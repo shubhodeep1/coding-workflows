@@ -2091,7 +2091,7 @@ jobs:
         # deferred), and HEAD is up to date, so the merge-base check is valid.
         # Actual
         # resolution is gated separately below.
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2286,7 +2286,7 @@ jobs:
         # resolution is not an autofix iteration and should not be blocked by
         # the iteration cap.  Also runs when did_commit is true since the push
         # is deferred — both autofix and conflict resolution are pushed together.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
@@ -2297,7 +2297,7 @@ jobs:
         # short-circuit together — any change to one must be mirrored to the
         # other. See the comment block on the prepare step for why the step
         # was split.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
@@ -2348,7 +2348,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true'
+        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -2451,7 +2451,7 @@ jobs:
 
       - name: Review-blocked judge decision
         id: rb_judge
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2477,7 +2477,7 @@ jobs:
             exit "${_judge_exit}"
           fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2570,7 +2570,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
@@ -2839,9 +2839,9 @@ jobs:
             # Settle delay: allow the push to propagate through GitHub's
             # indices before dispatching a run that will check out the
             # new HEAD SHA.  Tunable via
-            # AUTOFIX_CONTINUATION_SETTLE_SECS (default 10, clamped 0..60).
+            # AUTOFIX_CONTINUATION_SETTLE_SECS (default 10, clamped 1..60).
             settle_secs="${AUTOFIX_CONTINUATION_SETTLE_SECS:-10}"
-            if ! [[ "${settle_secs}" =~ ^(0|[1-9][0-9]*)$ ]] || [ "${settle_secs}" -gt 60 ]; then
+            if ! [[ "${settle_secs}" =~ ^[1-9][0-9]*$ ]] || [ "${settle_secs}" -gt 60 ]; then
               settle_secs=10
             fi
             sleep "${settle_secs}"
@@ -3031,7 +3031,7 @@ jobs:
           echo "CHANGES_LOST_REDISPATCHED=${dispatched}" >> "$GITHUB_ENV"
 
       - name: Telegram editor-changes-lost warning
-        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3118,7 +3118,7 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram review-blocked judge decision
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

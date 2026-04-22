@@ -602,7 +602,7 @@ Contract:
 
 Pre-dispatch guard (continuation path only):
 
-- **Settle delay.** The step `sleep`s `AUTOFIX_CONTINUATION_SETTLE_SECS` seconds (default `10`, clamped `0..60`) after the push completes but before dispatch, to let GitHub's internal indices catch up — a newly-dispatched run that immediately checks out the new HEAD SHA can otherwise race the push replication. Tunable via repository variable.
+- **Settle delay.** The step `sleep`s `AUTOFIX_CONTINUATION_SETTLE_SECS` seconds (default `10`, clamped `1..60`) after the push completes but before dispatch, to let GitHub's internal indices catch up — a newly-dispatched run that immediately checks out the new HEAD SHA can otherwise race the push replication. Tunable via repository variable.
 - Iteration-cap handling remains in the dispatched run's in-workflow guard (`review_autofix.yml` step `Count autofix iterations`, id `retrigger_guard`), which gates reviewers/editor and then routes exhausted runs to the `rb_judge`/review-blocked path.
 - The guard does not apply to the conflict-resolved dispatch path — that path keeps its pre-continuation timing and controls (the existing `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` peer-wait still runs).
 
