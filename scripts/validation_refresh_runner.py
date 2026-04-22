@@ -225,12 +225,12 @@ class ValidationRefreshRunner:
 		remote_branch = self.executor.run(
 			["git", "ls-remote", "--heads", "origin", f"refs/heads/{self.branch_name}"],
 			cwd=repo_dir,
-			check=True,
+			check=False,
 		)
 		start_ref = f"origin/{self.branch_name}" if (remote_branch.stdout or "").strip() else f"origin/{default_branch}"
-		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir, check=True)
+		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir, check=False)
 		if start_ref == f"origin/{self.branch_name}":
-			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir, check=True)
+			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir, check=False)
 		self.executor.run(["git", "checkout", "-B", self.branch_name, start_ref], cwd=repo_dir)
 
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
@@ -287,8 +287,16 @@ class ValidationRefreshRunner:
 		self.executor.run(["git", "config", "user.email", "coding-workflows-bot@users.noreply.github.com"], cwd=repo_dir)
 		self.executor.run(["gh", "auth", "setup-git"], cwd=repo_dir, check=False)
 		self.executor.run(["git", "add", "-A"], cwd=repo_dir)
+		if not self._repository_has_changes(repo_dir):
+			raise CommandFailure(
+				command=("git", "commit", "-m", self.commit_message),
+				cwd=str(repo_dir),
+				returncode=1,
+				stdout="",
+				stderr="nothing_to_commit",
+			)
 		self.executor.run(["git", "commit", "-m", self.commit_message], cwd=repo_dir)
-		self.executor.run(["git", "push", "--set-upstream", "origin", self.branch_name], cwd=repo_dir)
+		self.executor.run(["git", "push", "--force-with-lease", "--set-upstream", "origin", self.branch_name], cwd=repo_dir)
 
 	def _upsert_refresh_pr(
 		self,
@@ -352,6 +360,8 @@ class ValidationRefreshRunner:
 			)
 			if green and is_draft:
 				self.executor.run(["gh", "pr", "ready", str(pr_number), "--repo", repository], check=False)
+			elif (not green) and (not is_draft):
+				self.executor.run(["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository], check=False)
 			existing_was_draft = is_draft
 		else:
 			created_new_pr = True
@@ -402,15 +412,13 @@ class ValidationRefreshRunner:
 				auto_merge_enabled = True
 			except CommandFailure as exc:
 				diagnostics.append(_format_command_failure("auto_merge", exc))
-				undo_ready = created_new_pr or existing_was_draft
+				undo_ready = created_new_pr or existing_was_draft or (not is_draft)
 				if undo_ready:
 					self.executor.run(
 						["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository],
 						check=False,
 					)
 					diagnostics.append("auto_merge_enable_failed_fallback_to_draft")
-				else:
-					diagnostics.append("auto_merge_enable_failed_preserved_ready_state")
 
 		if green and not auto_merge_enabled:
 			final_pr_body = _build_pr_body(green=False, branch_name=self.branch_name, diagnostics=diagnostics)

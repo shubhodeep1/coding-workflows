@@ -139,8 +139,9 @@ def test_process_repository_green_existing_pr_promotes_and_enables_auto_merge() 
 				PlannedCall(("git", "config", "user.email")),
 				PlannedCall(("gh", "auth", "setup-git")),
 				PlannedCall(("git", "add", "-A")),
+				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
 				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--set-upstream", "origin", branch)),
+				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
 				PlannedCall(
 					("gh", "pr", "list"),
 					stdout='[{"number":42,"url":"https://github.com/octo/demo-repo/pull/42","isDraft":true}]',
@@ -197,8 +198,9 @@ def test_process_repository_red_new_draft_pr_with_diagnostics() -> None:
 				PlannedCall(("git", "config", "user.email")),
 				PlannedCall(("gh", "auth", "setup-git")),
 				PlannedCall(("git", "add", "-A")),
+				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
 				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--set-upstream", "origin", branch)),
+				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
 				PlannedCall(("gh", "pr", "list"), stdout="[]"),
 				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/52\n"),
 			]
@@ -249,14 +251,16 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 				PlannedCall(("git", "config", "user.email")),
 				PlannedCall(("gh", "auth", "setup-git")),
 				PlannedCall(("git", "add", "-A")),
+				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
 				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--set-upstream", "origin", branch)),
+				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
 				PlannedCall(
 					("gh", "pr", "list"),
 					stdout='[{"number":77,"url":"https://github.com/octo/demo-repo/pull/77","isDraft":false}]',
 				),
 				PlannedCall(("gh", "pr", "edit", "77")),
 				PlannedCall(("gh", "pr", "merge", "77"), returncode=1, stderr="auto-merge unavailable"),
+				PlannedCall(("gh", "pr", "ready", "--undo", "77")),
 				PlannedCall(("gh", "pr", "edit", "77")),
 			]
 		)
@@ -273,12 +277,12 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 		assert result.outcome == "red"
 		assert result.pr_number == 77
 		assert any("auto_merge_failed" in line for line in result.diagnostics)
-		assert "auto_merge_enable_failed_preserved_ready_state" in result.diagnostics
+		assert "auto_merge_enable_failed_fallback_to_draft" in result.diagnostics
 		assert result.diagnostics
 		edit_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "edit"]]
 		assert len(edit_commands) == 2
 		ready_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "ready"]]
-		assert ready_commands == []
+		assert len(ready_commands) == 1
 		executor.assert_consumed()
 
 
@@ -308,8 +312,9 @@ def test_process_repository_green_new_pr_auto_merge_failure_falls_back_to_red_dr
 				PlannedCall(("git", "config", "user.email")),
 				PlannedCall(("gh", "auth", "setup-git")),
 				PlannedCall(("git", "add", "-A")),
+				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
 				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--set-upstream", "origin", branch)),
+				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
 				PlannedCall(("gh", "pr", "list"), stdout="[]"),
 				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/88\n"),
 				PlannedCall(("gh", "pr", "merge", "88"), returncode=1, stderr="auto-merge unavailable"),
