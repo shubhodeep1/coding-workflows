@@ -40,6 +40,7 @@ def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
 	assert '- name: Write self-test summary' in wf
 	assert 'summary_file="artifacts/validation-selftest-summary.json"' in wf
 	assert "summary_data=\"$(jq -r '" in wf
+	assert "fixture_lines=\"$(jq -r '" in wf
 	assert '(.overall_status // "unknown")' in wf
 	assert '(.totals.fixtures // 0)' in wf
 	assert '.fixtures[]?' in wf

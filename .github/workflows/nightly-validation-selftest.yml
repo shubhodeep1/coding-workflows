@@ -83,13 +83,14 @@ jobs:
               (.overall_status // "unknown"),
               ((.totals.fixtures // 0) | tostring),
               ((.totals.passed // 0) | tostring),
-              ((.totals.failed // 0) | tostring),
-              (.fixtures[]? | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")")
+              ((.totals.failed // 0) | tostring)
             ] | @tsv
           ' "${summary_file}" 2>/dev/null || true)"
-          IFS=$'	' read -r status fixtures passed failed fixture_lines <<EOF
-          ${summary_data}
-          EOF
+          fixture_lines="$(jq -r '
+            .fixtures[]?
+            | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")"
+          ' "${summary_file}" 2>/dev/null || true)"
+          IFS=$'	' read -r status fixtures passed failed <<<"${summary_data}"
           status="${status:-unknown}"
           fixtures="${fixtures:-0}"
           passed="${passed:-0}"
