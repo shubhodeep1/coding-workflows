@@ -1,0 +1,78 @@
+---
+name: Nightly Validation Self-Test
+
+"on":
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  validation-selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Install self-test dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2
+
+      - name: Run validation self-test matrix
+        id: selftest
+        run: |
+          set -euo pipefail
+          python3 scripts/validation_selftest_matrix.py \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --fixtures-root "examples/validation-fixtures" \
+            --summary-path "artifacts/validation-selftest-summary.json" \
+            --log-dir "artifacts/validation-selftest-logs"
+
+      - name: Upload validation self-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-selftest-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            artifacts/validation-selftest-summary.json
+            artifacts/validation-selftest-logs/
+
+      - name: Write self-test summary
+        if: always()
+        run: |
+          set -euo pipefail
+          summary_file="artifacts/validation-selftest-summary.json"
+          if [ ! -f "${summary_file}" ]; then
+            {
+              echo "## Nightly Validation Self-Test"
+              echo "Summary file missing: ${summary_file}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          status="$(jq -r '.overall_status // "unknown"' "${summary_file}")"
+          fixtures="$(jq -r '.totals.fixtures // 0' "${summary_file}")"
+          passed="$(jq -r '.totals.passed // 0' "${summary_file}")"
+          failed="$(jq -r '.totals.failed // 0' "${summary_file}")"
+
+          {
+            echo "## Nightly Validation Self-Test"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            printf '| Status | `%s` |\n' "${status}"
+            printf '| Fixtures | `%s` |\n' "${fixtures}"
+            printf '| Passed | `%s` |\n' "${passed}"
+            printf '| Failed | `%s` |\n' "${failed}"
+            echo ""
+            echo "### Fixture Results"
+            jq -r '.fixtures[] | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")"' "${summary_file}"
+          } >> "${GITHUB_STEP_SUMMARY}"
