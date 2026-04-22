@@ -1785,7 +1785,7 @@ jobs:
 
           if gh_retry gh api repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")" >/dev/null; then
             echo "Posted editor summary comment."
-            # Signal to the failure-comment step (line ~4307) that the
+            # Signal to the failure-comment step (line ~3259) that the
             # editor summary already landed on the PR thread. The generic
             # "AI review/autofix failed" body speculates about editor /
             # dependency / infra failure modes and would contradict the
@@ -2810,7 +2810,7 @@ jobs:
           # the post-resolution reviewer pass runs (conflict-resolved code
           # is higher-risk than a vanilla autofix edit).
           #
-          # Autofix continuation (agents.md §20.3): when the just-pushed
+          # Autofix continuation (agents.md §20.4): when the just-pushed
           # [ai-autofix] commit is a productive edit (DID_COMMIT=true,
           # LEDGER_ONLY_COMMIT!=true, CONFLICT_RESOLVED!=true) and
           # AUTOFIX_CONTINUATION_ENABLED is not `false`, the dispatch
@@ -3100,7 +3100,7 @@ jobs:
           fi
 
       - name: Telegram editor-noop-suspicious warning
-        if: "success() && env.EDITOR_NOOP_SUSPICIOUS == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && env.EDITOR_NOOP_SUSPICIOUS == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
