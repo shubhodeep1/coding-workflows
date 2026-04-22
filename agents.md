@@ -323,14 +323,12 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - `workflow-log-analysis.yml` remains `workflow_dispatch`-only and has dual execution paths: `codex_mode=true` (default) runs analyzer preprocessing (`--codex-mode`) plus `codex exec`, while `codex_mode=false` uses the legacy analyzer/batch path.
 - `batch_api_disabled` input is validated whenever a non-empty value is provided, but only overrides analyzer batch behavior for `codex_mode=false`; codex-mode runs do not use the batch path.
 
-## 13a. Comprehensive Release Callback (Poller-Owned)
+## 13a. Workflow Log Analysis And Improvement Workflow
 
-- `.github/workflows/comprehensive-test-and-release.yml` has three phases only (`phase1-first-pass-test`, `phase2-collect-and-analyze-logs`, `phase3-dispatch-orchestrator`); callback handling is poller-owned, not a standalone workflow phase.
+- `.github/workflows/comprehensive-test-and-release.yml` (workflow name: **Workflow Log Analysis And Improvement**) has two phases: `phase2-collect-and-analyze-logs` and `phase3-dispatch-orchestrator`. Job IDs retain the `phase2-*` / `phase3-*` names (no `phase1-*` job) for backward compatibility with external references.
 - Phase 2 dispatches `workflow-log-analysis.yml` with `codex_mode=true` and resolves the collector window from `analysis/last_collection_timestamp.txt`; invalid/missing timestamp falls back to `lookback_days_fallback`.
-- Poller callback handling is label-gated: `handle_comprehensive_release_callback_if_needed` runs only while the tracking issue has `ai:comprehensive-test-pending`.
-- On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated `version_tag`/`test_repo` extracted from tracking comments when present.
-- On project status `failed` or `validation-failed`, the poller sends an abort notification and does not dispatch release.
-- On completion/abort callback paths, the poller writes `comprehensive_release_callback` (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort. When dispatch fails in the `complete` path, it leaves callback state/label unchanged so the poller retries on a later cycle.
+- Phase 3 dispatches `internal-orchestrate.yml` with a project description that links to the analysis report and emits the resolved orchestrator tracking issue number as a job output. Phase 3 does NOT apply `ai:comprehensive-test-pending` or post a `COMPREHENSIVE_RELEASE_METADATA_V1` comment; release dispatch from this workflow has been removed.
+- Release marking via `test-and-mark-stable.yml` remains available as a standalone workflow; it is no longer invoked from this workflow. The poller's `handle_comprehensive_release_callback_if_needed` code path and the `ai:comprehensive-test-pending` label definition are retained in `scripts/orchestrate_poll_process.sh` and `scripts/label_helpers.sh` but are currently inert because no workflow applies the gating label.
 
 ---
 
