@@ -390,30 +390,23 @@ jobs:
 > `AUTOFIX_PRE_EDITOR_BASE_FRESH`, `AUTOFIX_PRE_EDITOR_UNKNOWN` and the
 > corresponding `AUTOFIX_PRE_PUSH_*` variants are stable audit handles.
 >
-> **Ledger-only commit auto-merge** — `scripts/review_issue_ledger.sh`
+> **Review-issue ledger persistence** — `scripts/review_issue_ledger.sh`
 > updates `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`) on
 > every review pass, including passes where the editor reports
-> `Change status: not-edited`. This ledger-only commit scenario applies
-> only when `REVIEW_LEDGER_PATH` is Git-tracked (or explicitly
-> force-added); with the default `.ai/review_issue_ledger.txt`
-> runtime-artifact path in repos that leave it gitignored, the ledger is
-> still updated locally for the run but is not part of the commit/push
-> and this bug cannot manifest. When the resulting `[ai-autofix]` commit
-> contains **only** the ledger, the `commit_changes` step sets
-> `LEDGER_ONLY_COMMIT=true` (and the `ledger_only_commit` step output) in
-> addition to `DID_COMMIT=true`. Five downstream gates OR this signal into
-> their original `did_commit != 'true'` condition:
-> `Detect editor-claimed-but-uncommitted changes`,
-> `Validate editor no-op disposition`, `Mark linked issues ready to merge`,
-> `Enable auto-merge on PR`, and `Telegram success`. The two safety gates
-> still run to validate the editor's no-op claim, and the three
-> clean-review gates fire in the same run — required because any
-> `[ai-autofix]` ledger push in tracked-ledger configurations triggers a
-> `synchronize` event whose gate job is skipped by
-> `AUTOFIX_SKIP_SELF_TRIGGERED`, so auto-merge cannot be deferred to the
-> next run. In tracked-ledger configurations the push step
-> (`DID_COMMIT=true`) still fires so the ledger lands on the PR branch
-> and cross-iteration ledger continuity is preserved there as well.
+> `Change status: not-edited`. The ledger path is **gitignored** and
+> **not committed** to the PR branch — it is persisted across iterations
+> via a per-PR GitHub Actions cache (key
+> `review-ledger-pr-<PR_NUMBER>-<run_id>-<run_attempt>`, restored with
+> fallback key prefix `review-ledger-pr-<PR_NUMBER>-`). Committing the
+> ledger to the branch caused recurring sync conflicts between `main`
+> and `orchestrator/project-*` integration branches because every run
+> rewrites the file wholesale (the header embeds `PR_NUMBER`, body is
+> rewritten per-PR); the cache-backed model eliminates that failure mode.
+> If a consumer repo force-adds the ledger path or overrides
+> `REVIEW_LEDGER_PATH` to a tracked path, the legacy `LEDGER_ONLY_COMMIT`
+> detector in `scripts/review_commit_changes.sh` is retained for
+> backward compatibility but is a no-op in the default configuration
+> (the gitignored untracked ledger never reaches the commit).
 
 ### Local replay helper for review artifacts
 

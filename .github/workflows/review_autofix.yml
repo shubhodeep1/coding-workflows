@@ -1614,6 +1614,23 @@ jobs:
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
 
+      # Restore prior ledger state (written by review_issue_ledger.sh on the
+      # previous iteration of this PR) so persist_count survives across
+      # runs without committing .ai/review_issue_ledger.txt to the branch.
+      # Committing the ledger caused recurring sync conflicts on integration
+      # branches because every run rewrites the file wholesale (header embeds
+      # PR_NUMBER, body rewritten per-PR). The path is .gitignore'd; this
+      # cache is the only persistence mechanism. Keyed per-PR; restore-keys
+      # falls back to the most recent cache for the same PR.
+      - name: Restore review-issue ledger cache
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.PR_NUMBER != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: .ai/review_issue_ledger.txt
+          key: review-ledger-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            review-ledger-pr-${{ env.PR_NUMBER }}-
+
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
@@ -1730,6 +1747,19 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+
+      # Persist the ledger for the next iteration on this PR. Paired with
+      # the "Restore review-issue ledger cache" step above; see note there
+      # for why this is cached instead of committed. `always()` so we still
+      # save if a downstream step (e.g. push) fails — the ledger already
+      # reflects the outcome of THIS iteration's review pass and the next
+      # iteration should see it regardless of whether the commit got pushed.
+      - name: Save review-issue ledger cache
+        if: always() && env.PR_NUMBER != '' && hashFiles('.ai/review_issue_ledger.txt') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .ai/review_issue_ledger.txt
+          key: review-ledger-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"

@@ -229,7 +229,7 @@ so each new stage can be turned off independently without touching code.
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | `review_consolidate.sh` | Output cap to bound cost on pathological inputs. |
 | `REVIEW_LEDGER_ENABLED` | `1` | `review_issue_ledger.sh`, workflow | Master switch for the ledger stage. Off → no ledger updates, no `accepted-residual` promotion, every issue treated as `NEW`. |
 | `REVIEW_LEDGER_PERSIST_LIMIT` | `2` | `review_issue_ledger.sh` | Number of unsuccessful editor attempts on the same `issue_id` before the issue is auto-classified `accepted-residual` and dropped from the editor input. |
-| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger.txt` | `review_issue_ledger.sh` | PR-scoped ledger location inside the workflow workspace. Not committed to the repo (workflow artifact only — Q6). |
+| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger.txt` | `review_issue_ledger.sh` | PR-scoped ledger location inside the workflow workspace. Gitignored and not committed; persisted across iterations via `actions/cache` keyed `review-ledger-pr-<PR_NUMBER>-<run_id>-<run_attempt>` (see issue #1469). |
 | `REVIEW_FLOOR_RULES_ENABLED` | `1` | `review_floor_rules.sh`, workflow | Master switch for floor-rule tagging. Off → editor sees no `floor_tags.txt`. |
 | `REVIEW_FLOOR_KEYWORDS_FILE` | (built-in default list inside script) | `review_floor_rules.sh` | Optional path to override the built-in keyword list. |
 | `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | `review_run_reviewers.sh` | Append the seven-lens checklist block to reviewer prompts. Off → reviewer prompt unchanged from today. |
@@ -262,7 +262,7 @@ plumbing paths through env vars.
 | `review_issues.txt` | `review_parse_consolidator.sh` | ledger, editor | Per iteration |
 | `parser_stats.txt` | `review_parse_consolidator.sh` | workflow metrics step | Per iteration; one-line key=value pairs |
 | `ledger_status.txt` | `review_issue_ledger.sh` | editor, metrics step | Per iteration |
-| `.ai/review_issue_ledger.txt` | `review_issue_ledger.sh` | next iteration's ledger step | Per PR; carried across iterations within a run only. Not committed (Q6). Stored under `.ai/` inside the workspace; ignored via `.gitignore` to prevent accidental commits. |
+| `.ai/review_issue_ledger.txt` | `review_issue_ledger.sh` | next iteration's ledger step | Per PR; carried across iterations and across runs of the same PR via `actions/cache` (key `review-ledger-pr-<PR_NUMBER>-<run_id>-<run_attempt>`, restore-key prefix `review-ledger-pr-<PR_NUMBER>-`). Gitignored and never committed — see issue #1469 for the sync-conflict bug that committing this file caused. |
 | Job summary metrics table | workflow summary step | human reviewer of the workflow run | Per iteration; appended to `$GITHUB_STEP_SUMMARY` |
 
 The `.ai/` workspace directory is added to `.gitignore` if not already
@@ -600,9 +600,13 @@ line collapsing to one id.
 ## Ledger Schema & Lifecycle
 
 `.ai/review_issue_ledger.txt` is the per-PR ledger file carried across
-autofix iterations within a single workflow run. It is a text-with-markers
-format so shell tooling can parse it without a JSON dependency. It is not
-committed to the repo (Q6 — workflow summary only).
+autofix iterations and across workflow runs on the same PR via a
+per-PR `actions/cache` entry (see `review_autofix.yml` — "Restore
+review-issue ledger cache" / "Save review-issue ledger cache"). It is a
+text-with-markers format so shell tooling can parse it without a JSON
+dependency. It is gitignored and must not be committed to the repo;
+committing it caused recurring `main` → integration-branch sync
+conflicts (see issue #1469).
 
 ### File format
 
