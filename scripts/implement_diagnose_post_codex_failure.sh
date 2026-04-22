@@ -91,7 +91,7 @@ echo "handled=true" >> "$GITHUB_OUTPUT"
 ensure_implementation_failed_label() {
   if [ -f scripts/label_helpers.sh ]; then
     source scripts/label_helpers.sh
-    ensure_label_exists "ai:implementation-failed" "${GITHUB_REPOSITORY}"
+    ensure_label_exists "ai:implementation-failed" "${GITHUB_REPOSITORY}" || true
   else
     gh_retry gh label create "ai:implementation-failed" --repo "${GITHUB_REPOSITORY}" \
       --color "e11d48" --description "Implementation produced no changes or failed post-Codex validation" \
@@ -109,8 +109,8 @@ ensure_implementation_failed_label() {
 ensure_implement_fixup_labels() {
   if [ -f scripts/label_helpers.sh ]; then
     source scripts/label_helpers.sh
-    ensure_label_exists "ai:clarification" "${GITHUB_REPOSITORY}"
-    ensure_label_exists "ai:implement-fix-up" "${GITHUB_REPOSITORY}"
+    ensure_label_exists "ai:clarification" "${GITHUB_REPOSITORY}" || true
+    ensure_label_exists "ai:implement-fix-up" "${GITHUB_REPOSITORY}" || true
   else
     gh_retry gh label create "ai:clarification" --repo "${GITHUB_REPOSITORY}" \
       --color "f9d0c4" --description "AI clarification required before planning" \
@@ -122,10 +122,18 @@ ensure_implement_fixup_labels() {
 }
 
 FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
-FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
-if [ -z "${FAILED_STEP_NAME}" ] && [ "${JOB_STATUS:-}" != "success" ]; then
-  FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required" or .status == "in_progress")] | first | .name // ""' 2>/dev/null || true)"
-fi
+FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
+  [.jobs[].steps[]
+    | select(
+        .conclusion == "failure"
+        or .conclusion == "cancelled"
+        or .conclusion == "timed_out"
+        or .conclusion == "action_required"
+        or .status == "in_progress"
+      )
+  ]
+  | last
+  | .name // ""' 2>/dev/null || true)"
 if [ -z "${FAILED_STEP_NAME}" ]; then
   FAILED_STEP_NAME="unknown-step"
 fi
@@ -455,7 +463,7 @@ case "${DIAG_STATUS}" in
         --body "${FIX_BODY_FULL}" \
         --label "ai:clarification" \
         --label "ai:implement-fix-up" 2>"${CREATE_ERR_FILE}")"; then
-        FIX_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$' || true)"
+        FIX_NUM="$(printf '%s' "${FIX_URL}" | sed -nE 's#.*\/([0-9]+)([/?#].*)?$#\1#p')"
         if [ -n "${FIX_NUM}" ]; then
           CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
           local_to_issue_map="$(echo "${local_to_issue_map}" | jq --arg id "${FIX_ID}" --argjson num "${FIX_NUM}" '. + {($id): $num}')"
