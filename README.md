@@ -1578,6 +1578,25 @@ self-heal patches cannot be merged without explicit human action.
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
 
+### Validation Refresh Automation
+
+- Authentication:
+  - Uses `GH_PAT` (exported as `GH_TOKEN`) for all cross-repository clone/branch/PR operations.
+- Workflow: [`.github/workflows/validation-refresh.yml`](.github/workflows/validation-refresh.yml)
+- Triggers:
+  - Daily cron (`17 2 * * *`)
+  - Manual dispatch (`workflow_dispatch`) with optional `repos_file` and `branch_name` inputs
+- Runtime:
+  - Reads target repositories from `.github/ai/consumer_repos.json`
+  - For each target repo, clones the repo, checks out/creates `ai/validation-refresh` (or configured branch), renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`), and pushes refresh commits when files changed.
+- PR behavior:
+  - Green path (render/lint/self-test pass): opens/updates a non-draft PR and enables existing repo auto-merge via `gh pr merge --squash --auto`. If auto-merge enablement fails on an existing PR, the workflow preserves the PR's prior draft state instead of forcing it back to draft.
+  - Red path (any refresh stage failure with file changes): opens/updates a draft PR including diagnostics in the body.
+- Failure/no-op behavior:
+  - No `.ai/validate.yml`: repo is skipped.
+  - Pipeline failure with no file diff: records error and does not create a no-op PR.
+  - Workflow writes machine-readable summary JSON, appends a human summary to `$GITHUB_STEP_SUMMARY`, and sends Telegram failure notification (`TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID`) on workflow failure.
+
 ## Repository Structure
 
 ```

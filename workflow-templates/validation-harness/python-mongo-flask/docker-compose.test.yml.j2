@@ -22,8 +22,8 @@ services:
       - "{{ app_port }}:{{ app_port }}"
     healthcheck:
       test:
-        - CMD-SHELL
-        - /bin/sh -c "curl -fsS -H \"Host: ${TEST_HOST_HEADER:-app.local.test}\" \"http://127.0.0.1:{{ app_port }}{{ health_path }}\" >/dev/null"
+        - "CMD-SHELL"
+        - '/bin/sh -c "curl -fsS -H \"Host: ${TEST_HOST_HEADER:-app.local.test}\" \"http://127.0.0.1:{{ app_port }}{{ health_path }}\" >/dev/null"'
       interval: 5s
       timeout: 3s
       retries: 20
@@ -39,8 +39,8 @@ services:
       MONGO_INITDB_DATABASE: "{{ mongo_db_name }}"
     healthcheck:
       test:
-        - CMD-SHELL
-        - /bin/sh -c "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" \"mongodb://127.0.0.1:27017/{{ mongo_db_name }}\" >/dev/null"
+        - "CMD-SHELL"
+        - '/bin/sh -c "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" \"mongodb://127.0.0.1:27017/{{ mongo_db_name }}\" >/dev/null"'
       interval: 5s
       timeout: 5s
       retries: 20

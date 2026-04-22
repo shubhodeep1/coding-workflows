@@ -114,6 +114,7 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
 		assert compose_text.count("init: true") == 2
 		assert "/bin/sh -c" in compose_text
+		assert '- "CMD-SHELL"' in compose_text
 		assert "TEST_HOST_HEADER" in compose_text
 		assert "condition: service_healthy" in compose_text
 
@@ -123,7 +124,7 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 		assert "mongosh" not in canary_text
 		assert "tap_not_ok" in canary_text
 
-		http_smoke_shell = (output_root / "tests" / "10_http_smoke.sh").read_text(encoding="utf-8")
+		http_smoke_shell = (output_root / "tests" / "11_http_smoke.sh").read_text(encoding="utf-8")
 		http_smoke_py = (output_root / "tests" / "_lib" / "http_smoke.py").read_text(encoding="utf-8")
 		assert "TEST_HOST_HEADER" in http_smoke_shell
 		assert "--host-header" in http_smoke_shell

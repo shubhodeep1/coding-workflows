@@ -94,7 +94,7 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 			"docker-compose.test.yml",
 			"tests/00_canary.sh",
 			"tests/10_family_marker.sh",
-			"tests/10_http_smoke.sh",
+			"tests/11_http_smoke.sh",
 			"tests/20_import_audit.sh",
 			"tests/30_graceful_shutdown.sh",
 			"tests/90_tap_report.sh",
@@ -117,12 +117,20 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		assert "/bin/sh -c" in compose_text
 		assert "TEST_HOST_HEADER" in compose_text
 
-		http_smoke_text = (output_root / "tests" / "10_http_smoke.sh").read_text(encoding="utf-8")
+		http_smoke_text = (output_root / "tests" / "11_http_smoke.sh").read_text(encoding="utf-8")
 		assert "--host-header" in http_smoke_text
 		assert "TEST_HOST_HEADER" in http_smoke_text
 
 		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "python-mongo-flask family for demo-project" in family_text
+
+		lint_result = subprocess.run(
+			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
 
 
 def test_renderer_canary_tools_escaped_for_shell_safety() -> None:
@@ -275,9 +283,11 @@ def test_renderer_family_dispatch_routing() -> None:
 			output_root / "_lib" / "tap_helpers.sh",
 			output_root / "tests" / "00_canary.sh",
 			output_root / "tests" / "10_family_marker.sh",
-			output_root / "tests" / "20_rpc_probe.sh",
+			output_root / "tests" / "20_import_audit.sh",
+			output_root / "tests" / "25_rpc_probe.sh",
 			output_root / "tests" / "30_hardhat_test.sh",
 			output_root / "tests" / "90_tap_report.sh",
+			output_root / "tests" / "_lib" / "import_audit.py",
 		]
 		for expected in expected_files:
 			assert expected.exists(), f"missing rendered file: {expected}"
@@ -291,9 +301,17 @@ def test_renderer_family_dispatch_routing() -> None:
 				continue
 			assert '="' in line and line.endswith('"'), f"validate.env value must be double-quoted: {line}"
 
-		rpc_probe_text = (output_root / "tests" / "20_rpc_probe.sh").read_text(encoding="utf-8")
+		rpc_probe_text = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
 		assert 'type == "object"' in rpc_probe_text
 		assert 'has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)' in rpc_probe_text
+
+		import_audit_runner_text = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
+		import_audit_lib_text = (output_root / "tests" / "_lib" / "import_audit.py").read_text(encoding="utf-8")
+		assert "python3" in import_audit_runner_text
+		assert "_lib/import_audit.py" in import_audit_runner_text
+		assert "subprocess.run" in import_audit_lib_text
+		assert "sys.executable" in import_audit_lib_text
+		assert "importlib.import_module" in import_audit_lib_text
 
 		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
 		assert "dockerfile: out/Dockerfile.app" in compose_text
@@ -305,6 +323,14 @@ def test_renderer_family_dispatch_routing() -> None:
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "node-hardhat-solidity family for demo-project" in family_marker_text
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
+
+		lint_result = subprocess.run(
+			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
 
 
 def test_renderer_deterministic_output_for_same_manifest() -> None:

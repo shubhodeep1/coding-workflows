@@ -96,10 +96,30 @@ def test_log8_rpc_probe_requires_object_result() -> None:
         result = _run_renderer(manifest_path, output_root)
         assert result.returncode == 0, result.stderr
 
-        rpc_probe = (output_root / "tests" / "20_rpc_probe.sh").read_text(encoding="utf-8")
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
         assert 'type == "object"' in rpc_probe
         assert 'has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)' in rpc_probe
         assert "jq -e '.'" not in rpc_probe
+
+
+def test_import_audit_runner_and_helper_rendered_with_safe_subprocess_probe() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        runner_text = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
+        helper_text = (output_root / "tests" / "_lib" / "import_audit.py").read_text(encoding="utf-8")
+
+        assert "python3" in runner_text
+        assert "_lib/import_audit.py" in runner_text
+        assert "subprocess.run" in helper_text
+        assert "sys.executable" in helper_text
+        assert "importlib.import_module" in helper_text
 
 
 def test_log9_validate_env_values_are_double_quoted() -> None:
