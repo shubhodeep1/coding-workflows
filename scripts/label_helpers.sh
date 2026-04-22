@@ -169,8 +169,25 @@ set_issue_phase_label_resilient() {
 	fi
 
 	local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
+	local _current_phase_labels='' _prefetch_err_file _prefetch_err _phase_labels_prefetch_ok=0
+
+	# No existing helper call exposes the issue's current labels here; prefetch once
+	# so we only issue DELETE requests for phase labels that are actually present.
+	_prefetch_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+	if _current_phase_labels="$(gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels" --jq '.[].name' 2>"${_prefetch_err_file}")"; then
+		_phase_labels_prefetch_ok=1
+		[ "${_prefetch_err_file}" = "/dev/null" ] || rm -f "${_prefetch_err_file}"
+	else
+		_prefetch_err="$(cat "${_prefetch_err_file}" 2>/dev/null || true)"
+		[ "${_prefetch_err_file}" = "/dev/null" ] || rm -f "${_prefetch_err_file}"
+		echo "::warning::set_issue_phase_label_resilient: failed to prefetch labels for #${issue_number}; continuing with full phase-label sweep: ${_prefetch_err}" >&2
+	fi
+
 	for _phase_label in "${_AI_PHASE_TRANSITION_LABELS[@]}"; do
 		[ "${_phase_label}" = "${target_label}" ] && continue
+		if [ "${_phase_labels_prefetch_ok}" -eq 1 ] && ! printf '%s\n' "${_current_phase_labels}" | grep -Fxq -- "${_phase_label}"; then
+			continue
+		fi
 
 		# ai:* labels contain ':' and '-' only; encode ':' for URL path safety.
 		_encoded_label="${_phase_label//:/%3A}"
