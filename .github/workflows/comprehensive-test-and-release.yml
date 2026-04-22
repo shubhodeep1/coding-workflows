@@ -121,9 +121,16 @@ jobs:
             SINCE_ARG="${LAST_COLLECTION_TS}"
           fi
 
-          BEFORE_IDS_JSON="$(list_dispatch_runs | jq -c '[.workflow_runs[].id]' 2>/dev/null || echo '[]')"
+          BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+          if [ -z "${BEFORE_RUNS_JSON}" ]; then
+            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch."
+            exit 1
+          fi
+
+          BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>/dev/null || true)"
           if ! echo "${BEFORE_IDS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            BEFORE_IDS_JSON='[]'
+            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline."
+            exit 1
           fi
 
           RUN_ARGS=("${WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${GITHUB_REF_NAME}" "-f" "codex_mode=true")
@@ -356,9 +363,16 @@ jobs:
             BEFORE_TRACKING_JSON='[]'
           fi
 
-          BEFORE_IDS_JSON="$(list_dispatch_runs | jq -c '[.workflow_runs[].id]' 2>/dev/null || echo '[]')"
+          BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+          if [ -z "${BEFORE_RUNS_JSON}" ]; then
+            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch."
+            exit 1
+          fi
+
+          BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>/dev/null || true)"
           if ! echo "${BEFORE_IDS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            BEFORE_IDS_JSON='[]'
+            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline."
+            exit 1
           fi
 
           gh workflow run "${WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" -f "project_description=${PROJECT_DESCRIPTION}"
