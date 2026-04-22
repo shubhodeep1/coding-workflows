@@ -16,3 +16,7 @@ validation/tests/*
 validation/
 # Review pipeline runtime artifacts
 .ai/review_issue_ledger.txt
+
+# Workflow-fetched support-source checkouts (runtime-only, never committed)
+.codex-workflow-src/
+.codex-workflow-src-main/
