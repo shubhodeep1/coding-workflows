@@ -1579,7 +1579,9 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
-          path: .ai/review_issue_ledger
+          path: |
+            .ai/review_issue_ledger
+            .ai/review_issue_ledger.txt
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
@@ -1646,7 +1648,9 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: .ai/review_issue_ledger
+          path: |
+            .ai/review_issue_ledger
+            .ai/review_issue_ledger.txt
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Log token usage and Serena stats
