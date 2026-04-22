@@ -2209,7 +2209,7 @@ if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
   fi
 fi
 
-echo "Validation harness template render mode is enabled (VALIDATION_USE_TEMPLATES=${VALIDATION_USE_TEMPLATES})."
+echo "Validation harness template render mode is enabled (VALIDATION_USE_TEMPLATES=${VALIDATION_USE_TEMPLATES}, enabled=${VALIDATION_USE_TEMPLATES_ENABLED})."
 if run_template_validation_harness_renderer; then
 	renderer_exit=0
 else
@@ -2227,7 +2227,7 @@ case "${renderer_exit}" in
 		fi
 		;;
 	10)
-		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Add manifest config or set VALIDATION_USE_TEMPLATES=false to stop validation before render."
+		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Create the required manifest to proceed with template-based validation."
 		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
 		set_tracking_phase_label "ai:validation-failed"
 		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"

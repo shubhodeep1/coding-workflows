@@ -167,7 +167,7 @@ case "${renderer_exit}" in
 		exit 0
 		;;
 	10)
-		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Add manifest config or set VALIDATION_USE_TEMPLATES=false to stop validation before render."
+		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Create the required manifest to proceed with template-based validation."
 		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
 		set_tracking_phase_label "ai:validation-failed"
 		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
