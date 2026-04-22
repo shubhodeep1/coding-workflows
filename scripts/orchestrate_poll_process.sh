@@ -4549,7 +4549,7 @@ invoke_stall_judge() {
   local recent_comments
   # Filter out ORCHESTRATOR_STATE_V1 snapshots (they are ~57KB each and
   # are noise for the judge — it wants phase-change / recovery narrative,
-  # not state dumps) and cap each remaining body at 2000 bytes. Without
+  # not state dumps) and cap each remaining body at 2000 characters. Without
   # these two caps, 8 state snapshots produce ~260KB of argv which trips
   # Linux MAX_ARG_STRLEN (128KB per argv entry) when passed to the final
   # diagnostics jq via `--argjson recent_comments`, causing execve to
