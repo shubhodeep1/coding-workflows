@@ -35,7 +35,7 @@ class PlannedCall:
 class FakeExecutor:
 	def __init__(self, calls: list[PlannedCall]) -> None:
 		self._calls = calls
-		self.seen: list[tuple[list[str], Path | None, bool]] = []
+		self.seen: list[tuple[list[str], Path | None, bool, dict[str, str] | None]] = []
 
 	def run(
 		self,
@@ -46,7 +46,7 @@ class FakeExecutor:
 		env_overrides: dict[str, str] | None = None,
 	) -> subprocess.CompletedProcess[str]:
 		_ = env_overrides
-		self.seen.append((list(command), cwd, check))
+		self.seen.append((list(command), cwd, check, env_overrides))
 		assert self._calls, f"unexpected command: {command}"
 		plan = self._calls.pop(0)
 		assert tuple(command[: len(plan.prefix)]) == plan.prefix, (
@@ -212,7 +212,7 @@ def test_process_repository_red_new_draft_pr_with_diagnostics() -> None:
 		assert result.changed is True
 		assert result.pr_number == 52
 		assert any("lint_failed" in line for line in result.diagnostics)
-		create_commands = [cmd for cmd, _cwd, _check in executor.seen if cmd[:3] == ["gh", "pr", "create"]]
+		create_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "create"]]
 		assert len(create_commands) == 1
 		assert "--draft" in create_commands[0]
 		executor.assert_consumed()
@@ -250,6 +250,7 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 				),
 				PlannedCall(("gh", "pr", "edit", "77")),
 				PlannedCall(("gh", "pr", "merge", "77"), returncode=1, stderr="auto-merge unavailable"),
+				PlannedCall(("gh", "pr", "edit", "77")),
 			]
 		)
 
@@ -266,6 +267,8 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 		assert result.pr_number == 77
 		assert any("auto_merge_failed" in line for line in result.diagnostics)
 		assert "auto_merge_enable_failed_fallback_to_draft" in result.diagnostics
+		edit_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "edit"]]
+		assert len(edit_commands) == 2
 		executor.assert_consumed()
 
 
@@ -305,7 +308,53 @@ def test_process_repository_no_changes_skips_pr_operations() -> None:
 		assert result.outcome == "skipped"
 		assert result.changed is False
 		assert "no_changes_detected" in result.diagnostics
-		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check in executor.seen)
+		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check, _env in executor.seen)
+		executor.assert_consumed()
+
+
+def test_process_repository_pipeline_unsets_github_tokens() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-env-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "ls-remote"), stdout=""),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = refresh_runner.ValidationRefreshRunner(
+			source_root=REPO_ROOT,
+			branch_name=branch,
+			commit_message="chore(validation): refresh validation assets",
+			pr_title="chore(validation): refresh validation assets",
+			executor=executor,
+		)
+		runner.process_repository(repository, workspace)
+
+		pipeline_commands = {
+			str(REPO_ROOT / "scripts" / "render_validation_templates.py"),
+			str(REPO_ROOT / "scripts" / "validation_lint.py"),
+			str(REPO_ROOT / "scripts" / "validate_driver.sh"),
+		}
+		for command, _cwd, _check, env_overrides in executor.seen:
+			if any(item in command for item in pipeline_commands):
+				assert env_overrides is not None
+				assert env_overrides.get("GH_TOKEN") == ""
+				assert env_overrides.get("GITHUB_TOKEN") == ""
 		executor.assert_consumed()
 
 

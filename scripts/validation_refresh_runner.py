@@ -221,6 +221,10 @@ class ValidationRefreshRunner:
 
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
 		diagnostics: list[str] = []
+		pipeline_env_overrides = {
+			"GH_TOKEN": "",
+			"GITHUB_TOKEN": "",
+		}
 
 		render_command = [
 			"python3",
@@ -250,7 +254,7 @@ class ValidationRefreshRunner:
 			("self_test", self_test_command),
 		):
 			try:
-				self.executor.run(command, cwd=repo_dir)
+				self.executor.run(command, cwd=repo_dir, env_overrides=pipeline_env_overrides)
 			except CommandFailure as exc:
 				diagnostics.append(_format_command_failure(stage, exc))
 				return False, diagnostics
@@ -383,6 +387,23 @@ class ValidationRefreshRunner:
 						check=False,
 					)
 
+		if green and not auto_merge_enabled:
+			final_pr_body = _build_pr_body(green=False, branch_name=self.branch_name, diagnostics=diagnostics)
+			self.executor.run(
+				[
+					"gh",
+					"pr",
+					"edit",
+					str(pr_number),
+					"--repo",
+					repository,
+					"--title",
+					self.pr_title,
+					"--body",
+					final_pr_body,
+				]
+			)
+
 		return pr_number, pr_url, auto_merge_enabled
 
 
@@ -500,20 +521,21 @@ def main() -> int:
 		workspace_path = Path(temporary_root.name)
 	workspace_path.mkdir(parents=True, exist_ok=True)
 
-	runner = ValidationRefreshRunner(
-		source_root=source_root,
-		branch_name=args.branch_name,
-		commit_message=args.commit_message,
-		pr_title=args.pr_title,
-	)
-	results = runner.run_repositories(repositories, workspace_path)
-	summary = summarize_results(results)
-	write_summary(summary, args.summary_json)
-	print(json.dumps(summary, sort_keys=True))
-
-	if temporary_root is not None:
-		temporary_root.cleanup()
-	return 0
+	try:
+		runner = ValidationRefreshRunner(
+			source_root=source_root,
+			branch_name=args.branch_name,
+			commit_message=args.commit_message,
+			pr_title=args.pr_title,
+		)
+		results = runner.run_repositories(repositories, workspace_path)
+		summary = summarize_results(results)
+		write_summary(summary, args.summary_json)
+		print(json.dumps(summary, sort_keys=True))
+		return 0
+	finally:
+		if temporary_root is not None:
+			temporary_root.cleanup()
 
 
 def _extract_url(stdout_text: str) -> str:
