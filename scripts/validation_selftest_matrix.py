@@ -114,7 +114,16 @@ def _run_command(command: list[str], cwd: Path, log_path: Path, repo_root: Path)
 	except FileNotFoundError as exc:
 		result = subprocess.CompletedProcess(command, 127, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
 	except subprocess.TimeoutExpired as exc:
-		result = subprocess.CompletedProcess(command, 124, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
+		stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+		stderr_tail = exc.stderr if isinstance(exc.stderr, str) else ""
+		if isinstance(exc.stdout, bytes):
+			stdout = exc.stdout.decode("utf-8", errors="replace")
+		if isinstance(exc.stderr, bytes):
+			stderr_tail = exc.stderr.decode("utf-8", errors="replace")
+		stderr = f"{exc.__class__.__name__}: {exc}"
+		if stderr_tail:
+			stderr = f"{stderr}\n{stderr_tail}"
+		result = subprocess.CompletedProcess(command, 124, stdout=stdout, stderr=stderr)
 	except Exception as exc:
 		result = subprocess.CompletedProcess(command, 1, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
 	duration = time.monotonic() - started
@@ -176,13 +185,22 @@ def _run_sanity_check(command: list[str], cwd: Path) -> tuple[int, str, str, flo
 		return result.returncode, result.stdout, result.stderr, duration
 	except FileNotFoundError as exc:
 		duration = time.monotonic() - started
-		return 127, "", str(exc), duration
+		return 127, "", f"{exc.__class__.__name__}: {exc}", duration
 	except subprocess.TimeoutExpired as exc:
 		duration = time.monotonic() - started
-		return 124, "", str(exc), duration
+		stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+		stderr_tail = exc.stderr if isinstance(exc.stderr, str) else ""
+		if isinstance(exc.stdout, bytes):
+			stdout = exc.stdout.decode("utf-8", errors="replace")
+		if isinstance(exc.stderr, bytes):
+			stderr_tail = exc.stderr.decode("utf-8", errors="replace")
+		stderr = f"{exc.__class__.__name__}: {exc}"
+		if stderr_tail:
+			stderr = f"{stderr}\n{stderr_tail}"
+		return 124, stdout, stderr, duration
 	except Exception as exc:
 		duration = time.monotonic() - started
-		return 1, "", str(exc), duration
+		return 1, "", f"{exc.__class__.__name__}: {exc}", duration
 
 
 def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, skip_compose_config: bool) -> dict[str, Any]:
@@ -297,7 +315,10 @@ def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, ski
 
 	stage_duration = time.monotonic() - stage_started
 	log_path.parent.mkdir(parents=True, exist_ok=True)
-	log_path.write_text("\n".join(log_sections), encoding="utf-8")
+	try:
+		log_path.write_text("\n".join(log_sections), encoding="utf-8")
+	except OSError as exc:
+		print(f"validation-selftest: unable to write log {log_path}: {exc}", file=sys.stderr)
 	return {
 		"status": overall_status,
 		"duration_seconds": round(stage_duration, 3),

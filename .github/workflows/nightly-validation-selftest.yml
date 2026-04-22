@@ -15,6 +15,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      actions: write
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
@@ -69,10 +70,19 @@ jobs:
             exit 1
           fi
 
-          status="$(jq -r '.overall_status // "unknown"' "${summary_file}")"
-          fixtures="$(jq -r '.totals.fixtures // 0' "${summary_file}")"
-          passed="$(jq -r '.totals.passed // 0' "${summary_file}")"
-          failed="$(jq -r '.totals.failed // 0' "${summary_file}")"
+          if ! command -v jq >/dev/null 2>&1; then
+            {
+              echo "## Nightly Validation Self-Test"
+              echo "jq is unavailable; see artifact for raw summary: ${summary_file}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          status="$(jq -r '.overall_status // "unknown"' "${summary_file}" 2>/dev/null || echo "unknown")"
+          fixtures="$(jq -r '.totals.fixtures // 0' "${summary_file}" 2>/dev/null || echo "0")"
+          passed="$(jq -r '.totals.passed // 0' "${summary_file}" 2>/dev/null || echo "0")"
+          failed="$(jq -r '.totals.failed // 0' "${summary_file}" 2>/dev/null || echo "0")"
+          fixture_lines="$(jq -r '.fixtures[]? | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")"' "${summary_file}" 2>/dev/null || true)"
 
           {
             echo "## Nightly Validation Self-Test"
@@ -84,5 +94,9 @@ jobs:
             printf '| Failed | `%s` |\n' "${failed}"
             echo ""
             echo "### Fixture Results"
-            jq -r '.fixtures[] | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")"' "${summary_file}"
+            if [ -n "${fixture_lines}" ]; then
+              printf '%s\n' "${fixture_lines}"
+            else
+              echo "- fixture results unavailable"
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
