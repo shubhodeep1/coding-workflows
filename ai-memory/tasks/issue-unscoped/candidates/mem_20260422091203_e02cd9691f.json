@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1544 | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The pre-editor stale-base gate is incorrectly conditional on `env.CAN_PUSH == 'true'`.\n  WHY: When the workflow runs without push permissions, the gate is skipped and the editor can run against a stale base; reviewers disagreed about whether this is intentional, but the highest reported severity is high.\n- scripts/orchestrate_poll_process.sh:4559 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The comment-body truncation logic uses a hardcoded 2000-character cap that may remove important stall-judge context.\n  WHY: The review says this truncates recent tracking comments more aggressively than necessary and could strip diagnostic details needed for stall recovery.\n- scripts/check_external_branch_advance.sh:175 | severity=low | confidence=2\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: `self_subject_shas` is expanded unquoted in the `for` loop.\n  WHY: This is currently safe but brittle if the collection format changes; the reviewers treated it as a hardening issue rather than a functional bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml | severity=high | confidence=5\n  PROBLEM: The pre-editor stale-base gate is incorrectly conditional on `env.CAN_PUSH == 'true'`.\n  WHY: When the workflow runs without push permissions (e.g., in a fork or restricted environment), the gate is skipped entirely and the editor LLM pass can run against a stale base.\n- scripts/orchestrate_poll_process.sh | severity=medium | confidence=4\n  PROBLEM: The comment-body truncation logic uses a hardcoded 2000 character limit while the diagnostics builder and stall-judge are documented to handle larger payloads.\n  WHY: This aggressively truncates stall-judge context and can strip critical diagnostic details or plan/error summaries.\n- scripts/check_external_branch_advance.sh | severity=low | confidence=1\n  PROBLEM: Unquoted variable expansion in `for` loop.\n  WHY: `self_subject_shas` is space-separated, but using it unquoted is brittle if the format changes.\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=2\n  PROBLEM: The diagnostics builder fallback does not include `recent_comments` or `workflow_outcomes`.\n  WHY: The fallback payload can lose signal that those arrays existed but were dropped.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:~1544 | severity=low | confidence=5\n  PROBLEM: The pre-editor stale-base gate conditional on `CAN_PUSH` is not a bug.\n  WHY: The reviewer says skipping stale-base detection when push permission is unavailable is intentional because the workflow cannot push anyway.\n- scripts/orchestrate_poll_process.sh:4563 | severity=low | confidence=5\n  PROBLEM: The comment truncation logic is not a bug.\n  WHY: The reviewer says the `[:1988]` plus truncation marker matches the intended 2000-character cap.\n- scripts/check_external_branch_advance.sh:175 | severity=low | confidence=2\n  PROBLEM: `self_subject_shas` is expanded without quotes in the loop.\n  WHY: The reviewer treats it as a minor hardening opportunity, not a runtime issue, because the values are controlled SHAs.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:1544 | severity=high | confidence=5\n  PROBLEM: The pre-editor stale-base gate is incorrectly conditional on `env.CAN_PUSH == 'true'`.\n  WHY: The reviewer says the gate should run regardless of write permission because stale-base detection is independent of `CAN_PUSH`.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "8f1c32c18f751862c7292d024a7d83cf88942f866bd43a9c2adc12f7f0296250",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1517,
+    "run_id": "24769117573",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24769117573",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422091203_e02cd9691f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1517,
+    "run_id": "24769117573"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T09:12:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
