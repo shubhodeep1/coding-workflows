@@ -94,7 +94,10 @@ def _write_command_log(log_path: Path, command: list[str], cwd: Path, result: su
 		"--- stderr ---",
 		result.stderr,
 	]
-	log_path.write_text("\n".join(payload), encoding="utf-8")
+	try:
+		log_path.write_text("\n".join(payload), encoding="utf-8")
+	except OSError as exc:
+		print(f"validation-selftest: unable to write log {log_path}: {exc}", file=sys.stderr)
 
 
 def _run_command(command: list[str], cwd: Path, log_path: Path, repo_root: Path) -> dict[str, Any]:
@@ -106,11 +109,14 @@ def _run_command(command: list[str], cwd: Path, log_path: Path, repo_root: Path)
 			text=True,
 			capture_output=True,
 			check=False,
+			timeout=300,
 		)
 	except FileNotFoundError as exc:
-		result = subprocess.CompletedProcess(command, 127, stdout="", stderr=str(exc))
+		result = subprocess.CompletedProcess(command, 127, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
+	except subprocess.TimeoutExpired as exc:
+		result = subprocess.CompletedProcess(command, 124, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
 	except Exception as exc:
-		result = subprocess.CompletedProcess(command, 1, stdout="", stderr=str(exc))
+		result = subprocess.CompletedProcess(command, 1, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
 	duration = time.monotonic() - started
 	_write_command_log(log_path, command, cwd, result, duration)
 	return {
