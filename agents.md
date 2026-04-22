@@ -578,14 +578,14 @@ Operational rules:
 - Renames of `AUTOFIX_CONTINUATION_ENABLED`, `AUTOFIX_CONTINUATION_SETTLE_SECS`, or the log prefixes above are breaking changes per CLAUDE.md §6. Add alongside the old name and continue emitting the old log line in parallel for at least one stable-channel cycle before removing.
 - Do not raise `AUTOFIX_CONTINUATION_SETTLE_SECS` clamp beyond `60` without re-evaluating the `timeout-minutes: 180` on `codex-agent` — a long settle on a failing dispatch loop could eat budget otherwise reserved for the editor.
 - Do not move or weaken the target run's `retrigger_guard` cap gating (`max_iterations_reached`) without preserving the terminal `rb_judge` / review-blocked path; continuation relies on that in-run guard for cap exhaustion handling.
-- Non-orchestrator PR coverage: continuation is the primary mechanism because the stall cron does not scan PRs that have no orchestrator-pipeline-labelled linked issue. When the cap is reached for such PRs the `rb_judge` step (gated by `ENABLE_REVIEW_BLOCKED_JUDGE`, default `true`, `review_autofix.yml` step `Mark linked issues review-blocked (autofix exhaustion)` at around line 2404) decides the terminal action. See README `ENABLE_REVIEW_BLOCKED_JUDGE` and the §20.3 Judge-at-cap note.
+- Non-orchestrator PR coverage: continuation is the primary mechanism because the stall cron does not scan PRs that have no orchestrator-pipeline-labelled linked issue. When the cap is reached for such PRs the `rb_judge` step (gated by `ENABLE_REVIEW_BLOCKED_JUDGE`, default `true`, `review_autofix.yml` step `Mark linked issues review-blocked (autofix exhaustion)` at around line 2444) decides the terminal action. See README `ENABLE_REVIEW_BLOCKED_JUDGE` and the §20.3 Judge-at-cap note.
 
 ### 20.4 Failure-Comment Attribution (`EDITOR_SUMMARY_POSTED`)
 
 `jobs.codex-agent` posts two distinct PR comments at end-of-run:
 
-- The **editor summary** (step `Post editor summary comment`, around line 2136 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when an editor summary is available but a downstream step failed, we still want that audit trail on the PR thread.
-- The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 4307) is gated on `failure() && env.PR_CLOSED != 'true'`.
+- The **editor summary** (step `Post editor summary comment`, around line 1684 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when an editor summary is available but a downstream step failed, we still want that audit trail on the PR thread.
+- The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 3175) is gated on `failure() && env.PR_CLOSED != 'true'`.
 
 When a step *after* the editor summary fails (push race against a concurrent push, conflict resolver abort, auto-merge config error, telemetry plumbing), both steps fire and the PR thread shows two comments 10–30s apart. The default failure body — "encountered an error and could not complete. This may be due to an editor failure, missing dependencies, or an infrastructure issue" — directly contradicts the success-looking editor summary above it and mis-attributes the failure for the human reader.
 

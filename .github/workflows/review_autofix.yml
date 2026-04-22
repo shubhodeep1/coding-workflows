@@ -1735,7 +1735,7 @@ jobs:
 
           if gh_retry gh api repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")" >/dev/null; then
             echo "Posted editor summary comment."
-            # Signal to the failure-comment step (line ~4307) that the
+            # Signal to the failure-comment step (line ~3175) that the
             # editor summary already landed on the PR thread. The generic
             # "AI review/autofix failed" body speculates about editor /
             # dependency / infra failure modes and would contradict the
