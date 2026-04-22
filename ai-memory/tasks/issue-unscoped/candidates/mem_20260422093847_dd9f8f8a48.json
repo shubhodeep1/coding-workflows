@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `scripts/implement_diagnose_post_codex_failure.sh:123-129` | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: Failed-step selection uses the first matching cancelled/timed_out/in_progress step, which can record the wrong step name.\n  WHY: Multiple reviewers flagged the same root cause; the highest stated confidence is 4 and the issue can misattribute the diagnosis to an unrelated step.\n- `scripts/implement_diagnose_post_codex_failure.sh:458` | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: Issue-number extraction relies on a trailing-digit regex that can fail if the URL has a trailing slash or other suffix.\n  WHY: Multiple reviewers flagged the same root cause; the highest stated confidence is 4 and an empty `FIX_NUM` breaks fix-up issue tracking.\n- `.ai/review_issue_ledger.txt:1-1` | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Ledger carries stale `accepted-residual` entries from previous PR reviews.\n  WHY: Single-reviewer finding; the reviewer characterized it as polluting state rather than a runtime failure, so keep the stated low severity and confidence.\n- `agents.md:1-1` | severity=low | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: Documentation cross-reference text still references the wrong section number for the clean-review tail.\n  WHY: Single-reviewer finding; use the reviewer\u2019s stated confidence and note that the issue is documentation ambiguity rather than runtime behavior.\n- `scripts/implement_diagnose_post_codex_failure.sh:159-159` | severity=low | confidence=1\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The untracked-file secret filter may not handle hidden files reliably in all shells.\n  WHY: Single-reviewer hardening concern with low confidence; no severity was explicitly stated beyond the issue description.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `scripts/implement_diagnose_post_codex_failure.sh:126-130` | severity=medium | confidence=3\n  PROBLEM: Failed-step selection picks first matching cancelled/timed_out/in_progress step, which may misattribute failure away from the actual implementation step\n  WHY: Incorrect diagnosis could create fix-up issues with wrong context\n- `scripts/implement_diagnose_post_codex_failure.sh:458` | severity=medium | confidence=3\n  PROBLEM: Issue number extraction regex `'[0-9]+$'` may fail on URLs with trailing slashes or query parameters\n  WHY: Fix-up issues may not be linked to parent issue, breaking dependency tracking\n- `.ai/review_issue_ledger.txt:1-1` | severity=low | confidence=2\n  PROBLEM: Ledger carries stale `accepted-residual` entries from previous PR reviews\n  WHY: Pollutes ledger with unrelated state, though no direct runtime failure\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `agents.md:1-1` | severity=low | confidence=5\n  PROBLEM: The text still references `\u00a720.2` for the clean-review tail, but the section was likely bumped to `20.3`.\n  WHY: Documentation ambiguity leads to operator confusion during troubleshooting.\n- `scripts/implement_diagnose_post_codex_failure.sh:458` | severity=medium | confidence=4\n  PROBLEM: Regex is sensitive to URL format variations.\n  WHY: If extraction fails, `FIX_NUM` is empty, fix-up issues are created but not correctly tracked/linked in the summary comment, breaking the auto-heal chain.\n- `scripts/implement_diagnose_post_codex_failure.sh:123-129` | severity=medium | confidence=3\n  PROBLEM: `first` picks the first matching step in the job array, which isn't necessarily the causal failure for the diagnosis script.\n  WHY: The generated fix-up issues and summary comment may report the wrong failed step name, misleading the developer or the next AI cycle.\n- `scripts/implement_diagnose_post_codex_failure.sh:159-159` | severity=low | confidence=1\n  PROBLEM: The filter for untracked files uses `case` with glob patterns but doesn't handle hidden files reliably in all shells if not prefixed.\n  WHY: Ensure `lower_untracked_path` is properly checked against common secrets patterns including hidden files (e.g., `.*env*`).\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `scripts/implement_diagnose_post_codex_failure.sh:458` | severity=medium | confidence=4\n  PROBLEM: The regex `[0-9]+$` requires the number to be at the very end of the URL, so trailing slashes or query strings can leave `FIX_NUM` empty.\n  WHY: When this fails, the script warns but continues, potentially leaving fix-up issues unlinked from the main issue.\n- `scripts/implement_diagnose_post_codex_failure.sh:123-129` | severity=medium | confidence=4\n  PROBLEM: The fallback logic selects the FIRST step matching the criteria rather than the actual interrupted implementation step.\n  WHY: The `| first` filter will pick whichever step appears first in the JSON array, not necessarily the one that was actually implementing code.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `scripts/implement_diagnose_post_codex_failure.sh:458` | severity=medium | confidence=3\n  PROBLEM: Assumes `gh issue create` output ends with the issue number.\n  WHY: A trailing slash or alternate URL format would cause the regex to return empty, leaving `FIX_NUM` unset and unnecessarily failing the fix-up path.\n- `scripts/implement_diagnose_post_codex_failure.sh:125-127` | severity=medium | confidence=3\n  PROBLEM: Selects the first matching step without ordering.\n  WHY: GitHub API does not guarantee step array order, so multiple cancelled/in-progress steps could cause the wrong step name to be recorded.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "587b1416d57f8c4b85ac24864fce24f87e73d79b3dc517ff0de230b2307f338c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1502,
+    "run_id": "24770210759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24770210759",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422093847_dd9f8f8a48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1502,
+    "run_id": "24770210759"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T09:38:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
