@@ -19,8 +19,15 @@ def _read(path: Path) -> str:
 def test_label_helpers_exports_resilient_phase_swap_function() -> None:
 	text = _read(LABEL_HELPERS_SH)
 	assert "set_issue_phase_label_resilient()" in text
-	assert '"ai:needs-human"' in text
-	assert '"ai:blocked"' in text
+	for label in (
+		"ai:needs-human",
+		"ai:blocked",
+		"ai:comprehensive-test-pending",
+		"ai:destructive-blocked",
+		"ai:implement-fix-up",
+		"ai:needs-prompt-review",
+	):
+		assert f'"{label}"' in text
 	assert "::warning::jq label aggregation failed for #${issue_number} — falling back to POST add." in text
 	assert "::warning::PUT labels failed for #${issue_number} — falling back to POST add." in text
 	assert "::warning::POST fallback also failed for #${issue_number}." in text
@@ -57,7 +64,7 @@ def test_fallback_parsing_prefers_event_payload_before_pr_refetch() -> None:
 	assert 'if [ -z "$(printf \'%s\' "${pr_data}" | tr -d \'[:space:]\')" ]; then' in review_autofix
 	assert 'PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.title + " " + (.body // "")\' 2>/dev/null || echo "")"' in review_autofix
 	assert 'PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.title + " " + (.body // "")\' || echo "")"' in review_autofix
-	assert 'pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.title + " " + (.body // "")\' 2>/dev/null || echo "")"' in review_autofix
+	assert 'pr_data="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.title + " " + (.body // "")\' 2>/dev/null || echo "")"' in review_autofix
 
 
 def test_new_contract_test_is_covered_by_ci() -> None:

@@ -246,7 +246,7 @@ jobs:
           if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
             pr_data="$(printf '%s %s' "${PR_TITLE:-}" "${PR_BODY:-}")"
             if [ -z "$(printf '%s' "${pr_data}" | tr -d '[:space:]')" ]; then
-              pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+              pr_data="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
             fi
             repository_escaped="${REPOSITORY//./\\.}"
             issue_numbers="$(echo "${pr_data}" | grep -oiE "(github\\.com/${repository_escaped}/issues/[0-9]+|${repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
