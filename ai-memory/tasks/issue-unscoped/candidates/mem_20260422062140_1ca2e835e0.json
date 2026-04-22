@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/label_helpers.sh:182 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Using `echo` to pipe `cur_labels` into `jq` is less robust than `printf` or a here-string.\n  WHY: `echo` can mis-handle leading `-n`/`-e` or backslash escapes, which could corrupt the JSON input even though the current flow usually produces valid JSON.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/label_helpers.sh:182 | severity=low | confidence=2\n  PROBLEM: Using `echo` command to pipe data to jq is less robust than `printf` or here-string.\n  WHY: If `cur_labels` contains backslash escape sequences or `-n`/`-e` at start, `echo` may interpret them, potentially corrupting JSON input to jq. While `cur_labels` should be valid JSON from previous jq output, using `printf` is more defensive.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "ff6b2db01e639fdc4ecf6b59497bf84d7665305fc5a0a353c0f0adc271ef2cae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1506,
+    "run_id": "24762918489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24762918489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422062140_1ca2e835e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1506,
+    "run_id": "24762918489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-22T06:21:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
