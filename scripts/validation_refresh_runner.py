@@ -225,19 +225,20 @@ class ValidationRefreshRunner:
 		remote_branch = self.executor.run(
 			["git", "ls-remote", "--heads", "origin", f"refs/heads/{self.branch_name}"],
 			cwd=repo_dir,
-			check=False,
 		)
 		start_ref = f"origin/{self.branch_name}" if (remote_branch.stdout or "").strip() else f"origin/{default_branch}"
-		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir, check=False)
+		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir)
 		if start_ref == f"origin/{self.branch_name}":
-			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir, check=False)
+			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir)
 		self.executor.run(["git", "checkout", "-B", self.branch_name, start_ref], cwd=repo_dir)
 
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
 		diagnostics: list[str] = []
+		pipeline_log_dir = repo_dir.parent / f"{repo_dir.name}__validation_logs"
 		pipeline_env_overrides = {
 			"GH_TOKEN": "",
 			"GITHUB_TOKEN": "",
+			"LOG_DIR": str(pipeline_log_dir),
 		}
 
 		render_command = [
@@ -412,7 +413,7 @@ class ValidationRefreshRunner:
 				auto_merge_enabled = True
 			except CommandFailure as exc:
 				diagnostics.append(_format_command_failure("auto_merge", exc))
-				undo_ready = created_new_pr or existing_was_draft or (not is_draft)
+				undo_ready = created_new_pr or existing_was_draft
 				if undo_ready:
 					self.executor.run(
 						["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository],

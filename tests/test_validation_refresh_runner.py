@@ -260,7 +260,6 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 				),
 				PlannedCall(("gh", "pr", "edit", "77")),
 				PlannedCall(("gh", "pr", "merge", "77"), returncode=1, stderr="auto-merge unavailable"),
-				PlannedCall(("gh", "pr", "ready", "--undo", "77")),
 				PlannedCall(("gh", "pr", "edit", "77")),
 			]
 		)
@@ -277,12 +276,12 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 		assert result.outcome == "red"
 		assert result.pr_number == 77
 		assert any("auto_merge_failed" in line for line in result.diagnostics)
-		assert "auto_merge_enable_failed_fallback_to_draft" in result.diagnostics
+		assert "auto_merge_enable_failed_fallback_to_draft" not in result.diagnostics
 		assert result.diagnostics
 		edit_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "edit"]]
 		assert len(edit_commands) == 2
 		ready_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "ready"]]
-		assert len(ready_commands) == 1
+		assert len(ready_commands) == 0
 		executor.assert_consumed()
 
 
@@ -421,11 +420,13 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 			str(REPO_ROOT / "scripts" / "validation_lint.py"),
 			str(REPO_ROOT / "scripts" / "validate_driver.sh"),
 		}
+		expected_log_dir = repo_dir.parent / f"{repo_dir.name}__validation_logs"
 		for command, _cwd, _check, env_overrides in executor.seen:
 			if any(item in command for item in pipeline_commands):
 				assert env_overrides is not None
 				assert env_overrides.get("GH_TOKEN") == ""
 				assert env_overrides.get("GITHUB_TOKEN") == ""
+				assert env_overrides.get("LOG_DIR") == str(expected_log_dir)
 		executor.assert_consumed()
 
 
