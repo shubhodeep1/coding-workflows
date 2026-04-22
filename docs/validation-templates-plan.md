@@ -303,7 +303,19 @@ service-side CLIs`) and is live on `claude/analyze-job-logs-JKNlF`.
 - [ ] Add merge-bot handling for the `auto-merge:validation-refresh` label.
 - [ ] Add fixture-repo wiring for python-mongo and node-hardhat self-test targets.
 - [ ] Add README surface for nightly validation green-run streak reporting.
-- [ ] Flip `VALIDATION_USE_TEMPLATES` default from `false` to `true` after stability soak.
-- [ ] Remove freehand harness generation path from `scripts/validate_process.sh` once template mode is default.
-- [ ] Remove superseded freehand sections from `prompts/mode-validate-generate.txt` after cutover.
-- [ ] Update `agents.md` and `README.md` with the new manifest-centric flow.
+- [x] Flip `VALIDATION_USE_TEMPLATES` default from `false` to `true` after stability soak.
+- [x] Remove freehand harness generation path from `scripts/validate_process.sh` once template mode is default.
+- [x] Remove superseded freehand sections from `prompts/mode-validate-generate.txt` after cutover.
+- [x] Update `agents.md` and `README.md` with the new manifest-centric flow.
+
+### Snapshot — 2026-04-22
+
+| Milestone | Status | Objective evidence from repository |
+| --- | --- | --- |
+| M1 — Scaffold + renderer | Done | `workflow-templates/validation-harness/_shared/**`, `scripts/render_validation_templates.py`, `scripts/templates/slot_manifest.schema.json`, `tests/test_render_validation_templates.py`, template-mode wiring in `scripts/validate_process.sh`, bootstrap fetch/staging in `.github/workflows/validate.yml` |
+| M2 — `python-mongo-flask` family | Done | `workflow-templates/validation-harness/python-mongo-flask/**`, `tests/test_family_python_mongo_flask.py`, `tests/fixtures/validation_harness/python_mongo_flask/**` |
+| M3 — `node-hardhat-solidity` family | Done | `workflow-templates/validation-harness/node-hardhat-solidity/**`, `tests/test_render_validation_templates.py`, `tests/test_render_validation_templates_node_hardhat_regressions.py`, `tests/test_validate_harness_rpc.py` |
+| M4 — `validation_lint.py` + render self-heal | Done | `scripts/validation_lint.py`, `tests/test_validate_lint_*.py`, render self-heal path `attempt_self_heal_and_reexec "render"` in `scripts/validate_process.sh`, `tests/test_validate_process_render_recovery.py` |
+| M5 — Refresh workflow + auto-merge gate | Partial | Present: `.github/ai/consumer_repos.json`. Missing: `.github/workflows/validation-refresh.yml`; no merge-bot/runtime handling found for label `auto-merge:validation-refresh` outside this planning doc |
+| M6 — Nightly self-test coverage | Remaining | Missing in this repository: `.github/workflows/nightly-validation-selftest.yml`; fixture-repo wiring and README streak badge are not present in tracked files |
+| M7 — Flip default + remove freehand path | Done | `.github/workflows/validate.yml` now defaults `VALIDATION_USE_TEMPLATES` to `true`; `scripts/validate_process.sh` defaults `VALIDATION_USE_TEMPLATES` to `true`, removes freehand generate/fix execution branches, and hard-fails `VALIDATION_USE_TEMPLATES=false` with `raw_status=harness_error`; `prompts/mode-validate-generate.txt` now reflects template-first architecture; tests updated in `tests/test_validate_workflow_validate_bootstrap.py`, `tests/test_validate_process_template_mode.py`, `tests/test_validate_process_render_recovery.py` |

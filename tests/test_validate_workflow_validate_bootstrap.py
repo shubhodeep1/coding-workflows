@@ -43,15 +43,15 @@ def test_validate_workflow_bootstrap_fetches_template_assets() -> None:
 	assert "workflow-templates/validation-harness/python-mongo-flask/tests/_lib/import_audit.py.j2" in wf
 
 
-def test_validate_workflow_passes_template_opt_in_env() -> None:
+def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
-	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'false' }}" in wf
+	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
 	assert 'python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
 
 
 def main() -> int:
 	test_validate_workflow_bootstrap_fetches_template_assets()
-	test_validate_workflow_passes_template_opt_in_env()
+	test_validate_workflow_passes_template_default_env()
 	return 0
 
 
