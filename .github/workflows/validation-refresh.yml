@@ -120,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
-            echo "Telegram notification skipped (missing TG_BOT_SECRET or TG_ADMIN_CHAT_ID)."
+            echo "Telegram notification skipped (missing TG_BOT_SECRET or TG_CHAT_ID)."
             exit 0
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

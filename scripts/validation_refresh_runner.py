@@ -62,6 +62,7 @@ class CommandExecutor:
 			capture_output=True,
 			check=False,
 			env=env,
+			timeout=300,
 		)
 		if check and proc.returncode != 0:
 			raise CommandFailure(
@@ -210,18 +211,26 @@ class ValidationRefreshRunner:
 				shutil.rmtree(repo_dir)
 			except OSError as exc:
 				print(f"WARNING: failed to remove existing repo dir {repo_dir}: {exc}")
+			if repo_dir.exists():
+				raise CommandFailure(
+					command=("shutil", "rmtree", str(repo_dir)),
+					cwd=None,
+					returncode=1,
+					stdout="",
+					stderr=f"failed to remove existing directory: {repo_dir}",
+				)
 		self.executor.run(["gh", "repo", "clone", repository, str(repo_dir)])
 
 	def _checkout_refresh_branch(self, repo_dir: Path, default_branch: str) -> None:
 		remote_branch = self.executor.run(
 			["git", "ls-remote", "--heads", "origin", f"refs/heads/{self.branch_name}"],
 			cwd=repo_dir,
-			check=False,
+			check=True,
 		)
 		start_ref = f"origin/{self.branch_name}" if (remote_branch.stdout or "").strip() else f"origin/{default_branch}"
-		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir, check=False)
+		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir, check=True)
 		if start_ref == f"origin/{self.branch_name}":
-			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir, check=False)
+			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir, check=True)
 		self.executor.run(["git", "checkout", "-B", self.branch_name, start_ref], cwd=repo_dir)
 
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
@@ -342,9 +351,7 @@ class ValidationRefreshRunner:
 				]
 			)
 			if green and is_draft:
-				self.executor.run(["gh", "pr", "ready", str(pr_number), "--repo", repository])
-			if (not green) and (not is_draft):
-				self.executor.run(["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository])
+				self.executor.run(["gh", "pr", "ready", str(pr_number), "--repo", repository], check=False)
 			existing_was_draft = is_draft
 		else:
 			created_new_pr = True

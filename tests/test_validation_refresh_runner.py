@@ -274,6 +274,7 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 		assert result.pr_number == 77
 		assert any("auto_merge_failed" in line for line in result.diagnostics)
 		assert "auto_merge_enable_failed_preserved_ready_state" in result.diagnostics
+		assert result.diagnostics
 		edit_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "edit"]]
 		assert len(edit_commands) == 2
 		ready_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "ready"]]
