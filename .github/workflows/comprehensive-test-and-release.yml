@@ -31,7 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
-      run_id: ${{ steps.phase2.outputs.run_id }}
       report_file: ${{ steps.phase2.outputs.report_file }}
     steps:
       - name: Checkout repository
@@ -253,7 +252,6 @@ jobs:
             fi
           fi
 
-          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
           echo "report_file=${REPORT_FILE}" >> "${GITHUB_OUTPUT}"
 
   phase3-dispatch-orchestrator:
