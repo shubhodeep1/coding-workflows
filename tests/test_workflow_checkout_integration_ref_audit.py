@@ -33,6 +33,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"validation-improvements-intake.yml": "Validation prompt intake workflow is repository_dispatch PR automation.",
 	"validation-refresh.yml": "Validation refresh workflow iterates consumer repos and is not an orchestrator issue-phase checkout path.",
 	"workflow-log-analysis.yml": "Workflow-log analyzer inspects run artifacts, not orchestrator issue branches.",
+	"nightly-validation-selftest.yml": "Nightly fixture self-test runs on schedule/workflow_dispatch without orchestrator issue metadata.",
 }
 
 
