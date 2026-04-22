@@ -21,7 +21,7 @@ def test_label_helpers_exports_resilient_phase_swap_function() -> None:
 	assert "set_issue_phase_label_resilient()" in text
 	assert '"ai:needs-human"' in text
 	assert '"ai:blocked"' in text
-	assert "::warning::GET labels failed for #${issue_number} — falling back to POST add." in text
+	assert "::warning::jq label aggregation failed for #${issue_number} — falling back to POST add." in text
 	assert "::warning::PUT labels failed for #${issue_number} — falling back to POST add." in text
 	assert "::warning::POST fallback also failed for #${issue_number}." in text
 

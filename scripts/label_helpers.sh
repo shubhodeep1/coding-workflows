@@ -169,7 +169,7 @@ set_issue_phase_label_resilient() {
 	fi
 
 	if ! cur_labels="$(jq -cs 'add // []' <<< "${cur_labels}")"; then
-		echo "::warning::GET labels failed for #${issue_number} — falling back to POST add." >&2
+		echo "::warning::jq label aggregation failed for #${issue_number} — falling back to POST add." >&2
 		if gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
 			return 0
