@@ -60,6 +60,12 @@
 set -euo pipefail
 export LC_ALL=C
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${SCRIPT_DIR}/gh_helpers.sh" ]; then
+	# shellcheck source=/dev/null
+	. "${SCRIPT_DIR}/gh_helpers.sh" || true
+fi
+
 log() { printf '%s\n' "$*" >&2; }
 
 TARGET_BRANCH="${TARGET_BRANCH:-}"
@@ -69,6 +75,12 @@ REPOSITORY="${GITHUB_REPOSITORY:-}"
 
 if [ -z "${TARGET_BRANCH}" ] || [ -z "${LOCAL_HEAD_SHA}" ]; then
 	log "::warning::check_external_branch_advance: TARGET_BRANCH and LOCAL_HEAD_SHA must both be set; fail-open."
+	printf 'ADVANCE=unknown\n'
+	exit 0
+fi
+
+if ! git cat-file -e "${LOCAL_HEAD_SHA}^{commit}" 2>/dev/null; then
+	log "::warning::check_external_branch_advance: LOCAL_HEAD_SHA=${LOCAL_HEAD_SHA} is not a local commit object; fail-open."
 	printf 'ADVANCE=unknown\n'
 	exit 0
 fi
@@ -92,9 +104,9 @@ if ! git fetch --quiet --no-tags --prune origin \
 	exit 0
 fi
 
-REMOTE_TIP_SHA="$(git rev-parse --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null || git rev-parse --verify --quiet FETCH_HEAD 2>/dev/null || true)"
+REMOTE_TIP_SHA="$(git rev-parse --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null || true)"
 if [ -z "${REMOTE_TIP_SHA}" ]; then
-	log "::warning::check_external_branch_advance: refs/remotes/origin/${TARGET_BRANCH} and FETCH_HEAD both unresolved; fail-open."
+	log "::warning::check_external_branch_advance: refs/remotes/origin/${TARGET_BRANCH} unresolved after fetch; fail-open."
 	printf 'ADVANCE=unknown\n'
 	exit 0
 fi
@@ -155,9 +167,14 @@ fi
 
 bot_login_lc="$(printf '%s' "${BOT_LOGIN}" | tr '[:upper:]' '[:lower:]')"
 
+# The commit set is usually tiny (0-2 SHAs) and there is no existing
+# batched helper for commit-attribution lookups, so per-commit calls are
+# acceptable here. gh_retry keeps the rare API path rate-limit aware.
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
 for sha in ${self_subject_shas}; do
 	meta=""
-	if ! meta="$(gh api "repos/${REPOSITORY}/commits/${sha}" \
+	if ! meta="$(gh_retry gh api "repos/${REPOSITORY}/commits/${sha}" \
 		--jq '[(.author.login // ""), (.committer.login // "")] | @tsv' \
 		2>/dev/null)"; then
 		log "::warning::check_external_branch_advance: gh api commits/${sha} failed; fail-open."
