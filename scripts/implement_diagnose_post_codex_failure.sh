@@ -129,10 +129,9 @@ FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
         or .conclusion == "cancelled"
         or .conclusion == "timed_out"
         or .conclusion == "action_required"
-        or .status == "in_progress"
       )
   ]
-  | last
+  | first
   | .name // ""' 2>/dev/null || true)"
 if [ -z "${FAILED_STEP_NAME}" ]; then
   FAILED_STEP_NAME="unknown-step"
@@ -406,6 +405,9 @@ RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 case "${DIAG_STATUS}" in
   needs_fixes)
     FIX_COUNT="$(jq -r '(.fix_issues // []) | if type == "array" then length else 0 end' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+    if ! [[ "${FIX_COUNT}" =~ ^[0-9]+$ ]]; then
+      FIX_COUNT=0
+    fi
     if [ "${FIX_COUNT}" -le 0 ]; then
       FIX_COUNT=1
       jq -n \
@@ -440,7 +442,7 @@ case "${DIAG_STATUS}" in
     for idx in $(seq 0 $((FIX_COUNT - 1))); do
       FIX_ID="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].id // ("implement-fix-" + (($idx + 1) | tostring))' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
       FIX_TITLE="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].title // ("Implement post-Codex fix-up " + (($idx + 1) | tostring))' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
-      FIX_BODY_BASE="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].body // "No body provided"' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}" | sed 's/\\n/\n/g')"
+      FIX_BODY_BASE="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].body // "No body provided"' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
       FIX_PRIORITY="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].priority // 5' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
 
       FIX_BODY_FULL="${FIX_BODY_BASE}
