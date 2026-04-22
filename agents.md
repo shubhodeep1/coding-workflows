@@ -541,16 +541,16 @@ Operational rules:
 
 `jobs.codex-agent` posts two distinct PR comments at end-of-run:
 
-- The **editor summary** (step `Post editor summary comment`, around line 2136 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when the editor finished its work but a downstream step failed, we still want the editor's audit trail on the PR thread.
+- The **editor summary** (step `Post editor summary comment`, around line 2136 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when an editor summary is available but a downstream step failed, we still want that audit trail on the PR thread.
 - The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 4307) is gated on `failure() && env.PR_CLOSED != 'true'`.
 
 When a step *after* the editor summary fails (push race against a concurrent push, conflict resolver abort, auto-merge config error, telemetry plumbing), both steps fire and the PR thread shows two comments 10–30s apart. The default failure body — "encountered an error and could not complete. This may be due to an editor failure, missing dependencies, or an infrastructure issue" — directly contradicts the success-looking editor summary above it and mis-attributes the failure for the human reader.
 
 Contract:
 
-- The editor-summary post step writes **`EDITOR_SUMMARY_POSTED=true`** (env, not a step output) only inside the success branch of the `gh api .../comments` call. On retry exhaustion (the `else` branch that emits `::warning::Unable to post editor summary comment after retries.`) the variable is left unset, since the editor summary is then not visible to the reader and the generic failure body is the right thing to post.
+- The editor-summary post step writes **`EDITOR_SUMMARY_POSTED=true`** (env, not a step output) only inside the success branch of the `gh api .../comments` call. On retry exhaustion (the `else` branch that emits `::warning::Unable to post editor summary comment after retries.`) the variable is left unset, since the summary comment is then not visible to the reader and the generic failure body is the right thing to post. This signal guarantees only summary-comment visibility, not editor-stage success.
 - The failure-notification step branches its `BODY` on `${EDITOR_SUMMARY_POSTED:-false}`:
-  - When `true` — post a narrower "AI review/autofix encountered a post-editor failure" body that names the downstream step domains (push, conflict resolver, label/auto-merge, telemetry) and notes that the editor's commit may not have landed.
+  - When `true` — post a narrower "AI review/autofix encountered a post-editor failure" body that names the downstream step domains (push, conflict resolver, label/auto-merge, telemetry) and notes that the summary comment is visible, not that editor execution necessarily succeeded.
   - When unset/false — post the original generic body (true editor / dependency / infra failure path).
 - The label step (`Mark linked issues review-blocked (workflow failure)`) and `Telegram failure` are **not** gated on `EDITOR_SUMMARY_POSTED`. A failure is still a failure regardless of which comment variant is appropriate; the linked issue still needs `ai:review-blocked` and the operator still needs the Telegram alert.
 

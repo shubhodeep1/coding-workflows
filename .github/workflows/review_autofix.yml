@@ -4327,21 +4327,18 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          # Pick a body variant that doesn't contradict the editor
-          # summary comment when one was already posted. The editor
-          # summary step (line ~2136) sets EDITOR_SUMMARY_POSTED=true
-          # on a successful post; when that signal is true we know the
-          # editor completed and the failure must be in a downstream
-          # step (push, conflict resolver, auto-merge config, telemetry).
-          # The generic body would otherwise read as "the editor failed"
-          # immediately under a success-looking editor summary, which
-          # mis-attributes the failure for the human reader. See PR
-          # #1476 follow-up.
+          # Pick a body variant that doesn't contradict an editor
+          # summary comment when one was already posted.
+          # EDITOR_SUMMARY_POSTED=true only guarantees the summary
+          # comment is visible on the PR thread; it does not by
+          # itself prove editor execution succeeded (fallback summaries
+          # can also be posted). Keep this branch wording limited to
+          # that invariant.
           if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
             BODY="$(cat <<EOF
-          **AI review/autofix encountered a post-editor failure — needs human intervention**
+          **AI review/autofix encountered a failure after posting an editor summary — needs human intervention**
 
-          The editor stage completed and posted its summary above, but a downstream step (push, conflict resolver, label/auto-merge configuration, or telemetry) failed before the autofix run could complete. The editor's commit may not have landed on the PR branch.
+          An editor summary comment is visible above, but the overall review/autofix workflow still failed before completion. Check the workflow run for details; the PR branch may not include all intended editor changes.
 
           [View workflow run](${RUN_URL}) for details.
 
