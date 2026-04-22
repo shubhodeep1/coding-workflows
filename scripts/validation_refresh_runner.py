@@ -176,7 +176,6 @@ class ValidationRefreshRunner:
 			result.pr_url = pr_url
 			if pipeline_green and not auto_merge_enabled:
 				pr_green = False
-				result.diagnostics.append("auto_merge_enable_failed_fallback_to_draft")
 		except CommandFailure as exc:
 			result.diagnostics.append(_format_command_failure("pull_request", exc))
 			return result
@@ -304,6 +303,8 @@ class ValidationRefreshRunner:
 			]
 		)
 		existing_prs = _load_json_list(list_proc.stdout)
+		existing_was_draft = False
+		created_new_pr = False
 
 		if existing_prs:
 			existing = existing_prs[0]
@@ -330,6 +331,7 @@ class ValidationRefreshRunner:
 				self.executor.run(["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository])
 			existing_was_draft = is_draft
 		else:
+			created_new_pr = True
 			create_command = [
 				"gh",
 				"pr",
@@ -377,15 +379,15 @@ class ValidationRefreshRunner:
 				auto_merge_enabled = True
 			except CommandFailure as exc:
 				diagnostics.append(_format_command_failure("auto_merge", exc))
-				if existing_prs:
-					undo_ready = existing_was_draft
-				else:
-					undo_ready = False
+				undo_ready = created_new_pr or existing_was_draft
 				if undo_ready:
 					self.executor.run(
 						["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository],
 						check=False,
 					)
+					diagnostics.append("auto_merge_enable_failed_fallback_to_draft")
+				else:
+					diagnostics.append("auto_merge_enable_failed_preserved_ready_state")
 
 		if green and not auto_merge_enabled:
 			final_pr_body = _build_pr_body(green=False, branch_name=self.branch_name, diagnostics=diagnostics)
@@ -504,7 +506,7 @@ def main() -> int:
 
 	try:
 		repositories = load_target_repositories(args.repos_file)
-	except ValueError as exc:
+	except (OSError, ValueError) as exc:
 		print(f"ERROR: {exc}")
 		return 1
 

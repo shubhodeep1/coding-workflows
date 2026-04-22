@@ -18,7 +18,8 @@ name: Validation Refresh
         type: string
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   refresh:
@@ -119,7 +120,7 @@ jobs:
             exit 0
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TEXT="⚠️ Validation refresh failed in ${{ github.repository }}\n${RUN_URL}"
+          printf -v TEXT '⚠️ Validation refresh failed in %s\n%s' "${{ github.repository }}" "${RUN_URL}"
           curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \
             --data-urlencode "text=${TEXT}" \

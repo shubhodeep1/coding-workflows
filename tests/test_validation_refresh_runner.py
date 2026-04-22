@@ -266,9 +266,63 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 		assert result.outcome == "red"
 		assert result.pr_number == 77
 		assert any("auto_merge_failed" in line for line in result.diagnostics)
-		assert "auto_merge_enable_failed_fallback_to_draft" in result.diagnostics
+		assert "auto_merge_enable_failed_preserved_ready_state" in result.diagnostics
 		edit_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "edit"]]
 		assert len(edit_commands) == 2
+		ready_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "ready"]]
+		assert ready_commands == []
+		executor.assert_consumed()
+
+
+def test_process_repository_green_new_pr_auto_merge_failure_falls_back_to_red_draft() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-new-merge-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "ls-remote"), stdout=""),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+				PlannedCall(("git", "config", "user.name")),
+				PlannedCall(("git", "config", "user.email")),
+				PlannedCall(("git", "add", "-A")),
+				PlannedCall(("git", "commit", "-m")),
+				PlannedCall(("git", "push", "--set-upstream", "origin", branch)),
+				PlannedCall(("gh", "pr", "list"), stdout="[]"),
+				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/88\n"),
+				PlannedCall(("gh", "pr", "merge", "88"), returncode=1, stderr="auto-merge unavailable"),
+				PlannedCall(("gh", "pr", "ready", "--undo", "88")),
+				PlannedCall(("gh", "pr", "edit", "88")),
+			]
+		)
+
+		runner = refresh_runner.ValidationRefreshRunner(
+			source_root=REPO_ROOT,
+			branch_name=branch,
+			commit_message="chore(validation): refresh validation assets",
+			pr_title="chore(validation): refresh validation assets",
+			executor=executor,
+		)
+		result = runner.process_repository(repository, workspace)
+
+		assert result.outcome == "red"
+		assert result.pr_number == 88
+		assert result.pr_url == "https://github.com/octo/demo-repo/pull/88"
+		assert "auto_merge_enable_failed_fallback_to_draft" in result.diagnostics
+		ready_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "ready"]]
+		assert len(ready_commands) == 1
 		executor.assert_consumed()
 
 
