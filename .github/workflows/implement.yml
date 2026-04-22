@@ -386,7 +386,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2630,10 +2630,119 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          ISSUE_NUMBER: ${{ inputs.issue_number }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           JOB_STATUS: ${{ job.status }}
-        run: scripts/implement_diagnose_post_codex_failure.sh
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          bash scripts/implement_diagnose_post_codex_failure.sh
+
+      - name: Comment on issue failure
+        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          # Reuse the cached issue snapshot when available — see the
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it.
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
+            gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
+              --color "fbca04" --description "Awaiting human approval to implement" \
+              2>/dev/null || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            REASON="AI implementation workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"
+          else
+            REASON="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+          fi
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="${REASON}"
+
+      - name: Telegram failure notification
+        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "tg_helpers.sh not available; skipping Telegram notification."
+            exit 0
+          fi
+          source scripts/tg_helpers.sh
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            MSG="AI implementation workflow cancelled/timed out for issue #${ISSUE_NUMBER}"
+          else
+            MSG="AI implementation workflow failed for issue #${ISSUE_NUMBER}"
+          fi
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          if declare -F tg_send_tracked >/dev/null 2>&1; then
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
+          else
+            echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
+          fi
+
+      - name: Record implementation run failure event
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -f scripts/memory_helpers.sh ]; then
+            source scripts/memory_helpers.sh
+          else
+            if [ ! -d .codex-workflow-src ]; then
+              exit 0
+            fi
+            mkdir -p scripts
+            for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+              src=".codex-workflow-src/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+                src=".codex-workflow-src-main/scripts/${f}"
+              fi
+              if [ ! -f "${src}" ]; then
+                continue
+              fi
+              install -m 0755 "${src}" "scripts/${f}"
+            done
+            source scripts/memory_helpers.sh
+          fi
+
+          if [ -f scripts/memory_helpers.sh ]; then
+            if [ "${{ job.status }}" = "cancelled" ]; then
+              phase_message="Implementation phase cancelled"
+            else
+              phase_message="Implementation phase failed"
+            fi
+            memory_record_run_event \
+              --run-id "${{ github.run_id }}" \
+              --workflow implement \
+              --event-type phase_failed \
+              --status error \
+              --message "${phase_message}" \
+              --issue-number "${ISSUE_NUMBER}" \
+              --actor "${{ github.actor }}" \
+              --metadata-json "$(jq -cn --arg job_status "${{ job.status }}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{job_status: $job_status, run_url: $run_url}')"
+          fi
 
       - name: Exit safely
         if: failure() || cancelled()

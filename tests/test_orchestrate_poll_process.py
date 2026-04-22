@@ -5363,6 +5363,9 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# Verifier bootstrap must be in OPTIONAL list so older script_refs
 	# do not hard-fail.
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in wf_body
+	# The bootstrap still enumerates the script name in review_autofix.yml
+	# even after PR #1495 moved the resolver logic into support scripts.
+	assert "verify_integration_fingerprints.py" in wf_body
 	# The workflow must invoke the extracted prepare + resolve scripts so
 	# the integration-sync gate and fingerprint verifier actually run.
 	assert "review_conflict_prepare.sh" in wf_body

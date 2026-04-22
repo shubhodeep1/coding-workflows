@@ -676,6 +676,8 @@ rewrite_review_issues_without_residuals()
 
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 PR_NUMBER="${PR_NUMBER:-0}"
+PR_NUMBER="${PR_NUMBER//[^0-9]/}"
+: "${PR_NUMBER:=0}"
 ITERATION_RAW="${AUTOFIX_ITERATION:-${ITERATION:-1}}"
 if [[ ! "${ITERATION_RAW}" =~ ^[0-9]+$ ]] || [ "${ITERATION_RAW}" -lt 1 ]; then
 	ITERATION=1
@@ -693,7 +695,11 @@ else
 fi
 LEDGER_STATUS_FILE="${LEDGER_STATUS_FILE:-${RUNTIME_DIR}/ledger_status.txt}"
 FLOOR_TAGS_FILE="${FLOOR_TAGS_FILE:-${RUNTIME_DIR}/floor_tags.txt}"
-REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}"
+# Per-PR ledger path so concurrent PRs never share a file (no cross-PR merge
+# conflicts on main). PR_NUMBER defaults to 0 above, so local/dev runs without
+# PR context land on .ai/review_issue_ledger/pr-0.txt — still covered by the
+# .ai/review_issue_ledger/ gitignore rule.
+REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER}.txt}"
 
 mkdir -p "$(dirname "${LEDGER_STATUS_FILE}")"
 
