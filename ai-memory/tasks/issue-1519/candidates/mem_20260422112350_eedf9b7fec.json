@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context:\n- HEAD: `04d4ebb8f7df7272276c7f2a2c8d54118e48e92e`\n- Checked-out branch: `orchestrator/project-1469`\n- Integration branch metadata: `orchestrator/project-1469`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No Q<ID> items were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with issue-defined scope as written\u201d.\n\nConflict detection (issue vs current code):\n- Current runtime/docs/tests are still opt-in (`VALIDATION_USE_TEMPLATES` default `false`), but issue requires template mode as the default.\n- `scripts/validate_process.sh` still contains live freehand Codex generation/fix branches (`HARNESS_MODE=generate|fix`, `HARNESS_GENERATOR_MODE=freehand`), but issue requires removing superseded freehand generation logic.\n- `prompts/mode-validate-generate.txt` is still actively asserted by tests; trimming must be surgical, not full deletion.\n\nImplementation plan:\n\n1. Flip validate defaults to template-first wiring.\nFiles likely to change: `.github/workflows/validate.yml`, `scripts/validate_process.sh`, `tests/test_validate_workflow_validate_bootstrap.py`, `tests/test_validate_process_template_mode.py`.\nFunctions/modules: workflow env wiring for `VALIDATION_USE_TEMPLATES`; early mode selection block in `validate_process.sh`.\nData/interface changes: default value changes from `false` to `true` in workflow + process wiring.\nRisk/edge case: repos explicitly setting `VALIDATION_USE_TEMPLATES=false`; keep env var name and make behavior explicit in logs/docs to avoid silent confusion.\n\n2. Remove freehand harness-generation execution path from validate process.\nFiles likely to change: `scripts/validate_process.sh`, `tests/test_validate_process_template_mode.py`, `tests/test_validate_process_render_recovery.py`.\nFunctions/modules: main harness-mode branch around `HARNESS_MODE`/`HARNESS_GENERATOR_MODE`; remove Codex generate/fix prompt assembly and `codex exec` retry loop; keep template renderer path and existing renderer exit-code \u2192 `harness_error` contracts intact.\nData structures affected: runtime metadata written by `write_result_files` (`harness_mode`, `harness_generator_mode`) will no longer emit freehand modes.\nRisk/edge case: ensure no regressions in preflight/render-recovery/self-heal flow and no break in `is_validation_harness_runnable` template expectations.\n\n3. Trim superseded freehand sections in generate prompt while preserving still-required contract fragments.\nFiles likely to change: `prompts/mode-validate-generate.txt`, `tests/test_validate_harness_rpc.py` (if assertions need to track trimmed sections), possibly `tests/test_validate_preflight_canary_tools_scope.py` comments if line-sensitive references are outdated.\nModules/interfaces: prompt content only (no runtime schema changes).\nRisk/edge case: tests currently enforce required fragments/forbidden fragments in this prompt; trim only sections tied to removed freehand generation architecture, retain still-consumed validation rules.\n\n4. Update docs to the manifest-centric default-template architecture.\nFiles likely to change: `README.md`, `agents.md`, `docs/validation-templates-plan.md`.\nModules/interfaces: env-var docs, validation lifecycle docs, operational failure-mode docs.\nData/interface changes: documented default for `VALIDATION_USE_TEMPLATES`; removal of freehand generation lane from lifecycle description.\nRisk/edge case: `docs/validation-templates-plan.md` contains an append-only status anchor; add a new snapshot entry and mark M7 complete without rewriting prior snapshots.\n\n5. Mark completion status in validation templates plan.\nFiles likely to change: `docs/validation-templates-plan.md`.\nChanges: append a new status snapshot under `<!-- anchor:validation-templates-status -->` with M7 = Done and evidence pointers; mark relevant backlog checkboxes complete.\nRisk/edge case: preserve historical snapshots exactly; append-only update.\n\n6. Testing and acceptance verification.\nTests to update/run:\n- `python3 tests/test_validate_workflow_validate_bootstrap.py`\n- `python3 tests/test_validate_process_template_mode.py`\n- `python3 tests/test_validate_process_render_recovery.py`\n- `python3 tests/test_validate_harness_rpc.py` (if prompt-contract assertions changed)\nAcceptance checks:\n- Validate flow defaults to template mode.\n- No live freehand harness-generation branch remains in `scripts/validate_process.sh`.\n- Template-mode bootstrap/default tests pass.\n- README/agents/docs are aligned with runtime behavior and M7 status is recorded.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "504ec6e8ed4cc0bdab552b80f1f253f13e96c635278823c8cc63ebbf6102cd85",
+  "lineage": {
+    "issue_number": 1519,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24774998130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24774998130",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1519"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260422112350_eedf9b7fec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1519,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24774998130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1519",
+  "timestamps": {
+    "created_at": "2026-04-22T11:23:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
