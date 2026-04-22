@@ -938,18 +938,18 @@ if args[0] == 'api':
 			print('graphql failed', file=sys.stderr)
 			sys.exit(1)
 		aliases = []
-		for _, issue_num in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query):
-			aliases.append(int(issue_num))
+		for alias, issue_num in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query):
+			aliases.append((int(alias), int(issue_num)))
 		repo = {}
-		for num in aliases:
-			if mode == 'partial' and aliases and num == aliases[-1]:
+		for alias_num, issue_num in aliases:
+			if mode == 'partial' and aliases and (alias_num, issue_num) == aliases[-1]:
 				continue
-			issue = get_issue(num)
+			issue = get_issue(issue_num)
 			issue_state = 'CLOSED' if issue.get('closed') else 'OPEN'
-			labels = store.get('graphql_labels', {}).get(str(num), get_issue(num).get('labels', []))
+			labels = store.get('graphql_labels', {}).get(str(issue_num), issue.get('labels', []))
 			issue_payload = {}
 			if re.search(r'(?m)^\s*number\s*$', query):
-				issue_payload['number'] = num
+				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
 			if 'labels(first:' in query:
@@ -964,7 +964,7 @@ if args[0] == 'api':
 					})
 				issue_payload['comments'] = {'nodes': comment_nodes}
 			if 'timelineItems(' in query:
-				linked_pr_num = store.get('issue_linked_prs', {}).get(str(num))
+				linked_pr_num = store.get('issue_linked_prs', {}).get(str(issue_num))
 				timeline_nodes = []
 				if linked_pr_num is not None:
 					pr = None
@@ -1001,7 +1001,7 @@ if args[0] == 'api':
 						},
 					})
 				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
-			repo[f'i{num}'] = issue_payload
+			repo[f'i{alias_num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
