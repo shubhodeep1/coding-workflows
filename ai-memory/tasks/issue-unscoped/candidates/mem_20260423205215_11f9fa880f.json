@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:2211-2220 | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus]\n  PROBLEM: subtract_shared mutates its Counter argument in place by decrementing counts.\n  WHY: Current callers pass shared_counts.copy(), but the helper still mutates its argument and would produce wrong counts if reused without copying.\n- scripts/orchestrate_poll_process.sh:2212-2220 | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: subtract_shared's removal of matching stripped lines is order-dependent.\n  WHY: The helper's result depends on input order, although the reviewer noted this is not a correctness issue for the current stripped-line fingerprinting use case.\n- scripts/verify_integration_fingerprints.py:103-117 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus]\n  PROBLEM: _fp_key is defined inside the loop over fingerprint entries.\n  WHY: That recreates the function object on every iteration, adding avoidable overhead for large fingerprint sets.\n- tests/test_orchestrate_poll_process.py:5300 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: re.search(r, if_line) can match partial patterns instead of requiring the full line.\n  WHY: The current escaped full-line patterns make the risk low today, but re.search would still allow substring false positives if shorter patterns were introduced.\n- tests/test_orchestrate_poll_process.py:5312 (approximately) | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, qwen_qwen3-coder-plus]\n  PROBLEM: re.search(r, if_line) can match partial patterns instead of requiring the full line.\n  WHY: The current escaped full-line patterns make the risk low today, but re.search would still allow substring false positives if shorter patterns were introduced.\n=== END CONSENSUS FINDINGS ===\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:2212-2220 | confidence=4\n  PROBLEM: subtract_shared mutates its Counter argument in place.\n  WHY: Current callers pass shared_counts.copy(), but the helper still mutates its argument and would produce wrong counts if reused without copying.\n- scripts/verify_integration_fingerprints.py:103-117 | confidence=3\n  PROBLEM: _fp_key is defined inside the loop over fingerprint entries.\n  WHY: That recreates the function object on every iteration, adding avoidable overhead for large fingerprint sets.\n- tests/test_orchestrate_poll_process.py:5312 (approximately) | confidence=2\n  PROBLEM: re.search(r, if_line) can match partial patterns instead of requiring the full line.\n  WHY: The current escaped full-line patterns make the risk low today, but re.search would still allow substring false positives if shorter patterns were introduced.\n- scripts/orchestrate_poll_process.sh:2212-2220 | confidence=1\n  PROBLEM: subtract_shared's removal of matching stripped lines is order-dependent.\n  WHY: The helper's result depends on input order, although the reviewer noted this is not a correctness issue for the current stripped-line fingerprinting use case.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:5300 | confidence=3\n  PROBLEM: re.search(r, if_line) can match partial patterns instead of requiring the full line.\n  WHY: The current escaped full-line patterns make the risk low today, but re.search would still allow substring false positives if shorter patterns were introduced.\n- scripts/orchestrate_poll_process.sh:2211-2219 | confidence=2\n  PROBLEM: subtract_shared mutates its Counter argument in place.\n  WHY: The helper becomes fragile if a caller reuses the same Counter without copying it first, because the counts will already have been decremented.\n- scripts/verify_integration_fingerprints.py:103-117 | confidence=2\n  PROBLEM: _fp_key is defined inside the loop over fingerprint entries.\n  WHY: Recreating the function object on every iteration adds avoidable overhead when processing many fingerprints.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- scripts/orchestrate_poll_process.sh:2212-2220 | confidence=4\n  PROBLEM: subtract_shared mutates its Counter argument in place by decrementing counts.\n  WHY: If a caller forgets to pass a copy, later computations that reuse the Counter could produce incorrect fingerprint counts.\n- scripts/verify_integration_fingerprints.py:103-117 | confidence=3\n  PROBLEM: _fp_key is defined inside the loop, so it is recreated on every iteration.\n  WHY: The extra function creation is unnecessary overhead for large fingerprint sets.\n- tests/test_orchestrate_poll_process.py:5312 | confidence=2\n  PROBLEM: re.search(r, if_line) can match partial patterns instead of requiring the full line.\n  WHY: The test may pass on substring matches, which can hide regressions if fingerprint patterns become shorter.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7fb916c720b763c02b81707361c390394595f17f4af6c87d810174c509ca3f24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1568,
+    "run_id": "24856369933",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24856369933",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423205215_11f9fa880f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1568,
+    "run_id": "24856369933"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T20:52:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
