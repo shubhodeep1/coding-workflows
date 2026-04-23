@@ -2456,13 +2456,36 @@ jobs:
                   ;;
               esac
             }
+            set_issue_phase_label_resilient() {
+              local issue_number="$1"
+              local target_label="$2"
+              local repo="$3"
+              ensure_label_exists "${target_label}" "${repo}" || true
+              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                -f "labels[]=${target_label}" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #${issue_number}."
+            }
+          fi
+          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
+            set_issue_phase_label_resilient() {
+              local issue_number="$1"
+              local target_label="$2"
+              local repo="$3"
+              ensure_label_exists "${target_label}" "${repo}" || true
+              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                -f "labels[]=${target_label}" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #${issue_number}."
+            }
           fi
 
           ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            fi
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -2473,36 +2496,10 @@ jobs:
           fi
 
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-          # Phase labels that are mutually exclusive — at most one should
-          # be present.  Defined as a jq-parseable array for the PUT swap.
-          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            # Fetch current labels (1 call) then atomically replace via PUT
-            # (1 call).  This avoids the `gh issue edit --remove-label`
-            # failure mode where a label that does not exist as a repo
-            # label definition aborts the entire edit command, leaving the
-            # issue with stale phase labels and no target label applied.
-            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-              echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
-              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f 'labels[]=ai:ready-to-merge' >/dev/null 2>&1 \
-                || echo "::warning::POST fallback also failed for #${issue_number}."
-              continue
-            fi
-            _cur="${_cur:-[]}"
-            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
-              '(. - $p) + ["ai:ready-to-merge"] | unique')"
-            if ! printf '{"labels":%s}' "${_new}" | \
-              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                --input - >/dev/null 2>&1; then
-              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
-              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f 'labels[]=ai:ready-to-merge' >/dev/null 2>&1 \
-                || echo "::warning::POST fallback also failed for #${issue_number}."
-            fi
+            set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Review-blocked judge decision
@@ -2566,14 +2563,37 @@ jobs:
                     ;;
                 esac
               }
+              set_issue_phase_label_resilient() {
+                local issue_number="$1"
+                local target_label="$2"
+                local repo="$3"
+                ensure_label_exists "${target_label}" "${repo}" || true
+                gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                  -f "labels[]=${target_label}" >/dev/null 2>&1 \
+                  || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
+              }
             fi
+          fi
+          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
+            set_issue_phase_label_resilient() {
+              local issue_number="$1"
+              local target_label="$2"
+              local repo="$3"
+              ensure_label_exists "${target_label}" "${repo}" || true
+              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                -f "labels[]=${target_label}" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
+            }
           fi
 
           ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+              PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+            fi
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -2584,45 +2604,10 @@ jobs:
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
-          # Phase labels that are mutually exclusive — at most one should
-          # be present.  Defined as a jq-parseable array for the PUT swap.
-          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
-            # Fetch current labels (1 call) then atomically replace via PUT
-            # (1 call).  This avoids the `gh issue edit --remove-label`
-            # failure mode where a label that does not exist as a repo
-            # label definition aborts the entire edit command, leaving the
-            # issue with stale phase labels and no target label applied.
-            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-              echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
-              if gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1; then
-                echo "  ai:review-blocked added via POST fallback on #${issue_number}."
-              else
-                echo "::warning::POST fallback also failed for #${issue_number}. Label may need manual application."
-              fi
-              continue
-            fi
-            _cur="${_cur:-[]}"
-            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
-              '(. - $p) + ["ai:review-blocked"] | unique')"
-            if ! printf '{"labels":%s}' "${_new}" | \
-              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                --input - >/dev/null 2>&1; then
-              # Fallback: just ensure ai:review-blocked is present (1 call).
-              # This alone is sufficient for the orchestrator poller to detect
-              # the review-blocked state; stale phase labels are cosmetic.
-              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
-              if gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1; then
-                echo "  ai:review-blocked added via POST fallback on #${issue_number}."
-              else
-                echo "::warning::POST fallback also failed for #${issue_number}. Label may need manual application."
-              fi
-            fi
+            set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
@@ -3247,17 +3232,40 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          # Do not source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" in this failure path: the
-          # workflow can fail before support scripts are fetched.
-          gh_retry gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
-            --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
-            2>/dev/null || true
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
+          fi
+          if ! type ensure_label_exists >/dev/null 2>&1; then
+            ensure_label_exists() {
+              local label_name="$1"
+              local repo="$2"
+              gh_retry gh label create "${label_name}" --repo "${repo}" \
+                --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
+                2>/dev/null || true
+            }
+          fi
+          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
+            set_issue_phase_label_resilient() {
+              local issue_number="$1"
+              local target_label="$2"
+              local repo="$3"
+              ensure_label_exists "${target_label}" "${repo}" || true
+              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                -f "labels[]=${target_label}" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #${issue_number}."
+            }
+          fi
+
+          ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
 
           ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            fi
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -3267,36 +3275,10 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
-          # Phase labels that are mutually exclusive — at most one should
-          # be present.  Defined as a jq-parseable array for the PUT swap.
-          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
-            # Fetch current labels (1 call) then atomically replace via PUT
-            # (1 call).  This avoids the `gh issue edit --remove-label`
-            # failure mode where a label that does not exist as a repo
-            # label definition aborts the entire edit command, leaving the
-            # issue with stale phase labels and no target label applied.
-            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-              echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
-              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1 \
-                || echo "::warning::POST fallback also failed for #${issue_number}."
-              continue
-            fi
-            _cur="${_cur:-[]}"
-            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
-              '(. - $p) + ["ai:review-blocked"] | unique')"
-            if ! printf '{"labels":%s}' "${_new}" | \
-              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                --input - >/dev/null 2>&1; then
-              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
-              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1 \
-                || echo "::warning::POST fallback also failed for #${issue_number}."
-            fi
+            set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
