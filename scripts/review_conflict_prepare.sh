@@ -117,6 +117,7 @@ _merge_exit=0
 # real complaint (e.g. "refusing to merge unrelated histories") instead
 # of a generic "investigate" message.
 _merge_stderr_file="$(mktemp)"
+trap 'rm -f "${_merge_stderr_file}"' EXIT INT TERM
 git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${_merge_stderr_file}" || _merge_exit=$?
 if [ -s "${_merge_stderr_file}" ]; then
   sed 's/^/git merge stderr: /' "${_merge_stderr_file}"
