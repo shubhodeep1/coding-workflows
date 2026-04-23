@@ -4629,6 +4629,57 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 		f"expected no review_autofix redispatch when no prior failed autofix run exists; "
 		f"got: {dispatches_for_pr}"
 	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+
+
+def test_retrigger_review_does_not_increment_when_redispatch_skipped():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 79},
+		prs=[
+			{
+				"number": 79,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": "claude/retrigger-review-active-autofix",
+				"headRefFromApi": "claude/retrigger-review-active-autofix",
+				"headSha": "sha79",
+				"baseRefName": "main",
+			},
+		],
+		active_autofix_runs=[
+			{
+				"workflow": "review_autofix.yml",
+				"branch": "claude/retrigger-review-active-autofix",
+				"status": "queued",
+				"conclusion": "",
+			},
+			{
+				"workflow": "review_autofix.yml",
+				"branch": "claude/retrigger-review-active-autofix",
+				"status": "completed",
+				"conclusion": "failure",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "79"]
+	assert dispatches_for_pr == [], (
+		f"expected no redispatch when _dispatch_review_for_conflicts returns rc=2; got: {dispatches_for_pr}"
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
 
 
 def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():

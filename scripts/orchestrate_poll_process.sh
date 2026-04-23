@@ -4454,9 +4454,14 @@ STALL_EOF
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
             _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_dispatch_rc=$?
-            if [ "${_rtr_dispatch_rc}" -eq 0 ] || [ "${_rtr_dispatch_rc}" -eq 2 ]; then
+            if [ "${_rtr_dispatch_rc}" -eq 0 ]; then
               tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, last run='${_rtr_failed_conclusion}', stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
               STALL_RECOVERY_SHOULD_INCREMENT="true"
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            if [ "${_rtr_dispatch_rc}" -eq 2 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
               STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
               return 0
             fi
