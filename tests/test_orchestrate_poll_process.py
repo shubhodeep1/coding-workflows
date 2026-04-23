@@ -5296,12 +5296,60 @@ def test_capture_intent_fingerprints_cross_dedups_net_no_op_lines():
 	)
 	# Genuine additions (the new if/then/else/fi wrapper lines that are
 	# NOT also on the minus side) must still survive as must_contain so
-	# true regressions are still detected. Regexes are re.escape'd, so
-	# match on the escaped form.
-	if_line_escaped = re.escape("if echo")
-	assert any(if_line_escaped in r for r in mc_regexes), (
+	# true regressions are still detected.
+	if_line = "if echo \"${PRIOR_LABELS_JSON}\" | jq -e --arg key \"${pw_inum}\" 'has($key)' >/dev/null 2>&1; then"
+	assert any(re.search(r, if_line) for r in mc_regexes), (
 		"true net-added lines must still produce must_contain entries; "
 		f"mc_regexes={mc_regexes!r}"
+	)
+
+
+def test_capture_intent_fingerprints_preserves_net_duplicate_line_additions():
+	# If a diff adds N copies and removes M copies of the same stripped
+	# line, only min(N, M) shared occurrences should be canceled. Any
+	# residual net addition must survive as must_contain.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	diff_text = (
+		"diff --git a/scripts/foo.sh b/scripts/foo.sh\n"
+		"--- a/scripts/foo.sh\n"
+		"+++ b/scripts/foo.sh\n"
+		"@@ -1,2 +1,3 @@\n"
+		"-        echo \"duplicate-line\"\n"
+		"-        echo \"duplicate-line\"\n"
+		"+        echo \"duplicate-line\"\n"
+		"+        echo \"duplicate-line\"\n"
+		"+        echo \"duplicate-line\"\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+
+	dup_regex = re.escape('echo "duplicate-line"')
+	mc_regexes = [p.get("regex", "") for p in result.get("must_contain", [])]
+	mnc_regexes = [p.get("regex", "") for p in result.get("must_not_contain", [])]
+	assert dup_regex in mc_regexes, (
+		"net-added duplicate line should survive as must_contain fingerprint; "
+		f"mc_regexes={mc_regexes!r}"
+	)
+	assert dup_regex not in mnc_regexes, (
+		"net-added duplicate line must not remain in must_not_contain; "
+		f"mnc_regexes={mnc_regexes!r}"
 	)
 
 
