@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:2994 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: `gh issue list --limit 200` can omit an existing open fix-up issue from the dedupe search once the open `ai:orchestrator-managed` set exceeds 200 items.\n  WHY: If the matching issue is beyond the first 200 results, the query will not see it and the workflow can create a duplicate fix-up.\n- scripts/validate_process.sh:2999-3000 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: jq `contains()` on the Local ID and tracking issue fields can substring-match a different open issue when IDs share a prefix, so deduplication may reuse the wrong fix-up issue.\n  WHY: Deepseek also noted the Local ID collision (`validation-fix-cycle-2` vs `validation-fix-cycle-20`), and the other four reviewers independently confirmed the tracking-issue collision (`#1043` vs `#10430`).\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:2994 | severity=medium | confidence=3\n  PROBLEM: `gh issue list --limit 200` can omit an existing open fix-up issue from the dedupe search once the open `ai:orchestrator-managed` set exceeds 200 items.\n  WHY: If the matching issue is beyond the first 200 results, the query will not see it and the workflow can create a duplicate fix-up.\n- scripts/validate_process.sh:3000 | severity=medium | confidence=4\n  PROBLEM: jq `contains()` on the Local ID and tracking issue fields can substring-match the wrong open issue when IDs share a prefix.\n  WHY: `contains(\"Local ID: \\`validation-fix-cycle-2\\`\")` can match `validation-fix-cycle-20`, and `contains(\"Tracking issue: #1043\")` can match `#10430`.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3_1-pro-preview ===\n- scripts/validate_process.sh:3000 | severity=medium | confidence=5\n  PROBLEM: `contains($trk)` performs substring matching, so `Tracking issue: #1043` can falsely match `Tracking issue: #10430`.\n  WHY: That can cause the orchestrator to reuse the wrong issue and skip creating the distinct fix-up for the current tracker.\n=== END FINDINGS FROM google_gemini-3_1-pro-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:3000 | severity=medium | confidence=4\n  PROBLEM: `contains($trk)` performs substring matching, so deduplication can reuse the wrong fix-up issue when tracking numbers share a prefix.\n  WHY: For example, a body containing `Tracking issue: #10430` matches a search for `Tracking issue: #1043`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:3000 | severity=medium | confidence=4\n  PROBLEM: `contains($trk)` performs substring matching, so a lookup for `Tracking issue: #1043` can match an issue body for `Tracking issue: #10430`.\n  WHY: That can make the workflow reuse the wrong open fix-up and skip creating the correct one.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/validate_process.sh:2999 | severity=medium | confidence=4\n  PROBLEM: The jq `contains()` check for tracking issue numbers can false-positive on prefix collisions, causing the wrong open fix-up issue to be reused.\n  WHY: It can match `Tracking issue: #1043` against `Tracking issue: #10430`, which misattributes the validation failure.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2791feede60173ae2b58dbb03b3a1790d47f8010327916b8f94184426f71cbfa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1555,
+    "run_id": "24853545884",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24853545884",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423194215_5069078d8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1555,
+    "run_id": "24853545884"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T19:42:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
