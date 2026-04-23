@@ -47,6 +47,9 @@ LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
 LOG_EXCERPT_MAX_CHARS = 4000
 SLOW_RUNS_PER_REPO = 10
 DEFAULT_SUCCESS_SAMPLE_RATE = 0.07
+LOG_ARCHIVE_FETCH_RETRIES = 3
+LOG_ARCHIVE_FETCH_BACKOFF_SECONDS = 1.0
+MISSING_LOG_ARCHIVE_MARKER = "partial_data:missing_log_archive"
 RETRY_MARKERS = (
     "rate limit",
     "secondary",
@@ -668,6 +671,63 @@ def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CH
     return excerpts
 
 
+def _normalize_error_text(exc: Exception) -> str:
+    text = " ".join(str(exc).split()).strip()
+    return text or exc.__class__.__name__
+
+
+def _sanitize_missing_log_archive_detail(detail: str) -> str:
+    sanitized = detail.replace("=", ":")
+    return sanitized[:512] or "unknown"
+
+
+def _is_missing_log_archive_error(error_text: str, run_id: int) -> bool:
+    normalized = error_text.lower()
+    has_http_missing = any(
+        marker in normalized
+        for marker in (
+            "http 404",
+            "404 not found",
+            "status code 404",
+            "404 error",
+            "http 410",
+            "410 gone",
+            "status code 410",
+            "410 error",
+        )
+    )
+    has_archive_endpoint = f"actions/runs/{run_id}/logs" in normalized
+    return (has_http_missing and has_archive_endpoint) or "log archive not found" in normalized
+
+
+def _normalize_log_archive_exception(repo: str, run_id: int, exc: Exception) -> Exception:
+    detail = _normalize_error_text(exc)
+    if _is_missing_log_archive_error(detail, run_id):
+        sanitized_detail = _sanitize_missing_log_archive_detail(detail)
+        wrapped = RuntimeError(
+            f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} detail={sanitized_detail}"
+        )
+        wrapped.__cause__ = exc
+        return wrapped
+    return exc
+
+
+def _is_retryable_log_archive_exception(exc: Exception) -> bool:
+    message = _normalize_error_text(exc).lower()
+    return any(marker in message for marker in RETRY_MARKERS)
+
+
+def _append_log_error(errors: list[dict[str, str]], repository: str, run_id: int, exc: Exception) -> None:
+    errors.append(
+        {
+            "repository": repository,
+            "run_id": str(run_id),
+            "scope": "logs",
+            "message": _normalize_error_text(exc),
+        }
+    )
+
+
 def _fetch_run_log_archive(
     repo: str,
     run_id: int,
@@ -682,15 +742,41 @@ def _fetch_run_log_archive(
             raise cached
         return cached
 
-    try:
-        payload = gh_api_bytes(_build_logs_endpoint(repo, run_id), token=token)
-    except Exception as exc:  # noqa: BLE001
+    endpoint = _build_logs_endpoint(repo, run_id)
+    for attempt in range(1, LOG_ARCHIVE_FETCH_RETRIES + 1):
+        try:
+            payload = gh_api_bytes(endpoint, token=token, retries=1)
+        except Exception as exc:  # noqa: BLE001
+            normalized_exc = _normalize_log_archive_exception(repo, run_id, exc)
+            is_missing_archive = _normalize_error_text(normalized_exc).startswith(
+                f"{MISSING_LOG_ARCHIVE_MARKER} "
+            )
+            if (
+                not is_missing_archive
+                and attempt < LOG_ARCHIVE_FETCH_RETRIES
+                and _is_retryable_log_archive_exception(normalized_exc)
+            ):
+                time.sleep(LOG_ARCHIVE_FETCH_BACKOFF_SECONDS * attempt)
+                continue
+            if cache is not None:
+                cache[identity] = normalized_exc
+            if is_missing_archive:
+                raise normalized_exc from exc
+            raise
+
+        if not payload:
+            empty_exc = RuntimeError("empty_log_archive_payload")
+            wrapped_empty_exc = RuntimeError(
+                f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} "
+                f"detail={_sanitize_missing_log_archive_detail(_normalize_error_text(empty_exc))}"
+            )
+            wrapped_empty_exc.__cause__ = empty_exc
+            if cache is not None:
+                cache[identity] = wrapped_empty_exc
+            raise wrapped_empty_exc from empty_exc
         if cache is not None:
-            cache[identity] = exc
-        raise
-    if cache is not None:
-        cache[identity] = payload
-    return payload
+            cache[identity] = payload
+        return payload
 
 
 def list_run_log_excerpts(
@@ -1102,14 +1188,7 @@ def export_categorized_logs(
             )
             full_logs_by_identity[identity] = extract_full_logs(payload)
         except Exception as exc:  # noqa: BLE001
-            errors.append(
-                {
-                    "repository": repository,
-                    "run_id": str(run_id),
-                    "scope": "logs",
-                    "message": str(exc),
-                }
-            )
+            _append_log_error(errors, repository, run_id, exc)
 
     for category in LOG_EXPORT_CATEGORIES:
         for run in categories[category]:
@@ -1366,14 +1445,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_cache["rows_snapshot"] = updated_rows
                 repo_cache["last_updated"] = _format_iso8601(datetime.now(timezone.utc))
         except Exception as exc:  # noqa: BLE001
-            errors.append(
-                {
-                    "repository": repository,
-                    "run_id": str(run_id),
-                    "scope": "logs",
-                    "message": str(exc),
-                }
-            )
+            _append_log_error(errors, repository, run_id, exc)
 
     _cache_write_context(
         repo_root=repo_root,
