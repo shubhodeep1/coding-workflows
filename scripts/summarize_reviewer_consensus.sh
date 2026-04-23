@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Consolidate N reviewer outputs from one review pass into a single findings
-# ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: xhigh).
+# ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: medium).
 #
 # Invoked twice per review run:
 #   --prefix pass1  --output ${CROSS_POLLINATION_FILE}  → feeds pass-2 reviewers
@@ -9,9 +9,13 @@
 # Reads every ${PREVIOUS_REVIEWS_DIR}/<prefix>_<safe_model>.txt, builds one
 # prompt with per-reviewer sentinels, spawns codex-cli with an isolated
 # CODEX_HOME so the model/reasoning override cannot leak into the editor
-# call. Retries up to 3× on empty stdout / non-zero exit / timeout. Hard-fails
-# the workflow on final failure — the job-level "Telegram failure" step in
-# review_autofix.yml surfaces the incident to the operator.
+# call. Retries up to 10× with exponential backoff (5s, 10s, 20s, 40s, 80s,
+# 160s, 320s, 640s, 1280s between attempts; no cap) on empty stdout /
+# non-zero exit / timeout. Hard-fails the workflow on final failure — the
+# job-level "Telegram failure" step in review_autofix.yml surfaces the
+# incident to the operator. The PR-closed sentinel is polled every 2s during
+# each backoff sleep so a mid-retry PR close exits cleanly without waiting
+# out the remaining delay.
 #
 # Env contract:
 #   PREVIOUS_REVIEWS_DIR              dir holding <prefix>_*.txt
@@ -19,7 +23,7 @@
 #   SUPPORT_SCRIPTS_DIR               helper scripts (for gh_helpers.sh)
 #   CODEX_HOME                        shared codex home (source of config.toml)
 #   XPOLL_SUMMARISER_MODEL            default: openai/gpt-5.4-mini
-#   XPOLL_SUMMARISER_REASONING        default: xhigh
+#   XPOLL_SUMMARISER_REASONING        default: medium
 #   XPOLL_SUMMARISER_LINES_PER_REVIEWER  target lines per reviewer section (default 160)
 #   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS   per-attempt timeout (default 1200)
 #   XPOLL_SUMMARISER_MAX_INPUT_LINES     pre-truncate per-reviewer input above this (default 3000)
@@ -56,7 +60,7 @@ fi
 : "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
 
 SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.4-mini}"
-SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-xhigh}"
+SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-medium}"
 SUMMARISER_TARGET_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"
 SUMMARISER_CALL_TIMEOUT="${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS:-1200}"
 SUMMARISER_MAX_INPUT_LINES="${XPOLL_SUMMARISER_MAX_INPUT_LINES:-3000}"
@@ -219,13 +223,41 @@ for cfg in "${summariser_codex_home}/config.toml" "${summariser_codex_home}/.cod
 	fi
 done
 
-# ── Retry loop (3 attempts, hard-fail on final miss) ─────────────────────
+# ── Retry loop (10 attempts, exponential backoff 5s→1280s, hard-fail) ────
+# Backoff base=5s doubles each failure (5,10,20,40,80,160,320,640,1280); no
+# cap. Sentinel is polled every 2s during the sleep so a PR close mid-retry
+# exits cleanly without waiting the full remaining delay.
+SUMMARISER_MAX_ATTEMPTS=10
+SUMMARISER_BACKOFF_BASE_SECS=5
 log_file="${RUNTIME_DIR}/summariser_${PREFIX}.log"
 : > "${log_file}"
 
+# Interruptible sleep: sleep ${1} seconds total in 2s chunks, bailing out
+# early (exit 0 from the script) if the PR-closed sentinel appears.
+sentinel_aware_sleep()
+{
+	local total="$1"
+	local slept=0
+	local step
+	while [ "${slept}" -lt "${total}" ]; do
+		if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+			echo "summariser (${PREFIX}): PR #${PR_NUMBER} closed during backoff (after ${slept}s of ${total}s) — exiting cleanly." | tee -a "${log_file}" >&2
+			mkdir -p "$(dirname "${OUTPUT}")"
+			printf '(No consensus — PR closed during review.)\n' > "${OUTPUT}"
+			exit 0
+		fi
+		step=$(( total - slept ))
+		if [ "${step}" -gt 2 ]; then
+			step=2
+		fi
+		sleep "${step}"
+		slept=$(( slept + step ))
+	done
+}
+
 attempt=1
 last_rc=0
-while [ "${attempt}" -le 3 ]; do
+while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
 		echo "summariser (${PREFIX}): PR #${PR_NUMBER} closed mid-retry — exiting cleanly." | tee -a "${log_file}" >&2
 		mkdir -p "$(dirname "${OUTPUT}")"
@@ -235,7 +267,7 @@ while [ "${attempt}" -le 3 ]; do
 
 	tmp_stdout="$(mktemp)"
 	tmp_stderr="$(mktemp)"
-	echo "summariser (${PREFIX}): attempt ${attempt}/3 — model=${SUMMARISER_MODEL} reasoning=${SUMMARISER_REASONING}" | tee -a "${log_file}"
+	echo "summariser (${PREFIX}): attempt ${attempt}/${SUMMARISER_MAX_ATTEMPTS} — model=${SUMMARISER_MODEL} reasoning=${SUMMARISER_REASONING}" | tee -a "${log_file}"
 
 	last_rc=0
 	CODEX_HOME="${summariser_codex_home}" \
@@ -268,10 +300,18 @@ while [ "${attempt}" -le 3 ]; do
 	fi
 
 	rm -f "${tmp_stdout}" "${tmp_stderr}"
+
+	# Sleep before the next attempt (skip after the final attempt).
+	if [ "${attempt}" -lt "${SUMMARISER_MAX_ATTEMPTS}" ]; then
+		backoff_secs=$(( SUMMARISER_BACKOFF_BASE_SECS * (1 << (attempt - 1)) ))
+		echo "summariser (${PREFIX}): backing off ${backoff_secs}s before attempt $(( attempt + 1 ))/${SUMMARISER_MAX_ATTEMPTS}." | tee -a "${log_file}" >&2
+		sentinel_aware_sleep "${backoff_secs}"
+	fi
+
 	attempt=$(( attempt + 1 ))
 done
 
-echo "::error::summariser (${PREFIX}): all 3 attempts failed (last rc=${last_rc}). See ${log_file}." >&2
+echo "::error::summariser (${PREFIX}): all ${SUMMARISER_MAX_ATTEMPTS} attempts failed (last rc=${last_rc}). See ${log_file}." >&2
 # Hard-fail so the workflow job enters failure() and the existing
 # "Telegram failure" step at review_autofix.yml:4196-4220 alerts the operator.
 exit 1
