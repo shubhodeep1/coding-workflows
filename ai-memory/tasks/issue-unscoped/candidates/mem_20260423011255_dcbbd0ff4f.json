@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `scripts/label_helpers.sh`:91-196 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The PR removes `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` from the shared helper script.\n  WHY: Multiple contract tests still assert these symbols exist, so their removal breaks the shared label-management contract and causes test failures; severity disagreement did not occur.\n- `.github/workflows/review_autofix.yml`:1119 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The preflight gate condition `if: success() && env.PR_CLOSED != 'true'` can run when `PR_CLOSED` is unset.\n  WHY: If the earlier PR-state lookup does not populate `PR_CLOSED`, the gate still evaluates truthy and may probe a closed PR; stepfun_step-3_5-flash explicitly disagreed and treated this as acceptable, so the highest severity is medium.\n- `.github/workflows/review_autofix.yml`:1116 | severity=low | confidence=1\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: The protected-branch error classification regex may miss some GitHub error variants.\n  WHY: This is a hardening-only gap that does not affect correctness, and only these reviewers flagged it.\n- `.github/workflows/review_autofix.yml`:1116 | severity=low | confidence=1\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: Push-probe output may include ANSI/control characters when git output is colorized.\n  WHY: This is also hardening-only and was only flagged by these reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `scripts/label_helpers.sh` | severity=high | confidence=5\n  PROBLEM: The PR removes `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` from the shared helper script.\n  WHY: The contract test `tests/test_label_helpers_phase_transition_contract.py` still expects these symbols to exist, so the removal will fail CI.\n- `.github/workflows/review_autofix.yml` | severity=medium | confidence=3\n  PROBLEM: The preflight gate condition `if: success() && env.PR_CLOSED != 'true'` can run when `PR_CLOSED` is unset.\n  WHY: If the GitHub API step does not set `PR_CLOSED`, the gate may still execute on a closed PR.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=1\n  PROBLEM: Protected branch regex patterns could be expanded to catch more GitHub error variants.\n  WHY: This is a minor hardening improvement and not a correctness issue.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=1\n  PROBLEM: Push probe output capture may include control characters if git output is colorized.\n  WHY: This is also a minor hardening improvement only.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `scripts/label_helpers.sh` | severity=high | confidence=5\n  PROBLEM: The PR deletes `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` from the shared helper script.\n  WHY: Contract tests still assert these symbols exist, and removing the shared implementation also breaks the single-source-of-truth label-management contract.\n- `.github/workflows/review_autofix.yml` | severity=medium | confidence=3\n  PROBLEM: The preflight gate condition `success() && env.PR_CLOSED != 'true'` is prone to running unnecessarily if `PR_CLOSED` is empty or unset.\n  WHY: An unset variable causes the gate to run even on closed PRs, leading to a redundant dry-run push.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=1\n  PROBLEM: The regex for `protected_branch_policy` is missing common GitHub error variants.\n  WHY: This is a hardening-only issue that could reduce classification accuracy.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=1\n  PROBLEM: `push_probe_output` capture may include ANSI control characters.\n  WHY: This is also hardening-only and affects matching/log cleanliness rather than correctness.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `scripts/label_helpers.sh` | severity=high | confidence=5\n  PROBLEM: The PR removes `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` from the shared label helpers script.\n  WHY: The removal breaks contract tests that explicitly verify these symbols exist, even though workflows have inline fallbacks.\n- `.github/workflows/review_autofix.yml` | severity=medium | confidence=3\n  PROBLEM: The preflight pushability gate condition `if: success() && env.PR_CLOSED != 'true'` may run when `PR_CLOSED` is unset.\n  WHY: When `PR_CLOSED` is empty, the condition still evaluates true and can trigger an unnecessary dry-run push on a closed PR.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `scripts/label_helpers.sh` | severity=high | confidence=5\n  PROBLEM: The PR removes `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` from the shared helper script.\n  WHY: The contract test `tests/test_label_helpers_phase_transition_contract.py` still asserts these symbols exist, so their removal breaks the shared helper contract.\n- `.github/workflows/issue_pr_status.yml` | severity=high | confidence=5\n  PROBLEM: The workflow still calls `set_issue_phase_label_resilient \"${issue_number}\" \"${FINAL_LABEL}\" \"${REPOSITORY}\"`, but its contract is now broken by the helper removal.\n  WHY: The workflow depends on the removed shared implementation, and the review notes say the contract test validates the helper internals that are no longer present.\n- `scripts/label_helpers.sh / .github/workflows/issue_pr_status.yml` | severity=medium | confidence=4\n  PROBLEM: The inline fallback no longer enforces phase-label exclusivity.\n  WHY: The original helper removed prior `ai:*` labels before adding the new one, while the fallback only POSTs the new label and can leave multiple conflicting phase labels.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=3\n  PROBLEM: The preflight gate condition `if: success() && env.PR_CLOSED != 'true'` can still run when `PR_CLOSED` is unset.\n  WHY: An empty variable evaluates as not equal to `true`, so the gate may probe unnecessarily on closed PRs.\n- `.github/workflows/review_autofix.yml:1116` | severity=low | confidence=1\n  PROBLEM: The PR_CLOSED dependency could be more robust.\n  WHY: This is a suggested hardening tweak only.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- (No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "1df713b435f9399df03deb3fd8b5d6c4b323afeeaa35eaaf9ce94cdc627ff669",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1531,
+    "run_id": "24810287925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24810287925",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423011255_dcbbd0ff4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1531,
+    "run_id": "24810287925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T01:12:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
