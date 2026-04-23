@@ -742,7 +742,10 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 			continue
 		if branch and run.get('branch') != branch:
 			continue
-		runs.append({'status': run.get('status', 'queued')})
+		runs.append({
+			'status': run.get('status', 'queued'),
+			'conclusion': run.get('conclusion', ''),
+		})
 	if jq_query:
 		import subprocess as _sp
 		p = _sp.run(['jq', '-r', jq_query], input=json.dumps(runs), capture_output=True, text=True)
@@ -4550,6 +4553,133 @@ def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
 	assert not any("/approved" in body or "/reclarify" in body for body in issue_comments)
 	assert not any("Stall Judge — Issue #10" in body for body in tracking_comments)
 
+
+
+def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{
+				"number": 77,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": "claude/retrigger-review-failed-autofix",
+				"headRefFromApi": "claude/retrigger-review-failed-autofix",
+				"headSha": "sha77",
+				"baseRefName": "main",
+			},
+		],
+		active_autofix_runs=[
+			{
+				"workflow": "review_autofix.yml",
+				"branch": "claude/retrigger-review-failed-autofix",
+				"status": "completed",
+				"conclusion": "failure",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "77"]
+	assert dispatches_for_pr, (
+		f"expected review_autofix redispatch for PR 77 after last run concluded failure; "
+		f"got: {result.get('review_dispatches')}"
+	)
+
+
+def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 78},
+		prs=[
+			{
+				"number": 78,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": "claude/retrigger-review-no-failed-autofix",
+				"headRefFromApi": "claude/retrigger-review-no-failed-autofix",
+				"headSha": "sha78",
+				"baseRefName": "main",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "78"]
+	assert dispatches_for_pr == [], (
+		f"expected no review_autofix redispatch when no prior failed autofix run exists; "
+		f"got: {dispatches_for_pr}"
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+
+
+def test_retrigger_review_does_not_increment_when_redispatch_skipped():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 79},
+		prs=[
+			{
+				"number": 79,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": "claude/retrigger-review-active-autofix",
+				"headRefFromApi": "claude/retrigger-review-active-autofix",
+				"headSha": "sha79",
+				"baseRefName": "main",
+			},
+		],
+		active_autofix_runs=[
+			{
+				"workflow": "review_autofix.yml",
+				"branch": "claude/retrigger-review-active-autofix",
+				"status": "queued",
+				"conclusion": "",
+			},
+			{
+				"workflow": "review_autofix.yml",
+				"branch": "claude/retrigger-review-active-autofix",
+				"status": "completed",
+				"conclusion": "failure",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "79"]
+	assert dispatches_for_pr == [], (
+		f"expected no redispatch when _dispatch_review_for_conflicts returns rc=2; got: {dispatches_for_pr}"
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
 
 
 def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():

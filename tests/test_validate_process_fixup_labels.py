@@ -96,6 +96,13 @@ if args[:2] == ["issue", "create"]:
 	print(f"https://github.com/{repo}/issues/{next_num}")
 	sys.exit(0)
 
+if args[:2] == ["issue", "list"]:
+	state.setdefault("issue_list_args", []).append(args)
+	response = state.get("issue_list_response", [])
+	save()
+	print(json.dumps(response))
+	sys.exit(0)
+
 if args[:2] == ["label", "create"]:
 	label_name = args[2] if len(args) > 2 else ""
 	state.setdefault("label_create_args", []).append(args)
@@ -119,7 +126,19 @@ if args and args[0] == "api":
 			break
 	if path:
 		state.setdefault("api_calls", []).append(path)
+	jq_filter = first_value("--jq")
+	api_responses = state.get("api_responses", {}) or {}
+	matched = None
+	for pattern, resp in api_responses.items():
+		if pattern and pattern in path:
+			matched = resp
+			break
 	save()
+	if matched is not None:
+		if jq_filter == ".state":
+			print(matched.get("state", ""))
+		else:
+			print(json.dumps(matched))
 	sys.exit(0)
 
 save()
@@ -319,6 +338,240 @@ ensure_label_exists "ai:orchestrator-managed"
 		assert "label already exists, skipping 'ai:orchestrator-managed'" not in notify_text
 		assert "::debug::ensure_label_exists: label already exists, skipping 'ai:clarification'." in proc.stderr
 		assert "::debug::ensure_label_exists: label already exists, skipping 'ai:orchestrator-managed'." in proc.stderr
+
+
+def _run_needs_fixes_harness(
+	tmp_path: Path,
+	preload_state: dict,
+) -> tuple[subprocess.CompletedProcess, Path, Path, Path]:
+	runtime_dir = tmp_path / "runtime"
+	bin_dir = tmp_path / "bin"
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+	bin_dir.mkdir(parents=True, exist_ok=True)
+
+	gh_state_file = runtime_dir / "gh_state.json"
+	_install_mock_gh(bin_dir, gh_state_file)
+	gh_state_file.write_text(json.dumps(preload_state), encoding="utf-8")
+
+	diagnose_file = runtime_dir / "validation_diagnosis.json"
+	diagnose_file.write_text(
+		json.dumps(
+			{
+				"status": "needs_fixes",
+				"diagnosis": "runtime tests failed",
+				"fix_issues": [
+					{
+						"id": "validation-fix-1",
+						"title": "Fix flaky assertion",
+						"body": "Apply deterministic wait strategy.",
+						"priority": 2,
+						"depends_on": [],
+					}
+				],
+				"harness_fixes": "",
+			}
+		),
+		encoding="utf-8",
+	)
+
+	branch = _extract_needs_fixes_branch()
+	labels_file = runtime_dir / "ensure_labels.txt"
+	created_json_file = runtime_dir / "created_fix_issues.json"
+	harness_script = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+gh_retry() {{ "$@"; }}
+ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
+is_tracking_run() {{ return 0; }}
+post_tracking_comment() {{ :; }}
+set_tracking_phase_label() {{ :; }}
+write_result_files() {{ :; }}
+tg_notify() {{ :; }}
+
+DIAG_STATUS=\"needs_fixes\"
+
+trap 'printf "%s" "${{CREATED_FIX_ISSUES_JSON}}" > "${{CREATED_JSON_FILE}}"' EXIT
+
+case "${{DIAG_STATUS}}" in
+  needs_fixes)
+{branch}
+    ;;
+esac
+"""
+	script_path = runtime_dir / "needs_fixes_harness.sh"
+	script_path.write_text(harness_script, encoding="utf-8")
+	script_path.chmod(0o755)
+
+	env = {
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+		"MOCK_GH_STATE_FILE": str(gh_state_file),
+		"RUNTIME_DIR": str(runtime_dir),
+		"DIAGNOSE_RESULT_FILE": str(diagnose_file),
+		"VALIDATION_CYCLE": "2",
+		"TRACKING_ISSUE_RAW": "1043",
+		"INTEGRATION_BRANCH": "orchestrator/project-1020",
+		"FAILED_TESTS": "3",
+		"DIAG_TEXT": "runtime tests failed",
+		"GITHUB_REPOSITORY": "owner/repo",
+		"CREATED_FIX_ISSUES_JSON": "[]",
+		"ENSURE_LABELS_FILE": str(labels_file),
+		"CREATED_JSON_FILE": str(created_json_file),
+	}
+	run_env = os.environ.copy()
+	run_env.update(env)
+
+	proc = subprocess.run(
+		["bash", str(script_path)],
+		cwd=str(tmp_path),
+		env=run_env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+	return proc, gh_state_file, labels_file, created_json_file
+
+
+def test_validate_needs_fixes_dedupes_existing_open_fixup() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_dedupe_") as td:
+		preload = {
+			"issue_list_response": [
+				{
+					"number": 999,
+					"body": (
+						"## Diagnosis\n\n---\n"
+						"- Tracking issue: #1043\n"
+						"- Local ID: `validation-fix-cycle-2`\n"
+						"- Managed by: AI Orchestrator\n"
+					),
+				},
+				{
+					"number": 888,
+					"body": "- Local ID: `other` - Tracking issue: #1043",
+				},
+			],
+			"api_responses": {
+				"repos/owner/repo/issues/1043": {"state": "open"},
+			},
+		}
+		proc, gh_state_file, labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), preload
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert state.get("issue_create_args", []) == [], (
+			f"expected no issue create on dedupe hit, got: {state.get('issue_create_args')}"
+		)
+		assert state.get("issue_list_args"), "expected gh issue list to be invoked for dedupe"
+
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [999], f"expected reuse of existing #999, got: {created_json}"
+
+		# Dedupe path exits before ensure_label_exists runs.
+		label_text = labels_file.read_text(encoding="utf-8").strip() if labels_file.exists() else ""
+		assert label_text == "", f"expected no ensure_label_exists calls, got: {label_text!r}"
+
+
+def test_validate_needs_fixes_skips_when_tracker_closed() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_closed_") as td:
+		preload = {
+			"issue_list_response": [],
+			"api_responses": {
+				"repos/owner/repo/issues/1043": {"state": "closed"},
+			},
+		}
+		proc, gh_state_file, labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), preload
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert state.get("issue_create_args", []) == [], (
+			f"expected no issue create when tracker closed, got: {state.get('issue_create_args')}"
+		)
+		# Tracker-open guard must have consulted the API.
+		assert any(
+			"repos/owner/repo/issues/1043" in p for p in state.get("api_calls", [])
+		), f"expected tracker state API call, got: {state.get('api_calls')}"
+
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [], f"expected empty CREATED_FIX_ISSUES_JSON, got: {created_json}"
+
+		label_text = labels_file.read_text(encoding="utf-8").strip() if labels_file.exists() else ""
+		assert label_text == "", f"expected no ensure_label_exists calls, got: {label_text!r}"
+
+
+def test_validate_needs_fixes_skips_dedupe_when_tracker_closed() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_dedupe_closed_") as td:
+		preload = {
+			"issue_list_response": [
+				{
+					"number": 999,
+					"body": (
+						"## Diagnosis\n\n---\n"
+						"- Tracking issue: #1043\n"
+						"- Local ID: `validation-fix-cycle-2`\n"
+						"- Managed by: AI Orchestrator\n"
+					),
+				},
+			],
+			"api_responses": {
+				"repos/owner/repo/issues/1043": {"state": "closed"},
+			},
+		}
+		proc, gh_state_file, labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), preload
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert state.get("issue_create_args", []) == [], (
+			f"expected no issue create when tracker closed, got: {state.get('issue_create_args')}"
+		)
+		assert state.get("issue_list_args", []) == [], (
+			"expected dedupe issue listing to be skipped when tracker is closed"
+		)
+		assert any(
+			"repos/owner/repo/issues/1043" in p for p in state.get("api_calls", [])
+		), f"expected tracker state API call, got: {state.get('api_calls')}"
+
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [], f"expected empty CREATED_FIX_ISSUES_JSON, got: {created_json}"
+
+		label_text = labels_file.read_text(encoding="utf-8").strip() if labels_file.exists() else ""
+		assert label_text == "", f"expected no ensure_label_exists calls, got: {label_text!r}"
+
+
+def test_validate_needs_fixes_creates_when_no_dedupe_and_tracker_open() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_create_open_") as td:
+		preload = {
+			"issue_list_response": [
+				{
+					"number": 777,
+					"body": "- Local ID: `validation-fix-cycle-9` - Tracking issue: #1043",
+				},
+				{
+					"number": 666,
+					"body": "- Local ID: `validation-fix-cycle-2` - Tracking issue: #9999",
+				},
+			],
+			"api_responses": {
+				"repos/owner/repo/issues/1043": {"state": "open"},
+			},
+		}
+		proc, gh_state_file, labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), preload
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert len(state.get("issue_create_args", [])) == 1, (
+			f"expected exactly one issue create when no dedupe match and tracker open, "
+			f"got: {state.get('issue_create_args')}"
+		)
+
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [1201], f"expected new issue number, got: {created_json}"
 
 
 def main() -> int:

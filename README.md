@@ -1231,6 +1231,8 @@ A belt-and-braces check is also wired into `execute_stall_recovery_action retrig
 
 Fail-open: when neither cache nor REST fallback can confirm a conflict state, the legacy `retrigger_review` empty-commit push runs as before. The guard can never cause an action that otherwise would not have fired; it only redirects `retrigger_review` → `resolve_merge_conflict` within the conflict window.
 
+A second belt-and-braces check in `execute_stall_recovery_action retrigger_review` covers the **failed-autofix** case: after the merge-conflict override runs (and the PR is known to be mergeable), the action queries `gh run list --workflow <wf> --branch <head_ref> --limit 1` for each of `ai-review.yml`, `internal-review.yml`, `review_autofix.yml`, and if the most recent completed run concluded `failure`, `cancelled`, or `timed_out`, it calls `_dispatch_review_for_conflicts` directly instead of pushing an empty commit. The existing cycle-local `_CONFLICT_DISPATCH_TRACKER` and `_has_active_autofix_run` guards inside that helper prevent duplicate dispatch. On dispatch success (rc=0), the action emits `STALL_RECOVERY_EFFECTIVE_ACTION=redispatch_review_autofix`, consumes one recovery attempt (`STALL_RECOVERY_SHOULD_INCREMENT=true`), and returns 0. On already-dispatched-this-cycle/active (rc=2), it emits the same effective action but returns without incrementing the recovery counter. On dispatch failure (rc=1) the legacy empty-commit push runs as the fallback. Rationale: a failed Review-Autofix run leaves the PR with no in-flight worker and no review verdict, and an empty-commit push does not re-dispatch the workflow on its own (only `pull_request.synchronize` on a real code delta does), so the PR would otherwise sit until `MAX_STALL_RECOVERIES_PER_ISSUE` is exhausted.
+
 Log prefixes `STALL_RECOVERY issue=... reason=open_pr_merge_conflict ...` / `STALL_SKIP issue=... reason=open_pr_merge_conflict_dispatch_skipped ...` are public contracts (CLAUDE.md §6 Naming Immutability).
 
 ### Stall recovery: linked-PR closure and re-issue Gap-2 surfacing
@@ -1378,7 +1380,9 @@ This phase starts only after the orchestrator judge returns `complete`.
 1. The poller transitions the tracking issue to `ai:validating` and dispatches `.github/workflows/ai-validate.yml`.
 2. The wrapper workflow calls reusable `.github/workflows/validate.yml@stable`, which runs `scripts/validate_process.sh`.
 3. If validation passes, `validate_process.sh` sets `ai:validated`; the poller marks the project `complete` and closes the tracking issue.
-4. If validation fails with fixable findings (`needs_fixes`), `validate_process.sh` creates fix-up issues, comments them on the tracking issue, and sets `ai:validation-fixing`.
+4. If validation fails with fixable findings (`needs_fixes`), `validate_process.sh` creates fix-up issues, comments them on the tracking issue, and sets `ai:validation-fixing`. Before creating a new fix-up issue, the script now runs two guards (fail-open on API error):
+   - **Per-tracker dedupe**: if an open issue labelled `ai:orchestrator-managed` already contains both the `Local ID: validation-fix-cycle-<N>` marker and the `Tracking issue: #<tracker>` marker (the pair emitted in the fix-up body), the existing issue number is reused instead of creating a duplicate — the tracking comment and `ai:validation-fixing` label are still applied so downstream poller behavior is unchanged.
+   - **Tracker-open guard**: if the tracking issue's GitHub `state` is not `open`, no fix-up issue is created and the run exits with `needs_fixes`/`write_result_files` + Telegram notice (no tracking comment, no label flip on a closed tracker).
 5. While in `ai:validation-fixing`, the poller waits for all active validation fix-up issues to reach `ai:merged`.
 6. After all fix-up issues merge, the poller increments the validation cycle, returns to `ai:validating`, and redispatches `ai-validate.yml`.
 
