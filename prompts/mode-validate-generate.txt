@@ -7,18 +7,19 @@ All context is inlined directly into the prompt for efficiency:
 
 Do NOT read pre_assembled_static.txt, phase context files, or any other bundled context files.
 
-Your task: generate or update a runtime smoke-test harness that runs on ubuntu-latest using Docker and Docker Compose.
+The freehand harness-generation execution path has been removed from `scripts/validate_process.sh`.
+This prompt is retained as a compatibility rule ledger for template/lint/self-heal updates and must stay aligned with the manifest-centric renderer flow (`scripts/render_validation_templates.py` + `workflow-templates/validation-harness/`).
 
-Before generating artifacts, analyze the repository to identify the app type, entry points, startup commands, required local services, referenced env vars, existing test infrastructure, existing Dockerfile/docker-compose assets, and whether `.ai/validate.yml` hints exist.
+Before proposing prompt updates, analyze the repository to identify app/runtime characteristics, startup commands, required local services, referenced env vars, existing Docker assets, and whether `.ai/validate.yml` hints exist.
 
-Required outputs:
+Repository artifact contract (template-aligned):
 1. `validation/docker-compose.test.yml`
-2. `validation/validate.env`
+2. Optional: `validation/validate.env` when the rendered family/app needs runtime env defaults
 3. `validation/tests/00_canary.sh` followed by `validation/tests/NN_*.sh` scripts (each emitting TAP-like output with `ok N` / `not ok N` for individual tests)
 4. Optional: `validation/Dockerfile.app` when the compose harness builds a custom app image
 5. Optional: `validation/mocks/*` for inbound payload simulation only
 
-Mandatory rules:
+Mandatory guardrails:
 - Do not require human interaction.
 - Do not ask clarification questions.
 - Do not modify application source code; only write under `validation/`.
@@ -28,25 +29,10 @@ Mandatory rules:
 - Keep runtime within a 10-minute validation budget.
 - Ensure all generated `.sh` files are executable (for example, with `chmod +x`).
 
-`validation/validate.env` requirements:
-- Include only synthetic defaults for local validation; never reference production credentials.
-- Preserve env var names consumed by runtime (`VALIDATION_TEST_USERNAME`, `VALIDATION_TEST_PASSWORD`, `VALIDATION_TEST_API_KEY`).
+`validation/validate.env` guidance:
+- Keep values synthetic and local-only; never reference production credentials.
+- Preserve env var names consumed by runtime (`VALIDATION_TEST_USERNAME`, `VALIDATION_TEST_PASSWORD`, `VALIDATION_TEST_API_KEY`) when those vars are required by the app/harness startup path.
 - Use simple `KEY=VALUE` lines compatible with Docker Compose `env_file`.
-- Fail-fast env vars (CRITICAL — most common cause of `harness_error`): the app is expected to crash during import/startup if a required secret is missing. Before finalising `validate.env`, read `.ai/validate.yml` hints first and treat `env_overrides` (including format hints captured during discover) as authoritative, then scan the repository for additional env vars read during module import or service `__init__` in a way that raises when absent/empty. Representative patterns to grep for:
-    - `raise RuntimeError("<VAR> is not configured")`
-    - `raise .* if not .*os\.(getenv|environ)` and multi-line `if not os\.(getenv|environ)(...)` checks that raise in subsequent lines
-    - `os.environ["<VAR>"]` (bracket access with no default)
-    - `os.getenv("<VAR>") or .*raise`
-    - `assert os.getenv("<VAR>")`
-    - `Fernet(...)`, `jwt.encode/decode(..., key=...)`, `cryptography.*` constructors, `boto3.client(..., aws_access_key_id=..., aws_secret_access_key=..., aws_session_token=...)` initialized from env at import time (for example via `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
-    - Django/Flask/FastAPI settings modules that dereference env vars at import
-  Every such variable MUST appear in `validate.env` with a synthetic, format-valid placeholder. Format constraints matter because fail-fast code often validates the value, not just its presence:
-    - Fernet / `cryptography.fernet.Fernet` keys: a urlsafe-base64-encoded EXACTLY-32-byte value (44-char string ending in `=`), for example `TFA_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=` (the base64 of the ASCII string `0123456789abcdef0123456789abcdef`). Fernet rejects keys whose decoded length is not exactly 32, so mentally (or programmatically) verify the example decodes to 32 bytes before emitting it. Never use a real production key.
-    - JWT / HMAC secrets: any non-empty ASCII string of sufficient length (32+ chars) unless the code enforces a specific length.
-    - Hex-encoded keys (e.g. `*_HEX_KEY`, `*_PRIVATE_KEY`): the exact hex length required by the consuming library (32 / 64 / 128 hex chars).
-    - URI-shaped vars (`*_URI`, `*_URL`, `*_DSN`): a well-formed URI pointing at a service defined in the compose harness (`mongodb://mongo:27017/test`, `redis://redis:6379/0`, `postgres://postgres:postgres@postgres:5432/postgres`), not a placeholder string.
-    - Boolean/feature flags that gate startup: the value the app requires to reach a running state in test mode (typically `false`/`0` to disable external integrations).
-  When uncertain about the required format, prefer a value that matches an existing test fixture in the repo over invention. If the app defines a constant like `_TEST_FERNET_KEY` or similar already, reuse it verbatim.
 
 Docker build-context path rules (CRITICAL):
 - `docker compose` resolves `build.context` relative to the compose file's directory, NOT the working directory.
