@@ -1115,6 +1115,109 @@ jobs:
           echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
           echo "Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA} for stale-base detection."
 
+      - name: Preflight pushability gate
+        if: success() && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          classify_push_probe_reason() {
+            local probe_text="$1"
+            local probe_lc
+            probe_lc="$(printf '%s' "${probe_text}" | tr '[:upper:]' '[:lower:]')"
+
+            if printf '%s' "${probe_lc}" | grep -Eq 'authentication failed|permission to .* denied|access denied|not authorized|repository not found|could not read username'; then
+              printf 'auth_or_repo_denied'
+              return
+            fi
+            if printf '%s' "${probe_lc}" | grep -Eq 'gh006|protected branch|protected branch update failed|required status check|required checks|hook declined'; then
+              printf 'protected_branch_policy'
+              return
+            fi
+            if printf '%s' "${probe_lc}" | grep -Eq 'read-only|repository is archived|repository was archived|has been archived'; then
+              printf 'read_only_repo'
+              return
+            fi
+            if printf '%s' "${probe_lc}" | grep -Eq 'deny updating a hidden ref|cannot update ref|refusing to update checked out branch'; then
+              printf 'ref_not_writable'
+              return
+            fi
+            if printf '%s' "${probe_lc}" | grep -Eq 'non-fast-forward|fetch first|failed to push some refs'; then
+              printf 'non_fast_forward'
+              return
+            fi
+            if printf '%s' "${probe_lc}" | grep -Eq 'timed out|temporary failure|connection reset|service unavailable|http 5[0-9][0-9]|network is unreachable|could not resolve host'; then
+              printf 'transient_transport'
+              return
+            fi
+            printf 'unknown_probe_failure'
+          }
+
+          is_definitive_unpushable_reason() {
+            case "$1" in
+              checkout_guard_unpushable|missing_target_branch|auth_or_repo_denied|protected_branch_policy|read_only_repo|ref_not_writable)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          push_preflight_status="pass"
+          push_preflight_reason="ok"
+          push_probe_output=""
+
+          if [ "${CAN_PUSH:-false}" != "true" ]; then
+            push_preflight_status="blocked"
+            push_preflight_reason="checkout_guard_unpushable"
+          elif [ -z "${TARGET_BRANCH:-}" ]; then
+            push_preflight_status="blocked"
+            push_preflight_reason="missing_target_branch"
+          else
+            push_probe_file="$(mktemp)"
+            if git push --dry-run origin "HEAD:${TARGET_BRANCH}" >"${push_probe_file}" 2>&1; then
+              push_preflight_status="pass"
+              push_preflight_reason="ok"
+            else
+              push_probe_output="$(cat "${push_probe_file}" || true)"
+              push_preflight_reason="$(classify_push_probe_reason "${push_probe_output}")"
+              if is_definitive_unpushable_reason "${push_preflight_reason}"; then
+                push_preflight_status="blocked"
+              else
+                push_preflight_status="warn_fail_open"
+              fi
+            fi
+            rm -f "${push_probe_file}"
+          fi
+
+          echo "PUSH_PREFLIGHT_STATUS=${push_preflight_status}" >> "$GITHUB_ENV"
+          echo "PUSH_PREFLIGHT_REASON=${push_preflight_reason}" >> "$GITHUB_ENV"
+          echo "PUSH_PREFLIGHT_V1 status=${push_preflight_status} reason=${push_preflight_reason} can_push=${CAN_PUSH:-unset} target_branch=${TARGET_BRANCH:-unset}"
+
+          {
+            echo "### Push preflight"
+            echo ""
+            echo "- status: ${push_preflight_status}"
+            echo "- reason: ${push_preflight_reason}"
+            echo "- can_push: ${CAN_PUSH:-unset}"
+            echo "- target_branch: ${TARGET_BRANCH:-unset}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "${push_probe_output}" ]; then
+            echo "Push preflight probe output (tail):"
+            printf '%s\n' "${push_probe_output}" | tail -n 40
+          fi
+
+          if [ "${push_preflight_status}" = "blocked" ]; then
+            echo "::error::PUSH_PREFLIGHT_BLOCKED_V1 reason=${push_preflight_reason} can_push=${CAN_PUSH:-unset} target_branch=${TARGET_BRANCH:-unset}"
+            exit 1
+          fi
+          if [ "${push_preflight_status}" != "pass" ]; then
+            echo "::warning::PUSH_PREFLIGHT_FAIL_OPEN_V1 reason=${push_preflight_reason} can_push=${CAN_PUSH:-unset} target_branch=${TARGET_BRANCH:-unset}"
+          fi
+
       - name: "Preflight: Warn if protected paths are tracked in consumer repo"
         # Defensive check: in consumer repos, the workflow's runtime helpers
         # (known scripts/<helper> files, prompts/, .serena/, .github/scripts/,
