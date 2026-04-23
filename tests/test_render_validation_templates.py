@@ -365,7 +365,7 @@ def test_renderer_family_dispatch_routing_python_repo_checks() -> None:
 
 		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
 		assert "sleep infinity" in compose_text
-		assert "test -x /workspace/scripts/run_validation_repo_checks.sh" in compose_text
+		assert "test -f /workspace/scripts/run_validation_repo_checks.sh" in compose_text
 		assert "condition: service_healthy" not in compose_text
 
 		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")

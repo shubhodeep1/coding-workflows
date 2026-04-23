@@ -19,19 +19,23 @@ def build_parser() -> argparse.ArgumentParser:
 	return parser
 
 
-def run_isolated_import(module_name: str) -> tuple[int, str]:
+def run_isolated_import(module_name: str, timeout_seconds: float = 30.0) -> tuple[int, str]:
 	code = (
 		"import importlib; "
 		"import sys; "
 		f"importlib.import_module({module_name!r}); "
 		"sys.stdout.write('ok')"
 	)
-	proc = subprocess.run(
-		[sys.executable, "-c", code],
-		text=True,
-		capture_output=True,
-		check=False,
-	)
+	try:
+		proc = subprocess.run(
+			[sys.executable, "-c", code],
+			text=True,
+			capture_output=True,
+			check=False,
+			timeout=timeout_seconds,
+		)
+	except subprocess.TimeoutExpired:
+		return 124, f"timeout>{timeout_seconds}s"
 	return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 

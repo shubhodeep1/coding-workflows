@@ -14,13 +14,14 @@ def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Probe graceful shutdown semantics")
 	parser.add_argument("--pid", type=int, required=True)
 	parser.add_argument("--compose-file", default="validation/docker-compose.test.yml")
+	parser.add_argument("--app-service", default="app")
 	parser.add_argument("--timeout-seconds", type=int, default=20)
 	parser.add_argument("--poll-seconds", type=float, default=1.0)
 	parser.add_argument("--log-tail-lines", type=int, default=40)
 	return parser
 
 
-def send_sigterm_to_container(pid: int, compose_file: str) -> tuple[bool, str]:
+def send_sigterm_to_container(pid: int, compose_file: str, app_service: str) -> tuple[bool, str]:
 	proc = subprocess.run(
 		[
 			"docker",
@@ -29,7 +30,7 @@ def send_sigterm_to_container(pid: int, compose_file: str) -> tuple[bool, str]:
 			compose_file,
 			"exec",
 			"-T",
-			"app",
+			app_service,
 			"/bin/sh",
 			"-c",
 			f"kill -TERM {pid}",
@@ -44,7 +45,7 @@ def send_sigterm_to_container(pid: int, compose_file: str) -> tuple[bool, str]:
 	return True, ""
 
 
-def process_is_running(pid: int, compose_file: str) -> bool:
+def process_is_running(pid: int, compose_file: str, app_service: str) -> bool:
 	proc = subprocess.run(
 		[
 			"docker",
@@ -53,7 +54,7 @@ def process_is_running(pid: int, compose_file: str) -> bool:
 			compose_file,
 			"exec",
 			"-T",
-			"app",
+			app_service,
 			"/bin/sh",
 			"-c",
 			f"kill -0 {pid}",
@@ -65,25 +66,24 @@ def process_is_running(pid: int, compose_file: str) -> bool:
 	return proc.returncode == 0
 
 
-def bounded_compose_logs_tail(lines: int, compose_file: str) -> str:
+def bounded_compose_logs_tail(lines: int, compose_file: str, app_service: str) -> str:
+	if lines <= 0:
+		return ""
 	proc = subprocess.run(
-		["docker", "compose", "-f", compose_file, "logs", "--no-color", "app"],
+		["docker", "compose", "-f", compose_file, "logs", "--no-color", "--tail", str(lines), app_service],
 		text=True,
 		capture_output=True,
 		check=False,
 	)
 	if proc.returncode != 0:
 		return ""
-	log_lines = (proc.stdout or "").splitlines()
-	if lines <= 0:
-		return ""
-	return "\n".join(log_lines[-lines:])
+	return (proc.stdout or "").strip()
 
 
 def main() -> int:
 	args = build_parser().parse_args()
 
-	ok, message = send_sigterm_to_container(args.pid, args.compose_file)
+	ok, message = send_sigterm_to_container(args.pid, args.compose_file, args.app_service)
 	if not ok:
 		print(
 			f"# graceful_shutdown failed to send SIGTERM to container pid={args.pid} error={message}",
@@ -93,12 +93,12 @@ def main() -> int:
 
 	deadline = time.monotonic() + max(1, args.timeout_seconds)
 	while time.monotonic() < deadline:
-		if not process_is_running(args.pid, args.compose_file):
+		if not process_is_running(args.pid, args.compose_file, args.app_service):
 			print("# graceful_shutdown process transitioned to not-running after SIGTERM")
 			return 0
 		time.sleep(max(0.1, args.poll_seconds))
 
-	tail = bounded_compose_logs_tail(args.log_tail_lines, args.compose_file)
+	tail = bounded_compose_logs_tail(args.log_tail_lines, args.compose_file, args.app_service)
 	payload = {
 		"reason": "timeout_waiting_for_shutdown",
 		"pid": args.pid,

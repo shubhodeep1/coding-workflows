@@ -112,7 +112,7 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 
 		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
 		assert "sleep infinity" in compose_text
-		assert "test -x /workspace/scripts/run_validation_repo_checks.sh" in compose_text
+		assert "test -f /workspace/scripts/run_validation_repo_checks.sh" in compose_text
 		assert "condition: service_healthy" not in compose_text
 
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")

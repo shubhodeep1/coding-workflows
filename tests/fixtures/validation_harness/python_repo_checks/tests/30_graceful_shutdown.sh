@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+APP_SERVICE="${APP_SERVICE:-app}"
 SHUTDOWN_TIMEOUT_SECONDS="${SHUTDOWN_TIMEOUT_SECONDS:-20}"
 SHUTDOWN_POLL_SECONDS="${SHUTDOWN_POLL_SECONDS:-1}"
 GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
@@ -12,7 +13,7 @@ GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
 echo "1..1"
 
 set +e
-probe_pid="$(docker compose -f "${COMPOSE_FILE}" exec -T app /bin/sh -c 'sleep 300 >/tmp/repo-check-sleep.log 2>&1 & echo $!')"
+probe_pid="$(docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c 'sleep 300 >/tmp/repo-check-sleep.log 2>&1 & echo $!')"
 spawn_rc=$?
 set -e
 
@@ -26,6 +27,7 @@ set +e
 python3 "${SCRIPT_DIR}/_lib/graceful_shutdown.py" \
 	--pid "${probe_pid}" \
 	--compose-file "${COMPOSE_FILE}" \
+	--app-service "${APP_SERVICE}" \
 	--timeout-seconds "${SHUTDOWN_TIMEOUT_SECONDS}" \
 	--poll-seconds "${SHUTDOWN_POLL_SECONDS}" \
 	--log-tail-lines "${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES}"
