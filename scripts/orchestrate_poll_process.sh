@@ -1199,7 +1199,7 @@ _fetch_issue_states_batch_graphql() {
 get_issue_state_labels_json() {
   local issue_num="$1"
   gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" \
-    --jq '{state: (.state // "open"), state_reason: (.state_reason // ""), labels: [(.labels // [])[] | .name]}' \
+    --jq '{state: ((.state // "open") | ascii_downcase), state_reason: (.state_reason // ""), labels: [(.labels // [])[] | .name]}' \
     || echo '{"state":"open","state_reason":"","labels":[]}'
 }
 
@@ -3942,7 +3942,7 @@ close_linked_pr() {
     [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
     scanned=$((scanned + 1))
     local pr_state
-    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | grep -xE 'open|closed|merged' || echo "")"
+    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | tr '[:upper:]' '[:lower:]' | grep -xE 'open|closed|merged' || echo "")"
     if [ "${pr_state}" = "open" ]; then
       echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
       if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -9033,7 +9033,7 @@ ${RB_FIX_DESC}
         [ -n "${blocker_issue}" ] || continue
         BLOCKER_STATE="$(printf '%s' "${IF_BLOCKER_STATES_JSON}" | jq -r --arg blocker_issue "${blocker_issue}" '.[$blocker_issue] // empty' 2>/dev/null || echo "")"
         if [ "${BLOCKER_STATE}" != "open" ] && [ "${BLOCKER_STATE}" != "closed" ]; then
-          BLOCKER_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+          BLOCKER_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' | tr '[:upper:]' '[:lower:]' || echo "")"
         fi
         case "${BLOCKER_STATE}" in
           open)
