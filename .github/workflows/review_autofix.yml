@@ -1214,7 +1214,10 @@ jobs:
               printf '%s' "${push_probe_output}" | sed -E \
                 -e 's#(https?://)([^/@[:space:]]+):([^/@[:space:]]+)@#\1[REDACTED]:[REDACTED]@#g' \
                 -e 's#(https?://)([^/@[:space:]]+)@#\1[REDACTED]@#g' \
-                -e 's#x-access-token:[^@[:space:]]+#x-access-token:[REDACTED]#g'
+                -e 's#x-access-token:[^@[:space:]]+#x-access-token:[REDACTED]#g' \
+                -e 's/\r/ /g' \
+                -e 's/##\[/##\\[/g' \
+                -e 's/^::(error|warning|notice|debug|group|endgroup|add-mask|add-matcher|remove-matcher|set-output|save-state|echo|stop-commands|add-path|set-env)([[:space:]]|::)/::\\\1\2/g'
             )"
             echo "Push preflight probe output (tail, credentials redacted):"
             printf '%s\n' "${sanitized_push_probe_output}" | tail -n 40

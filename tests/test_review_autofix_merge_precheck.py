@@ -63,19 +63,21 @@ def test_known_ci_artifacts_removed_in_resolve_step():
     """The resolver path must still remove known CI-generated files before its
     merge invocation, whether implemented inline or via delegated script."""
     wf = _workflow()
+    resolver_script = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
     rm_line = "rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh"
-    count = wf.count(rm_line)
 
-    assert count >= 1, (
-        "Expected at least one known-CI-artifact rm -f occurrence in "
-        f"review_autofix.yml, found {count}"
-    )
     assert "bash \"${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh\"" in wf, (
         "Expected delegated conflict-prepare script call when resolver cleanup "
         "is no longer duplicated inline"
     )
-    assert "review_conflict_prepare.sh" in wf, (
-        "Expected review_conflict_prepare.sh to remain part of workflow wiring"
+    rm_pos = resolver_script.find(rm_line)
+    assert rm_pos != -1, (
+        "Expected delegated resolver script to remove known CI artifacts before merge"
+    )
+    merge_pos = resolver_script.find('git merge --no-commit --no-ff "origin/${BASE_BRANCH}"')
+    assert merge_pos != -1, "Expected delegated resolver script to perform merge replay"
+    assert rm_pos < merge_pos, (
+        "Known CI artifact cleanup must happen before resolver merge replay"
     )
 
 
