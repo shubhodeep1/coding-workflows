@@ -479,8 +479,28 @@ jobs:
               # The "completed" run may be a spurious trigger (e.g. non-/answer
               # comment that caused the job to be skipped) while the real Plan
               # run is still working.
-              OTHER_ACTIVE_PLAN_RUNS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo "0")
+              _plan_runs_json_valid() {
+                printf '%s' "$1" \
+                  | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
+                  >/dev/null 2>&1
+              }
+              PLAN_RUNS_JSON='{"workflow_runs":[]}'
+              if _PLAN_RUNS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" 2>/dev/null); then
+                PLAN_RUNS_JSON="$_PLAN_RUNS_OUT"
+              fi
+              unset _PLAN_RUNS_OUT
+              if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then
+                PLAN_RUNS_JSON='{"workflow_runs":[]}'
+              fi
+              OTHER_ACTIVE_PLAN_RUNS=0
+              if _OTHER_ACTIVE_PLAN_RUNS=$(printf '%s' "$PLAN_RUNS_JSON" \
+                | jq -r '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null); then
+                OTHER_ACTIVE_PLAN_RUNS="$_OTHER_ACTIVE_PLAN_RUNS"
+              fi
+              unset _OTHER_ACTIVE_PLAN_RUNS
+              if ! [[ "$OTHER_ACTIVE_PLAN_RUNS" =~ ^[0-9]+$ ]]; then
+                OTHER_ACTIVE_PLAN_RUNS=0
+              fi
               if [ "$OTHER_ACTIVE_PLAN_RUNS" -gt 0 ]; then
                 echo "  ⏳ Found ${OTHER_ACTIVE_PLAN_RUNS} other active Plan run(s) — waiting for the real run to finish"
                 continue

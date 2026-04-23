@@ -555,17 +555,17 @@ Safety net:
 - If both gates mis-fire and incorrectly soft-exit on an advance that was in fact our own autofix (e.g. identity API returned stale data), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/30 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch`. Worst-case recovery window: ~30 min. Same safety net as §20.1.
 - If both gates fail-open on detection error and the push subsequently hard-fails at the merge-retry step, the existing `phase_failed` ledger entry + Telegram failure alert fires as before. Detection failure gracefully degrades to the pre-gate behaviour.
 
-### 20.3 Ledger-Only Commit Auto-Merge
+### 20.3 Ledger Persistence (cache-backed) and the retained `LEDGER_ONLY_COMMIT` flag
 
 §20.1's skip used to create an interaction bug: when a review pass produced no productive edit but `scripts/review_issue_ledger.sh` still wrote `REVIEW_LEDGER_PATH`, the `commit_changes` step produced an `[ai-autofix]` commit whose only tracked path was the ledger. That commit set `DID_COMMIT=true`, which historically gated three "clean review" steps (ready-to-merge label, enable auto-merge, telegram success) out of firing. The subsequent `pull_request.synchronize` event was then skipped by §20.1, so there was no follow-up run in which those gates could fire. Result: a PR that the editor cleared as no-change got stuck in `mergeable_state=clean` indefinitely (see PR #1472).
 
 In the default configuration the ledger path is now `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` (per-PR, to prevent cross-PR merge conflicts on main) and is **gitignored**; cross-iteration persistence is handled by `actions/cache` restore/save steps wrapped around `Apply fixes with editor model` in `review_autofix.yml` (keys of the form `review-ledger-<repo>-pr-<N>-<run_id>-<run_attempt>` with `restore-keys: review-ledger-<repo>-pr-<N>-`). The ledger is updated on disk each iteration but never staged, so the ledger-only commit scenario the rest of this section describes **cannot manifest in the default configuration**. The contract below remains enforced because consumer repos that override `REVIEW_LEDGER_PATH` to a tracked path (or force-add the default path) still produce ledger-only commits, and the auto-merge gates must remain correct in that mode.
 
-Contract:
+Current model (post-#1469 fix):
 
 - `jobs.codex-agent.steps.commit_changes` writes a second signal alongside `DID_COMMIT` / `did_commit`: **`LEDGER_ONLY_COMMIT`** (env) and **`ledger_only_commit`** (step output). The flag is `true` iff `git diff-tree --no-commit-id --name-only -r HEAD` emits exactly one path equal to `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}`. When `commit_changes` runs, its default is `false` (including the no-commit branch). In the default configuration the ledger path is gitignored and never staged, so this comparison never matches and the flag is always `false`; the detector exists for consumer repos that override `REVIEW_LEDGER_PATH` to a tracked path. If `commit_changes` is skipped (e.g. `max_iterations_reached` / `PR_CLOSED` short-circuits), the env var and step output are undefined; downstream `if` expressions must not rely on the flag being set in that case (the `did_commit != 'true'` clause they OR with already handles the skipped-commit branch).
 - **Five gates** OR `env.LEDGER_ONLY_COMMIT == 'true'` into their existing `steps.commit_changes.outputs.did_commit != 'true'` clause:
-  1. `Detect editor-claimed-but-uncommitted changes` (sets `EDITOR_CHANGES_LOST`) — must still run to verify the editor's "no edit" claim.
+  1. `Detect editor-claimed-but-uncommitted changes` (sets `EDITOR_CHANGES_LOST`) — must still run to verify the editor's "no edit" claim. The defence-in-depth shim `scripts/detect_editor_changes_lost.sh` additionally reads the optional `COMMITTED_FILES_FILE` env var (wired into the step env by the `Initialize runtime workspace` step in `.github/workflows/review_autofix.yml`); when the working tree is clean AND every file path referenced in an edit-verb narrative bullet is present in that committed-files list, the shim prints `false` so the caller downgrades to an informational log. This unblocks the productive-ledger-deletion case (editor's only claim is `Removed \`.ai/review_issue_ledger/pr-<N>.txt\``, and that path **is** in the commit) without loosening the PR #1472 safety check (editor claimed `scripts/foo.py` but only the ledger got committed — `scripts/foo.py` is absent from `COMMITTED_FILES_FILE`, subset fails, shim still returns `true`).
   2. `Validate editor no-op disposition` (sets `EDITOR_NOOP_SUSPICIOUS`) — same reason.
   3. `Mark linked issues ready to merge` — applies `ai:ready-to-merge`.
   4. `Enable auto-merge on PR` — `gh pr merge --squash --auto`.
@@ -573,15 +573,20 @@ Contract:
 - The push step (`DID_COMMIT == 'true' || CONFLICT_RESOLVED == 'true'`) is **not** touched. Ledger-only commits still push so `scripts/review_issue_ledger.sh` can read its own prior state on the next iteration — losing the ledger push would reset `persist_count` and re-open already-resolved issues as fresh findings.
 - The §20.1 gate skip is **not** touched either. The subsequent `synchronize` run is still skipped; clean-review work happens in the same run that produced the ledger-only commit.
 
-Why `LEDGER_ONLY_COMMIT` and not repurposing `DID_COMMIT`:
+Gates that still OR `LEDGER_ONLY_COMMIT == 'true'` with `did_commit != 'true'` (legacy, no-op in default config):
 
-- The push step, peer-dedup retrigger, and iteration counter all key off `DID_COMMIT`. Flipping it to `false` on ledger-only commits would lose the ledger push, defeating the ledger's cross-iteration persistence. Per CLAUDE.md §6 an existing identifier's semantics are immutable; add alongside.
-- The safety gates (`EDITOR_CHANGES_LOST`, `EDITOR_NOOP_SUSPICIOUS`) correctly skip on any `DID_COMMIT=true` before this fix because a productive edit commit self-evidently proves the editor ran. A ledger-only commit does **not** prove the editor ran (the ledger write happens in a separate pipeline stage), so those gates must still run — hence the explicit `|| LEDGER_ONLY_COMMIT == 'true'` in gates 1–2 as well as the clean-review gates 3–5.
+1. `Detect editor-claimed-but-uncommitted changes` (sets `EDITOR_CHANGES_LOST`).
+2. `Validate editor no-op disposition` (sets `EDITOR_NOOP_SUSPICIOUS`).
+3. `Mark linked issues ready to merge`.
+4. `Enable auto-merge on PR`.
+5. `Telegram success`.
 
-API cost audit (CLAUDE.md §15):
+Cache persistence contract:
 
-- The detection uses a single `git diff-tree --no-commit-id --name-only -r HEAD` — a local git operation, zero GitHub API calls.
-- No new `gh` invocations. No new batched or cached data. No cycle-local caching needed (decision is scoped to the single commit just produced).
+- `jobs.codex-agent.steps.Restore review-issue ledger` runs before the editor; `jobs.codex-agent.steps.Save review-issue ledger` runs immediately after `Apply fixes with editor model` (before `commit_changes`) with `if: always()` so the ledger for the current iteration is persisted even if a later step (push, conflict resolver) fails.
+- The save step writes `.ai/review_issue_ledger/` + `${REVIEW_LEDGER_PATH}` through `actions/cache/save@v4`, gated by `if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'`, with `continue-on-error: true` to fail open on cache upload errors.
+- The key includes `${{ github.repository }}` plus `run_id` + `run_attempt` so each run produces a distinct, repository-scoped cache entry; the `restore-keys` fallback gives every new iteration the latest previously-saved state for the same PR. GitHub's LRU eviction is 7 days since last access, which is well inside any active autofix cycle.
+- Missing cache on first run is handled by `scripts/review_issue_ledger.sh` by treating every current issue as `NEW`; `ledger_reset=1` is emitted only for malformed prior-ledger content.
 
 Operational rules:
 
@@ -629,14 +634,14 @@ Operational rules:
 - Renames of `AUTOFIX_CONTINUATION_ENABLED`, `AUTOFIX_CONTINUATION_SETTLE_SECS`, or the log prefixes above are breaking changes per CLAUDE.md §6. Add alongside the old name and continue emitting the old log line in parallel for at least one stable-channel cycle before removing.
 - Do not raise `AUTOFIX_CONTINUATION_SETTLE_SECS` clamp beyond `60` without re-evaluating the `timeout-minutes: 180` on `codex-agent` — a long settle on a failing dispatch loop could eat budget otherwise reserved for the editor.
 - Do not move or weaken the target run's `retrigger_guard` cap gating (`max_iterations_reached`) without preserving the terminal `rb_judge` / review-blocked path; continuation relies on that in-run guard for cap exhaustion handling.
-- Non-orchestrator PR coverage: continuation is the primary mechanism because the stall cron does not scan PRs that have no orchestrator-pipeline-labelled linked issue. When the cap is reached for such PRs the `rb_judge` step (gated by `ENABLE_REVIEW_BLOCKED_JUDGE`, default `true`, `review_autofix.yml` step `Mark linked issues review-blocked (autofix exhaustion)` at around line 2404) decides the terminal action. See README `ENABLE_REVIEW_BLOCKED_JUDGE` and the §20.4 Judge-at-cap note.
+- Non-orchestrator PR coverage: continuation is the primary mechanism because the stall cron does not scan PRs that have no orchestrator-pipeline-labelled linked issue. When the cap is reached for such PRs the `rb_judge` step (gated by `ENABLE_REVIEW_BLOCKED_JUDGE`, default `true`, `review_autofix.yml` step `Mark linked issues review-blocked (autofix exhaustion)` at around line 2502) decides the terminal action. See README `ENABLE_REVIEW_BLOCKED_JUDGE` and the §20.4 Judge-at-cap note.
 
 ### 20.5 Failure-Comment Attribution (`EDITOR_SUMMARY_POSTED`)
 
 `jobs.codex-agent` posts two distinct PR comments at end-of-run:
 
 - The **editor summary** (step `Post editor summary comment`, around line 1734 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when an editor summary is available but a downstream step failed, we still want that audit trail on the PR thread.
-- The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 3259) is gated on `failure() && env.PR_CLOSED != 'true'`.
+- The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 3269) is gated on `failure() && env.PR_CLOSED != 'true'`.
 
 When a step *after* the editor summary fails (push race against a concurrent push, conflict resolver abort, auto-merge config error, telemetry plumbing), both steps fire and the PR thread shows two comments 10–30s apart. The default failure body — "encountered an error and could not complete. This may be due to an editor failure, missing dependencies, or an infrastructure issue" — directly contradicts the success-looking editor summary above it and mis-attributes the failure for the human reader.
 

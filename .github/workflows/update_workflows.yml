@@ -66,13 +66,64 @@ jobs:
           TOTAL_CHECKED=0
           TOTAL_UPDATED=0
           TOTAL_CREATED=0
+          FAILURE_REASON_FILE="/tmp/update_workflows_failure_reason.txt"
 
           # The updater itself must already exist for this job to run;
           # never overwrite or auto-create it to avoid bootstrap loops.
           SELF_TEMPLATE="ai-update-workflows.yml"
 
+          printf '' > /tmp/updated_files.txt
+          printf '' > /tmp/created_files.txt
+          printf '' > /tmp/skipped_files.txt
+          : > "${FAILURE_REASON_FILE}"
+
+          echo "templates_checked=0" >> "$GITHUB_OUTPUT"
+          echo "templates_updated=0" >> "$GITHUB_OUTPUT"
+          echo "templates_created=0" >> "$GITHUB_OUTPUT"
+          echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          echo "validation_ok=false" >> "$GITHUB_OUTPUT"
+          echo "failure_reason_code=" >> "$GITHUB_OUTPUT"
+          echo "failure_reason_detail=" >> "$GITHUB_OUTPUT"
+
+          fail_with_reason() {
+            local code="$1"
+            local detail="$2"
+            local detail_sanitized="${detail//$'\r'/ }"
+            detail_sanitized="${detail_sanitized//$'\n'/ }"
+            echo "::error::${code}: ${detail_sanitized}"
+            echo "validation_ok=false" >> "$GITHUB_OUTPUT"
+            echo "failure_reason_code=${code}" >> "$GITHUB_OUTPUT"
+            echo "failure_reason_detail=${detail_sanitized}" >> "$GITHUB_OUTPUT"
+            printf '%s\n%s\n' "${code}" "${detail_sanitized}" > "${FAILURE_REASON_FILE}"
+            exit 1
+          }
+
+          [ -n "${UPSTREAM_DIR}" ] || fail_with_reason "ERR_UPSTREAM_DIR_EMPTY" "Fetch step did not provide upstream_dir."
+          [ -d "${UPSTREAM_DIR}" ] || fail_with_reason "ERR_UPSTREAM_DIR_MISSING" "Upstream template directory does not exist: ${UPSTREAM_DIR}"
+
           shopt -s nullglob
-          for upstream_file in "${UPSTREAM_DIR}"/*.yml; do
+          upstream_templates=( "${UPSTREAM_DIR}"/*.yml )
+          [ "${#upstream_templates[@]}" -gt 0 ] || fail_with_reason "ERR_UPSTREAM_TEMPLATES_EMPTY" "No workflow templates (*.yml) found in ${UPSTREAM_DIR}."
+          [ -f "${UPSTREAM_DIR}/${SELF_TEMPLATE}" ] || fail_with_reason "ERR_UPSTREAM_SELF_TEMPLATE_MISSING" "Expected sentinel template ${SELF_TEMPLATE} is missing from ${UPSTREAM_DIR}."
+
+          [ -d "${LOCAL_DIR}" ] || fail_with_reason "ERR_LOCAL_WORKFLOW_DIR_MISSING" "Local workflow directory is missing: ${LOCAL_DIR}"
+          [ -w "${LOCAL_DIR}" ] || fail_with_reason "ERR_LOCAL_WORKFLOW_DIR_NOT_WRITABLE" "Local workflow directory is not writable: ${LOCAL_DIR}"
+
+          for upstream_file in "${upstream_templates[@]}"; do
+            filename=$(basename "$upstream_file")
+            local_file="${LOCAL_DIR}/${filename}"
+            if [ "$filename" = "$SELF_TEMPLATE" ]; then
+              continue
+            fi
+            if [ -e "$local_file" ] && [ -d "$local_file" ]; then
+              fail_with_reason "ERR_LOCAL_TARGET_IS_DIRECTORY" "Existing workflow path is a directory, not a file: ${local_file}"
+            fi
+            if [ -e "$local_file" ] && [ ! -w "$local_file" ]; then
+              fail_with_reason "ERR_LOCAL_TARGET_NOT_WRITABLE" "Existing workflow file is not writable: ${local_file}"
+            fi
+          done
+
+          for upstream_file in "${upstream_templates[@]}"; do
             filename=$(basename "$upstream_file")
             local_file="${LOCAL_DIR}/${filename}"
             TOTAL_CHECKED=$((TOTAL_CHECKED + 1))
@@ -84,30 +135,39 @@ jobs:
               fi
 
               echo "Creating: ${filename}"
-              cp "$upstream_file" "$local_file"
+              cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED" "Failed to create workflow file ${local_file} from ${upstream_file}."
               TOTAL_CREATED=$((TOTAL_CREATED + 1))
               CREATED_FILES="${CREATED_FILES}• ${filename}\n"
               continue
             fi
 
             # Compare content (ignore trailing whitespace differences)
+            if [ "$filename" = "$SELF_TEMPLATE" ]; then
+              SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\n"
+              continue
+            fi
+
             if ! diff -q --strip-trailing-cr --ignore-space-at-eol "$upstream_file" "$local_file" >/dev/null 2>&1; then
               echo "Updating: ${filename}"
-              cp "$upstream_file" "$local_file"
+              cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED" "Failed to update workflow file ${local_file} from ${upstream_file}."
               TOTAL_UPDATED=$((TOTAL_UPDATED + 1))
               UPDATED_FILES="${UPDATED_FILES}• ${filename}\n"
             fi
           done
           shopt -u nullglob
 
+          echo "validation_ok=true" >> "$GITHUB_OUTPUT"
+          echo "failure_reason_code=" >> "$GITHUB_OUTPUT"
+          echo "failure_reason_detail=" >> "$GITHUB_OUTPUT"
+
           echo "templates_checked=${TOTAL_CHECKED}" >> "$GITHUB_OUTPUT"
           echo "templates_updated=${TOTAL_UPDATED}" >> "$GITHUB_OUTPUT"
           echo "templates_created=${TOTAL_CREATED}" >> "$GITHUB_OUTPUT"
 
           # Store multi-line outputs via files
-          printf '%s' "$UPDATED_FILES" > /tmp/updated_files.txt
-          printf '%s' "$CREATED_FILES" > /tmp/created_files.txt
-          printf '%s' "$SKIPPED_FILES" > /tmp/skipped_files.txt
+          printf '%b' "$UPDATED_FILES" > /tmp/updated_files.txt
+          printf '%b' "$CREATED_FILES" > /tmp/created_files.txt
+          printf '%b' "$SKIPPED_FILES" > /tmp/skipped_files.txt
 
           TOTAL_CHANGED=$((TOTAL_UPDATED + TOTAL_CREATED))
           if [ "$TOTAL_CHANGED" -eq 0 ]; then
@@ -210,18 +270,74 @@ jobs:
           fi
 
       - name: Summary
+        if: always()
         run: |
           set -euo pipefail
+
+          FETCH_OUTCOME="${{ steps.fetch.outcome }}"
+          UPDATE_OUTCOME="${{ steps.update.outcome }}"
+          HAS_UPDATES="${{ steps.update.outputs.has_updates }}"
+          TEMPLATES_CHECKED="${{ steps.update.outputs.templates_checked }}"
+          TEMPLATES_UPDATED="${{ steps.update.outputs.templates_updated }}"
+          TEMPLATES_CREATED="${{ steps.update.outputs.templates_created }}"
+          FAILURE_REASON_CODE="${{ steps.update.outputs.failure_reason_code }}"
+          FAILURE_REASON_DETAIL="${{ steps.update.outputs.failure_reason_detail }}"
+          FAILURE_REASON_FILE="/tmp/update_workflows_failure_reason.txt"
+
+          if [ -z "${HAS_UPDATES}" ]; then
+            HAS_UPDATES="false"
+          fi
+          if [ -z "${TEMPLATES_CHECKED}" ]; then
+            TEMPLATES_CHECKED="0"
+          fi
+          if [ -z "${TEMPLATES_UPDATED}" ]; then
+            TEMPLATES_UPDATED="0"
+          fi
+          if [ -z "${TEMPLATES_CREATED}" ]; then
+            TEMPLATES_CREATED="0"
+          fi
+
+          if [ -z "${FAILURE_REASON_CODE}" ] && [ -f "${FAILURE_REASON_FILE}" ]; then
+            IFS= read -r FAILURE_REASON_CODE < "${FAILURE_REASON_FILE}" || true
+            FAILURE_REASON_DETAIL="$(sed -n '2p' "${FAILURE_REASON_FILE}" 2>/dev/null || true)"
+          fi
+
           echo "### Workflow Wrapper Update" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Templates checked:** ${{ steps.update.outputs.templates_checked }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Templates updated:** ${{ steps.update.outputs.templates_updated }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Templates created:** ${{ steps.update.outputs.templates_created }}" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${FETCH_OUTCOME}" = "failure" ]; then
+            echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason code:** \\`ERR_TEMPLATE_FETCH_FAILED\\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason detail:** Fetch step failed before pre-mutation validation could run." >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "${FAILURE_REASON_FILE}" ]; then
+              echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 1
+          fi
+
+          if [ "${UPDATE_OUTCOME}" = "failure" ]; then
+            if [ -z "${FAILURE_REASON_CODE}" ]; then
+              FAILURE_REASON_CODE="ERR_UNCATEGORIZED_FAILURE"
+              FAILURE_REASON_DETAIL="Update step failed before categorized reason was recorded."
+            fi
+            echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason code:** \\`${FAILURE_REASON_CODE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason detail:** ${FAILURE_REASON_DETAIL}" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "${FAILURE_REASON_FILE}" ]; then
+              echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 1
+          fi
+
+          echo "- **Templates checked:** ${TEMPLATES_CHECKED}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Templates updated:** ${TEMPLATES_UPDATED}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Templates created:** ${TEMPLATES_CREATED}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "${{ steps.update.outputs.has_updates }}" = "true" ]; then
+          if [ "${HAS_UPDATES}" = "true" ]; then
             UPDATED_LIST=$(cat /tmp/updated_files.txt)
             CREATED_LIST=$(cat /tmp/created_files.txt)
+            SKIPPED_LIST=$(cat /tmp/skipped_files.txt)
             if [ -n "$UPDATED_LIST" ]; then
               echo "**Updated files:**" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -232,6 +348,12 @@ jobs:
               echo "**New files:**" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
               cat /tmp/created_files.txt >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ -n "$SKIPPED_LIST" ]; then
+              echo "**Skipped files:**" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              cat /tmp/skipped_files.txt >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
             fi
           else

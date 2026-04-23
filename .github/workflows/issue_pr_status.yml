@@ -178,6 +178,8 @@ jobs:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -191,10 +193,21 @@ jobs:
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            # Fallback: extract issue number from PR body/title only when the
+            # PR explicitly references an issue via a supported closing keyword
+            # (close(s|d)/fix(es|ed)/resolve(s|d) #N) or a full repo-scoped
+            # URL/path.
+            # Bare prose mentions like "issue #N" or "issues/N" are NOT treated
+            # as closing links — those are documentation references and
+            # auto-labeling/closing on them caused incorrect ai:merged
+            # transitions on orchestrator-tracking issues mentioned in PR
+            # bodies (see issue #1469).
+            PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            fi
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               ISSUE_NUMBERS=""
@@ -224,38 +237,93 @@ jobs:
             exit 1
           fi
           source scripts/label_helpers.sh
+          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
+            set_issue_phase_label_resilient() {
+              local issue_number="$1"
+              local target_label="$2"
+              local repo="$3"
+              ensure_label_exists "${target_label}" "${repo}" || true
+              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                -f "labels[]=${target_label}" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #${issue_number}."
+            }
+          fi
           ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
 
-          # Phase labels that are mutually exclusive — at most one should
-          # be present.  Defined as a jq-parseable array for the PUT swap.
-          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+          # Identify orchestrator-managed issues — those carry the
+          # ai:orchestrator-tracking label or the "Managed by: AI
+          # Orchestrator" body marker. Their terminal phase label
+          # (ai:merged / ai:closed / ai:validation-failed / etc.) is
+          # owned exclusively by scripts/orchestrate_poll_process.sh,
+          # so this PR-close path must NOT relabel or auto-close
+          # them. Single batched GraphQL call (one API request,
+          # regardless of N) per CLAUDE.md §15. Fail-open with a
+          # per-issue REST fallback so a transient GraphQL failure
+          # cannot cause the bug it is trying to prevent.
+          ORCHESTRATED_ISSUES=""
+          ORCH_ALIAS_FRAGMENT=""
+          ORCH_IDX=0
+          while IFS= read -r _orch_num; do
+            [ -n "${_orch_num}" ] || continue
+            [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
+            ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+            ORCH_IDX=$((ORCH_IDX + 1))
+          done <<< "${ISSUE_NUMBERS}"
+
+          if [ -n "${ORCH_ALIAS_FRAGMENT}" ]; then
+            ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
+            ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+            ORCH_BATCH_FAILED=true
+            if [ -n "${ORCH_RESP}" ] && printf '%s' "${ORCH_RESP}" | jq -e --argjson expected "${ORCH_IDX}" '
+              ((.errors // []) | length) == 0
+              and (.data.repository? != null)
+              and (([.data.repository | to_entries[] | .value | select(. != null)] | length) == $expected)
+            ' >/dev/null 2>&1; then
+              if _orchestrated_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+                .data.repository | to_entries[] | .value | select(. != null) |
+                select(
+                  ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null
+                  or
+                  ((.body // "") | contains("Managed by: AI Orchestrator"))
+                ) | .number
+              ' 2>/dev/null)"; then
+                ORCHESTRATED_ISSUES="${_orchestrated_issues}"
+                ORCH_BATCH_FAILED=false
+              fi
+            fi
+            if [ "${ORCH_BATCH_FAILED}" = true ]; then
+              # GraphQL batch failed — fall back to per-issue REST detection
+              # so we never silently re-introduce the auto-label/close bug.
+              echo "::warning::Orchestrator-issue batch detection failed; falling back to per-issue REST."
+              while IFS= read -r _orch_num; do
+                [ -n "${_orch_num}" ] || continue
+                [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
+                _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
+                if [ -z "${_orch_meta}" ]; then
+                  echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively skipping label/close mutation for this issue."
+                  ORCHESTRATED_ISSUES+="${_orch_num}"$'\n'
+                  continue
+                fi
+                if printf '%s' "${_orch_meta}" | jq -e '
+                  ((.labels // []) | index("ai:orchestrator-tracking")) != null
+                  or ((.body // "") | contains("Managed by: AI Orchestrator"))
+                ' >/dev/null 2>&1; then
+                  ORCHESTRATED_ISSUES+="${_orch_num}"$'\n'
+                fi
+              done <<< "${ISSUE_NUMBERS}"
+            fi
+          fi
+
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
-            echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
-            # Fetch current labels (1 call) then atomically replace via PUT
-            # (1 call).  This avoids the `gh issue edit --remove-label`
-            # failure mode where a label that does not exist as a repo
-            # label definition aborts the entire edit command, leaving the
-            # issue with stale phase labels and no target label applied.
-            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-              echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
-              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f "labels[]=${FINAL_LABEL}" >/dev/null 2>&1 \
-                || echo "::warning::POST fallback also failed for #${issue_number}."
+
+            if [ -n "${ORCHESTRATED_ISSUES}" ] && printf '%s\n' "${ORCHESTRATED_ISSUES}" | grep -qxF "${issue_number}"; then
+              echo "Skipping orchestrator-managed issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
               continue
             fi
-            _cur="${_cur:-[]}"
-            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${FINAL_LABEL}" \
-              '(. - $p) + [$t] | unique')"
-            if ! printf '{"labels":%s}' "${_new}" | \
-              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                --input - >/dev/null 2>&1; then
-              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
-              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-                -f "labels[]=${FINAL_LABEL}" >/dev/null 2>&1 \
-                || echo "::warning::POST fallback also failed for #${issue_number}."
-            fi
+
+            echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
+            set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
 
             if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ]; then
               echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."

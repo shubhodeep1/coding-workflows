@@ -609,7 +609,7 @@ the form `review-ledger-<repo>-pr-<N>-<run_id>-<run_attempt>` with
 `restore-keys: review-ledger-<repo>-pr-<N>-`). The format is
 text-with-markers so shell tooling can parse it without a JSON
 dependency. It is **not** committed — the per-PR path is gitignored
-precisely so concurrent PRs never collide on `.ai/review_issue_ledger.txt`
+precisely so concurrent PRs never collide on the legacy shared ledger file
 the way they did pre-isolation.
 
 ### File format
