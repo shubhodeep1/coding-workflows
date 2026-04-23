@@ -116,6 +116,7 @@ log capture, and the `attempt_self_heal_and_reexec` integration points.
 | `Dockerfile.app`                         | `python:3.12-slim` base; installs only `bash`/`jq` plus renderer deps (`pyyaml`, `jsonschema`, `jinja2`); no Flask bootstrap    |
 | `docker-compose.test.yml`                | Single long-lived `app` service (`sleep infinity`) with healthcheck that validates repo-check helper presence                     |
 | `tests/00_canary.sh`                     | Client-side canary (`bash`, `python3`, `jq`) with TAP primitives from shared helpers                                              |
+| `tests/10_family_marker.sh`              | Emits a deterministic family marker for fixture verification and troubleshooting                                                     |
 | `tests/20_import_audit.sh`               | Runs `_lib/import_audit.py` in subprocess isolation before repo-specific checks                                                    |
 | `tests/30_graceful_shutdown.sh`          | Reuses `_lib/graceful_shutdown.py` timeout/tail behavior to enforce deterministic stop semantics                                  |
 | `tests/40_repo_checks.sh`                | Executes manifest `entry` (default `scripts/run_validation_repo_checks.sh`) inside the app container for repo-local checks       |

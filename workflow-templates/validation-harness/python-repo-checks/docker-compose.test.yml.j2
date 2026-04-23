@@ -3,7 +3,7 @@ services:
     init: true
     build:
       context: ..
-      dockerfile: validation/Dockerfile.app
+      dockerfile: {{ output_root_name }}/Dockerfile.app
     working_dir: /workspace
     command: ["/bin/sh", "-c", "sleep infinity"]
     healthcheck:
