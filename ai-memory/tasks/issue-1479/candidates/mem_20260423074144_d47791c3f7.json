@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=error; raw_status=harness_error; summary=Validation harness generation failed; failure_summary=Template mode requires /home/runner/work/coding-workflows/coding-workflows/.ai/validate.yml but it is missing. Add manifest config or disable VALIDATION_USE_TEMPLATES.",
+  "fingerprint": "36c169b8bd6e63b480cc9ae55a7d35ec236d5bca7af68ff91f254a8a979f6525",
+  "lineage": {
+    "issue_number": 1479,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24822390084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24822390084",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260423074144_d47791c3f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1479,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24822390084"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation harness generation failed",
+  "timestamps": {
+    "created_at": "2026-04-23T07:41:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
