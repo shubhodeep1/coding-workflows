@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- ./workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2:43-48 | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Uses TAP format output while python-repo-checks uses comment format after the recent change\n  WHY: Inconsistent output format could cause issues with TAP parsers; the shell script handles TAP protocol, so Python script should output diagnostic comments.\n- ./workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2:22-39 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Missing timeout handling compared to python-repo-checks version\n  WHY: Import could hang indefinitely without timeout\n- scripts/run_validation_repo_checks.sh:Whole file created | confidence=5\n  flagged_by: [qwen_qwen3-coder-plus]\n  PROBLEM: The validation harness configuration was not updated in .ai/validate.yml - the root cause of issue #1551 was that .ai/validate.yml declared `type: python-mongo-flask` and this repository doesn't have a Flask app module\n  WHY: The rendered validation harness won't be triggered because there's likely still an outdated .ai/validate.yml configuration that specifies python-mongo-flask instead of python-repo-checks\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:48 | confidence=3\n  flagged_by: [qwen_qwen3-coder-plus]\n  PROBLEM: The validation harness families have inconsistent output formats when they share the same shell-script/TAP wrapper system\n  WHY: While functional, debugging and monitoring becomes difficult due to format differences between harness familes\n- tests/fixtures/validation_harness/python_repo_checks/tests/30_graceful_shutdown.sh:18 | confidence=4\n  flagged_by: [qwen_qwen3-coder-plus]\n  PROBLEM: Previous issue was that graceful_shutdown.sh hardcodes 'app' instead of using APP_SERVICE variable, reducing configurability and creating harness inconsistency\n  WHY: Less configurable, difficult to customize for different service names\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- ./workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2:43-48 | confidence=4\n  PROBLEM: Uses TAP format output while python-repo-checks uses comment format after the recent change\n  WHY: Inconsistent output format could cause issues with TAP parsers; the shell script handles TAP protocol, so Python script should output diagnostic comments.\n- ./workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2:22-39 | confidence=3\n  PROBLEM: Missing timeout handling compared to python-repo-checks version\n  WHY: Import could hang indefinitely without timeout\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- scripts/run_validation_repo_checks.sh:Whole file created | confidence=5\n  PROBLEM: The validation harness configuration was not updated in .ai/validate.yml - the root cause of issue #1551 was that .ai/validate.yml declared `type: python-mongo-flask` and this repository doesn't have a Flask app module\n  WHY: The rendered validation harness won't be triggered because there's likely still an outdated .ai/validate.yml configuration that specifies python-mongo-flask instead of python-repo-checks\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:48 | confidence=3\n  PROBLEM: The validation harness families have inconsistent output formats when they share the same shell-script/TAP wrapper system\n  WHY: While functional, debugging and monitoring becomes difficult due to format differences between harness familes\n- tests/fixtures/validation_harness/python_repo_checks/tests/30_graceful_shutdown.sh:18 | confidence=4\n  PROBLEM: Previous issue was that graceful_shutdown.sh hardcodes 'app' instead of using APP_SERVICE variable, reducing configurability and creating harness inconsistency\n  WHY: Less configurable, difficult to customize for different service names\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "42336162d01a00924ecb23c612f2548634cf17891ce9828e189d8d486b8740a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1562,
+    "run_id": "24859573399",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24859573399",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423215905_9ad7403ba4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1562,
+    "run_id": "24859573399"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-23T21:59:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
