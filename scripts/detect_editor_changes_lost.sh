@@ -83,6 +83,7 @@ if [ -z "${porcelain}" ] && [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -s "${COMMIT
 		| sed -E 's/^-[[:space:]]+//' \
 		| grep -vE '^(none([[:space:][:punct:]]|$)|commit skipped)' \
 		| while IFS= read -r committed_path; do
+			[ -z "${committed_path}" ] && continue
 			sed -e 's#^\./##' -e 's#//*#/#g' -e 's#/$##' <<< "${committed_path}"
 		done \
 		| sort -u || true)"
@@ -93,11 +94,11 @@ if [ -z "${porcelain}" ] && [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -s "${COMMIT
 		# the subset check would incorrectly fail to downgrade legitimate
 		# ledger-only commits. The edit-verb filter below mirrors the
 		# edit_claim_regex used by the caller's main detector heuristic.
-		narrative_paths="$(printf '%s\n' "${narrative_claims}" \
-			| grep -iE '\b(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b' \
-			| grep -oE '`[^`]+`|\.?[A-Za-z0-9_][A-Za-z0-9_./-]*/[A-Za-z0-9_./-]*\.[A-Za-z0-9]{1,16}' \
+			narrative_paths="$(printf '%s\n' "${narrative_claims}" \
+				| grep -iE '\b(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b' \
+				| grep -oE '`[^`]+`|[./]?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_./-]+' \
 			| tr -d '`' \
-			| grep -E '^[^[:space:]]*/[^[:space:]]+$' \
+			| grep -E '^[^[:space:]]*([/]|[.][A-Za-z0-9][A-Za-z0-9_-]*)$' \
 			| grep -vE '^[[:space:]]*$' \
 			| while IFS= read -r narrative_path; do
 				sed -e 's#^\./##' -e 's#//*#/#g' -e 's#/$##' <<< "${narrative_path}"
@@ -107,7 +108,7 @@ if [ -z "${porcelain}" ] && [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -s "${COMMIT
 			all_in_commit="true"
 			while IFS= read -r nar_path; do
 				[ -z "${nar_path}" ] && continue
-				if ! printf '%s\n' "${committed_paths}" | grep -qxF "${nar_path}"; then
+				if ! printf '%s\n' "${committed_paths}" | grep -qxF -- "${nar_path}"; then
 					all_in_commit="false"
 					break
 				fi

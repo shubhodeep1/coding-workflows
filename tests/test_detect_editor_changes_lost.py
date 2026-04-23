@@ -50,10 +50,11 @@ def _init_clean_repo(tmp_path: Path) -> None:
 
 
 def _run_shim(tmp_path: Path, summary: Path, committed_files: Path | None = None) -> str:
-	env = None
-	if committed_files is not None:
-		import os
-		env = os.environ.copy()
+	import os
+	env = os.environ.copy()
+	if committed_files is None:
+		env.pop("COMMITTED_FILES_FILE", None)
+	else:
 		env["COMMITTED_FILES_FILE"] = str(committed_files)
 	result = subprocess.run(
 		["bash", str(SHIM), str(summary)],
@@ -232,7 +233,7 @@ def test_ledger_delete_covered_by_normalized_committed_path_is_false(tmp_path: P
 		committed_files=committed,
 	)
 	assert result == "false", (
-		"Expected shim to normalize committed-file paths before matching; got {result!r}."
+		f"Expected shim to normalize committed-file paths before matching; got {result!r}."
 	)
 
 
