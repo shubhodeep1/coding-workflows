@@ -82,6 +82,9 @@ if [ -z "${porcelain}" ] && [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -s "${COMMIT
 	committed_paths="$(grep -E '^-[[:space:]]+' "${COMMITTED_FILES_FILE}" 2>/dev/null \
 		| sed -E 's/^-[[:space:]]+//' \
 		| grep -vE '^(none([[:space:][:punct:]]|$)|commit skipped)' \
+		| while IFS= read -r committed_path; do
+			sed -e 's#^\./##' -e 's#//*#/#g' -e 's#/$##' <<< "${committed_path}"
+		done \
 		| sort -u || true)"
 	if [ -n "${committed_paths}" ] && [ -n "${narrative_claims}" ]; then
 		# Only extract paths from narrative bullets that actually claim an
@@ -92,9 +95,13 @@ if [ -z "${porcelain}" ] && [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -s "${COMMIT
 		# edit_claim_regex used by the caller's main detector heuristic.
 		narrative_paths="$(printf '%s\n' "${narrative_claims}" \
 			| grep -iE '\b(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b' \
-			| grep -oE '`[^`]+`|[A-Za-z0-9_][A-Za-z0-9_./-]*/[A-Za-z0-9_./-]*\.[A-Za-z]{1,6}' \
+			| grep -oE '`[^`]+`|\.?[A-Za-z0-9_][A-Za-z0-9_./-]*/[A-Za-z0-9_./-]*\.[A-Za-z0-9]{1,16}' \
 			| tr -d '`' \
+			| grep -E '^[^[:space:]]*/[^[:space:]]+$' \
 			| grep -vE '^[[:space:]]*$' \
+			| while IFS= read -r narrative_path; do
+				sed -e 's#^\./##' -e 's#//*#/#g' -e 's#/$##' <<< "${narrative_path}"
+			done \
 			| sort -u || true)"
 		if [ -n "${narrative_paths}" ]; then
 			all_in_commit="true"

@@ -216,6 +216,53 @@ def test_committed_files_file_with_marker_line_falls_through(tmp_path: Path) -> 
 	)
 
 
+def test_ledger_delete_covered_by_normalized_committed_path_is_false(tmp_path: Path) -> None:
+	"""Equivalent path spellings should still match after normalization.
+	The committed file list may contain `./`-prefixed paths; the shim must
+	accept them as the same ledger path and downgrade to `false`."""
+	_init_clean_repo(tmp_path)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- ./.ai/review_issue_ledger/pr-1524.txt\n",
+	)
+	result = _run_shim(
+		tmp_path,
+		FIXTURES / "narrative_ledger_delete_status_edited.txt",
+		committed_files=committed,
+	)
+	assert result == "false", (
+		"Expected shim to normalize committed-file paths before matching; got {result!r}."
+	)
+
+
+def test_edit_claim_with_backticked_non_file_identifier_still_reports_changes_lost(tmp_path: Path) -> None:
+	"""Backticked code identifiers on edit-claim lines must not be treated
+	as file paths. When the real file edit is present in the committed
+	set, the shim should still downgrade to `false`."""
+	_init_clean_repo(tmp_path)
+	fixture = tmp_path / "summary.txt"
+	fixture.write_text(
+		"""Changes made:
+- Modified `LEDGER_ONLY_COMMIT` handling in `scripts/detect_editor_changes_lost.sh`.
+
+Change status:
+- edited
+""",
+		encoding="utf-8",
+	)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- scripts/detect_editor_changes_lost.sh\n",
+	)
+	result = _run_shim(tmp_path, fixture, committed_files=committed)
+	assert result == "false", (
+		"Expected shim to ignore backticked non-file identifiers and "
+		f"downgrade when the real file edit is committed; got {result!r}."
+	)
+
+
 # ---------------------------------------------------------------------------
 # Static assertions: the normalization + defense-in-depth wiring stays wired
 # ---------------------------------------------------------------------------
