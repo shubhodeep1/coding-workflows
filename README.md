@@ -389,6 +389,11 @@ jobs:
 > prefixes `AUTOFIX_PRE_EDITOR_STALE_BASE`, `AUTOFIX_PRE_EDITOR_SELF_ADVANCE`,
 > `AUTOFIX_PRE_EDITOR_BASE_FRESH`, `AUTOFIX_PRE_EDITOR_UNKNOWN` and the
 > corresponding `AUTOFIX_PRE_PUSH_*` variants are stable audit handles.
+> Operator-facing behavior: `AUTOFIX_PRE_EDITOR_STALE_BASE` and
+> `AUTOFIX_PRE_PUSH_STALE_BASE` are intentional soft exits, not workflow
+> failures. Those paths skip editor/push/clean-review tail actions (no
+> `ai:ready-to-merge` transition and no success Telegram) and rely on the
+> external push's `pull_request.synchronize` event to start the next run.
 >
 > **Ledger-only commit auto-merge** — `scripts/review_issue_ledger.sh`
 > updates `REVIEW_LEDGER_PATH` (default
@@ -680,6 +685,46 @@ jobs:
 > up the fix immediately — no `test-and-mark-stable.yml` re-run required.
 > Run `test-and-mark-stable.yml` separately when you are ready to promote
 > the fix to the `@stable` channel for consumer repos.
+>
+> **`update_workflows.yml` guardrails.** The updater validates its runtime
+> preconditions before copying any template and records categorized failures
+> using stable reason codes (`ERR_UPSTREAM_DIR_EMPTY`,
+> `ERR_UPSTREAM_DIR_MISSING`, `ERR_UPSTREAM_TEMPLATES_EMPTY`,
+> `ERR_UPSTREAM_SELF_TEMPLATE_MISSING`, `ERR_LOCAL_WORKFLOW_DIR_MISSING`,
+> `ERR_LOCAL_WORKFLOW_DIR_NOT_WRITABLE`, `ERR_LOCAL_TARGET_IS_DIRECTORY`,
+> `ERR_LOCAL_TARGET_NOT_WRITABLE`, `ERR_TEMPLATE_COPY_FAILED`, plus summary
+> fallback `ERR_UNCATEGORIZED_FAILURE`; fetch-step failure is summarized as
+> `ERR_TEMPLATE_FETCH_FAILED`). The reason code/detail pair is persisted to
+> `/tmp/update_workflows_failure_reason.txt` and echoed in the workflow
+> summary on failure. The updater's self-template (`ai-update-workflows.yml`)
+> remains a hard skip path (never created/updated by the updater itself) to
+> prevent bootstrap loops.
+
+### Workflow checkout integration-ref contract
+
+Issue-phase workflows that checkout from issue context (`clarify.yml`,
+`plan.yml`, `orchestrate_clarify_respond.yml`, `implement.yml`) plus
+`validate.yml` runs keyed by `tracking_issue` all follow the same resolver
+pattern before `actions/checkout@v5`:
+
+1. Run `Resolve integration ref` (`id: refctx`) and stage the canonical
+   resolver from `shubhodeep1/coding-workflows/scripts/resolve_integration_ref.sh`
+   in `${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`.
+2. Bind checkout ref as
+   `${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}`.
+3. Log resolved ref + `git rev-parse HEAD` +
+   `git symbolic-ref --short HEAD` (detached fallback message).
+
+Hardening semantics:
+
+- The resolver prefers canonical script staging and execution (`bash "${resolver_script}"`),
+  with best-effort fallback to default branch when script staging fails,
+  metadata is missing/invalid, branch lookup fails, or GH API calls fail.
+- `orchestrate_poll.yml` is intentionally excluded because a single run may
+  process multiple tracking issues with different integration branches.
+- Regression guard: `tests/test_workflow_checkout_integration_ref_audit.py`
+  enforces resolver presence, ref binding, post-checkout logging, canonical
+  staging markers, and disallows legacy inline resolver markers.
 
 ### 3. Open an issue
 
@@ -872,6 +917,14 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 - Structured logs are emitted for batch decisions and lifecycle (`batch_submit`, `batch_poll`, `batch_complete`, `batch_fallback`).
 - `memory_maintenance.yml` remains functionally unchanged (no LLM path in current repo) and now emits structured `batch_noop` compatibility logging with batch env values.
 - Low-data windows are valid: the analyzer still writes a report when input data is sparse.
+- Missing run-log archives are soft-failed as partial data, not terminal errors:
+  when `GET /repos/{repo}/actions/runs/{run_id}/logs` returns HTTP `404`/`410`
+  (or the archive payload is empty), collector normalizes the error to
+  `partial_data:missing_log_archive repository=<repo> run_id=<id> detail=<...>`
+  in the `errors.scope=logs` channel and continues report generation.
+  Retry semantics are unchanged for transient failures (`rate limit`, timeout,
+  connection, `502/503/504`): up to 3 attempts with linear backoff (1s, 2s,
+  3s).
 
 ## Required Secrets
 
