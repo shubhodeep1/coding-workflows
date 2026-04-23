@@ -5,13 +5,24 @@
   "entry_id": "processed_command_1529_4300865344_approved",
   "issue_number": 1529,
   "metadata": {
+    "branch": "ai/issue-1529",
+    "changed_files": [
+      "scripts/label_helpers.sh",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 1529,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1529",
+    "pr_number": 1532,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1532",
+    "run_attempt": "1",
+    "run_id": "24810050371",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24810050371"
   },
   "run_attempt": 1,
   "run_id": "24810050371",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-23T00:36:18Z",
+  "status": "completed",
+  "timestamp": "2026-04-23T00:47:16Z",
   "workflow": "implement"
 }
