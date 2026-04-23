@@ -475,6 +475,7 @@ def _run_poller(
 			"graphql_calls": 0,
 			"candidate_details_graphql_calls": 0,
 			"label_batch_graphql_calls": 0,
+			"issue_state_batch_graphql_calls": 0,
 			"issue_label_calls": {},
 			"issue_state_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
@@ -933,6 +934,16 @@ if args[0] == 'api':
 		)
 		if is_label_batch:
 			store['label_batch_graphql_calls'] = int(store.get('label_batch_graphql_calls', 0)) + 1
+		is_issue_state_batch = (
+			has_issue_aliases
+			and re.search(r'(?m)^\s*state\s*$', query)
+			and 'labels(first:' not in query
+			and 'comments(last:' not in query
+			and 'timelineItems(' not in query
+			and 'search(query:' not in query
+		)
+		if is_issue_state_batch:
+			store['issue_state_batch_graphql_calls'] = int(store.get('issue_state_batch_graphql_calls', 0)) + 1
 		save()
 		if mode == 'error':
 			print('graphql failed', file=sys.stderr)
@@ -2851,6 +2862,8 @@ def test_implementation_failed_post_codex_open_blockers_defers_reissue_and_persi
 	)
 	assert result.get("created_issues", []) == []
 	assert result["closed_issues"] == []
+	assert result["issue_state_batch_graphql_calls"] > 0
+	assert result["issue_state_calls"].get("501", 0) == 0
 	latest_issue_state = result["latest_state"]["waves"][0]["issues"][0]
 	assert latest_issue_state["github_issue"] == 10
 	assert latest_issue_state.get("reissue_depends_on") == [501]
@@ -2884,6 +2897,9 @@ def test_implementation_failed_post_codex_closed_blockers_reissues_with_post_cod
 	assert "failed during post-Codex syntax/validation checks" in new_issue_body
 	assert "Post-Codex blocker context" in new_issue_body
 	assert "- #501" in new_issue_body
+	assert result["issue_state_batch_graphql_calls"] > 0
+	assert result["issue_state_calls"].get("501", 0) == 0
+	assert result["issue_state_calls"].get("777", 0) == 0
 	latest_issue_state = result["latest_state"]["waves"][0]["issues"][0]
 	assert latest_issue_state["github_issue"] == str(new_issue_num)
 	assert latest_issue_state.get("depends_on") == [501, 777]
@@ -2924,11 +2940,39 @@ def test_implementation_failed_post_codex_unknown_blocker_state_defers_reissue()
 				"- #501"
 			],
 		},
+		gql_mode="partial",
 		fail_issue_get_for=[501],
 	)
 	assert result.get("created_issues", []) == []
 	assert result["closed_issues"] == []
+	assert result["issue_state_batch_graphql_calls"] > 0
 	assert "blocker status lookup incomplete" in result["stdout"]
+
+
+def test_implementation_failed_post_codex_graphql_error_falls_back_to_rest_and_keeps_behavior():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"], 501: ["ai:closed"], 777: ["ai:closed"]},
+		issue_closed={501: True, 777: True},
+		issue_comments={
+			10: [
+				"## Post-Codex validation diagnosed follow-up fixes\n\n"
+				"Investigate captured diagnostics.\n\n"
+				"Created fix-up issues:\n"
+				"- #501\n"
+				"- #777"
+			],
+		},
+		gql_mode="error",
+	)
+	assert result.get("created_issues", [])
+	assert result["issue_state_batch_graphql_calls"] > 0
+	assert result["issue_state_calls"].get("501", 0) > 0
+	assert result["issue_state_calls"].get("777", 0) > 0
 
 
 def test_implementation_failed_comment_lookup_failure_defers_reissue():
