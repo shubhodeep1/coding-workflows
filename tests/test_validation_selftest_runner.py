@@ -59,6 +59,19 @@ def _fixture_manifest(family: str, project_name: str) -> dict:
 				"tap_plan": 3,
 			},
 		}
+	if family == "python-mongo-repo-checks":
+		return {
+			"type": family,
+			"custom_tests": [
+				"python3 tests/test_render_validation_templates.py",
+				"python3 tests/test_validation_selftest_runner.py",
+			],
+			"slots": {
+				"project_name": project_name,
+				"canary_tools": ["bash", "python3", "jq", "curl"],
+				"tap_plan": 6,
+			},
+		}
 	raise AssertionError(f"unsupported family fixture: {family}")
 
 
@@ -110,7 +123,7 @@ def _resolve_log_path(log_path: str) -> Path:
 	return REPO_ROOT / path
 
 
-def test_runner_passes_both_supported_family_fixtures() -> None:
+def test_runner_passes_all_supported_family_fixtures() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-selftest-runner-") as td:
 		work_root = Path(td)
 		fixtures_root = work_root / "fixtures"
@@ -120,6 +133,7 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 		_write_yaml(fixtures_root / "python-mongo-flask.yml", _fixture_manifest("python-mongo-flask", "ci-python"))
 		_write_yaml(fixtures_root / "python-repo-checks.yml", _fixture_manifest("python-repo-checks", "ci-repo-checks"))
 		_write_yaml(fixtures_root / "node-hardhat-solidity.yml", _fixture_manifest("node-hardhat-solidity", "ci-node"))
+		_write_yaml(fixtures_root / "python-mongo-repo-checks.yml", _fixture_manifest("python-mongo-repo-checks", "ci-repo"))
 
 		result = _run_matrix(work_root, fixtures_root, summary_path, logs_root)
 		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
@@ -129,10 +143,25 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 		assert summary["schema_version"] == "1"
 		assert summary["repo_root"] == "."
 		assert summary["overall_status"] == "pass"
-		assert summary["totals"] == {"fixtures": 3, "passed": 3, "failed": 0}
-		assert len(summary["fixtures"]) == 3
+		assert summary["totals"] == {"fixtures": 4, "passed": 4, "failed": 0}
+		assert len(summary["fixtures"]) == 4
 		fixture_names = sorted(item["name"] for item in summary["fixtures"])
-		assert fixture_names == ["node-hardhat-solidity.yml", "python-mongo-flask.yml", "python-repo-checks.yml"]
+		assert fixture_names == [
+			"node-hardhat-solidity.yml",
+			"python-mongo-flask.yml",
+			"python-mongo-repo-checks.yml",
+			"python-repo-checks.yml",
+		]
+		repo_checks = next(item for item in summary["fixtures"] if item["name"] == "python-mongo-repo-checks.yml")
+		repo_checks_output_root = Path(repo_checks["output_root"])
+		if not repo_checks_output_root.is_absolute():
+			repo_checks_output_root = REPO_ROOT / repo_checks_output_root
+		validate_env_text = (repo_checks_output_root / "validate.env").read_text(encoding="utf-8")
+		repo_checks_script = (repo_checks_output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
+		assert "CUSTOM_TESTS_JSON='[" in validate_env_text
+		assert "SKIP_TESTS_JSON='[" in validate_env_text
+		assert "CUSTOM_TESTS_JSON" in repo_checks_script
+		assert "SKIP_TESTS_JSON" in repo_checks_script
 
 		for fixture in summary["fixtures"]:
 			assert fixture["status"] == "pass"
@@ -221,7 +250,7 @@ def test_sanity_skips_compose_when_missing_by_default() -> None:
 
 
 def main() -> int:
-	test_runner_passes_both_supported_family_fixtures()
+	test_runner_passes_all_supported_family_fixtures()
 	test_runner_surfaces_fixture_stage_failure_in_summary()
 	test_runner_fails_when_no_fixture_manifests_discovered()
 	test_sanity_skips_compose_when_missing_by_default()

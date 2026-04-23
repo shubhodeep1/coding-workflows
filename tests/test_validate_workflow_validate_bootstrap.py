@@ -52,6 +52,17 @@ def test_validate_workflow_bootstrap_fetches_template_assets() -> None:
 		"workflow-templates/validation-harness/python-repo-checks/tests/90_tap_report.sh.j2",
 		"workflow-templates/validation-harness/python-repo-checks/tests/_lib/graceful_shutdown.py.j2",
 		"workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/docker-compose.test.yml.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/validate.env.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/00_canary.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/10_family_marker.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/20_import_audit.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/30_graceful_shutdown.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/90_tap_report.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/graceful_shutdown.py.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2",
 	]
 	for snippet in required_snippets:
 		assert snippet in wf

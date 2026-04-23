@@ -1,12 +1,17 @@
-# Template-mode validation manifest for this repository.
-# This repo is workflow/script focused, so use repo-local checks instead of
-# a Flask service bootstrap.
-type: python-repo-checks
-entry: scripts/run_validation_repo_checks.sh
+# Validation harness contract for this repository.
+# This repo is a workflow/template project, not a Flask service. Use the
+# repo-checks family so startup is non-HTTP and checks run via custom_tests.
+type: python-mongo-repo-checks
+custom_tests:
+  - python3 tests/test_render_validation_templates.py
+  - python3 tests/test_render_validation_templates_repo_checks.py
+  - python3 tests/test_validation_selftest_runner.py
+  - python3 tests/test_validate_workflow_validate_bootstrap.py
 slots:
   project_name: coding-workflows
   canary_tools:
     - bash
     - python3
     - jq
-  tap_plan: 3
+    - curl
+  tap_plan: 6

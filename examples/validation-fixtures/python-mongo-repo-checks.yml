@@ -1,0 +1,12 @@
+type: python-mongo-repo-checks
+custom_tests:
+  - python3 tests/test_render_validation_templates.py
+  - python3 tests/test_validation_selftest_runner.py
+slots:
+  project_name: nightly-python-mongo-repo-checks
+  canary_tools:
+    - bash
+    - python3
+    - jq
+    - curl
+  tap_plan: 6
