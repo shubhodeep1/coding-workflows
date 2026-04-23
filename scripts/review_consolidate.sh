@@ -182,14 +182,17 @@ if [ -s "${tmp_err}" ]; then
 	# stderr stream can re-anchor such a token to column zero even when
 	# the enclosing line already carries the "stage=consolidator stderr="
 	# prefix. Replace CR with space, then defang `##[` → `##\[` and
-	# `::<cmd>::` → `::\<cmd>::` inline before prefixing so no transform
-	# can accidentally produce a line that the runner interprets as an
-	# annotation. The prefix itself is still applied last to keep log
+	# `::<cmd>` → `::\<cmd>` inline before prefixing so both bare
+	# `::<cmd>::` commands and parameterized forms like
+	# `::error file=path,line=1::message` are neutralised before any
+	# transform can accidentally produce a line that the runner interprets
+	# as an annotation. The prefix itself is still applied last to keep log
 	# lines identifiable via the existing "stage=consolidator stderr="
 	# grep contract (see agents.md consolidator stderr forwarding).
-	sed -e 's/\r/ /g' \
+	sed -e 's/%/%25/g' \
+		-e 's/\r/ /g' \
 		-e 's/##\[/##\\[/g' \
-		-e 's/::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\|set-env\)::/::\\\1::/g' \
+		-e 's/::\([a-z][a-z-]*\)/::\\\1/g' \
 		-e 's/^/stage=consolidator stderr=/' \
 		"${tmp_err}" >&2 || true
 fi
