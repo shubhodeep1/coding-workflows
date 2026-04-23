@@ -194,8 +194,9 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title only when the
-            # PR explicitly references an issue via a closing keyword
-            # (closes/fixes/resolves #N) or a full repo-scoped URL/path.
+            # PR explicitly references an issue via a supported closing keyword
+            # (close(s|d)/fix(es|ed)/resolve(s|d) #N) or a full repo-scoped
+            # URL/path.
             # Bare prose mentions like "issue #N" or "issues/N" are NOT treated
             # as closing links — those are documentation references and
             # auto-labeling/closing on them caused incorrect ai:merged
@@ -206,7 +207,7 @@ jobs:
               PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
             fi
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               ISSUE_NUMBERS=""
@@ -273,9 +274,10 @@ jobs:
             ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
             ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
             ORCH_BATCH_FAILED=true
-            if [ -n "${ORCH_RESP}" ] && printf '%s' "${ORCH_RESP}" | jq -e '
+            if [ -n "${ORCH_RESP}" ] && printf '%s' "${ORCH_RESP}" | jq -e --argjson expected "${ORCH_IDX}" '
               ((.errors // []) | length) == 0
               and (.data.repository? != null)
+              and (([.data.repository | to_entries[] | .value | select(. != null)] | length) == $expected)
             ' >/dev/null 2>&1; then
               if _orchestrated_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
                 .data.repository | to_entries[] | .value | select(. != null) |

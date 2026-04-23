@@ -48,7 +48,7 @@ def test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls() ->
 	assert (
 		r'(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|'
 		r'${REPOSITORY_ESCAPED}/issues/[0-9]+|'
-		r'(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)'
+		r'(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+)'
 	) in text, "Tightened fallback regex must be present verbatim"
 
 	# Forbidden: bare prose mentions that triggered the original bug.
@@ -59,6 +59,10 @@ def test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls() ->
 	assert '(^|[^[:alnum:]_/-])issues/[0-9]+' not in text, (
 		"Bare 'issues/N' fallback pattern must not be re-introduced — it caused "
 		"incorrect ai:merged labeling on issues mentioned in PR prose."
+	)
+	assert '[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+' not in text, (
+		"Optional colon between closing keyword and '#N' must not be re-introduced; "
+		"GitHub closing-link syntax expects whitespace separation."
 	)
 
 
@@ -91,11 +95,18 @@ def test_orchestrator_tracking_issues_are_skipped_in_label_close_loop() -> None:
 	assert 'index("ai:orchestrator-tracking")' in text
 	assert 'contains("Managed by: AI Orchestrator")' in text
 
+	# GraphQL validity requires complete aliased-issue coverage; any missing/null
+	# alias entry must trigger REST fallback.
+	assert 'and (([.data.repository | to_entries[] | .value | select(. != null)] | length) == $expected)' in text
+
 	# Fail-open contract: GraphQL failure must fall back to per-issue REST,
 	# not silently degrade to the buggy "label everything" behavior.
 	assert "Orchestrator-issue batch detection failed; falling back to per-issue REST" in text, (
 		"GraphQL failure path must use per-issue REST fallback so a transient "
 		"GraphQL error cannot re-introduce the auto-label bug."
+	)
+	assert 'gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq' in text, (
+		"Per-issue REST fallback lookup must remain wired in the GraphQL-failure path."
 	)
 
 	# Loop guard: the label/close loop must consult ORCHESTRATED_ISSUES
