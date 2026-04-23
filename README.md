@@ -845,7 +845,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
   1. `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (writes `analysis_context.json` and prints its path)
   2. `codex exec --model <WORKFLOW_EDITOR_MODEL> --full-auto` with `prompts/mode-workflow-analysis.txt` + generated analysis context, writing the final markdown report file.
 - Legacy workflow path (`codex_mode=false`): `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file workflow_log_analysis_batch_state.json`
-- `--max-output-tokens` default is `100000`. The workflow auto-caps this to `60000` when the resolved `WORKFLOW_EDITOR_MODEL` contains `gemini` (Gemini 3.1 Pro Preview's max output is 65536).
+- `--max-output-tokens` default is `100000`. The workflow auto-caps this to `60000` when the resolved `WORKFLOW_EDITOR_MODEL` contains `gemini` (Gemini 2.5 Pro's max output is 65536).
 - Model resolution for this workflow only: the `Run workflow log analysis` step defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.4` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
 - `load_input_data` accepts either:
   - `--input` with a collector report (`runs` list; `runs[].log_excerpts` are flattened into `deep_dive_logs` as `{name: <repo>/<run_id>/<step_name>, excerpt}`), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
