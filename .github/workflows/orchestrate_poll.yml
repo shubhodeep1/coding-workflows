@@ -22,7 +22,7 @@ name: AI Orchestrate Poller (Reusable)
         required: false
 
 env:
-  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
