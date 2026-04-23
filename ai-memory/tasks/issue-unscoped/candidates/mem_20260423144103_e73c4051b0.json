@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:~1149 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: HTTP 5xx classification misses some common variants.\n  WHY: The regex `http 5[0-9][0-9]` only matches one lowercase layout, so strings like `HTTP/1.1 504 Gateway Timeout` or `Received HTTP 504` can fall through to `unknown_probe_failure`.\n- .github/workflows/review_autofix.yml:~1216 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: x-access-token redaction may miss uncommon token formats.\n  WHY: The pattern `x-access-token:[^@[:space:]]+` assumes the token never contains `@`, so unusual or URL-encoded forms could be redacted incompletely and logged.\n- .github/workflows/review_autofix.yml:~1150 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: Transient transport classifier misses common SSL/network failures.\n  WHY: Errors like `ssl certificate problem`, `host key verification failed`, `remote hung up unexpectedly`, and `connection refused` still fall through to `unknown_probe_failure`.\n- .github/workflows/review_autofix.yml:~1180-1182 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: Timeout wrapper is only checked for existence, not compatible behavior.\n  WHY: `command -v timeout` does not verify GNU-compatible syntax or that `timeout 30s` will actually work, so the push probe can still hang until the job times out.\n- .github/workflows/review_autofix.yml:~1179-1183 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: Dry-run preflight can become stale before the actual push.\n  WHY: `git push --dry-run` only snapshots pushability at check time, so another push between the probe and the later real push can make the preflight result obsolete even though downstream stale-base handling exists.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:~1149\n  PROBLEM: HTTP 5xx error classification pattern may miss some error variations\n  WHY: `http 5[0-9][0-9]` only matches one HTTP error format, so variants like `HTTP/1.1 504 Gateway Timeout` or `Received HTTP 504` could be missed.\n- .github/workflows/review_autofix.yml:~1216\n  PROBLEM: x-access-token redaction pattern may not handle all token formats\n  WHY: `x-access-token:[^@[:space:]]+` assumes tokens never contain `@`, so uncommon or URL-encoded tokens could be redacted incompletely.\n- .github/workflows/review_autofix.yml:~1150\n  PROBLEM: Missing common network error patterns\n  WHY: Errors like `SSL certificate problem`, `host key verification failed`, `remote hung up unexpectedly`, and `connection refused` would still be treated as unknown failures.\n- .github/workflows/review_autofix.yml:~1180-1182\n  PROBLEM: Inconsistent timeout command availability check\n  WHY: `command -v timeout` does not ensure the expected syntax or safe failure behavior, so the push probe can still hang.\n- .github/workflows/review_autofix.yml:~1179-1183\n  PROBLEM: Potential race condition with stale-base detection\n  WHY: `git push --dry-run` is only a snapshot, so the branch can advance before the actual push and make the warning stale unless it uses `INITIAL_HEAD_SHA`.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:~1149 | confidence=4\n  PROBLEM: HTTP 5xx Pattern Misses HTTP Version Variants\n  WHY: The pattern `http 5[0-9][0-9]` only matches lowercase `http 502` etc. It will not match strings like `HTTP/1.1 504 Gateway Timeout` or `HTTP 504 Service Unavailable`.\n- .github/workflows/review_autofix.yml:~1216 | confidence=3\n  PROBLEM: x-access-token Redaction Pattern May Miss URL-encoded Tokens\n  WHY: The pattern `x-access-token:[^@[:space:]]+` excludes `@`, so token or URI forms containing an encoded `@` can be redacted incompletely and still be logged.\n- .github/workflows/review_autofix.yml:~1150 | confidence=3\n  PROBLEM: Missing Common SSL/TLS Error Patterns\n  WHY: Errors like `ssl certificate problem`, `host key verification failed`, `remote hung up unexpectedly`, and `connection refused` would still be treated as unknown failures.\n- .github/workflows/review_autofix.yml:~1180-1182 | confidence=4\n  PROBLEM: Timeout Command Availability Check Assumes GNU timeout\n  WHY: `command -v timeout` only checks that the command exists, not that `timeout 30s` syntax is supported, so the push probe could fail or hang on non-GNU implementations.\n- .github/workflows/review_autofix.yml:~1179-1183 | confidence=2\n  PROBLEM: Stale-Base Detection Uses Dry-Run Snapshot Without Subsequent Validation\n  WHY: `git push --dry-run` only snapshots pushability at probe time, so the result can go stale before the later real push even though a downstream stale-base check exists.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6f7d6bb3ecd416d75a6e5ae9850edd77cf436891c88087ef893ab2b94de23d31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24838382494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24838382494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423144103_e73c4051b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24838382494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T14:41:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
