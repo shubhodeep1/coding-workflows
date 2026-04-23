@@ -2059,8 +2059,12 @@ ensure_integration_conflict_state_fields() {
 # regex allowlist/denylist is used by the integration-sync conflict
 # resolver (review_autofix.yml) to verify that the resolver's commit
 # preserves the sub-issue's intent — must_contain patterns are derived
-# from lines the sub-issue ADDED, must_not_contain from lines it
-# REMOVED.
+# from lines the sub-issue NET-ADDED, must_not_contain from lines it
+# NET-REMOVED. Any stripped-line that appears on both sides of the
+# unified diff (e.g. a bare call wrapped in a new if/else fallback)
+# is load-bearing on the post-state and is excluded from BOTH sets;
+# the verifier also defensively skips self-contradictory pairs still
+# present in legacy state entries.
 #
 # Storage: top-level state field `merged_issue_fingerprints`, an
 # object keyed by the sub-issue's GitHub issue number (string). Each
@@ -2203,6 +2207,31 @@ def to_patterns(by_file: dict[str, list[str]]) -> list[dict]:
         for stripped in kept:
             out.append({"file": path, "regex": re.escape(stripped)})
     return out
+
+# Net-change filter: drop any stripped line that a PR both removed and
+# re-added (same stripped content appearing on both sides of the unified
+# diff). This happens naturally when a PR wraps a bare call in an
+# if/else fallback, moves code inside a conditional, or reformats a
+# block — the line remains in the post-state, so capturing it as
+# must_not_contain would false-trigger on every downstream commit that
+# preserves the PR's intent, and simultaneously capturing it as
+# must_contain creates a self-contradictory contract. Subtract the
+# intersection from BOTH sets so only true net additions / true net
+# removals survive as fingerprints.
+for path in set(per_file_added) | set(per_file_removed):
+    added_stripped = {l.strip() for l in per_file_added.get(path, [])}
+    removed_stripped = {l.strip() for l in per_file_removed.get(path, [])}
+    shared = added_stripped & removed_stripped
+    if not shared:
+        continue
+    if path in per_file_added:
+        per_file_added[path] = [l for l in per_file_added[path] if l.strip() not in shared]
+        if not per_file_added[path]:
+            del per_file_added[path]
+    if path in per_file_removed:
+        per_file_removed[path] = [l for l in per_file_removed[path] if l.strip() not in shared]
+        if not per_file_removed[path]:
+            del per_file_removed[path]
 
 result = {
     "must_contain": to_patterns(per_file_added),

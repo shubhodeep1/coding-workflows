@@ -88,6 +88,39 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 		must_contain = entry.get("must_contain", []) or []
 		must_not_contain = entry.get("must_not_contain", []) or []
 
+		# Defensive cross-dedup: the extractor in
+		# capture_intent_fingerprints_for_merged_subissue
+		# (scripts/orchestrate_poll_process.sh) filters net-no-op lines,
+		# but that capture function is idempotent per issue — already-
+		# stored bad entries in an orchestrator state file persist until
+		# the state is rebuilt. A line a PR both removes and re-adds
+		# (e.g. wrapping a bare call in an if/else fallback) cannot
+		# simultaneously be required to appear AND required to be
+		# absent; skip any (file, regex) pair recorded in both sets for
+		# this issue so historic bad fingerprints don't produce
+		# perpetual false positives.
+		def _fp_key(fp: Any) -> tuple[str, str] | None:
+			if not isinstance(fp, dict):
+				return None
+			path = fp.get("file", "")
+			regex_src = fp.get("regex", "")
+			if not path or not regex_src:
+				return None
+			return (path, regex_src)
+
+		mc_keys = {k for k in (_fp_key(fp) for fp in must_contain) if k is not None}
+		mnc_keys = {k for k in (_fp_key(fp) for fp in must_not_contain) if k is not None}
+		shared_keys = mc_keys & mnc_keys
+		if shared_keys:
+			print(
+				f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
+				f"skipping {len(shared_keys)} self-contradictory pattern(s) present in both "
+				f"must_contain and must_not_contain (capture-side refactor false positive).",
+				flush=True,
+			)
+			must_contain = [fp for fp in must_contain if _fp_key(fp) not in shared_keys]
+			must_not_contain = [fp for fp in must_not_contain if _fp_key(fp) not in shared_keys]
+
 		for fp in must_contain:
 			if not isinstance(fp, dict):
 				continue

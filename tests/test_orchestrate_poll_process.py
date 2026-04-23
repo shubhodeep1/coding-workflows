@@ -5215,6 +5215,182 @@ def test_verify_integration_fingerprints_skips_empty_object():
 		assert mod.main([str(empty)]) == 0
 
 
+def _extract_intent_fingerprint_extractor_py() -> str:
+	# Pull the embedded Python heredoc body out of the bash function
+	# capture_intent_fingerprints_for_merged_subissue so the extractor
+	# can be exercised directly from a test. Anchors on the function
+	# name to locate the right heredoc (the poller script has several
+	# other python3 <<'PY' blocks); if the anchor or heredoc shape
+	# changes the test fails loudly rather than silently skipping
+	# coverage.
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	anchor = "capture_intent_fingerprints_for_merged_subissue()"
+	anchor_idx = script.index(anchor)
+	open_marker = "<<'PY'"
+	close_marker = "\nPY\n"
+	open_idx = script.index(open_marker, anchor_idx)
+	# Skip past the opening marker line (to the start of the body).
+	body_start = script.index("\n", open_idx) + 1
+	body_end = script.index(close_marker, body_start)
+	return script[body_start:body_end]
+
+
+def test_capture_intent_fingerprints_cross_dedups_net_no_op_lines():
+	# Regression guard for the false-positive that blocked
+	# orchestrator/project-1479: PR #1491/#1487/#1505/#1526 all wrap a
+	# bare call in an if/else fallback, so the same stripped line
+	# appears on BOTH sides of the unified diff (removed at the old
+	# indent, re-added inside the new conditional at a deeper indent).
+	# Without cross-set dedup the extractor captures the line as
+	# must_not_contain, which guarantees a false must_not_contain
+	# violation on every downstream commit that preserves the PR's
+	# intent. The net-change filter must drop such lines from both
+	# contracts.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	diff_text = (
+		"diff --git a/scripts/foo.sh b/scripts/foo.sh\n"
+		"--- a/scripts/foo.sh\n"
+		"+++ b/scripts/foo.sh\n"
+		"@@ -1,1 +1,6 @@\n"
+		"-        PW_LABELS=\"$(gh_retry _safe_gh_jq \"repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels\" --jq '[.[].name]' || echo '[]')\"\n"
+		"+        if echo \"${PRIOR_LABELS_JSON}\" | jq -e --arg key \"${pw_inum}\" 'has($key)' >/dev/null 2>&1; then\n"
+		"+          PW_LABELS=\"$(echo \"${PRIOR_LABELS_JSON}\" | jq -c --arg key \"${pw_inum}\" '.[$key] // []')\"\n"
+		"+        else\n"
+		"+          PW_LABELS=\"$(gh_retry _safe_gh_jq \"repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels\" --jq '[.[].name]' || echo '[]')\"\n"
+		"+        fi\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+
+	shared_line = (
+		"PW_LABELS=\"$(gh_retry _safe_gh_jq \"repos/${GITHUB_REPOSITORY}"
+		"/issues/${pw_inum}/labels\" --jq '[.[].name]' || echo '[]')\""
+	)
+	shared_regex = re.escape(shared_line)
+	mc_regexes = [p.get("regex", "") for p in result.get("must_contain", [])]
+	mnc_regexes = [p.get("regex", "") for p in result.get("must_not_contain", [])]
+	assert shared_regex not in mnc_regexes, (
+		"shared line still present in must_not_contain — extractor did not cross-dedup. "
+		f"Got mnc_regexes={mnc_regexes!r}"
+	)
+	assert shared_regex not in mc_regexes, (
+		"shared line still present in must_contain — extractor did not cross-dedup. "
+		f"Got mc_regexes={mc_regexes!r}"
+	)
+	# Genuine additions (the new if/then/else/fi wrapper lines that are
+	# NOT also on the minus side) must still survive as must_contain so
+	# true regressions are still detected. Regexes are re.escape'd, so
+	# match on the escaped form.
+	if_line_escaped = re.escape("if echo")
+	assert any(if_line_escaped in r for r in mc_regexes), (
+		"true net-added lines must still produce must_contain entries; "
+		f"mc_regexes={mc_regexes!r}"
+	)
+
+
+def test_verify_integration_fingerprints_cross_dedups_self_contradictory_pairs():
+	# Defensive path in the verifier: if the orchestrator state file
+	# still holds legacy bad fingerprints (capture is idempotent per
+	# issue, so an already-stored entry survives the extractor fix),
+	# the verifier must treat any (file, regex) pair present in BOTH
+	# must_contain and must_not_contain as self-contradictory and
+	# skip it rather than emit a guaranteed-impossible violation.
+	mod = _verifier_module()
+	files = {
+		"scripts/foo.sh": (
+			'        PW_LABELS="$(gh_retry _safe_gh_jq '
+			'"repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" '
+			'--jq \'[.[].name]\' || echo \'[]\')"\n'
+		),
+	}
+	shared_regex = re.escape(
+		"PW_LABELS=\"$(gh_retry _safe_gh_jq "
+		"\"repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels\" "
+		"--jq '[.[].name]' || echo '[]')\""
+	)
+	fingerprints = {
+		"1483": {
+			"issue": 1483,
+			"pr": 1491,
+			"must_contain": [
+				{"file": "scripts/foo.sh", "regex": shared_regex},
+			],
+			"must_not_contain": [
+				{"file": "scripts/foo.sh", "regex": shared_regex},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 0
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_still_fails_on_real_violation_when_mixed_with_shared():
+	# Belt-and-braces: the cross-dedup must ONLY skip patterns present
+	# in both sets; genuine must_not_contain entries (not also in
+	# must_contain) must still trigger a violation. Otherwise the
+	# defensive path would silently neuter the whole verifier.
+	mod = _verifier_module()
+	files = {
+		"scripts/foo.sh": (
+			'        PW_LABELS="$(gh_retry _safe_gh_jq '
+			'"repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" '
+			'--jq \'[.[].name]\' || echo \'[]\')"\n'
+			'        gh api -H "Accept: x" "/repos/foo/bar"\n'
+		),
+	}
+	shared_regex = re.escape(
+		"PW_LABELS=\"$(gh_retry _safe_gh_jq "
+		"\"repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels\" "
+		"--jq '[.[].name]' || echo '[]')\""
+	)
+	fingerprints = {
+		"1483": {
+			"issue": 1483,
+			"pr": 1491,
+			"must_contain": [
+				{"file": "scripts/foo.sh", "regex": shared_regex},
+			],
+			"must_not_contain": [
+				{"file": "scripts/foo.sh", "regex": shared_regex},
+				# Genuine must_not_contain — NOT in must_contain, so
+				# the dedup leaves it alone.
+				{"file": "scripts/foo.sh", "regex": r"gh\ api\ \-H"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def test_actions_runs_shared_loader_reuses_single_fetch_per_tick() -> None:
 	state = _base_state()
 	state["project_status"] = "in_progress"
