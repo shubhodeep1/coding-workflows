@@ -73,6 +73,16 @@ def _read_file(path: str, cache: dict[str, str | None]) -> str | None:
 	return content
 
 
+def _fp_key(fp: Any) -> tuple[str, str] | None:
+	if not isinstance(fp, dict):
+		return None
+	path = fp.get("file", "")
+	regex_src = fp.get("regex", "")
+	if not path or not regex_src:
+		return None
+	return (path, regex_src)
+
+
 def verify(fingerprints: dict[str, Any], branch: str) -> int:
 	violations: list[str] = []
 	mc_total_expected = 0
@@ -99,17 +109,11 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 		# absent; skip any (file, regex) pair recorded in both sets for
 		# this issue so historic bad fingerprints don't produce
 		# perpetual false positives.
-		def _fp_key(fp: Any) -> tuple[str, str] | None:
-			if not isinstance(fp, dict):
-				return None
-			path = fp.get("file", "")
-			regex_src = fp.get("regex", "")
-			if not path or not regex_src:
-				return None
-			return (path, regex_src)
 
-		mc_keys = {k for k in (_fp_key(fp) for fp in must_contain) if k is not None}
-		mnc_keys = {k for k in (_fp_key(fp) for fp in must_not_contain) if k is not None}
+		mc_with_keys = [(fp, _fp_key(fp)) for fp in must_contain]
+		mnc_with_keys = [(fp, _fp_key(fp)) for fp in must_not_contain]
+		mc_keys = {k for _, k in mc_with_keys if k is not None}
+		mnc_keys = {k for _, k in mnc_with_keys if k is not None}
 		shared_keys = mc_keys & mnc_keys
 		if shared_keys:
 			print(
@@ -118,8 +122,8 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 				f"must_contain and must_not_contain (capture-side refactor false positive).",
 				flush=True,
 			)
-			must_contain = [fp for fp in must_contain if _fp_key(fp) not in shared_keys]
-			must_not_contain = [fp for fp in must_not_contain if _fp_key(fp) not in shared_keys]
+			must_contain = [fp for fp, key in mc_with_keys if key not in shared_keys]
+			must_not_contain = [fp for fp, key in mnc_with_keys if key not in shared_keys]
 
 		for fp in must_contain:
 			if not isinstance(fp, dict):
