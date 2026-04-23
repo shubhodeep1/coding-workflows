@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "repo-local-tooling family for demo-project"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
+
+echo "1..1"
+echo "# repo-local-tooling family for demo-project"
+tap_ok 1 "family marker"

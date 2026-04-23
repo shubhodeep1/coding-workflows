@@ -123,6 +123,20 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 
 		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "python-mongo-flask family for demo-project" in family_text
+		assert "echo \"1..1\"" in family_text
+		assert "tap_ok 1 \"family marker\"" in family_text
+		assert "# python-mongo-flask family for demo-project" in family_text
+
+		marker_result = subprocess.run(
+			["bash", str(output_root / "tests" / "10_family_marker.sh")],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert marker_result.returncode == 0, marker_result.stderr
+		assert "1..1" in marker_result.stdout
+		assert "ok 1 - family marker" in marker_result.stdout
+		assert "# python-mongo-flask family for demo-project" in marker_result.stdout
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
@@ -322,6 +336,20 @@ def test_renderer_family_dispatch_routing() -> None:
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "node-hardhat-solidity family for demo-project" in family_marker_text
+		assert "echo \"1..1\"" in family_marker_text
+		assert "tap_ok 1 \"family marker\"" in family_marker_text
+		assert "# node-hardhat-solidity family for demo-project" in family_marker_text
+
+		node_marker_result = subprocess.run(
+			["bash", str(output_root / "tests" / "10_family_marker.sh")],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert node_marker_result.returncode == 0, node_marker_result.stderr
+		assert "1..1" in node_marker_result.stdout
+		assert "ok 1 - family marker" in node_marker_result.stdout
+		assert "# node-hardhat-solidity family for demo-project" in node_marker_result.stdout
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
 		assert not (output_root / "tests" / "50_tap_report.sh").exists()
 
@@ -400,6 +428,20 @@ def test_renderer_repo_local_tooling_family_dispatch_routing() -> None:
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "repo-local-tooling family for demo-project" in family_marker_text
+		assert "echo \"1..1\"" in family_marker_text
+		assert "tap_ok 1 \"family marker\"" in family_marker_text
+		assert "# repo-local-tooling family for demo-project" in family_marker_text
+
+		repo_marker_result = subprocess.run(
+			["bash", str(output_root / "tests" / "10_family_marker.sh")],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert repo_marker_result.returncode == 0, repo_marker_result.stderr
+		assert "1..1" in repo_marker_result.stdout
+		assert "ok 1 - family marker" in repo_marker_result.stdout
+		assert "# repo-local-tooling family for demo-project" in repo_marker_result.stdout
 		assert not (output_root / "tests" / "90_tap_report.sh").exists()
 
 		tap_text = (output_root / "tests" / "50_tap_report.sh").read_text(encoding="utf-8")

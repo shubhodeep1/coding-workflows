@@ -162,6 +162,20 @@ def test_repo_local_tooling_invariants_regression_guards() -> None:
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "repo-local-tooling family for demo-project" in family_marker_text
+		assert "echo \"1..1\"" in family_marker_text
+		assert "tap_ok 1 \"family marker\"" in family_marker_text
+		assert "# repo-local-tooling family for demo-project" in family_marker_text
+
+		marker_result = subprocess.run(
+			["bash", str(output_root / "tests" / "10_family_marker.sh")],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert marker_result.returncode == 0, marker_result.stderr
+		assert "1..1" in marker_result.stdout
+		assert "ok 1 - family marker" in marker_result.stdout
+		assert "# repo-local-tooling family for demo-project" in marker_result.stdout
 
 		tap_text = (output_root / "tests" / "50_tap_report.sh").read_text(encoding="utf-8")
 		assert "stable_summary=1" in tap_text
