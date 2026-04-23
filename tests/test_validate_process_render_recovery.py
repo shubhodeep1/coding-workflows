@@ -498,16 +498,18 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		assert "Render recovery: pre-flight checks still failing after deterministic rerender (kind=lint reason=shell_syntax_lint)." in log
 
 
-def test_non_template_preflight_failure_preserves_legacy_path() -> None:
+def test_non_lint_preflight_failure_preserves_preflight_self_heal_path() -> None:
+	# Non-lint preflight failures should bypass template rerender and route to
+	# the preflight self-heal lane.
 	script = """#!/usr/bin/env bash
 set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
-PRE_FLIGHT_FAILURE_CLASS="lint"
+PRE_FLIGHT_FAILURE_CLASS="non_lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
-HARNESS_MODE="generate"
-HARNESS_GENERATOR_MODE="freehand"
+HARNESS_MODE="template_generate"
+HARNESS_GENERATOR_MODE="templates"
 SELF_HEAL_PHASE_LOG="${RUNTIME_DIR}/self_heal_phase.log"
 RENDER_CALLS_FILE="${RUNTIME_DIR}/render_calls.txt"
 PRECHECK_SEQUENCE="fail"
@@ -637,7 +639,7 @@ fi
 echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 """
 
-	with tempfile.TemporaryDirectory(prefix="validate-render-recovery-legacy-") as td:
+	with tempfile.TemporaryDirectory(prefix="validate-render-recovery-non-lint-") as td:
 		tmp_path = Path(td)
 		runtime_dir = tmp_path / "runtime"
 		runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -823,7 +825,7 @@ def main() -> int:
 	test_render_recovery_success_continues_pipeline()
 	test_render_recovery_fail_open_uses_render_phase_self_heal()
 	test_render_recovery_relint_failure_uses_render_phase_self_heal()
-	test_non_template_preflight_failure_preserves_legacy_path()
+	test_non_lint_preflight_failure_preserves_preflight_self_heal_path()
 	test_render_recovery_relint_fail_open_uses_render_phase_self_heal()
 	return 0
 
