@@ -556,7 +556,7 @@ jobs:
         run: |
           set -euo pipefail
           CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
-          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
           sudo apt-get update
           sudo apt-get install -y jq curl python3
 

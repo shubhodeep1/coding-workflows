@@ -59,7 +59,7 @@ jobs:
         if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
           # Persist to tool cache for future runs
           CODEX_BIN="$(which codex)"
           CODEX_DIR="$(dirname "${CODEX_BIN}")"
@@ -71,7 +71,7 @@ jobs:
         if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
+          npm install -g "${{ runner.tool_cache }}/codex/package" --include=optional --no-audit --no-fund
 
       - name: Resolve integration ref
         id: refctx

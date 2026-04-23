@@ -191,7 +191,7 @@ jobs:
         if: ${{ inputs.codex_mode && steps.cache-codex.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
-          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
           CODEX_BIN="$(which codex)"
           mkdir -p "${{ runner.tool_cache }}/codex"
           cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
@@ -201,7 +201,7 @@ jobs:
         if: ${{ inputs.codex_mode && steps.cache-codex.outputs.cache-hit == 'true' }}
         run: |
           set -euo pipefail
-          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
+          npm install -g "${{ runner.tool_cache }}/codex/package" --include=optional --no-audit --no-fund
 
       - name: Create Codex config
         if: ${{ inputs.codex_mode }}
@@ -662,7 +662,7 @@ jobs:
         if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
           CODEX_BIN="$(which codex)"
           mkdir -p "${{ runner.tool_cache }}/codex"
           cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
@@ -672,7 +672,7 @@ jobs:
         if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
+          npm install -g "${{ runner.tool_cache }}/codex/package" --include=optional --no-audit --no-fund
 
       - name: Create Codex config
         env:
@@ -979,7 +979,7 @@ jobs:
         if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
           CODEX_BIN="$(which codex)"
           mkdir -p "${{ runner.tool_cache }}/codex"
           cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
@@ -989,7 +989,7 @@ jobs:
         if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
+          npm install -g "${{ runner.tool_cache }}/codex/package" --include=optional --no-audit --no-fund
 
       - name: Create Codex config
         env:
