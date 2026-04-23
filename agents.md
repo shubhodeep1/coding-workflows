@@ -434,7 +434,7 @@ If you need a new data shape that truly cannot be satisfied by any existing call
 
 ## 18. Orchestrator Integration-Sync Auto-Heal Hardening
 
-When a sub-issue PR merges into an orchestrator integration branch (head matches `orchestrator/project-*`), the poller captures intent fingerprints from the merged diff and persists them under the new top-level state field `merged_issue_fingerprints` (object keyed by GitHub issue number). Each entry stores `must_contain` and `must_not_contain` regex pattern lists derived from added/removed lines in the PR diff.
+When a sub-issue PR merges into an orchestrator integration branch (head matches `orchestrator/project-*`), the poller captures intent fingerprints from the merged diff and persists them under the new top-level state field `merged_issue_fingerprints` (object keyed by GitHub issue number). Each entry stores `must_contain` and `must_not_contain` regex pattern lists derived from **net** added/removed lines in the PR diff: any stripped-line content that appears on both sides of the unified diff (e.g. a bare call wrapped in a new if/else fallback, which the diff records as `-bare_call` followed by `+wrapper ... +  bare_call` at a deeper indent) is load-bearing on the PR's post-state and is excluded from BOTH sets. `scripts/verify_integration_fingerprints.py` additionally skips any `(file, regex)` pair recorded in both sets for the same issue, so legacy state entries captured before this net-change filter landed do not produce perpetual false-positive `must_not_contain` failures.
 
 When a `main → integration_branch` sync conflict subsequently triggers `heal_integration_branch_conflict`:
 
