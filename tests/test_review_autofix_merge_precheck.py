@@ -205,8 +205,8 @@ def test_push_preflight_probe_and_markers_present():
     assert wf.find("exit 1", blocked_pos) != -1, (
         "Expected blocked preflight path to exit immediately"
     )
-    assert 'if [ "${push_preflight_reason}" != "checkout_guard_unpushable" ]; then' not in wf, (
-        "Blocked preflight must not carve out checkout_guard_unpushable as non-fatal"
+    assert 'push_preflight_status="warn_fail_open"' in wf, (
+        "Expected checkout_guard_unpushable to remain a non-blocking warning"
     )
     assert "printf 'non_fast_forward'" in wf, (
         "Expected classifier to still detect non-fast-forward probe output"

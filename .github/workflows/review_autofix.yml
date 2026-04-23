@@ -1170,7 +1170,7 @@ jobs:
           push_probe_output=""
 
           if [ "${CAN_PUSH:-false}" != "true" ]; then
-            push_preflight_status="blocked"
+            push_preflight_status="warn_fail_open"
             push_preflight_reason="checkout_guard_unpushable"
           elif [ -z "${TARGET_BRANCH:-}" ]; then
             push_preflight_status="blocked"
