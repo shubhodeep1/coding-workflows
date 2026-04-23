@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_family_python_repo_checks.py | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, z-ai_glm-5]\n  PROBLEM: Test for `python-repo-checks` validation family is not executed in CI or validation, leaving template rendering regressions undetected.\n  WHY: The file is not referenced in `.github/workflows/ci.yml` or `scripts/run_validation_repo_checks.sh`, so its assertions never run.\n- scripts/run_validation_repo_checks.sh:7-11 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Validation entry script runs limited test set, missing test for `python-mongo-repo-checks` family.\n  WHY: The entry script's `CHECK_COMMANDS` array omits `test_render_validation_templates_repo_checks.py`, so validation may not catch issues with `python-mongo-repo-checks` family templates.\n- tests/fixtures/validation_harness/python_repo_checks/docker-compose.test.yml:6 | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The dockerfile path was incorrectly changed from `validation/Dockerfile.app` to `out/Dockerfile.app`.\n  WHY: The docker build will fail with \"Cannot locate specified Dockerfile\" because the path is wrong.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_family_python_repo_checks.py | confidence=4\n  PROBLEM: Test for `python-repo-checks` validation family is not executed in CI or validation, leaving template rendering regressions undetected.\n  WHY: If `python-repo-checks` template rendering has bugs, validation may fail unexpectedly without being caught by automated tests.\n- scripts/run_validation_repo_checks.sh:7-11 | confidence=3\n  PROBLEM: Validation entry script runs limited test set, missing test for `python-mongo-repo-checks` family.\n  WHY: The entry script's `CHECK_COMMANDS` array omits `test_render_validation_templates_repo_checks.py`, so validation may not catch issues with `python-mongo-repo-checks` family templates.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/fixtures/validation_harness/python_repo_checks/docker-compose.test.yml:6 | confidence=5\n  PROBLEM: The dockerfile path was incorrectly changed from `validation/Dockerfile.app` to `out/Dockerfile.app`.\n  WHY: The docker build will fail with \"Cannot locate specified Dockerfile\" because the path is wrong.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_family_python_repo_checks.py | confidence=4\n  PROBLEM: This test file was added in the original PR but is not being run anywhere in CI.\n  WHY: The CI workflow at `.github/workflows/ci.yml` does not include `test_family_python_repo_checks.py`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ea192ae3928e56581874ca63be85a63f294ef13c2d500b0244d642d8b31781fe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1562,
+    "run_id": "24863316131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24863316131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423234641_44d40f409c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1562,
+    "run_id": "24863316131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T23:46:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
