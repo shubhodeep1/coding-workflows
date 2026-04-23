@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `07592b0886f577886c27287c2fc86d9d5e9e535a`\n- Checked-out ref: `orchestrator/project-1479`\n- Integration branch metadata: `orchestrator/project-1479`\n- Integration branch mismatch: `false`\n\nClarification interpretation\n- No `Q<ID>` clarification questions were issued in the clarify phase.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with planning against the issue as written.\u201d\n\nRepresentative pattern\n- Use `workflow-templates/validation-harness/node-hardhat-solidity/` plus `_shared/` as the structural reference for the new family. It already models the important behavior this repo needs: a long-lived local container, `APP_URL=\"\"`, and repo-local checks instead of booting an HTTP app.\n- Keep `python-mongo-flask` unchanged for backward compatibility. Do not repurpose an existing family.\n\nFiles likely to change\n- `.ai/validate.yml`\n- `scripts/render_validation_templates.py`\n- `workflow-templates/validation-harness/<new-family>/**`\n- `examples/validation-fixtures/<new-family>.yml`\n- `tests/test_render_validation_templates.py`\n- new family-specific renderer coverage, likely `tests/test_family_<new_family>.py`\n- `tests/test_validation_selftest_runner.py`\n- `tests/fixtures/validation_harness/<new_family>/**` if golden-output coverage is used\n- `.github/workflows/ci.yml` if the new direct test file is not already executed by CI\n- `README.md`\n\nFunctions or modules to implement\n- `scripts/render_validation_templates.py`\n  - Extend `FAMILY_REGISTRY` with a new repo-local/tooling family.\n  - Update `RENDERED_OUTPUT_ALIASES` only if the new family needs non-default rendered test numbering.\n- `workflow-templates/validation-harness/<new-family>/`\n  - `Dockerfile.app.j2`: install deterministic local tooling needed for repo checks; no Flask bootstrap.\n  - `docker-compose.test.yml.j2`: mount the repo and keep the `app` service running without a fake web entrypoint.\n  - `validate.env.j2`: set `APP_SERVICE`, keep `APP_URL=\"\"`, and define only local/test-safe knobs.\n  - Rendered tests: canary, family marker, repo-local checks, TAP report.\n- `.ai/validate.yml`\n  - Replace `type: python-mongo-flask` with the new family key.\n  - Add only the family-specific slots the new templates actually consume.\n- Prefer repo-local checks already exercised in this repo, such as renderer/self-test checks and lightweight validation-related unit tests, rather than inventing a fabricated service boot.\n\nData structures affected\n- Validation manifest:\n  - `.ai/validate.yml` `type`\n  - additive family-specific `slots.*`\n- Renderer registry:\n  - `FAMILY_REGISTRY`\n  - optional `RENDERED_OUTPUT_ALIASES`\n- Rendered asset set for the new family:\n  - `Dockerfile.app`\n  - `docker-compose.test.yml`\n  - `validate.env`\n  - `tests/*.sh`\n- Example/self-test fixtures under `examples/validation-fixtures/`\n- No MongoDB collections, indexes, or DB contracts should change.\n- Prefer new knobs under `slots`; the current schema already allows additive slot fields, so a schema change should not be necessary unless new required top-level keys are introduced.\n\nAPI or interface changes\n- No external API changes.\n- One additive repo interface change: `.ai/validate.yml` will use a new validation-family `type`.\n- No new env vars should be necessary if the family is expressed through existing manifest fields and slots.\n\nPotential risks or edge cases\n- `scripts/validate_driver.sh` currently hard-fails when `validation/docker-compose.test.yml` is missing, so this cannot be solved by a manifest-only \u201cskip compose\u201d approach.\n- Validation must remain local-only; do not introduce cloud services or external runtime dependencies.\n- Avoid recursive/self-mutating checks if the new family renders this repo\u2019s own manifest; use temporary output directories.\n- Do not repurpose `python-mongo-flask` or `node-hardhat-solidity`; add the new family alongside them.\n- Keep tool installation deterministic and compatible with `ubuntu-latest` / Docker builds.\n- Ensure the new family never emits `FLASK_APP`, `python -m flask`, or any implicit HTTP health dependency.\n\nTesting considerations\n- Extend `tests/test_render_validation_templates.py` to cover dispatch to the new family.\n- Add family-specific regression coverage similar to the existing family tests: rendered file set, invariants, and no Flask-specific output.\n- Add a new example fixture in `examples/validation-fixtures/` so the nightly self-test matrix exercises the family end-to-end.\n- Update `tests/test_validation_selftest_runner.py`, which currently hard-codes a two-family expectation.\n- If the new test file is standalone, wire it into `.github/workflows/ci.yml`.\n- Verification steps:\n  - Render from the updated `.ai/validate.yml` and confirm there is no `FLASK_APP=app.py` or `python -m flask`.\n  - Run renderer/unit coverage for the new family.\n  - Run `python3 tests/test_validation_selftest_runner.py` and confirm the new fixture is included.\n  - Run the validation flow (`scripts/validate_process.sh` or the validate workflow path) and confirm the former `Could not import 'app'` startup failure is gone and pass/fail now reflects real repo-local checks.\n\nFactual conflicts / constraints\n- The placeholder comment in `.ai/validate.yml` suggests `skip_tests` / `custom_tests` as a possible follow-up path, but those keys are only defined in `scripts/templates/slot_manifest.schema.json`; there are no consumers for them in `scripts/render_validation_templates.py` or `workflow-templates/validation-harness/**`. A manifest-only fix through those fields will not work today.\n- The issue says `app.py` is not a real runtime entrypoint; the current checkout is stricter than that: there is no real `app.py` anywhere in the repo, so the Flask family is guaranteed to fail until the manifest family changes.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "89f9586a6b9a06eb15cc076dc09d2b95a11e3c5c35282ca4f3e4cfe7054e3d51",
+  "lineage": {
+    "issue_number": 1544,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24829024978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24829024978",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1544"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260423101602_f028647016",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1544,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24829024978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1544",
+  "timestamps": {
+    "created_at": "2026-04-23T10:16:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
