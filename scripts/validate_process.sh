@@ -488,6 +488,8 @@ post_tracking_comment()
     return 0
   fi
 
+  comment_body="${comment_body//\\n/$'\n'}"
+
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
     -f body="${comment_body}" >/dev/null || true
 }
