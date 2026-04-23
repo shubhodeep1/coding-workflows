@@ -4421,6 +4421,49 @@ STALL_EOF
           return "${_rtr_rc}"
         fi
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
+          # Failed-autofix redispatch (Q1/Q2/Q3:A).  If the most recent
+          # ai-review / internal-review / review_autofix run for this
+          # branch completed with failure/cancelled/timed_out, the PR
+          # has no in-flight worker and an empty-commit push will not
+          # re-dispatch the workflow (empty commits do not fire
+          # pull_request.synchronize).  Call _dispatch_review_for_conflicts
+          # directly; it already guards against duplicate dispatch
+          # (cycle tracker + _has_active_autofix_run).  Fall through to
+          # the empty-commit path on dispatch-failure (rc=1); treat
+          # already-dispatched/active (rc=2) as success.
+          local _rtr_failed_conclusion=""
+          local _rtr_failed_wf=""
+          for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
+            local _rtr_wf_conclusion
+            _rtr_wf_conclusion="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+              --workflow "${wf_candidate}" \
+              --branch "${head_ref}" \
+              --limit 1 \
+              --json status,conclusion \
+              --jq '[.[] | select(.status == "completed")] | .[0].conclusion // empty' \
+              2>/dev/null || echo "")"
+            case "${_rtr_wf_conclusion}" in
+              failure|cancelled|timed_out)
+                _rtr_failed_conclusion="${_rtr_wf_conclusion}"
+                _rtr_failed_wf="${wf_candidate}"
+                break
+                ;;
+            esac
+          done
+          if [ -n "${_rtr_failed_conclusion}" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
+            local _rtr_dispatch_rc=0
+            _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_dispatch_rc=$?
+            if [ "${_rtr_dispatch_rc}" -eq 0 ] || [ "${_rtr_dispatch_rc}" -eq 2 ]; then
+              tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, last run='${_rtr_failed_conclusion}', stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+              STALL_RECOVERY_SHOULD_INCREMENT="true"
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            echo "  Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_rtr_dispatch_rc}; falling back to empty-commit push."
+          fi
+        fi
+        if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
           if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
              git checkout "origin/${head_ref}" 2>/dev/null; then
             git config user.name "codex-bot"
