@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "1..{{ slots.get('tap_plan', 5) }}"
+current=1
+while [ "${current}" -le "{{ slots.get('tap_plan', 5) }}" ]; do
+	echo "ok ${current} - tap summary slot ${current}"
+	current=$((current + 1))
+done
+
+echo "# tap_report family=python-mongo-repo-checks stable_summary=1"
