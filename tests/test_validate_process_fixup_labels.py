@@ -501,6 +501,47 @@ def test_validate_needs_fixes_skips_when_tracker_closed() -> None:
 		assert label_text == "", f"expected no ensure_label_exists calls, got: {label_text!r}"
 
 
+def test_validate_needs_fixes_skips_dedupe_when_tracker_closed() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_dedupe_closed_") as td:
+		preload = {
+			"issue_list_response": [
+				{
+					"number": 999,
+					"body": (
+						"## Diagnosis\n\n---\n"
+						"- Tracking issue: #1043\n"
+						"- Local ID: `validation-fix-cycle-2`\n"
+						"- Managed by: AI Orchestrator\n"
+					),
+				},
+			],
+			"api_responses": {
+				"repos/owner/repo/issues/1043": {"state": "closed"},
+			},
+		}
+		proc, gh_state_file, labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), preload
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert state.get("issue_create_args", []) == [], (
+			f"expected no issue create when tracker closed, got: {state.get('issue_create_args')}"
+		)
+		assert state.get("issue_list_args", []) == [], (
+			"expected dedupe issue listing to be skipped when tracker is closed"
+		)
+		assert any(
+			"repos/owner/repo/issues/1043" in p for p in state.get("api_calls", [])
+		), f"expected tracker state API call, got: {state.get('api_calls')}"
+
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [], f"expected empty CREATED_FIX_ISSUES_JSON, got: {created_json}"
+
+		label_text = labels_file.read_text(encoding="utf-8").strip() if labels_file.exists() else ""
+		assert label_text == "", f"expected no ensure_label_exists calls, got: {label_text!r}"
+
+
 def test_validate_needs_fixes_creates_when_no_dedupe_and_tracker_open() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_create_open_") as td:
 		preload = {

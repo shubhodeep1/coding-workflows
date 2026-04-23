@@ -2969,6 +2969,18 @@ case "${DIAG_STATUS}" in
       exit 0
     fi
 
+    # Tracker-open guard: never open a fix-up against a closed tracker.
+    # Fail-open on API failure (empty state) so a transient blip does
+    # not block legitimate fix-up creation.
+    TRACKER_STATE="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}" --jq '.state' 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -n "${TRACKER_STATE}" ] && [ "${TRACKER_STATE}" != "open" ]; then
+      echo "Tracker-open guard: tracking issue #${TRACKING_ISSUE_RAW} is '${TRACKER_STATE}'; skipping fix-up issue creation."
+      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but tracking issue #${TRACKING_ISSUE_RAW} is ${TRACKER_STATE}; no fix-up issue created."
+      write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
+      tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes, but tracker is ${TRACKER_STATE}; no fix-up created." "WARNING"
+      exit 0
+    fi
+
     # Per-tracker dedupe: if an open fix-up for this tracker + cycle
     # already exists (matched by the Local ID and Tracking issue lines
     # the body writer emits above), reuse it instead of creating a
@@ -2985,7 +2997,7 @@ case "${DIAG_STATUS}" in
       EXISTING_FIXUP_NUM="$(printf '%s' "${DEDUPE_LIST_JSON}" | jq -r \
         --arg lid "Local ID: \`${CONSOLIDATED_LOCAL_ID}\`" \
         --arg trk "Tracking issue: #${TRACKING_ISSUE_RAW}" \
-        '[.[] | select((.body | contains($lid)) and (.body | contains($trk)))] | .[0].number // empty' 2>/dev/null || true)"
+        '[.[] | select(((.body // "") as $b | ($b | contains($lid)) and ($b | contains($trk))))] | .[0].number // empty' 2>/dev/null || true)"
     fi
     if [ -n "${EXISTING_FIXUP_NUM}" ] && [[ "${EXISTING_FIXUP_NUM}" =~ ^[0-9]+$ ]]; then
       echo "Dedupe: open fix-up issue #${EXISTING_FIXUP_NUM} already exists for tracker #${TRACKING_ISSUE_RAW} at cycle ${VALIDATION_CYCLE}; skipping create."
@@ -3000,18 +3012,6 @@ case "${DIAG_STATUS}" in
       failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Reused existing fix-up issue #${EXISTING_FIXUP_NUM} (cycle ${VALIDATION_CYCLE}); no duplicate created."
       write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
       tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes; reused existing fix-up #${EXISTING_FIXUP_NUM}." "WARNING"
-      exit 0
-    fi
-
-    # Tracker-open guard: never open a fix-up against a closed tracker.
-    # Fail-open on API failure (empty state) so a transient blip does
-    # not block legitimate fix-up creation.
-    TRACKER_STATE="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}" --jq '.state' 2>/dev/null | tr -d '[:space:]' || true)"
-    if [ -n "${TRACKER_STATE}" ] && [ "${TRACKER_STATE}" != "open" ]; then
-      echo "Tracker-open guard: tracking issue #${TRACKING_ISSUE_RAW} is '${TRACKER_STATE}'; skipping fix-up issue creation."
-      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but tracking issue #${TRACKING_ISSUE_RAW} is ${TRACKER_STATE}; no fix-up issue created."
-      write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
-      tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes, but tracker is ${TRACKER_STATE}; no fix-up created." "WARNING"
       exit 0
     fi
 
