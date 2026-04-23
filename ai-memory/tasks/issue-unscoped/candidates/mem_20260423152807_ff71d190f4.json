@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:181-184 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` bullet was modified in place instead of being appended.\n  WHY: The append-only contract at lines 154-158 says \"append new env-var bullets to the bottom of this list under this anchor. Do NOT reorder existing bullets or reflow paragraphs \u2014 parallel edits that rewrite existing bullets here cause merge conflicts.\"; z-ai_glm-5 treated the edit as a correct consolidation, but the other two reviewers still flagged the in-place rewrite.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:184 | confidence=5\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` bullet was modified in place instead of being appended.\n  WHY: The reviewer said this violates the append-only contract at lines 154-158: \"append new env-var bullets to the bottom of this list under this anchor. Do NOT reorder existing bullets or reflow paragraphs \u2014 parallel edits that rewrite existing bullets here cause merge conflicts.\"\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:181 | confidence=5\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` bullet was modified in place instead of being appended.\n  WHY: The reviewer said this violates the append-only contract at lines 154-158: \"append new env-var bullets to the bottom of this list under this anchor. Do NOT reorder existing bullets or reflow paragraphs \u2014 parallel edits that rewrite existing bullets here cause merge conflicts.\"\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7fa744dc80ebfa2491032ec4781df9942d080e855c064291bd3d32d1d12544ec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1540,
+    "run_id": "24841133939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24841133939",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423152807_ff71d190f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1540,
+    "run_id": "24841133939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T15:28:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
