@@ -69,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
-          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
 
       - name: Install uv for Serena
         if: env.SKIP_IMPLEMENT != 'true'
