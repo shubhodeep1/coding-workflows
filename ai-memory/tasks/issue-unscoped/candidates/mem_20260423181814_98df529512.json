@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2:8-10 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The Dockerfile omits `coreutils`, so `timeout` is unavailable.\n  WHY: The repo-check script relies on `timeout`, so the validation container can fail with `command not found: timeout`.\n- workflow-templates/validation-harness/python-repo-checks/tests/90_tap_report.sh.j2:7-15 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The synthetic TAP reporter emits its own TAP plan and results on top of the test suite output.\n  WHY: That can confuse TAP consumers with duplicate test IDs and incorrect counts.\n- workflow-templates/validation-harness/python-repo-checks/tests/10_family_marker.sh.j2:4 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The family marker script prints plain text instead of TAP format.\n  WHY: Mixing non-TAP text into a TAP stream can break strict TAP consumers.\n- .ai/validate.yml:12 | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: tap_plan: 3 doesn't match the actual TAP-emitting test count.\n  WHY: The reviewer counted five TAP-emitting tests, so the manifest's declared plan can disagree with execution.\n- scripts/run_validation_repo_checks.sh:10 | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Potentially incorrect test file reference in the repo-check script.\n  WHY: It invokes `python3 tests/test_validate_process_template_mode.py`, so a missing or broken test would fail the check.\n- tests/fixtures/validation_harness/python_repo_checks/tests/10_family_marker.sh | severity=critical | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The family marker script prints plain text instead of TAP output.\n  WHY: TAP parsers expect compliant TAP records, so arbitrary text without a plan can fail validation.\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:5 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `import argparse` is unused.\n  WHY: The file only uses `subprocess` and `sys`, so the import is dead code.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2:8-10 | confidence=5\n  PROBLEM: Missing coreutils package installation\n  WHY: `scripts/run_validation_repo_checks.sh` uses `timeout`, which is part of coreutils, so the validation container will fail with \"command not found: timeout\".\n- workflow-templates/validation-harness/python-repo-checks/tests/90_tap_report.sh.j2:7-15 | confidence=3\n  PROBLEM: Duplicate synthetic TAP output\n  WHY: It creates TAP plan and test results even though other tests already output TAP, which can confuse TAP parsers.\n- workflow-templates/validation-harness/python-repo-checks/tests/10_family_marker.sh.j2:4 | confidence=3\n  PROBLEM: Plain text output instead of TAP format\n  WHY: Non-TAP output mixed with TAP can break TAP consumers expecting strict TAP format.\n- .ai/validate.yml:12 | confidence=4\n  PROBLEM: tap_plan: 3 doesn't match actual test count\n  WHY: The TAP plan announces 3 tests but the reviewer counted 5 TAP-emitting tests.\n- scripts/run_validation_repo_checks.sh:10 | confidence=2\n  PROBLEM: References potentially incorrect test file\n  WHY: The script runs `python3 tests/test_validate_process_template_mode.py`; if the test fails or doesn't exist, the repo check fails.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2:8-10 | severity=high | confidence=5\n  PROBLEM: The Dockerfile installs `bash` and `jq` but does not install `coreutils`, which provides `timeout`.\n  WHY: `scripts/run_validation_repo_checks.sh` invokes `timeout`, so the validation harness can fail with \"command not found: timeout\".\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/fixtures/validation_harness/python_repo_checks/tests/10_family_marker.sh | severity=critical | confidence=5\n  PROBLEM: This script outputs plain text without TAP formatting.\n  WHY: TAP parsers expect compliant TAP output and will fail when encountering arbitrary text without a plan.\n- workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2:8 | severity=high | confidence=4\n  PROBLEM: The Dockerfile does not explicitly install `coreutils`, which provides `timeout`.\n  WHY: Relying on the base image for `timeout` is fragile, and a base-image change can make the repo checks fail with \"command not found\".\n- tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py:5 | severity=medium | confidence=4\n  PROBLEM: `argparse` is imported but never used.\n  WHY: The module only uses `subprocess` and `sys`, so the import is dead code.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/fixtures/validation_harness/python_repo_checks/tests/10_family_marker.sh | severity=critical | confidence=5\n  PROBLEM: `10_family_marker.sh` produces no TAP output.\n  WHY: The validation driver fails tests with no TAP output, so this causes runtime validation to fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "aff148ca08b6a975fe15530354c62191ad2dd88172c0c0fae73b97a41d9389df",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1562,
+    "run_id": "24848900047",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24848900047",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423181814_98df529512",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1562,
+    "run_id": "24848900047"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T18:18:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
