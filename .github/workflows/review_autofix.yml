@@ -2258,7 +2258,19 @@ jobs:
           echo "====================================="
 
           merge_exit=0
-          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || merge_exit=$?
+          # Capture git merge stderr so the failure annotation can surface
+          # the real cause (e.g. "refusing to merge unrelated histories",
+          # "Untracked working tree file … would be overwritten by merge").
+          # The previous implementation hard-coded "untracked files or a
+          # corrupted working tree" in the ::error:: annotation, which was
+          # misleading whenever git's actual complaint was something else.
+          MERGE_STDERR_FILE="$(mktemp)"
+          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
+          # Echo captured stderr so it remains visible in the raw step log
+          # even when we wrap it in an annotation below.
+          if [ -s "${MERGE_STDERR_FILE}" ]; then
+            sed 's/^/git merge stderr: /' "${MERGE_STDERR_FILE}"
+          fi
 
           # Restore the stashed dirs so later steps have them available.
           for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
@@ -2277,11 +2289,20 @@ jobs:
           # attempt a proper merge.
           if [ -z "$(git ls-files --unmerged)" ]; then
             if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
-              if [ "${merge_exit}" -eq 128 ]; then
-                echo "::error::Merge precheck failed (exit 128): untracked files or a corrupted working tree blocked git merge. Review the pre-merge diagnostics above to identify the colliding file."
+              # Flatten the captured stderr onto a single line for the
+              # annotation (::error:: notations cannot span newlines).
+              _merge_stderr_oneline="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+              _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+              if grep -qi 'refusing to merge unrelated histories' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+                _head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+                _base_sha="$(git rev-parse --short "origin/${BASE_BRANCH}" 2>/dev/null || echo unknown)"
+                echo "::error::Merge precheck failed (exit ${merge_exit}): HEAD (${_head_sha}) and origin/${BASE_BRANCH} (${_base_sha}) have no common ancestor. This PR's branch was likely force-pushed to an orphan root, or ${BASE_BRANCH} was force-pushed since this branch diverged. Manual repair required: rebase the PR branch onto a current ${BASE_BRANCH} ancestor, or recreate the branch from ${BASE_BRANCH} and re-apply the changes. git stderr: ${_merge_stderr_oneline}"
+              elif [ "${merge_exit}" -eq 128 ]; then
+                echo "::error::Merge precheck failed (exit 128): git merge aborted before entering merge state. See pre-merge diagnostics above. git stderr: ${_merge_stderr_oneline}"
               else
-                echo "::warning::git merge exited ${merge_exit} without entering merge state — treating as conflict"
+                echo "::warning::git merge exited ${merge_exit} without entering merge state — treating as conflict. git stderr: ${_merge_stderr_oneline}"
               fi
+              rm -f "${MERGE_STDERR_FILE}"
               echo "Merge conflict detected (merge command failed)"
               echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
               for d in .serena scripts prompts; do
@@ -2305,6 +2326,7 @@ jobs:
             git reset --hard HEAD || true
             git clean -fd || true
             rm -rf "${UNTRACKED_BACKUP}"
+            rm -f "${MERGE_STDERR_FILE}"
             exit 0
           else
             echo "Merge conflict detected"
@@ -2327,6 +2349,7 @@ jobs:
             done
           fi
           rm -rf "${UNTRACKED_BACKUP}"
+          rm -f "${MERGE_STDERR_FILE}"
 
       - name: Prepare merge-conflict resolver prompt and pre-snapshot
         # Split from "Run Codex resolver, validate, stage, commit" below so

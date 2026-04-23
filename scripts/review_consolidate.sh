@@ -175,7 +175,23 @@ fi
 review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} input_bytes=${input_bytes} output_bytes=${output_bytes} wall_secs=${wall_secs} exit_code=${cmd_rc} capped=${capped} failopen=${failopen}"
 
 if [ -s "${tmp_err}" ]; then
-	sed 's/^/stage=consolidator stderr=/g' "${tmp_err}" >&2 || true
+	# Neutralise any bytes that the GitHub Actions runner would otherwise
+	# parse as a workflow command / annotation. LLM reasoning sometimes
+	# echoes literal snippets like `echo "::error::..."` or quotes
+	# `##[error]` from agents.md documentation, and a bare CR in the
+	# stderr stream can re-anchor such a token to column zero even when
+	# the enclosing line already carries the "stage=consolidator stderr="
+	# prefix. Replace CR with space, then defang `##[` → `##\[` and
+	# `::<cmd>::` → `::\<cmd>::` inline before prefixing so no transform
+	# can accidentally produce a line that the runner interprets as an
+	# annotation. The prefix itself is still applied last to keep log
+	# lines identifiable via the existing "stage=consolidator stderr="
+	# grep contract (see agents.md consolidator stderr forwarding).
+	sed -e 's/\r/ /g' \
+		-e 's/##\[/##\\[/g' \
+		-e 's/::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\)::/::\\\1::/g' \
+		-e 's/^/stage=consolidator stderr=/' \
+		"${tmp_err}" >&2 || true
 fi
 
 rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
