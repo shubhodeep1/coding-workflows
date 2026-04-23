@@ -73,13 +73,12 @@ class FakeExecutor:
 def _write_manifest(repo_dir: Path) -> None:
 	(repo_dir / ".ai").mkdir(parents=True, exist_ok=True)
 	(repo_dir / ".ai" / "validate.yml").write_text(
-		"""type: python-mongo-flask
-entry: app.py
-port: 8000
+		"""type: repo-local-tooling
+entry: scripts/render_validation_templates.py
 slots:
   project_name: demo
-  canary_tools: [curl, jq]
-  tap_plan: 2
+  canary_tools: [bash, python3, jq]
+  tap_plan: 5
 """,
 		encoding="utf-8",
 	)

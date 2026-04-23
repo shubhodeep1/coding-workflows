@@ -49,6 +49,16 @@ def _fixture_manifest(family: str, project_name: str) -> dict:
 				"tap_plan": 3,
 			},
 		}
+	if family == "repo-local-tooling":
+		return {
+			"type": family,
+			"entry": "scripts/render_validation_templates.py",
+			"slots": {
+				"project_name": project_name,
+				"canary_tools": ["bash", "python3", "jq"],
+				"tap_plan": 5,
+			},
+		}
 	raise AssertionError(f"unsupported family fixture: {family}")
 
 
@@ -109,6 +119,7 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 
 		_write_yaml(fixtures_root / "python-mongo-flask.yml", _fixture_manifest("python-mongo-flask", "ci-python"))
 		_write_yaml(fixtures_root / "node-hardhat-solidity.yml", _fixture_manifest("node-hardhat-solidity", "ci-node"))
+		_write_yaml(fixtures_root / "repo-local-tooling.yml", _fixture_manifest("repo-local-tooling", "ci-repo-local"))
 
 		result = _run_matrix(work_root, fixtures_root, summary_path, logs_root)
 		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
@@ -118,10 +129,10 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 		assert summary["schema_version"] == "1"
 		assert summary["repo_root"] == "."
 		assert summary["overall_status"] == "pass"
-		assert summary["totals"] == {"fixtures": 2, "passed": 2, "failed": 0}
-		assert len(summary["fixtures"]) == 2
+		assert summary["totals"] == {"fixtures": 3, "passed": 3, "failed": 0}
+		assert len(summary["fixtures"]) == 3
 		fixture_names = sorted(item["name"] for item in summary["fixtures"])
-		assert fixture_names == ["node-hardhat-solidity.yml", "python-mongo-flask.yml"]
+		assert fixture_names == ["node-hardhat-solidity.yml", "python-mongo-flask.yml", "repo-local-tooling.yml"]
 
 		for fixture in summary["fixtures"]:
 			assert fixture["status"] == "pass"

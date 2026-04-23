@@ -155,6 +155,29 @@ def test_log9_validate_env_values_are_double_quoted() -> None:
         assert 'RPC_URL=""' in custom_env_text
 
 
+def test_log10_repo_local_tooling_tap_alias_remaps_to_50() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-repo-local-tooling-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = {
+            "type": "repo-local-tooling",
+            "entry": "scripts/render_validation_templates.py",
+            "slots": {
+                "project_name": "demo-project",
+                "canary_tools": ["bash", "python3", "jq"],
+                "tap_plan": 5,
+            },
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        assert (output_root / "tests" / "50_tap_report.sh").exists()
+        assert not (output_root / "tests" / "90_tap_report.sh").exists()
+
+
 def test_shutdown_helper_is_rendered_and_invoked() -> None:
     with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
         temp_root = Path(td)

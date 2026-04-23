@@ -1,0 +1,12 @@
+services:
+  app:
+    init: true
+    build:
+      context: ..
+      dockerfile: {{ output_root_name }}/Dockerfile.app
+    working_dir: /workspace
+    env_file:
+      - validate.env
+    environment:
+      APP_SERVICE: "${APP_SERVICE:-app}"
+      APP_URL: "${APP_URL:-}"

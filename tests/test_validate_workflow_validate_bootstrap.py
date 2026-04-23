@@ -30,6 +30,17 @@ def test_validate_workflow_bootstrap_fetches_template_assets() -> None:
 	assert "workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2" in wf
 	assert "workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2" in wf
 	assert "workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/Dockerfile.app.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/docker-compose.test.yml.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/tests/00_canary.sh.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/tests/10_family_marker.sh.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/tests/25_render_validation_templates.sh.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/tests/20_import_audit.sh.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/tests/30_hardhat_test.sh.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/_lib/graceful_shutdown.sh.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/tests/_lib/import_audit.py.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/tests/90_tap_report.sh.j2" in wf
+	assert "workflow-templates/validation-harness/repo-local-tooling/validate.env.j2" in wf
 	assert "workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2" in wf
 	assert "workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2" in wf
 	assert "workflow-templates/validation-harness/python-mongo-flask/tests/00_canary.sh.j2" in wf

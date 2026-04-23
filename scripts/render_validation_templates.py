@@ -95,6 +95,7 @@ class RenderedFile:
 FAMILY_REGISTRY: dict[str, FamilySpec] = {
 	"python-mongo-flask": FamilySpec(name="python-mongo-flask", relative_dir="python-mongo-flask"),
 	"node-hardhat-solidity": FamilySpec(name="node-hardhat-solidity", relative_dir="node-hardhat-solidity"),
+	"repo-local-tooling": FamilySpec(name="repo-local-tooling", relative_dir="repo-local-tooling"),
 }
 
 RENDERED_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
@@ -103,6 +104,9 @@ RENDERED_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
 	},
 	"node-hardhat-solidity": {
 		"tests/20_rpc_probe.sh": "tests/25_rpc_probe.sh",
+	},
+	"repo-local-tooling": {
+		"tests/90_tap_report.sh": "tests/50_tap_report.sh",
 	},
 }
 

@@ -1,0 +1,9 @@
+type: repo-local-tooling
+entry: scripts/render_validation_templates.py
+slots:
+  project_name: nightly-repo-local-tooling
+  canary_tools:
+    - bash
+    - python3
+    - jq
+  tap_plan: 5
