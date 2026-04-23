@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2947-2948 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: Continuation dispatches bypass `autofix_retrigger_has_inflight_peer`, leaving a low-probability duplicate-run window.\n  WHY: Reviewers treat the bypass as an intentional trade-off to avoid the stall, with concurrency and iteration caps keeping the duplicate-run window low-probability.\n- .github/workflows/review_autofix.yml:2955-2957 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true` still reports `reason=no_peer_detected` even when the peer check was bypassed.\n  WHY: Reviewers note the separate `AUTOFIX_PEER_CHECK_BYPASSED` line already records the bypass, so this is only a cosmetic observability mismatch.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:2947-2948 | severity=low | confidence=2\n  PROBLEM: Continuation dispatches bypass `autofix_retrigger_has_inflight_peer`, leaving a low-probability duplicate-run window.\n  WHY: The reviewer treats it as a plausible but low-probability trade-off against the stall, noting a real peer would likely be terminal after the 8s wait.\n- .github/workflows/review_autofix.yml:2955-2957 | severity=low | confidence=1\n  PROBLEM: `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true` still reports `reason=no_peer_detected` even when the peer check was bypassed.\n  WHY: The reviewer says this is cosmetic only and has no functional impact.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:2947-2948 | severity=low | confidence=2\n  PROBLEM: Continuation dispatches bypass `autofix_retrigger_has_inflight_peer`, leaving a low-probability duplicate-run window.\n  WHY: The reviewer calls this an intentional trade-off to prevent the stall while preserving legacy dedup on non-continuation paths.\n- .github/workflows/review_autofix.yml:2955-2957 | severity=low | confidence=1\n  PROBLEM: `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true` still reports `reason=no_peer_detected` even when the peer check was bypassed.\n  WHY: The reviewer says the message is cosmetic only and technically accurate enough because no peer was detected by the bypass path.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:2947-2948 | severity=low | confidence=2\n  PROBLEM: Continuation dispatches bypass `autofix_retrigger_has_inflight_peer`, leaving a low-probability duplicate-run window.\n  WHY: The reviewer says handing the iteration to the gate-skipped synchronize run would stall indefinitely, so bypassing the peer check is intentional.\n- .github/workflows/review_autofix.yml:2955-2957 | severity=low | confidence=1\n  PROBLEM: `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true` still reports `reason=no_peer_detected` even when the peer check was bypassed.\n  WHY: The reviewer says the log is emitted after the bypass and is just a minor cosmetic issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- .github/workflows/review_autofix.yml:2947-2948 | severity=low | confidence=1\n  PROBLEM: Continuation dispatches bypass `autofix_retrigger_has_inflight_peer`, leaving a low-probability duplicate-run window.\n  WHY: The reviewer says concurrency, synchronous continuation, and prior iteration completion or the iteration cap keep the duplicate-run risk low.\n- .github/workflows/review_autofix.yml:2955-2957 | severity=low | confidence=1\n  PROBLEM: `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true` still reports `reason=no_peer_detected` even when the peer check was bypassed.\n  WHY: The reviewer says the `continuation=true` suffix makes the bypass context clear even though the wording is technically imprecise.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:2947-2948 | severity=low\n  PROBLEM: Continuation dispatches bypass `autofix_retrigger_has_inflight_peer`, leaving a low-probability duplicate-run window.\n  WHY: The reviewer says the risk is low because the only same-branch peer is gate-skipped and the iteration cap bounds runaway cases.\n- .github/workflows/review_autofix.yml:2955-2957 | severity=low\n  PROBLEM: `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true` still reports `reason=no_peer_detected` even when the peer check was bypassed.\n  WHY: The reviewer says the log is technically imprecise but has no runtime impact.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c2c0fb77d83160cc46bbaa6f683bcf7c2a204a2e85c41336dd594c6e44b4e0fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1571,
+    "run_id": "24853584697",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24853584697",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423201424_93e2ca8ca1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1571,
+    "run_id": "24853584697"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T20:14:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
