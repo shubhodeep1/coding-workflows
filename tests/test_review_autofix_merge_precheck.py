@@ -60,18 +60,22 @@ def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
 
 
 def test_known_ci_artifacts_removed_in_resolve_step():
-    """The 'Resolve merge conflicts' step must also remove the same set of
-    CI-generated files before running git merge, since it performs its own
-    merge invocation."""
+    """The resolver path must still remove known CI-generated files before its
+    merge invocation, whether implemented inline or via delegated script."""
     wf = _workflow()
-    # There must be at least two occurrences of the rm -f line (one per merge-
-    # performing step).
-    count = wf.count(
-        "rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh"
+    rm_line = "rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh"
+    count = wf.count(rm_line)
+
+    assert count >= 1, (
+        "Expected at least one known-CI-artifact rm -f occurrence in "
+        f"review_autofix.yml, found {count}"
     )
-    assert count >= 2, (
-        "Expected at least 2 occurrences of the known-CI-artifact rm -f "
-        f"(one per merge step), found {count}"
+    assert "bash \"${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh\"" in wf, (
+        "Expected delegated conflict-prepare script call when resolver cleanup "
+        "is no longer duplicated inline"
+    )
+    assert "review_conflict_prepare.sh" in wf, (
+        "Expected review_conflict_prepare.sh to remain part of workflow wiring"
     )
 
 
@@ -148,4 +152,84 @@ def test_merge_conflict_env_var_set_on_exit_128():
     assert idx_conflict != -1, (
         "Expected 'MERGE_CONFLICT=true' to be written to GITHUB_ENV after the "
         "exit-128 error annotation"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix 5: early pushability preflight gate
+# ---------------------------------------------------------------------------
+
+def test_push_preflight_gate_runs_before_reviewer_models():
+    """Known-unpushable branches must fail before reviewer/editor execution."""
+    wf = _workflow()
+    gate_pos = wf.find("- name: Preflight pushability gate")
+    reviewers_pos = wf.find("- name: Run reviewer models")
+    assert gate_pos != -1, "Expected 'Preflight pushability gate' step in workflow"
+    assert reviewers_pos != -1, "Expected 'Run reviewer models' step in workflow"
+    assert gate_pos < reviewers_pos, (
+        "Preflight pushability gate must run before 'Run reviewer models'"
+    )
+
+
+def test_push_preflight_probe_and_markers_present():
+    """Preflight must probe pushability and emit stable operational markers."""
+    wf = _workflow()
+    preflight_header = (
+        "- name: Preflight pushability gate\n"
+        "        if: success() && env.PR_CLOSED != 'true'\n"
+        "        env:\n"
+        "          GH_TOKEN: ${{ secrets.GH_PAT }}\n"
+        "        run: |"
+    )
+    assert preflight_header in wf, (
+        "Expected preflight gate to expose GH_TOKEN for git push --dry-run auth parity"
+    )
+    assert 'git push --dry-run origin "HEAD:${TARGET_BRANCH}"' in wf, (
+        "Expected push preflight to probe remote pushability via git push --dry-run"
+    )
+    assert "PUSH_PREFLIGHT_V1 status=${push_preflight_status} reason=${push_preflight_reason}" in wf, (
+        "Expected stable PUSH_PREFLIGHT_V1 status marker in workflow logs"
+    )
+    assert "sanitized_push_probe_output" in wf, (
+        "Expected push preflight output to be sanitized before log emission"
+    )
+    assert "x-access-token:[REDACTED]" in wf, (
+        "Expected push preflight sanitization to redact x-access-token credentials"
+    )
+    assert "::error::PUSH_PREFLIGHT_BLOCKED_V1 reason=${push_preflight_reason}" in wf, (
+        "Expected blocked preflight marker for definitive unpushable outcomes"
+    )
+    blocked_guard = 'if [ "${push_preflight_status}" = "blocked" ]; then'
+    blocked_pos = wf.find(blocked_guard)
+    assert blocked_pos != -1, "Expected blocked preflight guard in workflow"
+    assert wf.find("exit 1", blocked_pos) != -1, (
+        "Expected blocked preflight path to exit immediately"
+    )
+    assert 'push_preflight_status="warn_fail_open"' in wf, (
+        "Expected checkout_guard_unpushable to remain a non-blocking warning"
+    )
+    assert "printf 'non_fast_forward'" in wf, (
+        "Expected classifier to still detect non-fast-forward probe output"
+    )
+    assert "|non_fast_forward)" not in wf, (
+        "non_fast_forward must not be treated as a definitive unpushable reason"
+    )
+    assert "::warning::PUSH_PREFLIGHT_FAIL_OPEN_V1 reason=${push_preflight_reason}" in wf, (
+        "Expected fail-open warning marker for ambiguous/transient probe failures"
+    )
+
+
+def test_retrigger_if_guard_unchanged_with_stale_base_gate():
+    """The existing re-dispatch eligibility guard must remain unchanged."""
+    wf = _workflow()
+    retrigger_if = (
+        "if: success() && env.CAN_PUSH == 'true' && "
+        "(env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && "
+        "env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+    )
+    assert "- name: Re-trigger review via workflow_dispatch" in wf, (
+        "Expected re-dispatch step to remain in review_autofix workflow"
+    )
+    assert wf.count(retrigger_if) >= 2, (
+        "Expected existing re-dispatch/push guard condition to remain unchanged"
     )
