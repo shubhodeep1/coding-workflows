@@ -192,7 +192,7 @@ if [ -s "${tmp_err}" ]; then
 	sed -e 's/%/%25/g' \
 		-e 's/\r/ /g' \
 		-e 's/##\[/##\\[/g' \
-		-e 's/::\([a-z][a-z-]*\)/::\\\1/g' \
+		-e 's/^::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\|set-env\)\([[:space:]]\|::\)/::\\\1\2/g' \
 		-e 's/^/stage=consolidator stderr=/' \
 		"${tmp_err}" >&2 || true
 fi
