@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:489-496 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: When `gh issue create` fails, the script exits early after posting an error comment and skips the dependency-comment loop and final summary comment.\n  WHY: This leaves the source issue partially updated and omits the blocker/dependency metadata the orchestrator uses to track created fix-up issues.\n- scripts/implement_diagnose_post_codex_failure.sh:136-170 | severity=low | confidence=1\n  flagged_by: [google_gemini-3-flash-preview, deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: `git diff HEAD` is written into the diagnose prompt without any size limit.\n  WHY: Large diffs can blow up prompt/context size or slow the diagnose step, and multiple reviewers flagged it as a robustness risk.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/implement_diagnose_post_codex_failure.sh:170,294 | severity=low | confidence=3\n  PROBLEM: `git diff HEAD` output is included in the prompt without size limiting.\n  WHY: Large diffs could exceed the LLM context window or cause Codex to fail or truncate output.\n- scripts/validate_process.sh:63-67 | severity=low | confidence=2\n  PROBLEM: `VALIDATION_USE_TEMPLATES` only accepts `1|true|yes|on`, so other truthy strings fall through to false.\n  WHY: Existing configurations that use non-standard truthy values would unexpectedly hit `harness_error`.\n- scripts/implement_diagnose_post_codex_failure.sh:89,498 | severity=medium | confidence=3\n  PROBLEM: The script outputs `handled=true` early but can still exit with error 1 if fix-up issue creation fails.\n  WHY: This creates contradictory signals for the calling workflow about whether the post-diagnosis handling succeeded.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/implement_diagnose_post_codex_failure.sh:365 | severity=medium | confidence=5\n  PROBLEM: If `gh issue create` fails in the fix-up loop, the script terminates before the source issue is fully labeled and summarized.\n  WHY: The failure path stops the process before the issue is correctly marked `ai:implementation-failed` and before the user gets a complete summary comment.\n- scripts/implement_diagnose_post_codex_failure.sh:136 | severity=low | confidence=5\n  PROBLEM: Building the diff with `git diff HEAD` has no size guard.\n  WHY: Large worktrees can produce oversized prompts that may exceed token limits or local temp storage during `codex exec`.\n- scripts/implement_diagnose_post_codex_failure.sh:270 | severity=low | confidence=5\n  PROBLEM: JSON extraction depends on `python3` being available.\n  WHY: The script has no shell fallback for extraction, making `python3` a single point of failure even if GitHub Actions usually provides it.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/implement_diagnose_post_codex_failure.sh:489-496 | severity=medium | confidence=4\n  PROBLEM: When creation of one or more fix-up issues fails, the script exits immediately after posting an error comment and skips the dependency-comment loop and final summary comment.\n  WHY: The source issue is left partially updated and the blocker/dependency metadata never gets written.\n- scripts/implement_diagnose_post_codex_failure.sh:170 | severity=low | confidence=1\n  PROBLEM: Unbounded `git diff HEAD` output is written to `DIFF_FILE`.\n  WHY: Very large diffs can overflow LLM context or cause severe slowdown in the diagnose step.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "2cdcb85d2881812fa705194876ffb4cefa92dd983a0e521e8d09bfdc17aba064",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1540,
+    "run_id": "24821423766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24821423766",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423072158_0266ddb2d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1540,
+    "run_id": "24821423766"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T07:21:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
