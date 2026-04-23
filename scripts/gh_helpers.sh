@@ -86,10 +86,13 @@ _gh_rate_limit_wait()
 # Circuit breaker: rate-limit flag file.
 #
 # When any gh_retry / curl_gh_api helper detects a GitHub API
-# rate limit, it touches this file.  Callers (e.g.
-# orchestrate_poll.yml) can check gh_rate_limit_breaker_tripped
-# to suppress self-retrigger and let the cron schedule handle the
-# next cycle instead.
+# rate limit, it touches this file.  Callers within the same job
+# can check gh_rate_limit_breaker_tripped to short-circuit further
+# API calls and let the next scheduled workflow run handle them
+# instead.  (orchestrate_poll.yml previously consumed this flag to
+# suppress an end-of-run self-retrigger dispatch; that path has
+# been removed — the flag is still written for other scripts that
+# want per-job back-pressure.)
 #
 # The file path defaults to /tmp/.gh_rate_limit_circuit_breaker
 # and can be overridden via GH_RATE_LIMIT_BREAKER_FILE env var.
