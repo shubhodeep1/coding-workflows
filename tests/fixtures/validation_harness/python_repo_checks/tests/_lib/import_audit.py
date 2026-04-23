@@ -49,7 +49,7 @@ def main() -> int:
 				file=sys.stderr,
 			)
 			return 1
-		print(f"ok - isolated import module={module_name}")
+		print(f"# isolated import module={module_name}")
 	return 0
 
 

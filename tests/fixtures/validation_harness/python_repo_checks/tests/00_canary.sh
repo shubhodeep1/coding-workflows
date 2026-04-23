@@ -6,9 +6,18 @@ source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
-CANARY_TOOLS="${CANARY_TOOLS:-bash python3 jq}"
+DEFAULT_CANARY_TOOLS=(
+	'bash'
+	'python3'
+	'jq'
+)
 
-read -r -a TOOL_LIST <<< "${CANARY_TOOLS}"
+if [ "${CANARY_TOOLS+x}" = "x" ]; then
+	read -r -a TOOL_LIST <<< "${CANARY_TOOLS}"
+else
+	TOOL_LIST=("${DEFAULT_CANARY_TOOLS[@]}")
+fi
+
 tool_count=0
 for _tool in "${TOOL_LIST[@]}"; do
 	tool_count=$((tool_count + 1))
