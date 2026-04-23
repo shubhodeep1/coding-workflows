@@ -35,8 +35,22 @@ def _fixture_manifest(family: str, project_name: str) -> dict:
 			"slots": {
 				"project_name": project_name,
 				"canary_tools": ["curl", "jq", "python3"],
-				"tap_plan": 2,
+				"tap_plan": 5,
 			},
+		}
+	if family == "python-mongo-flask-non-app":
+		return {
+			"type": "python-mongo-flask",
+			"slots": {
+				"project_name": project_name,
+				"canary_tools": ["bash", "python3", "jq"],
+				"tap_plan": 5,
+			},
+			"skip_tests": ["http_smoke", "graceful_shutdown"],
+			"custom_tests": [
+				"python3 scripts/render_validation_templates.py --help >/dev/null",
+				"python3 scripts/validation_lint.py --help >/dev/null",
+			],
 		}
 	if family == "node-hardhat-solidity":
 		return {
@@ -108,6 +122,10 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 		logs_root = work_root / "logs"
 
 		_write_yaml(fixtures_root / "python-mongo-flask.yml", _fixture_manifest("python-mongo-flask", "ci-python"))
+		_write_yaml(
+			fixtures_root / "python-mongo-flask-non-app.yml",
+			_fixture_manifest("python-mongo-flask-non-app", "ci-python-non-app"),
+		)
 		_write_yaml(fixtures_root / "node-hardhat-solidity.yml", _fixture_manifest("node-hardhat-solidity", "ci-node"))
 
 		result = _run_matrix(work_root, fixtures_root, summary_path, logs_root)
@@ -118,10 +136,14 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 		assert summary["schema_version"] == "1"
 		assert summary["repo_root"] == "."
 		assert summary["overall_status"] == "pass"
-		assert summary["totals"] == {"fixtures": 2, "passed": 2, "failed": 0}
-		assert len(summary["fixtures"]) == 2
+		assert summary["totals"] == {"fixtures": 3, "passed": 3, "failed": 0}
+		assert len(summary["fixtures"]) == 3
 		fixture_names = sorted(item["name"] for item in summary["fixtures"])
-		assert fixture_names == ["node-hardhat-solidity.yml", "python-mongo-flask.yml"]
+		assert fixture_names == [
+			"node-hardhat-solidity.yml",
+			"python-mongo-flask-non-app.yml",
+			"python-mongo-flask.yml",
+		]
 
 		for fixture in summary["fixtures"]:
 			assert fixture["status"] == "pass"
@@ -134,6 +156,11 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 			for log_rel in fixture["log_paths"].values():
 				log_path = _resolve_log_path(log_rel)
 				assert log_path.exists(), f"missing stage log {log_rel}"
+
+		non_app_fixture = next(item for item in summary["fixtures"] if item["name"] == "python-mongo-flask-non-app.yml")
+		non_app_output_root = _resolve_log_path(non_app_fixture["log_paths"]["render"]).parent / "validation"
+		assert (non_app_output_root / "tests" / "40_custom_01.sh").exists()
+		assert (non_app_output_root / "tests" / "41_custom_02.sh").exists()
 
 
 def test_runner_surfaces_fixture_stage_failure_in_summary() -> None:

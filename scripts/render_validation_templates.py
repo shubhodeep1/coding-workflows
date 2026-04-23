@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,6 +110,28 @@ RENDERED_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
 
+PYTHON_MONGO_FLASK_TEST_OUTPUTS: dict[str, str] = {
+	"canary": "tests/00_canary.sh",
+	"family_marker": "tests/10_family_marker.sh",
+	"http_smoke": "tests/11_http_smoke.sh",
+	"import_audit": "tests/20_import_audit.sh",
+	"graceful_shutdown": "tests/30_graceful_shutdown.sh",
+}
+PYTHON_MONGO_FLASK_TEST_ORDER: tuple[str, ...] = (
+	"canary",
+	"family_marker",
+	"http_smoke",
+	"import_audit",
+	"graceful_shutdown",
+)
+PYTHON_MONGO_FLASK_ALWAYS_TEST_OUTPUTS: tuple[str, ...] = ("tests/90_tap_report.sh",)
+PYTHON_MONGO_FLASK_CANARY_ID = "canary"
+PYTHON_MONGO_FLASK_CUSTOM_TEST_START_PREFIX = 40
+PYTHON_MONGO_FLASK_CUSTOM_TEST_MAX_PREFIX = 89
+PYTHON_MONGO_FLASK_SELECTION_METADATA_PATH = "_meta/test_selection.json"
+EXTERNAL_TOOL_IDS: tuple[str, ...] = ("forge", "cast", "hardhat")
+TOOL_TOKEN_CHARS = r"A-Za-z0-9._+-"
+
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Render validation harness templates from .ai/validate.yml")
@@ -165,6 +188,199 @@ def _json_pointer_from_path(path_parts: list[Any]) -> str:
 		escaped = str(segment).replace("~", "~0").replace("/", "~1")
 		segments.append(escaped)
 	return "/" + "/".join(segments)
+
+
+def _normalize_manifest_string_list(manifest: dict[str, Any], key: str) -> list[str]:
+	raw_value = manifest.get(key)
+	if raw_value is None:
+		return []
+	if not isinstance(raw_value, list):
+		raise ManifestValidationError(f"Manifest key '{key}' must be an array of strings")
+
+	normalized: list[str] = []
+	for idx, item in enumerate(raw_value, start=1):
+		if not isinstance(item, str):
+			raise ManifestValidationError(
+				f"Manifest key '{key}' item #{idx} must be a string, got {type(item).__name__}"
+			)
+		value = item.strip()
+		if not value:
+			raise ManifestValidationError(f"Manifest key '{key}' item #{idx} must not be empty")
+		normalized.append(value)
+	return normalized
+
+
+def _find_external_tools_in_command(command: str) -> list[str]:
+	required: list[str] = []
+	for tool in EXTERNAL_TOOL_IDS:
+		pattern = re.compile(rf"(?<![{TOOL_TOKEN_CHARS}]){re.escape(tool)}(?![{TOOL_TOKEN_CHARS}])", re.IGNORECASE)
+		if pattern.search(command):
+			required.append(tool)
+	return required
+
+
+def _python_mongo_flask_selection_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+	raw_skip_tests = _normalize_manifest_string_list(manifest, "skip_tests")
+	skip_test_ids: list[str] = []
+	seen_skip_ids: set[str] = set()
+
+	for raw_id in raw_skip_tests:
+		normalized_id = raw_id.strip().lower()
+		if normalized_id not in PYTHON_MONGO_FLASK_TEST_OUTPUTS:
+			supported = ", ".join(PYTHON_MONGO_FLASK_TEST_ORDER)
+			raise ManifestValidationError(
+				f"Manifest key 'skip_tests' contains unsupported test id '{raw_id}'. Supported ids: {supported}"
+			)
+		if normalized_id in seen_skip_ids:
+			raise ManifestValidationError(
+				f"Manifest key 'skip_tests' contains duplicate test id '{raw_id}'"
+			)
+		if normalized_id == PYTHON_MONGO_FLASK_CANARY_ID:
+			raise ManifestValidationError(
+				"Manifest key 'skip_tests' cannot skip test id 'canary' because tests/00_canary.sh is mandatory"
+			)
+		seen_skip_ids.add(normalized_id)
+		skip_test_ids.append(normalized_id)
+
+	selected_test_ids = [
+		test_id for test_id in PYTHON_MONGO_FLASK_TEST_ORDER if test_id not in seen_skip_ids
+	]
+	selected_static_test_outputs = [
+		PYTHON_MONGO_FLASK_TEST_OUTPUTS[test_id] for test_id in selected_test_ids
+	]
+
+	custom_test_commands = _normalize_manifest_string_list(manifest, "custom_tests")
+	custom_capacity = PYTHON_MONGO_FLASK_CUSTOM_TEST_MAX_PREFIX - PYTHON_MONGO_FLASK_CUSTOM_TEST_START_PREFIX + 1
+	if len(custom_test_commands) > custom_capacity:
+		raise ManifestValidationError(
+			f"Manifest key 'custom_tests' supports at most {custom_capacity} commands for python-mongo-flask"
+		)
+
+	custom_tests: list[dict[str, Any]] = []
+	for idx, command in enumerate(custom_test_commands, start=1):
+		prefix = PYTHON_MONGO_FLASK_CUSTOM_TEST_START_PREFIX + idx - 1
+		output_rel_path = f"tests/{prefix:02d}_custom_{idx:02d}.sh"
+		custom_tests.append(
+			{
+				"index": idx,
+				"output_rel_path": output_rel_path,
+				"command": command,
+				"required_tools": _find_external_tools_in_command(command),
+			}
+		)
+
+	selected_test_outputs = [*selected_static_test_outputs]
+	selected_test_outputs.extend(custom_test["output_rel_path"] for custom_test in custom_tests)
+	selected_test_outputs.extend(PYTHON_MONGO_FLASK_ALWAYS_TEST_OUTPUTS)
+
+	http_runtime_test_ids = {"http_smoke", "graceful_shutdown"}
+	runtime_http_tests_enabled = any(test_id in http_runtime_test_ids for test_id in selected_test_ids)
+
+	return {
+		"family": "python-mongo-flask",
+		"skip_test_ids": skip_test_ids,
+		"selected_test_ids": selected_test_ids,
+		"selected_static_test_outputs": selected_static_test_outputs,
+		"selected_test_outputs": selected_test_outputs,
+		"custom_tests": custom_tests,
+		"runtime_http_tests_enabled": runtime_http_tests_enabled,
+	}
+
+
+def _render_custom_test_wrapper(command: str, index: int) -> str:
+	escaped_command = command.replace("'", "'\"'\"'")
+	label = f"custom validation command {index:02d}"
+	return (
+		"#!/usr/bin/env bash\n"
+		"set -euo pipefail\n\n"
+		"SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n"
+		"source \"${SCRIPT_DIR}/../_lib/tap_helpers.sh\"\n\n"
+		f"CUSTOM_TEST_COMMAND='{escaped_command}'\n\n"
+		"echo \"1..1\"\n\n"
+		"set +e\n"
+		"/bin/sh -c \"${CUSTOM_TEST_COMMAND}\"\n"
+		"custom_rc=$?\n"
+		"set -e\n\n"
+		"if [ \"${custom_rc}\" -ne 0 ]; then\n"
+		f"\ttap_not_ok 1 \"{label}\"\n"
+		"\techo \"# custom test command failed: ${CUSTOM_TEST_COMMAND}\"\n"
+		"\texit 1\n"
+		"fi\n\n"
+		f"tap_ok 1 \"{label}\"\n"
+	)
+
+
+def _build_family_selection(manifest: dict[str, Any], family: FamilySpec) -> dict[str, Any] | None:
+	if family.name == "python-mongo-flask":
+		return _python_mongo_flask_selection_from_manifest(manifest)
+	return None
+
+
+def _filter_template_specs_for_selection(
+	template_specs: list[TemplateSpec],
+	family: FamilySpec,
+	family_selection: dict[str, Any] | None,
+) -> list[TemplateSpec]:
+	if family.name != "python-mongo-flask" or family_selection is None:
+		return template_specs
+
+	selected_static_outputs = set(
+		str(path) for path in family_selection.get("selected_static_test_outputs", [])
+	)
+	selected_static_outputs.update(PYTHON_MONGO_FLASK_ALWAYS_TEST_OUTPUTS)
+	known_static_outputs = set(PYTHON_MONGO_FLASK_TEST_OUTPUTS.values())
+	known_static_outputs.update(PYTHON_MONGO_FLASK_ALWAYS_TEST_OUTPUTS)
+
+	filtered: list[TemplateSpec] = []
+	for template_spec in template_specs:
+		output_rel = template_spec.output_rel_path.as_posix()
+		if output_rel in known_static_outputs and output_rel not in selected_static_outputs:
+			continue
+		filtered.append(template_spec)
+	return filtered
+
+
+def _augment_rendered_files_for_selection(
+	rendered_files: list[RenderedFile],
+	family: FamilySpec,
+	family_selection: dict[str, Any] | None,
+) -> list[RenderedFile]:
+	if family.name != "python-mongo-flask" or family_selection is None:
+		return rendered_files
+
+	augmented = [*rendered_files]
+	custom_tests = family_selection.get("custom_tests", [])
+	for custom_test in custom_tests:
+		output_rel_path = Path(custom_test["output_rel_path"])
+		_ensure_safe_relative_path(output_rel_path, what="Generated custom test path")
+		augmented.append(
+			RenderedFile(
+				output_rel_path=output_rel_path,
+				content=_normalize_newlines(
+					_render_custom_test_wrapper(custom_test["command"], int(custom_test["index"]))
+				),
+			)
+		)
+
+	selection_metadata = {
+		"schema_version": 1,
+		"family": family_selection.get("family", family.name),
+		"skip_test_ids": family_selection.get("skip_test_ids", []),
+		"selected_test_ids": family_selection.get("selected_test_ids", []),
+		"selected_test_outputs": family_selection.get("selected_test_outputs", []),
+		"runtime_http_tests_enabled": bool(family_selection.get("runtime_http_tests_enabled", True)),
+		"custom_tests": custom_tests,
+	}
+	metadata_path = Path(PYTHON_MONGO_FLASK_SELECTION_METADATA_PATH)
+	_ensure_safe_relative_path(metadata_path, what="Selection metadata path")
+	augmented.append(
+		RenderedFile(
+			output_rel_path=metadata_path,
+			content=_normalize_newlines(json.dumps(selection_metadata, sort_keys=True, indent=2)),
+		)
+	)
+
+	return augmented
 
 
 def load_manifest(manifest_path: Path) -> dict[str, Any]:
@@ -437,10 +653,17 @@ def main(argv: list[str] | None = None) -> int:
 		schema = load_schema(schema_path)
 		validate_manifest(manifest, schema)
 		family = resolve_family(manifest)
+		family_selection = _build_family_selection(manifest, family)
 		template_specs = collect_templates(templates_root, family)
+		template_specs = _filter_template_specs_for_selection(template_specs, family, family_selection)
 		context = build_render_context(manifest, family)
+		if family_selection is not None:
+			context["selection"] = _stable_value(family_selection)
+			for key, value in family_selection.items():
+				context.setdefault(key, value)
 		context.setdefault("output_root_name", output_root.name or "validation")
 		rendered_files = render_templates(template_specs, templates_root, context)
+		rendered_files = _augment_rendered_files_for_selection(rendered_files, family, family_selection)
 		written_paths = write_outputs(output_root, rendered_files)
 	except RenderValidationTemplatesError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)

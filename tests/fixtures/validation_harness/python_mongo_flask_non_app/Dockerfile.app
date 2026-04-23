@@ -17,9 +17,5 @@ RUN if [ -f "requirements.txt" ]; then \
 	&& pip install --no-cache-dir flask jinja2 jsonschema pyyaml pymongo pytest
 
 
-ENV FLASK_APP="app.py" \
-	FLASK_RUN_HOST="0.0.0.0" \
-	FLASK_RUN_PORT="8000"
-
-CMD ["/bin/sh", "-c", "echo $$ > /tmp/flask-app.pid; exec python -m flask --app \"${FLASK_APP}\" run --host=\"${FLASK_RUN_HOST}\" --port=\"${FLASK_RUN_PORT}\""]
+CMD ["/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 5; done"]
 

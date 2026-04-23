@@ -1,0 +1,14 @@
+type: python-mongo-flask
+slots:
+  project_name: nightly-python-mongo-flask-non-app
+  canary_tools:
+    - bash
+    - python3
+    - jq
+  tap_plan: 5
+skip_tests:
+  - http_smoke
+  - graceful_shutdown
+custom_tests:
+  - python3 scripts/render_validation_templates.py --help >/dev/null
+  - python3 scripts/validation_lint.py --help >/dev/null

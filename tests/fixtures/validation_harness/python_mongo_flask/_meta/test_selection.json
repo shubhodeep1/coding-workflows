@@ -1,0 +1,22 @@
+{
+  "custom_tests": [],
+  "family": "python-mongo-flask",
+  "runtime_http_tests_enabled": true,
+  "schema_version": 1,
+  "selected_test_ids": [
+    "canary",
+    "family_marker",
+    "http_smoke",
+    "import_audit",
+    "graceful_shutdown"
+  ],
+  "selected_test_outputs": [
+    "tests/00_canary.sh",
+    "tests/10_family_marker.sh",
+    "tests/11_http_smoke.sh",
+    "tests/20_import_audit.sh",
+    "tests/30_graceful_shutdown.sh",
+    "tests/90_tap_report.sh"
+  ],
+  "skip_test_ids": []
+}

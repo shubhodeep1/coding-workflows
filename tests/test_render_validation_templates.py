@@ -91,6 +91,7 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		expected_files = [
 			"Dockerfile.app",
 			"_lib/tap_helpers.sh",
+			"_meta/test_selection.json",
 			"docker-compose.test.yml",
 			"tests/00_canary.sh",
 			"tests/10_family_marker.sh",
@@ -122,7 +123,29 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		assert "TEST_HOST_HEADER" in http_smoke_text
 
 		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-mongo-flask family for demo-project" in family_text
+		assert "1..1" in family_text
+		assert "python-mongo-flask family marker for demo-project" in family_text
+
+		selection_payload = json.loads((output_root / "_meta" / "test_selection.json").read_text(encoding="utf-8"))
+		assert selection_payload["family"] == "python-mongo-flask"
+		assert selection_payload["skip_test_ids"] == []
+		assert selection_payload["runtime_http_tests_enabled"] is True
+		assert selection_payload["custom_tests"] == []
+		assert selection_payload["selected_test_ids"] == [
+			"canary",
+			"family_marker",
+			"http_smoke",
+			"import_audit",
+			"graceful_shutdown",
+		]
+		assert selection_payload["selected_test_outputs"] == [
+			"tests/00_canary.sh",
+			"tests/10_family_marker.sh",
+			"tests/11_http_smoke.sh",
+			"tests/20_import_audit.sh",
+			"tests/30_graceful_shutdown.sh",
+			"tests/90_tap_report.sh",
+		]
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
@@ -147,6 +170,120 @@ def test_renderer_canary_tools_escaped_for_shell_safety() -> None:
 		canary_text = (output_root / "tests" / "00_canary.sh").read_text(encoding="utf-8")
 		assert "'tool$(echo pwn)'" in canary_text
 		assert "'tool'\"'\"'quote'" in canary_text
+
+
+def test_renderer_rejects_unknown_skip_test_ids() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["skip_tests"] = ["not-a-real-test"]
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode != 0
+		assert "skip_tests" in result.stderr
+		assert "unsupported test id" in result.stderr
+
+
+def test_renderer_rejects_duplicate_skip_test_ids() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["skip_tests"] = ["http_smoke", "http_smoke"]
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode != 0
+		assert "duplicate test id" in result.stderr
+
+
+def test_renderer_rejects_skipping_canary_test() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["skip_tests"] = ["canary"]
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode != 0
+		assert "cannot skip test id 'canary'" in result.stderr
+
+
+def test_renderer_skip_and_custom_tests_render_selected_suite() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["skip_tests"] = ["http_smoke", "graceful_shutdown"]
+		payload["custom_tests"] = [
+			"python3 scripts/render_validation_templates.py --help >/dev/null",
+			"python3 scripts/validation_lint.py --help >/dev/null",
+		]
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, result.stderr
+
+		files, _ = _snapshot_directory(output_root)
+		assert "tests/11_http_smoke.sh" not in files
+		assert "tests/30_graceful_shutdown.sh" not in files
+		assert "tests/40_custom_01.sh" in files
+		assert "tests/41_custom_02.sh" in files
+
+		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
+		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+		assert "python -m flask" not in dockerfile_text
+		assert "FLASK_APP" not in compose_text
+		assert "healthcheck" not in compose_text.split("  app:", 1)[1].split("  mongo:", 1)[0]
+
+		custom_wrapper = (output_root / "tests" / "40_custom_01.sh").read_text(encoding="utf-8")
+		assert "CUSTOM_TEST_COMMAND='python3 scripts/render_validation_templates.py --help >/dev/null'" in custom_wrapper
+		assert "tap_ok 1 \"custom validation command 01\"" in custom_wrapper
+
+		selection_payload = json.loads((output_root / "_meta" / "test_selection.json").read_text(encoding="utf-8"))
+		assert selection_payload["skip_test_ids"] == ["http_smoke", "graceful_shutdown"]
+		assert selection_payload["selected_test_ids"] == ["canary", "family_marker", "import_audit"]
+		assert selection_payload["runtime_http_tests_enabled"] is False
+		assert selection_payload["selected_test_outputs"] == [
+			"tests/00_canary.sh",
+			"tests/10_family_marker.sh",
+			"tests/20_import_audit.sh",
+			"tests/40_custom_01.sh",
+			"tests/41_custom_02.sh",
+			"tests/90_tap_report.sh",
+		]
+		assert [item["output_rel_path"] for item in selection_payload["custom_tests"]] == [
+			"tests/40_custom_01.sh",
+			"tests/41_custom_02.sh",
+		]
+
+
+def test_renderer_custom_tests_preserve_manifest_order() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["custom_tests"] = [
+			"echo second-command",
+			"echo first-command",
+		]
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, result.stderr
+
+		first_wrapper = (output_root / "tests" / "40_custom_01.sh").read_text(encoding="utf-8")
+		second_wrapper = (output_root / "tests" / "41_custom_02.sh").read_text(encoding="utf-8")
+		assert "CUSTOM_TEST_COMMAND='echo second-command'" in first_wrapper
+		assert "CUSTOM_TEST_COMMAND='echo first-command'" in second_wrapper
 
 
 def test_renderer_rejects_invalid_string_port() -> None:
