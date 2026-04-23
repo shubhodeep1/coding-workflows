@@ -117,7 +117,15 @@ git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null |
 #              happens we must surface it instead of silently
 #              running Codex against an empty conflict set.
 _merge_exit=0
-git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || _merge_exit=$?
+# Capture stderr so the hard-fail annotation below can surface git's
+# real complaint (e.g. "refusing to merge unrelated histories") instead
+# of a generic "investigate" message.
+_merge_stderr_file="$(mktemp)"
+trap 'rm -f "${_merge_stderr_file}"' EXIT INT TERM
+git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${_merge_stderr_file}" || _merge_exit=$?
+if [ -s "${_merge_stderr_file}" ]; then
+  sed 's/^/git merge stderr: /' "${_merge_stderr_file}"
+fi
 
 # Capture the set of actually-unmerged paths produced by this
 # merge replay.  This is the authoritative allowlist the Codex
@@ -174,15 +182,33 @@ if [ "${_resolver_allowlist_count}" -eq 0 ]; then
       fi
     done
     rm -rf "${RESOLVE_STASH}"
+    rm -f "${_merge_stderr_file}"
     git reset --hard HEAD 2>/dev/null || true
     echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
     exit 0
   fi
-  echo "::error::Merge replay failed with exit ${_merge_exit} before producing any unmerged paths. The clean-tree reset at the top of this step did not yield a tree git could merge — investigate. Diagnostics:"
+  # Flatten captured stderr onto one line for the ::error:: annotation,
+  # and route "refusing to merge unrelated histories" to a dedicated
+  # message that names the two SHAs so operators can repair the branch
+  # without re-reading the raw log.
+  _merge_stderr_oneline="$(tr '\n' ' ' < "${_merge_stderr_file}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+  _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+  _merge_stderr_oneline="$(printf '%s' "${_merge_stderr_oneline}" | sed 's/%/%25/g; s/\r/%0D/g')"
+  if grep -qi 'refusing to merge unrelated histories' "${_merge_stderr_file}" 2>/dev/null; then
+    _head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    _base_sha="$(git rev-parse --short "origin/${BASE_BRANCH}" 2>/dev/null || echo unknown)"
+    echo "::error::Merge replay failed (exit ${_merge_exit}): HEAD (${_head_sha}) and origin/${BASE_BRANCH} (${_base_sha}) have no common ancestor. This PR's branch was likely force-pushed to an orphan root, or ${BASE_BRANCH} was force-pushed since this branch diverged. Manual repair required: rebase the PR branch onto a current ${BASE_BRANCH} ancestor, or recreate the branch from ${BASE_BRANCH} and re-apply the changes. git stderr: ${_merge_stderr_oneline}"
+  else
+    echo "::error::Merge replay failed with exit ${_merge_exit} before producing any unmerged paths. The clean-tree reset at the top of this step did not yield a tree git could merge — investigate. git stderr: ${_merge_stderr_oneline}"
+  fi
   git status --porcelain 2>/dev/null || true
   git ls-files --others --exclude-standard 2>/dev/null | head -20 || true
+  rm -f "${_merge_stderr_file}"
   exit 1
 fi
+# The stderr file is no longer needed past this point — the happy path
+# has unmerged entries, which the resolver handles regardless of stderr.
+rm -f "${_merge_stderr_file}"
 
 # Defensive: `git merge --no-commit` auto-stages merged hunks (and
 # conflict-marked hunks) into the index for every path both sides
