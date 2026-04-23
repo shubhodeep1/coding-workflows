@@ -482,6 +482,202 @@ def _step_block_text(step_name: str) -> str:
 	return "\n".join(_step_block(step_name))
 
 
+def _parse_github_output(path: Path) -> dict[str, str]:
+	if not path.exists():
+		return {}
+	parsed: dict[str, str] = {}
+	for line in path.read_text(encoding="utf-8").splitlines():
+		if "=" not in line:
+			continue
+		key, value = line.split("=", 1)
+		parsed[key] = value
+	return parsed
+
+
+def _install_capture_step_mock_gh(bin_dir: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_CAPTURE_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def first_non_flag(values: list[str]) -> str:
+	i = 0
+	while i < len(values):
+		arg = values[i]
+		if arg in ("--jq", "-q", "-f", "--field", "-H", "--header", "-X", "--method", "--input", "--template", "-t", "--preview"):
+			i += 2
+			continue
+		if arg.startswith("-"):
+			i += 1
+			continue
+		return arg
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args and args[0] == "api":
+	path = first_non_flag(args[1:])
+	if "/actions/runs/" in path and "/jobs" in path:
+		state["jobs_api_calls"] = int(state.get("jobs_api_calls", 0)) + 1
+		mode = state.get("mode", "ok")
+		if mode == "api_error":
+			save()
+			print("mock jobs api error", file=sys.stderr)
+			sys.exit(1)
+		if mode == "invalid_json":
+			save()
+			print("{invalid-json")
+			sys.exit(0)
+		payload = state.get("jobs_payload", {"jobs": []})
+		save()
+		print(json.dumps(payload))
+		sys.exit(0)
+
+save()
+print("{}")
+sys.exit(0)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+
+
+def _run_capture_step(
+	tmp_path: Path,
+	*,
+	jobs_payload: dict | None,
+	mode: str,
+	job_status: str,
+) -> tuple[subprocess.CompletedProcess[str], dict, dict[str, str]]:
+	repo_dir = tmp_path / "capture-repo"
+	_bootstrap_git_repo(repo_dir)
+	bin_dir = tmp_path / "bin"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_capture_step_mock_gh(bin_dir)
+
+	gh_state_file = runtime_dir / "capture_gh_state.json"
+	gh_state_file.write_text(
+		json.dumps(
+			{
+				"mode": mode,
+				"jobs_payload": jobs_payload if jobs_payload is not None else {"jobs": []},
+				"jobs_api_calls": 0,
+			}
+		),
+		encoding="utf-8",
+	)
+
+	github_output = runtime_dir / "capture_github_output.txt"
+	script = _render_github_expressions(
+		_extract_run_script("Capture post-Codex validation errors"),
+		overrides={"job.status": job_status},
+	)
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GITHUB_OUTPUT": str(github_output),
+			"RUNTIME_DIR": str(runtime_dir),
+			"ISSUE_NUMBER": "948",
+			"MOCK_CAPTURE_GH_STATE_FILE": str(gh_state_file),
+			"TMPDIR": str(runtime_dir),
+		}
+	)
+
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	state = _read_gh_state(gh_state_file)
+	outputs = _parse_github_output(github_output)
+	return proc, state, outputs
+
+
+def test_capture_step_reuses_single_jobs_fetch_for_failure_selector() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_capture_") as td:
+		tmp_path = Path(td)
+		payload = {
+			"jobs": [
+				{
+					"steps": [
+						{"name": "Checkout", "conclusion": "success", "status": "completed"},
+						{
+							"name": "Validate syntax of changed files",
+							"conclusion": "failure",
+							"status": "completed",
+						},
+					]
+				}
+			]
+		}
+		proc, state, outputs = _run_capture_step(
+			tmp_path,
+			jobs_payload=payload,
+			mode="ok",
+			job_status="failure",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("jobs_api_calls") == 1
+		assert outputs.get("failed_step_name") == "Validate syntax of changed files"
+
+
+def test_capture_step_reuses_single_jobs_fetch_for_cancelled_fallback_selector() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_capture_") as td:
+		tmp_path = Path(td)
+		payload = {
+			"jobs": [
+				{
+					"steps": [
+						{"name": "Checkout", "conclusion": "success", "status": "completed"},
+						{
+							"name": "Run Codex implementation",
+							"conclusion": "",
+							"status": "in_progress",
+						},
+					]
+				}
+			]
+		}
+		proc, state, outputs = _run_capture_step(
+			tmp_path,
+			jobs_payload=payload,
+			mode="ok",
+			job_status="cancelled",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("jobs_api_calls") == 1
+		assert outputs.get("failed_step_name") == "Run Codex implementation"
+
+
+def test_capture_step_fails_open_on_invalid_jobs_payload() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_capture_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs = _run_capture_step(
+			tmp_path,
+			jobs_payload=None,
+			mode="invalid_json",
+			job_status="cancelled",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("jobs_api_calls") == 1
+		assert outputs.get("failed_step_name", "") == ""
+
+
 def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
 	wf = _workflow_text()
 	assert (
