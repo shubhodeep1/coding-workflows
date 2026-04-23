@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/label_helpers.sh:91-198 | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: Removing `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` breaks the shared helper contract and removes symbols still expected by tests and external callers.\n  WHY: Multiple reviewers identified the deletion as a backward-incompatible change; the highest severity reported was high, and the contract-test/runtime-breakage concerns were consistent across reviewers.\n- scripts/orchestrate_poll_process.sh:1198-1203 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `get_issue_state_labels_json` returns the raw GitHub `.state` value without normalizing case.\n  WHY: The reviewer reported that downstream comparisons expect lowercase states, so uppercase API values could cause misclassification.\n- scripts/orchestrate_poll_process.sh:3945 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The `grep -xE 'open|closed|merged'` check in `close_linked_pr` is case-sensitive.\n  WHY: The reviewer reported that uppercase PR states from the API would fail the match and leave `pr_state` empty, affecting downstream logic.\n- scripts/orchestrate_poll_process.sh:7034 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The `[ \"${FIX_STATE}\" = \"closed\" ]` comparison is case-sensitive.\n  WHY: The reviewer reported that uppercase issue states would not satisfy the equality check and could block validation completion.\n- scripts/orchestrate_poll_process.sh:9036-9037 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The REST fallback for blocker state lookup returns `.state` without normalizing case.\n  WHY: Both reviewers flagged this as a defensive robustness issue; the concern is that uppercase API values could fall through the lowercase state handling, though one reviewer called it minor/theoretical and the other framed it as hardening.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/label_helpers.sh: removed `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` | severity=5 | confidence=5\n  PROBLEM: These shared utilities were deleted from `label_helpers.sh`, breaking callers that source the file and expect the helper API to exist.\n  WHY: The reviewer said callers would hit `command not found` and workflows or consumers relying on the labels constant would get empty or incorrect label handling.\n- scripts/orchestrate_poll_process.sh:1198-1203 | severity=5 | confidence=5\n  PROBLEM: `get_issue_state_labels_json` returns the raw GitHub `.state` value without normalization.\n  WHY: The reviewer said uppercase REST values would mismatch downstream lowercase checks and cause incorrect state handling.\n- scripts/orchestrate_poll_process.sh:3945 | severity=4 | confidence=4\n  PROBLEM: The `grep -xE 'open|closed|merged'` state check in `close_linked_pr` is case-sensitive.\n  WHY: The reviewer said uppercase API values would fail the match, leaving `pr_state` empty and potentially triggering wrong downstream behavior.\n- scripts/orchestrate_poll_process.sh:7034 | severity=5 | confidence=5\n  PROBLEM: The `[ \"${FIX_STATE}\" = \"closed\" ]` comparison is case-sensitive.\n  WHY: The reviewer said uppercase closed states would not be recognized, preventing the validation batch from completing.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/label_helpers.sh:91-93,139-196 | severity=high | confidence=5\n  PROBLEM: Removing `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` is a breaking change for shared workflows, contract tests, and external consumers.\n  WHY: The reviewer reported that the symbols are still referenced by workflows and tests, so deleting them causes contract failures and `command not found` runtime errors.\n- scripts/orchestrate_poll_process.sh:90.36-90.37 | severity=low | confidence=2\n  PROBLEM: The REST fallback path does not normalize the issue state case.\n  WHY: The reviewer called this a theoretical robustness concern, noting GitHub REST usually returns lowercase but the code would be safer with normalization.\n- scripts/orchestrate_poll_process.sh:39.45,70.34,75.63 | severity=low | confidence=2\n  PROBLEM: Case-sensitive greps and comparisons still exist in related state handling.\n  WHY: The reviewer said these are defensive hardening opportunities rather than current runtime bugs because GitHub API responses are typically lowercase.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/label_helpers.sh:91-198 | severity=high | confidence=5\n  PROBLEM: Deleting `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient` breaks contract tests and backward compatibility for consumers of the shared helper script.\n  WHY: The reviewer said contract tests explicitly assert these symbols exist and external scripts sourcing `label_helpers.sh` will fail with `command not found`.\n- scripts/orchestrate_poll_process.sh:9036-9037 | severity=medium | confidence=3\n  PROBLEM: The REST fallback for blocker state lookup returns `.state` without lowercasing it.\n  WHY: The reviewer said a cache miss plus an uppercase REST value could fall through the lowercase state handling and increment the unknown-state counter.\n- scripts/orchestrate_poll_process.sh:7034 | severity=medium | confidence=3\n  PROBLEM: The `FIX_STATE` comparison uses a lowercase-only equality check.\n  WHY: The reviewer said an uppercase REST state would fail the check and misroute validation handling.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/label_helpers.sh:91-198 | severity=high | confidence=5\n  PROBLEM: The PR removes public helper symbols from `label_helpers.sh`, which is a backward-incompatible change.\n  WHY: The reviewer said tests and external scripts still expect `_AI_PHASE_LABELS` and `set_issue_phase_label_resilient`, so removing them breaks the shared contract and can cause runtime failures.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "801c6bdd8539d16bc375eab4f1d9e5771e09fa43e785d41ba57808af6f5bbb90",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1532,
+    "run_id": "24810396431",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24810396431",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423011947_719cc76a27",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1532,
+    "run_id": "24810396431"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T01:19:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
