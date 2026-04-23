@@ -272,16 +272,24 @@ jobs:
           if [ -n "${ORCH_ALIAS_FRAGMENT}" ]; then
             ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
             ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
-            if [ -n "${ORCH_RESP}" ]; then
-              ORCHESTRATED_ISSUES="$(printf '%s' "${ORCH_RESP}" | jq -r '
-                .data.repository // {} | to_entries[] | .value | select(. != null) |
+            ORCH_BATCH_FAILED=true
+            if [ -n "${ORCH_RESP}" ] && printf '%s' "${ORCH_RESP}" | jq -e '
+              ((.errors // []) | length) == 0
+              and (.data.repository? != null)
+            ' >/dev/null 2>&1; then
+              if _orchestrated_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+                .data.repository | to_entries[] | .value | select(. != null) |
                 select(
                   ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null
                   or
                   ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ) | .number
-              ' 2>/dev/null || echo "")"
-            else
+              ' 2>/dev/null)"; then
+                ORCHESTRATED_ISSUES="${_orchestrated_issues}"
+                ORCH_BATCH_FAILED=false
+              fi
+            fi
+            if [ "${ORCH_BATCH_FAILED}" = true ]; then
               # GraphQL batch failed — fall back to per-issue REST detection
               # so we never silently re-introduce the auto-label/close bug.
               echo "::warning::Orchestrator-issue batch detection failed; falling back to per-issue REST."
