@@ -492,7 +492,7 @@ Log prefix contract (stable — renames are breaking changes per CLAUDE.md §6):
 
 Safety net:
 
-- If a required verification pass is incorrectly skipped (e.g. the author guard misfires or an edge case slips through), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/30 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch` — which bypasses the skip. Worst-case recovery window is ~30 min. Do **not** lengthen the stall cron cadence beyond this value without re-evaluating the skip contract.
+- If a required verification pass is incorrectly skipped (e.g. the author guard misfires or an edge case slips through), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/5 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch` — which bypasses the skip. Worst-case recovery window is ~5 min. Do **not** lengthen the stall cron cadence beyond this value without re-evaluating the skip contract.
 
 API cost audit (CLAUDE.md §15):
 
@@ -553,7 +553,7 @@ API cost audit (CLAUDE.md §15):
 
 Safety net:
 
-- If both gates mis-fire and incorrectly soft-exit on an advance that was in fact our own autofix (e.g. identity API returned stale data), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/30 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch`. Worst-case recovery window: ~30 min. Same safety net as §20.1.
+- If both gates mis-fire and incorrectly soft-exit on an advance that was in fact our own autofix (e.g. identity API returned stale data), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/5 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch`. Worst-case recovery window: ~5 min. Same safety net as §20.1.
 - If both gates fail-open on detection error and the push subsequently hard-fails at the merge-retry step, the existing `phase_failed` ledger entry + Telegram failure alert fires as before. Detection failure gracefully degrades to the pre-gate behaviour.
 
 ### 20.3 Ledger Persistence (cache-backed) and the retained `LEDGER_ONLY_COMMIT` flag
@@ -598,7 +598,7 @@ Operational rules:
 
 ### 20.4 Autofix Continuation
 
-§20.1's skip is measured for the **verification** case (an `[ai-autofix]` commit whose reviewer panel would re-surface the findings already fixed in the preceding run). It is **not** correct for the **continuation** case — when the editor made a productive code edit the downstream state has genuinely changed, and a follow-up reviewer+editor pass is needed to either surface newly-introduced findings or terminate the cycle via the clean-review tail (§20.3). Pre-continuation the only path to that follow-up run was the orchestrator stall cron (`internal-orchestrate-poll.yml`, `*/30 * * * *`), which detects stalls via linked-issue phase timers. That path is unavailable for non-orchestrator PRs (branches like `claude/*` or any human-authored PR whose body does not reference an orchestrator-pipeline issue), so those PRs could remain idle indefinitely after a productive autofix commit.
+§20.1's skip is measured for the **verification** case (an `[ai-autofix]` commit whose reviewer panel would re-surface the findings already fixed in the preceding run). It is **not** correct for the **continuation** case — when the editor made a productive code edit the downstream state has genuinely changed, and a follow-up reviewer+editor pass is needed to either surface newly-introduced findings or terminate the cycle via the clean-review tail (§20.3). Pre-continuation the only path to that follow-up run was the orchestrator stall cron (`internal-orchestrate-poll.yml`, `*/5 * * * *`), which detects stalls via linked-issue phase timers. That path is unavailable for non-orchestrator PRs (branches like `claude/*` or any human-authored PR whose body does not reference an orchestrator-pipeline issue), so those PRs could remain idle indefinitely after a productive autofix commit.
 
 Contract:
 
