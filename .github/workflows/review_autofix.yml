@@ -57,7 +57,7 @@ env:
     moonshotai/kimi-k2.5
     deepseek/deepseek-v3.2
     z-ai/glm-5
-    google/gemini-2.5-pro
+    qwen/qwen3-coder-plus
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
