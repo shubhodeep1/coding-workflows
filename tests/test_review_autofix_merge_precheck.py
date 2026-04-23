@@ -183,6 +183,12 @@ def test_push_preflight_probe_and_markers_present():
     assert "PUSH_PREFLIGHT_V1 status=${push_preflight_status} reason=${push_preflight_reason}" in wf, (
         "Expected stable PUSH_PREFLIGHT_V1 status marker in workflow logs"
     )
+    assert "sanitized_push_probe_output" in wf, (
+        "Expected push preflight output to be sanitized before log emission"
+    )
+    assert "x-access-token:[REDACTED]" in wf, (
+        "Expected push preflight sanitization to redact x-access-token credentials"
+    )
     assert "::error::PUSH_PREFLIGHT_BLOCKED_V1 reason=${push_preflight_reason}" in wf, (
         "Expected blocked preflight marker for definitive unpushable outcomes"
     )

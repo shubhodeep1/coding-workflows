@@ -1206,8 +1206,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ -n "${push_probe_output}" ]; then
-            echo "Push preflight probe output (tail):"
-            printf '%s\n' "${push_probe_output}" | tail -n 40
+            sanitized_push_probe_output="$(
+              printf '%s' "${push_probe_output}" | sed -E \
+                -e 's#(https?://)([^/@[:space:]]+):([^/@[:space:]]+)@#\1[REDACTED]:[REDACTED]@#g' \
+                -e 's#(https?://)([^/@[:space:]]+)@#\1[REDACTED]@#g' \
+                -e 's#x-access-token:[^@[:space:]]+#x-access-token:[REDACTED]#g'
+            )"
+            echo "Push preflight probe output (tail, credentials redacted):"
+            printf '%s\n' "${sanitized_push_probe_output}" | tail -n 40
           fi
 
           if [ "${push_preflight_status}" = "blocked" ]; then
