@@ -49,13 +49,20 @@ def _init_clean_repo(tmp_path: Path) -> None:
 	)
 
 
-def _run_shim(tmp_path: Path, summary: Path) -> str:
+def _run_shim(tmp_path: Path, summary: Path, committed_files: Path | None = None) -> str:
+	import os
+	env = os.environ.copy()
+	if committed_files is None:
+		env.pop("COMMITTED_FILES_FILE", None)
+	else:
+		env["COMMITTED_FILES_FILE"] = str(committed_files)
 	result = subprocess.run(
 		["bash", str(SHIM), str(summary)],
 		cwd=tmp_path,
 		capture_output=True,
 		text=True,
 		check=True,
+		env=env,
 	)
 	return result.stdout.strip()
 
@@ -120,6 +127,140 @@ def test_non_git_directory_fails_open(tmp_path: Path) -> None:
 	result = _run_shim(tmp_path, FIXTURES / "narrative_none_status_edited.txt")
 	assert result == "true", (
 		f"Expected fail-open 'true' when git status is unavailable; got {result!r}."
+	)
+
+
+def _write_external(tmp_path: Path, name: str, contents: str) -> Path:
+	"""Write a helper file OUTSIDE the git worktree so it does not show up
+	in `git status --porcelain` inside the scratch repo. Mirrors the real
+	workflow layout where COMMITTED_FILES_FILE lives under /tmp/codex-pr-…
+	rather than inside the checkout."""
+	external_dir = tmp_path.parent / f"{tmp_path.name}-external"
+	external_dir.mkdir(parents=True, exist_ok=True)
+	path = external_dir / name
+	path.write_text(contents, encoding="utf-8")
+	return path
+
+
+def test_ledger_delete_covered_by_committed_files_is_false(tmp_path: Path) -> None:
+	"""PR #1524 reproducing case: the editor's productive fix is to delete
+	the tracked review-issue ledger file. The commit step records this as
+	LEDGER_ONLY_COMMIT=true and writes the committed path into
+	COMMITTED_FILES_FILE. The narrative's only file-path reference is the
+	ledger path itself, so the subset check must downgrade the detector
+	to 'false' and leave auto-merge unblocked."""
+	_init_clean_repo(tmp_path)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- .ai/review_issue_ledger/pr-1524.txt\n",
+	)
+	result = _run_shim(
+		tmp_path,
+		FIXTURES / "narrative_ledger_delete_status_edited.txt",
+		committed_files=committed,
+	)
+	assert result == "false", (
+		"Expected shim to treat a ledger-only commit whose narrative only "
+		f"references the committed ledger path as a false positive; got {result!r}."
+	)
+
+
+def test_claimed_path_not_in_commit_still_reports_changes_lost(tmp_path: Path) -> None:
+	"""PR #1472 safety: when the editor narrates a non-ledger edit but the
+	commit only contains the ledger path, the narrative path is NOT in the
+	committed set, so the subset check must fall through to 'true' and
+	keep the existing detector warning intact."""
+	_init_clean_repo(tmp_path)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- .ai/review_issue_ledger/pr-999.txt\n",
+	)
+	result = _run_shim(
+		tmp_path,
+		FIXTURES / "narrative_real_edit_status_edited.txt",
+		committed_files=committed,
+	)
+	assert result == "true", (
+		"Expected shim to keep reporting 'true' when the narrative claims a "
+		f"non-ledger edit that is missing from COMMITTED_FILES_FILE; got {result!r}."
+	)
+
+
+def test_committed_files_file_unset_preserves_legacy_behaviour(tmp_path: Path) -> None:
+	"""When COMMITTED_FILES_FILE is unset the shim must behave exactly as
+	before — the new subset check is purely additive. narrative_real_edit
+	+ clean tree still returns 'true'."""
+	_init_clean_repo(tmp_path)
+	result = _run_shim(tmp_path, FIXTURES / "narrative_real_edit_status_edited.txt")
+	assert result == "true", (
+		"Expected shim with no COMMITTED_FILES_FILE env to match pre-change "
+		f"behaviour and still report 'true'; got {result!r}."
+	)
+
+
+def test_committed_files_file_with_marker_line_falls_through(tmp_path: Path) -> None:
+	"""A COMMITTED_FILES_FILE containing only a marker line (e.g. '- none'
+	or '- commit skipped ...') has no real committed paths, so the subset
+	check must fall through to 'true' rather than silently succeeding."""
+	_init_clean_repo(tmp_path)
+	committed = _write_external(tmp_path, "committed_files.txt", "- none\n")
+	result = _run_shim(
+		tmp_path,
+		FIXTURES / "narrative_ledger_delete_status_edited.txt",
+		committed_files=committed,
+	)
+	assert result == "true", (
+		"Expected shim to fall through to 'true' when COMMITTED_FILES_FILE "
+		f"contains only the marker line '- none'; got {result!r}."
+	)
+
+
+def test_ledger_delete_covered_by_normalized_committed_path_is_false(tmp_path: Path) -> None:
+	"""Equivalent path spellings should still match after normalization.
+	The committed file list may contain `./`-prefixed paths; the shim must
+	accept them as the same ledger path and downgrade to `false`."""
+	_init_clean_repo(tmp_path)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- ./.ai/review_issue_ledger/pr-1524.txt\n",
+	)
+	result = _run_shim(
+		tmp_path,
+		FIXTURES / "narrative_ledger_delete_status_edited.txt",
+		committed_files=committed,
+	)
+	assert result == "false", (
+		f"Expected shim to normalize committed-file paths before matching; got {result!r}."
+	)
+
+
+def test_edit_claim_with_backticked_non_file_identifier_still_reports_changes_lost(tmp_path: Path) -> None:
+	"""Backticked code identifiers on edit-claim lines must not be treated
+	as file paths. When the real file edit is present in the committed
+	set, the shim should still downgrade to `false`."""
+	_init_clean_repo(tmp_path)
+	fixture = tmp_path / "summary.txt"
+	fixture.write_text(
+		"""Changes made:
+- Modified `LEDGER_ONLY_COMMIT` handling in `scripts/detect_editor_changes_lost.sh`.
+
+Change status:
+- edited
+""",
+		encoding="utf-8",
+	)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- scripts/detect_editor_changes_lost.sh\n",
+	)
+	result = _run_shim(tmp_path, fixture, committed_files=committed)
+	assert result == "false", (
+		"Expected shim to ignore backticked non-file identifiers and "
+		f"downgrade when the real file edit is committed; got {result!r}."
 	)
 
 
