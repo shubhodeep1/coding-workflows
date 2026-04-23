@@ -19,7 +19,7 @@ if [ ! -f "${SCRIPT_DIR}/_lib/import_audit.py" ]; then
 fi
 
 # Keep TAP output stable: helper-level per-module success lines are non-TAP diagnostics.
-python3 "${SCRIPT_DIR}/_lib/import_audit.py" >/dev/null
+python3 "${SCRIPT_DIR}/_lib/import_audit.py" >/dev/null 2>&1
 audit_rc=$?
 set -e
 
