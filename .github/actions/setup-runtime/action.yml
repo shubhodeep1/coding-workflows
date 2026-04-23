@@ -57,7 +57,7 @@ runs:
       run: |
         set -euo pipefail
 
-        npm install -g "@openai/codex@${CODEX_VERSION}" --no-audit --no-fund
+        npm install -g "@openai/codex@${CODEX_VERSION}" --include=optional --no-audit --no-fund
 
         missing_tools=()
         for tool in jq curl gh; do
