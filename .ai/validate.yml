@@ -1,13 +1,12 @@
-# Minimal manifest to unblock template-mode validation.
-# Required because VALIDATION_USE_TEMPLATES defaults to true (#1536) and
-# scripts/validate_process.sh refuses to fall back when this file is missing.
-# Family chosen for schema/runtime validity only — this repo ships workflow
-# templates rather than a Flask app, so rendered harness tests may need
-# tuning (skip_tests, custom_tests) in a follow-up.
-type: python-mongo-flask
+# Validation manifest for this workflow/tooling repository.
+# Uses repo-local-tooling family to run local renderer/self-test checks without
+# booting a fabricated HTTP app.
+type: repo-local-tooling
+entry: scripts/render_validation_templates.py
 slots:
   project_name: coding-workflows
   canary_tools:
     - bash
     - python3
     - jq
+  tap_plan: 5

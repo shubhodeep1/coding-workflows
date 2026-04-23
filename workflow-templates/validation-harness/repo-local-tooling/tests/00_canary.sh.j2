@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+APP_SERVICE="${APP_SERVICE:-app}"
+CANARY_TOOLS="${CANARY_TOOLS:-{{ slots.canary_tools | join(' ') }}}"
+
+read -r -a TOOL_LIST <<< "${CANARY_TOOLS}"
+tool_count=0
+for _tool in "${TOOL_LIST[@]}"; do
+	tool_count=$((tool_count + 1))
+done
+echo "1..${tool_count}"
+
+test_id=1
+for tool in "${TOOL_LIST[@]}"; do
+	if ! docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c 'command -v "$1" >/dev/null 2>&1' sh "${tool}"; then
+		echo "not ok ${test_id} - canary tool available: ${tool}"
+		echo "# missing required canary tool: ${tool}"
+		exit 1
+	fi
+	echo "ok ${test_id} - canary tool available: ${tool}"
+	test_id=$((test_id + 1))
+done

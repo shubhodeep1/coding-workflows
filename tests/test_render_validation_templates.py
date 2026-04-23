@@ -323,6 +323,88 @@ def test_renderer_family_dispatch_routing() -> None:
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "node-hardhat-solidity family for demo-project" in family_marker_text
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
+		assert not (output_root / "tests" / "50_tap_report.sh").exists()
+
+		lint_result = subprocess.run(
+			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
+
+
+def test_renderer_repo_local_tooling_family_dispatch_routing() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = {
+			"type": "repo-local-tooling",
+			"entry": "scripts/render_validation_templates.py",
+			"slots": {
+				"project_name": "demo-project",
+				"canary_tools": ["bash", "python3", "jq"],
+				"tap_plan": 5,
+			},
+		}
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, f"renderer failed: {result.stderr}"
+		expected_files = [
+			output_root / "Dockerfile.app",
+			output_root / "_lib" / "graceful_shutdown.sh",
+			output_root / "_lib" / "tap_helpers.sh",
+			output_root / "docker-compose.test.yml",
+			output_root / "tests" / "00_canary.sh",
+			output_root / "tests" / "10_family_marker.sh",
+			output_root / "tests" / "20_import_audit.sh",
+			output_root / "tests" / "25_render_validation_templates.sh",
+			output_root / "tests" / "30_hardhat_test.sh",
+			output_root / "tests" / "50_tap_report.sh",
+			output_root / "tests" / "_lib" / "import_audit.py",
+			output_root / "validate.env",
+		]
+		for expected in expected_files:
+			assert expected.exists(), f"missing rendered file: {expected}"
+
+		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+		assert "dockerfile: out/Dockerfile.app" in compose_text
+		assert "APP_URL: \"${APP_URL:-}\"" in compose_text
+		assert "python -m flask" not in compose_text
+		assert "FLASK_APP" not in compose_text
+
+		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+		assert 'APP_URL=""' in env_text
+		for line in env_text.splitlines():
+			if not line.strip() or line.startswith("#"):
+				continue
+			assert '="' in line and line.endswith('"'), f"validate.env value must be double-quoted: {line}"
+
+		render_test = (output_root / "tests" / "25_render_validation_templates.sh").read_text(encoding="utf-8")
+		assert "scripts/render_validation_templates.py" in render_test
+
+		hardhat_test = (output_root / "tests" / "30_hardhat_test.sh").read_text(encoding="utf-8")
+		assert "tests/test_validation_selftest_runner.py" in hardhat_test
+		assert '. "${ROOT_DIR}/_lib/graceful_shutdown.sh"' in hardhat_test
+		assert "tail -n" in hardhat_test
+
+		import_audit_runner_text = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
+		import_audit_lib_text = (output_root / "tests" / "_lib" / "import_audit.py").read_text(encoding="utf-8")
+		assert "python3" in import_audit_runner_text
+		assert "_lib/import_audit.py" in import_audit_runner_text
+		assert "subprocess.run" in import_audit_lib_text
+		assert "sys.executable" in import_audit_lib_text
+		assert "importlib.import_module" in import_audit_lib_text
+
+		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
+		assert "repo-local-tooling family for demo-project" in family_marker_text
+		assert not (output_root / "tests" / "90_tap_report.sh").exists()
+
+		tap_text = (output_root / "tests" / "50_tap_report.sh").read_text(encoding="utf-8")
+		assert "stable_summary=1" in tap_text
+		assert "tap summary slot" in tap_text
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
