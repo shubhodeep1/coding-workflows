@@ -333,6 +333,61 @@ def test_renderer_family_dispatch_routing() -> None:
 		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
 
 
+def test_renderer_family_dispatch_routing_python_repo_checks() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-repo-checks")
+		payload["entry"] = "scripts/run_validation_repo_checks.sh"
+		payload.pop("port", None)
+		payload["slots"]["canary_tools"] = ["bash", "python3", "jq"]
+		payload["slots"]["tap_plan"] = 3
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, f"renderer failed: {result.stderr}"
+		expected_files = [
+			output_root / "Dockerfile.app",
+			output_root / "docker-compose.test.yml",
+			output_root / "_lib" / "tap_helpers.sh",
+			output_root / "tests" / "00_canary.sh",
+			output_root / "tests" / "10_family_marker.sh",
+			output_root / "tests" / "20_import_audit.sh",
+			output_root / "tests" / "30_graceful_shutdown.sh",
+			output_root / "tests" / "40_repo_checks.sh",
+			output_root / "tests" / "90_tap_report.sh",
+			output_root / "tests" / "_lib" / "graceful_shutdown.py",
+			output_root / "tests" / "_lib" / "import_audit.py",
+		]
+		for expected in expected_files:
+			assert expected.exists(), f"missing rendered file: {expected}"
+
+		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+		assert "sleep infinity" in compose_text
+		assert "test -x /workspace/scripts/run_validation_repo_checks.sh" in compose_text
+		assert "condition: service_healthy" not in compose_text
+
+		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
+		assert "REPO_CHECK_ENTRY" in repo_checks_text
+		assert "scripts/run_validation_repo_checks.sh" in repo_checks_text
+
+		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
+		assert "pip install --no-cache-dir pyyaml jsonschema jinja2" in dockerfile_text
+		assert "flask" not in dockerfile_text
+
+		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
+		assert "python-repo-checks family for demo-project" in family_marker_text
+
+		lint_result = subprocess.run(
+			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
+
+
 def test_renderer_deterministic_output_for_same_manifest() -> None:
 	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
 		temp_root = Path(td)

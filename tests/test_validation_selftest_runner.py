@@ -38,6 +38,16 @@ def _fixture_manifest(family: str, project_name: str) -> dict:
 				"tap_plan": 2,
 			},
 		}
+	if family == "python-repo-checks":
+		return {
+			"type": family,
+			"entry": "scripts/run_validation_repo_checks.sh",
+			"slots": {
+				"project_name": project_name,
+				"canary_tools": ["bash", "python3", "jq"],
+				"tap_plan": 3,
+			},
+		}
 	if family == "node-hardhat-solidity":
 		return {
 			"type": family,
@@ -108,6 +118,7 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 		logs_root = work_root / "logs"
 
 		_write_yaml(fixtures_root / "python-mongo-flask.yml", _fixture_manifest("python-mongo-flask", "ci-python"))
+		_write_yaml(fixtures_root / "python-repo-checks.yml", _fixture_manifest("python-repo-checks", "ci-repo-checks"))
 		_write_yaml(fixtures_root / "node-hardhat-solidity.yml", _fixture_manifest("node-hardhat-solidity", "ci-node"))
 
 		result = _run_matrix(work_root, fixtures_root, summary_path, logs_root)
@@ -118,10 +129,10 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 		assert summary["schema_version"] == "1"
 		assert summary["repo_root"] == "."
 		assert summary["overall_status"] == "pass"
-		assert summary["totals"] == {"fixtures": 2, "passed": 2, "failed": 0}
-		assert len(summary["fixtures"]) == 2
+		assert summary["totals"] == {"fixtures": 3, "passed": 3, "failed": 0}
+		assert len(summary["fixtures"]) == 3
 		fixture_names = sorted(item["name"] for item in summary["fixtures"])
-		assert fixture_names == ["node-hardhat-solidity.yml", "python-mongo-flask.yml"]
+		assert fixture_names == ["node-hardhat-solidity.yml", "python-mongo-flask.yml", "python-repo-checks.yml"]
 
 		for fixture in summary["fixtures"]:
 			assert fixture["status"] == "pass"
@@ -207,6 +218,7 @@ def test_sanity_skips_compose_when_missing_by_default() -> None:
 		assert compose_check is not None
 		assert compose_check["status"] == "skipped"
 		assert compose_check["reason"] == "no docker-compose.test.yml in output"
+
 
 def main() -> int:
 	test_runner_passes_both_supported_family_fixtures()

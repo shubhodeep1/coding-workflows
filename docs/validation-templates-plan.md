@@ -30,7 +30,7 @@ into code that the LLM no longer touches.
 | Q2    | A        | Manifest is `.ai/validate.yml`, committed in the consumer repo.                                                      |
 | Q3    | A        | **Regenerate** on drift: refresh PR overwrites managed files; custom additions live in whitelisted escape hatches.   |
 | Q4    | —        | (skipped)                                                                                                            |
-| Q5    | A        | Per-stack template families (`python-mongo-flask`, `node-hardhat-solidity`); dispatch by `type` + signals.           |
+| Q5    | A        | Per-stack template families (`python-mongo-flask`, `node-hardhat-solidity`, `python-repo-checks`); dispatch by `type` + signals.           |
 | Q6    | B        | Keep the self-heal loop, but retarget it to re-render from manifest / re-run lint instead of freehand edits.         |
 | Q7    | A        | **Zero human steps**: `validation-refresh.yml` opens an auto-mergeable PR on green; draft PR (needs human) on red.   |
 | Q8    | A        | Auto-merge gate is pass-only; any lint or self-test regression downgrades to draft PR.                               |
@@ -45,6 +45,7 @@ consumer repo                         coding-workflows (this repo)
 .ai/validate.yml  ────────────────►  workflow-templates/validation-harness/
                                        _shared/                 (Jinja2 base)
                                        python-mongo-flask/      (family)
+                                       python-repo-checks/      (family)
                                        node-hardhat-solidity/   (family)
 
 scripts/render_validation_templates.py
@@ -107,6 +108,20 @@ log capture, and the `attempt_self_heal_and_reexec` integration points.
 | `tests/30_hardhat_test.sh`               | `npx hardhat test --network localhost`; captures stdout/stderr tails on timeout                                                    |
 | `_lib/import_audit.py`                   | Isolated import helper that executes each module import in a child Python process                                                   |
 | `_lib/graceful_shutdown.sh`              | Same pattern as python family, shell version                                                                                       |
+
+### `python-repo-checks`
+
+| File                                     | Purpose                                                                                                                          |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `Dockerfile.app`                         | `python:3.12-slim` base; installs only `bash`/`jq` plus renderer deps (`pyyaml`, `jsonschema`, `jinja2`); no Flask bootstrap    |
+| `docker-compose.test.yml`                | Single long-lived `app` service (`sleep infinity`) with healthcheck that validates repo-check helper presence                     |
+| `tests/00_canary.sh`                     | Client-side canary (`bash`, `python3`, `jq`) with TAP primitives from shared helpers                                              |
+| `tests/20_import_audit.sh`               | Runs `_lib/import_audit.py` in subprocess isolation before repo-specific checks                                                    |
+| `tests/30_graceful_shutdown.sh`          | Reuses `_lib/graceful_shutdown.py` timeout/tail behavior to enforce deterministic stop semantics                                  |
+| `tests/40_repo_checks.sh`                | Executes manifest `entry` (default `scripts/run_validation_repo_checks.sh`) inside the app container for repo-local checks       |
+| `tests/90_tap_report.sh`                 | TAP-format `ok N` / `not ok N` aggregator                                                                                          |
+| `tests/_lib/import_audit.py`             | Isolated import helper run in a child Python process                                                                                |
+| `tests/_lib/graceful_shutdown.py`        | Shared readiness/tail capture helper for shutdown assertions                                                                        |
 
 ## Encoded prompt rules (the ~30)
 

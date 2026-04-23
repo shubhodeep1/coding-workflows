@@ -94,6 +94,7 @@ class RenderedFile:
 
 FAMILY_REGISTRY: dict[str, FamilySpec] = {
 	"python-mongo-flask": FamilySpec(name="python-mongo-flask", relative_dir="python-mongo-flask"),
+	"python-repo-checks": FamilySpec(name="python-repo-checks", relative_dir="python-repo-checks"),
 	"node-hardhat-solidity": FamilySpec(name="node-hardhat-solidity", relative_dir="node-hardhat-solidity"),
 }
 

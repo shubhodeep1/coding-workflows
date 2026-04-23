@@ -1,0 +1,16 @@
+services:
+  app:
+    init: true
+    build:
+      context: ..
+      dockerfile: validation/Dockerfile.app
+    working_dir: /workspace
+    command: ["/bin/sh", "-c", "sleep infinity"]
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "test -x /workspace/scripts/run_validation_repo_checks.sh"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
