@@ -2,7 +2,7 @@ name: "Internal: AI Orchestrate Poller"
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch: {}
 
 permissions:

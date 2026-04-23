@@ -21,7 +21,7 @@
 #   XPOLL_SUMMARISER_MODEL            default: openai/gpt-5.4-mini
 #   XPOLL_SUMMARISER_REASONING        default: xhigh
 #   XPOLL_SUMMARISER_LINES_PER_REVIEWER  target lines per reviewer section (default 160)
-#   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS   per-attempt timeout (default 600)
+#   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS   per-attempt timeout (default 1200)
 #   XPOLL_SUMMARISER_MAX_INPUT_LINES     pre-truncate per-reviewer input above this (default 3000)
 #   PR_NUMBER                         used to honour /tmp/pr_closed_sentinel_<n>
 
@@ -58,7 +58,7 @@ fi
 SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.4-mini}"
 SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-xhigh}"
 SUMMARISER_TARGET_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"
-SUMMARISER_CALL_TIMEOUT="${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS:-600}"
+SUMMARISER_CALL_TIMEOUT="${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS:-1200}"
 SUMMARISER_MAX_INPUT_LINES="${XPOLL_SUMMARISER_MAX_INPUT_LINES:-3000}"
 
 if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
