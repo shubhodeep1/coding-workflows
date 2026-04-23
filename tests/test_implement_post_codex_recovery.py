@@ -514,7 +514,7 @@ def first_non_flag(values: list[str]) -> str:
 	i = 0
 	while i < len(values):
 		arg = values[i]
-		if arg in ("--jq", "-f", "-H", "-X", "--method", "--input"):
+		if arg in ("--jq", "-q", "--query", "-f", "--field", "-H", "--header", "-X", "--method", "--input", "--repo", "-R", "--template", "-t", "--preview"):
 			i += 2
 			continue
 		if arg.startswith("-"):
