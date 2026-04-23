@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.ai/review_issue_ledger/pr-1524.txt`:1 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The per-PR review-issue ledger file is tracked in git and included in the PR.\n  WHY: It is intended to be a gitignored ephemeral artifact persisted via `actions/cache`; committing it pollutes the repository and risks merge conflicts.\n- `scripts/orchestrate_poll_process.sh`:1097,1170 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The JSON merge passes full blobs through `--argjson`, which can hit command-line length limits for large batches.\n  WHY: Large accumulated JSON can exceed `ARG_MAX`, causing jq invocation failure and forcing degraded per-issue fallback behavior.\n- `scripts/orchestrate_poll_process.sh`:1165,1188,5150 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: `ascii_downcase` is used without a jq-version fallback.\n  WHY: On jq versions older than 1.6, the function is unavailable and the batch GraphQL path can fail.\n- `tests/test_orchestrate_poll_process.py`:2943 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The test does not fully verify the REST fallback path.\n  WHY: The current assertions can pass even if the fallback behavior is broken, leaving a coverage gap.\n- `agents.md`:589 | severity=low | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The section title is duplicated.\n  WHY: The repeated heading reduces clarity and maintainability of the documentation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `.ai/review_issue_ledger/pr-1524.txt`:1 | severity=high | confidence=5\n  PROBLEM: The ledger file is tracked in git but should be gitignored as an ephemeral runtime artifact.\n  WHY: Committing ledger files pollutes the repository, risks merge conflicts, and leaks metadata.\n- `scripts/orchestrate_poll_process.sh`:1067,1139 | severity=medium | confidence=3\n  PROBLEM: The jq expression `.key + $start` relies on implicit type coercion.\n  WHY: If the operands are not handled as expected, GraphQL alias names could be malformed or collide.\n- `scripts/orchestrate_poll_process.sh`:1097,1170 | severity=medium | confidence=4\n  PROBLEM: Passing potentially large JSON blobs via `--argjson` could exceed command-line length limits.\n  WHY: Large merged payloads can trigger `Argument list too long`, degrading batch processing.\n- `scripts/orchestrate_poll_process.sh`:1165,1188,5150 | severity=medium | confidence=4\n  PROBLEM: `ascii_downcase` requires jq 1.6+ and has no fallback.\n  WHY: Older jq versions will fail on the function call, breaking the batch path.\n- `tests/test_orchestrate_poll_process.py`:2943 | severity=medium | confidence=3\n  PROBLEM: The test does not fully verify that REST fallback was exercised when GraphQL returns partial data.\n  WHY: The test may pass even if the fallback logic is broken, giving false confidence.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `.ai/review_issue_ledger/pr-1524.txt`:1 | severity=high | confidence=5\n  PROBLEM: The review-issue ledger is tracked in git and included in the PR diff.\n  WHY: The ledger path is intended to be gitignored and persisted via `actions/cache`; committing it violates that contract and pollutes repository history.\n- `agents.md`:589 | severity=low | confidence=5\n  PROBLEM: The section title is duplicated.\n  WHY: The duplicate title reduces maintainability and clarity of the mandatory system instructions.\n- `scripts/orchestrate_poll_process.sh` | severity=medium | confidence=3\n  PROBLEM: Possible use of jq 1.6+ features without version verification.\n  WHY: If the environment has jq 1.5, `ascii_downcase` will fail and the batch GraphQL path will fall back to REST calls.\n- `scripts/orchestrate_poll_process.sh` | severity=medium | confidence=1\n  PROBLEM: Implicit type coercion in jq alias generation.\n  WHY: The expression should use explicit string interpolation to ensure alias names are always valid strings.\n- `scripts/orchestrate_poll_process.sh` | severity=medium | confidence=3\n  PROBLEM: Passing full JSON blobs through `--argjson` risks `ARG_MAX` overflow.\n  WHY: Large batches can exceed command-line argument limits, causing jq to fail and degrade batching.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `.ai/issue_ledger/Pr-15.24. txt`:1 | severity=critical | confidence=5\n  PROBLEM: The PR adds a new ledger file even though the stated fix is to stop committing review-issue ledgers.\n  WHY: The file is tracked in git when it should be ignored, directly reintroducing the problem the change was supposed to solve.\n- `scripts/Orchestrate_oll_Process. sh`:1097,1170 | severity=medium | confidence=4\n  PROBLEM: The JSON merge passes full blobs through `--argjson`, which can exceed `ARG_MAX`.\n  WHY: Large accumulated JSON can make jq fail with `Argument list too long`, causing batch merging to stop working.\n- `scripts/label_elpers. sh`:137 | severity=low | confidence=1\n  PROBLEM: A previously noted docstring removal is not actually part of this PR.\n  WHY: The file was not modified in this diff, so this issue is outside the review scope and not attributable here.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `.ai/review_issue_ledger/pr-1524.txt`:1 | severity=high | confidence=5\n  PROBLEM: The review-issue ledger file is being tracked in git despite being in a gitignored directory.\n  WHY: It is an ephemeral runtime artifact that should be handled by cache persistence, not committed to the repository.\n- `scripts/orchestrate_poll_process.sh`:1097,1170 | severity=medium | confidence=4\n  PROBLEM: Both batch merge sites pass full JSON blobs through `--argjson`.\n  WHY: As `merged` grows across batches, the command can exceed `ARG_MAX`, causing the merge to stop accumulating data.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `.ai/review_issue_ledger/pr-1524.txt`:1 | severity=high | confidence=5\n  PROBLEM: The per-PR review-issue ledger is tracked in git and included in the PR.\n  WHY: The ledger is meant to be gitignored and persisted via `actions/cache`; committing it pollutes the repo and risks merge conflicts.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "fe4e78486ff845165afbdd9c142b1e7edf9d31e3fc71fe079955d35d9589c6dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24817684037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24817684037",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423053310_0f4a6552ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24817684037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T05:33:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
