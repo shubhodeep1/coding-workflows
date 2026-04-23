@@ -91,8 +91,6 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 )
 
-_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
-
 # ensure_label_exists <label_name> [repo]
 #
 # Creates the label if it does not already exist.  Idempotent — safe to
@@ -135,62 +133,4 @@ ensure_label_exists() {
 
 	echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${repo}': ${_label_err}" >&2
 	return 1
-}
-
-# set_issue_phase_label_resilient <issue_number> <target_label> [repo]
-#
-# Applies a target phase label while preserving non-phase labels and
-# enforcing exclusivity across ai:* phase labels. Uses GET+PUT for
-# atomic replacement, with POST fallback that fails open.
-set_issue_phase_label_resilient() {
-	local issue_number="${1:-}"
-	local target_label="${2:-}"
-	local repo="${3:-${GITHUB_REPOSITORY:-}}"
-
-	if [ -z "${issue_number}" ] || [ -z "${target_label}" ]; then
-		echo "::warning::set_issue_phase_label_resilient: issue_number and target_label are required; skipping." >&2
-		return 0
-	fi
-	if [ -z "${repo}" ]; then
-		echo "::warning::set_issue_phase_label_resilient: repo required for issue #${issue_number}; skipping." >&2
-		return 0
-	fi
-
-	ensure_label_exists "${target_label}" "${repo}" || true
-
-	local _cur=""
-	if ! _cur="$(gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels" \
-		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-		echo "::warning::set_issue_phase_label_resilient: GET labels failed for #${issue_number} — falling back to POST add." >&2
-		if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-			-f "labels[]=${target_label}" >/dev/null 2>&1; then
-			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
-		fi
-		return 0
-	fi
-
-	_cur="${_cur:-[]}"
-	local _new=""
-	if ! _new="$(printf '%s' "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${target_label}" \
-		'(. - $p) + [$t] | unique' 2>/dev/null)"; then
-		echo "::warning::set_issue_phase_label_resilient: failed to compute new labels for #${issue_number} — falling back to POST add." >&2
-		if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-			-f "labels[]=${target_label}" >/dev/null 2>&1; then
-			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
-		fi
-		return 0
-	fi
-
-	if printf '{"labels":%s}' "${_new}" | \
-		gh_retry gh api -X PUT "repos/${repo}/issues/${issue_number}/labels" \
-			--input - >/dev/null 2>&1; then
-		return 0
-	fi
-
-	echo "::warning::set_issue_phase_label_resilient: PUT labels failed for #${issue_number} — falling back to POST add." >&2
-	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-		-f "labels[]=${target_label}" >/dev/null 2>&1; then
-		echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
-	fi
-	return 0
 }

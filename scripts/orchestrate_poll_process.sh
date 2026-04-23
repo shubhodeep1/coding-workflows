@@ -1109,6 +1109,86 @@ _fetch_issue_labels_batch_graphql() {
   echo "${merged}"
 }
 
+# _fetch_issue_states_batch_graphql — Batch-fetch issue states for a list
+# of issue numbers using GraphQL aliases.
+#
+# Input: JSON array of issue numbers, e.g. "[123, 456]"
+# Output: JSON object keyed by stringified issue number with normalized
+# lowercase states:
+#   {"123":"open", "456":"closed"}
+#
+# Fail-open contract:
+# - Any failed batch is skipped (its issues are omitted from the cache).
+# - Callers must treat missing keys as cache misses and fall back to the
+#   legacy per-issue REST state lookup for those specific issues.
+_fetch_issue_states_batch_graphql() {
+  local numbers_json="$1"
+  local count
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [ -z "${count}" ] || [ "${count}" -eq 0 ]; then
+    echo '{}'
+    return
+  fi
+
+  local owner="${GITHUB_REPOSITORY%%/*}"
+  local name="${GITHUB_REPOSITORY##*/}"
+  local batch_size=25
+  local merged='{}'
+  local start=0
+  local end
+  local i
+  local n
+  local query
+  local fragment
+  local batch_resp
+  local batch_transformed
+
+  while [ "${start}" -lt "${count}" ]; do
+    end=$(( start + batch_size ))
+    [ "${end}" -gt "${count}" ] && end="${count}"
+
+    fragment=""
+    for ((i=start; i<end; i++)); do
+      n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]")"
+      [[ "${n}" =~ ^[0-9]+$ ]] || continue
+      fragment+=$'\n'"        i${i}: issue(number: ${n}) {
+          number
+          state
+        }"
+    done
+
+    if [ -z "${fragment}" ]; then
+      start="${end}"
+      continue
+    fi
+
+    query="query {
+  repository(owner: \"${owner}\", name: \"${name}\") {${fragment}
+  }
+}"
+
+    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+      start="${end}"
+      continue
+    fi
+
+    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
+      (.data.repository // {}) | to_entries | map(
+        select(.value != null and (.value.number? != null)) | {
+          key: (.value.number | tostring),
+          value: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end)
+        }
+      ) | from_entries
+    ' 2>/dev/null || echo '{}')"
+
+    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
+
+    start="${end}"
+  done
+
+  echo "${merged}"
+}
+
 # get_issue_state_labels_json — fetch {state, state_reason, labels} in a single
 # API call.  Used by the validation fix-up loop to consolidate what used to be
 # two separate round-trips (labels + state) and to make the loop state-aware
@@ -8944,10 +9024,17 @@ ${RB_FIX_DESC}
       IF_BLOCKER_OPEN_COUNT=0
       IF_BLOCKER_UNKNOWN_COUNT=0
       IF_BLOCKER_STATUS_SUMMARY=""
+      IF_BLOCKER_STATES_JSON="$(_fetch_issue_states_batch_graphql "${IF_BLOCKERS_JSON}")"
+      if ! printf '%s' "${IF_BLOCKER_STATES_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        IF_BLOCKER_STATES_JSON='{}'
+      fi
 
       while IFS= read -r blocker_issue; do
         [ -n "${blocker_issue}" ] || continue
-        BLOCKER_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+        BLOCKER_STATE="$(printf '%s' "${IF_BLOCKER_STATES_JSON}" | jq -r --arg blocker_issue "${blocker_issue}" '.[$blocker_issue] // empty' 2>/dev/null || echo "")"
+        if [ "${BLOCKER_STATE}" != "open" ] && [ "${BLOCKER_STATE}" != "closed" ]; then
+          BLOCKER_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+        fi
         case "${BLOCKER_STATE}" in
           open)
             IF_BLOCKER_OPEN_COUNT=$((IF_BLOCKER_OPEN_COUNT + 1))
