@@ -2936,14 +2936,14 @@ jobs:
           # productive [ai-autofix] push. The only same-branch peer the
           # dedup can find is the gate-skipped pull_request.synchronize run
           # produced by our own push (AUTOFIX_GATE_SKIP
-          # reason=self_triggered_autofix), whose `run` job is gated out by
-          # `needs.gate.outputs.should_run == 'true'` and therefore never
-          # advances retrigger_guard or invokes rb_judge. Handing the
-          # iteration to that peer stalls the cycle until the orchestrator
-          # stall cron recovers — and the cron does not scan non-orchestrator
-          # PRs at all (agents.md §20.4). Bypass the peer check in the
-          # continuation case; legacy non-continuation dispatches keep their
-          # existing dedup semantics.
+          # reason=self_triggered_autofix), whose `run` job is gated out
+          # because its `needs.gate.outputs.should_run == 'true'` condition
+          # is not met, so it never advances retrigger_guard or invokes
+          # rb_judge. Handing the iteration to that peer stalls the cycle
+          # until the orchestrator stall cron recovers — and the cron does
+          # not scan non-orchestrator PRs at all (agents.md §20.4). Bypass
+          # the peer check in the continuation case; legacy non-continuation
+          # dispatches keep their existing dedup semantics.
           if [ "${is_continuation_dispatch}" = "true" ]; then
             echo "AUTOFIX_PEER_CHECK_BYPASSED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} reason=continuation_dispatch source=post_commit_retrigger"
           elif type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
