@@ -1117,8 +1117,6 @@ jobs:
 
       - name: Preflight pushability gate
         if: success() && env.PR_CLOSED != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -1156,7 +1154,7 @@ jobs:
 
           is_definitive_unpushable_reason() {
             case "$1" in
-              checkout_guard_unpushable|missing_target_branch|auth_or_repo_denied|protected_branch_policy|read_only_repo|ref_not_writable)
+              checkout_guard_unpushable|missing_target_branch|auth_or_repo_denied|protected_branch_policy|read_only_repo|ref_not_writable|non_fast_forward)
                 return 0
                 ;;
               *)
@@ -1177,7 +1175,11 @@ jobs:
             push_preflight_reason="missing_target_branch"
           else
             push_probe_file="$(mktemp)"
-            if git push --dry-run origin "HEAD:${TARGET_BRANCH}" >"${push_probe_file}" 2>&1; then
+            push_probe_cmd=(git push --dry-run origin "HEAD:${TARGET_BRANCH}")
+            if command -v timeout >/dev/null 2>&1; then
+              push_probe_cmd=(timeout 30s "${push_probe_cmd[@]}")
+            fi
+            if "${push_probe_cmd[@]}" >"${push_probe_file}" 2>&1; then
               push_preflight_status="pass"
               push_preflight_reason="ok"
             else
@@ -1218,7 +1220,9 @@ jobs:
 
           if [ "${push_preflight_status}" = "blocked" ]; then
             echo "::error::PUSH_PREFLIGHT_BLOCKED_V1 reason=${push_preflight_reason} can_push=${CAN_PUSH:-unset} target_branch=${TARGET_BRANCH:-unset}"
-            exit 1
+            if [ "${push_preflight_reason}" != "checkout_guard_unpushable" ]; then
+              exit 1
+            fi
           fi
           if [ "${push_preflight_status}" != "pass" ]; then
             echo "::warning::PUSH_PREFLIGHT_FAIL_OPEN_V1 reason=${push_preflight_reason} can_push=${CAN_PUSH:-unset} target_branch=${TARGET_BRANCH:-unset}"

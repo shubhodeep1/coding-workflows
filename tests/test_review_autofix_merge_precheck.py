@@ -66,10 +66,7 @@ def test_known_ci_artifacts_removed_in_resolve_step():
     rm_line = "rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh"
     count = wf.count(rm_line)
 
-    if count >= 2:
-        return
-
-    assert count == 1, (
+    assert count >= 1, (
         "Expected at least one known-CI-artifact rm -f occurrence in "
         f"review_autofix.yml, found {count}"
     )
