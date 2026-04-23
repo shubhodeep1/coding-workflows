@@ -91,7 +91,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 )
 
-_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:needs-human","ai:blocked"]'
 
 # ensure_label_exists <label_name> [repo]
 #
