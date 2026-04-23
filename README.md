@@ -54,7 +54,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 
 | Variable | Required | Default | Used By | Description |
 |---|---|---|---|---|
-| `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.3-codex` | clarify, plan, implement, review_autofix | Model for code editing tasks |
+| `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.4` (clarify, plan, orchestrate, orchestrate_poll judge, orchestrate_clarify_respond, validate, workflow-log-analysis) / `openai/gpt-5.3-codex` (implement, review_autofix editor, orchestrate_poll conflict resolver) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate, workflow-log-analysis | Model for code editing / reasoning tasks. Reasoning-heavy workflows default to `gpt-5.4` (unified reasoning + coding); patch-heavy workflows that apply `apply_patch` edits stay on `gpt-5.3-codex` (better Terminal-Bench / patch specialisation). Setting this var overrides all defaults; use per-workflow vars (`WORKFLOW_ORCHESTRATE_MODEL`, `WORKFLOW_VALIDATE_MODEL`, `WORKFLOW_LOG_ANALYSIS_MODEL`) for finer control. |
 | `WORKFLOW_VALIDATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | validate | Model override for validation harness generation/diagnosis |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
@@ -846,7 +846,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
   2. `codex exec --model <WORKFLOW_EDITOR_MODEL> --full-auto` with `prompts/mode-workflow-analysis.txt` + generated analysis context, writing the final markdown report file.
 - Legacy workflow path (`codex_mode=false`): `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file workflow_log_analysis_batch_state.json`
 - `--max-output-tokens` default is `100000`. The workflow auto-caps this to `60000` when the resolved `WORKFLOW_EDITOR_MODEL` contains `gemini` (Gemini 3.1 Pro Preview's max output is 65536).
-- Model resolution for this workflow only: the `Run workflow log analysis` step defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.3-codex` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
+- Model resolution for this workflow only: the `Run workflow log analysis` step defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.4` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
 - `load_input_data` accepts either:
   - `--input` with a collector report (`runs` list; `runs[].log_excerpts` are flattened into `deep_dive_logs` as `{name: <repo>/<run_id>/<step_name>, excerpt}`), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
   - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json` (optionally `run_logs/`)
@@ -890,7 +890,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
      the middle is a classic merge-conflict generator. -->
 | Variable | Default | Description |
 |---|---|---|
-| `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.3-codex` | Model for code editing tasks |
+| `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.4` (reasoning workflows) / `openai/gpt-5.3-codex` (patch workflows: implement, review_autofix, conflict resolver) | Model for code editing / reasoning tasks. See main table above for per-workflow split. |
 | `TG_ADMIN_CHAT_ID` | — | Telegram chat ID for notifications |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |

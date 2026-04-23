@@ -56,8 +56,8 @@ env:
     minimax/minimax-m2.5
     moonshotai/kimi-k2.5
     deepseek/deepseek-v3.2
-    stepfun/step-3.5-flash
-    google/gemini-3-flash-preview
+    z-ai/glm-5
+    google/gemini-3.1-pro-preview
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
