@@ -618,6 +618,7 @@ STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES="${STALL_THRESHOLD_AWAITING_APPROVAL_M
 STALL_THRESHOLD_IMPLEMENTING_MINUTES="${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}"
 STALL_THRESHOLD_DONE_MINUTES="${STALL_THRESHOLD_DONE_MINUTES:-}"
 STALL_THRESHOLD_READY_TO_MERGE_MINUTES="${STALL_THRESHOLD_READY_TO_MERGE_MINUTES:-}"
+STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES="${STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES:-}"
 
 _validate_phase_threshold STALL_THRESHOLD_NO_LABELS_MINUTES
 _validate_phase_threshold STALL_THRESHOLD_CLARIFICATION_MINUTES
@@ -626,6 +627,7 @@ _validate_phase_threshold STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES
 _validate_phase_threshold STALL_THRESHOLD_IMPLEMENTING_MINUTES
 _validate_phase_threshold STALL_THRESHOLD_DONE_MINUTES
 _validate_phase_threshold STALL_THRESHOLD_READY_TO_MERGE_MINUTES
+_validate_phase_threshold STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES
 
 # Build the JSON dict for per-phase overrides (only include vars that are set).
 _build_phase_thresholds_json() {
@@ -637,6 +639,7 @@ _build_phase_thresholds_json() {
   [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ] && parts+=("\"ai:implementing\":${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
   [ -n "${STALL_THRESHOLD_DONE_MINUTES:-}" ] && parts+=("\"ai:done\":${STALL_THRESHOLD_DONE_MINUTES}")
   [ -n "${STALL_THRESHOLD_READY_TO_MERGE_MINUTES:-}" ] && parts+=("\"ai:ready-to-merge\":${STALL_THRESHOLD_READY_TO_MERGE_MINUTES}")
+  [ -n "${STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES:-}" ] && parts+=("\"ai:review-blocked\":${STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES}")
 
   if [ "${#parts[@]}" -eq 0 ]; then
     echo ""
@@ -4599,6 +4602,40 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
 
+    dispatch_rb_judge)
+      # Autonomous escape from ai:review-blocked: dispatch the
+      # standalone review-blocked judge workflow for the linked PR.
+      # The judge (scripts/review_rb_judge.sh) then decides merge,
+      # fix, or close_and_reissue.  Linked PR lookup prefers the
+      # shared stall cache (STALL_MANAGED_LINKED_PR_CACHE) and falls
+      # back to the legacy per-issue REST cross-ref helper.
+      local rb_pr_num=""
+      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
+        rb_pr_num="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" \
+          | jq -r --arg n "${issue_num}" '.[$n].number // empty' 2>/dev/null || echo "")"
+      fi
+      if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
+        rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      fi
+      if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
+        echo "::warning::dispatch_rb_judge: no linked PR found for issue #${issue_num}; skipping."
+        return 1
+      fi
+      local rb_dispatch_rc=0
+      _dispatch_rb_judge_for_pr "${rb_pr_num}" || rb_dispatch_rc=$?
+      if [ "${rb_dispatch_rc}" -eq 1 ]; then
+        return 1
+      fi
+      if [ "${rb_dispatch_rc}" -eq 2 ]; then
+        # Already dispatched this cycle.  Don't increment recovery
+        # count — let the next cycle re-check; the judge run is in
+        # flight.
+        return 0
+      fi
+      tg_notify "Stall recovery: dispatched review-blocked judge for issue #${issue_num} (PR #${rb_pr_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${rb_pr_num}")" "WARNING"
+      STALL_RECOVERY_SHOULD_INCREMENT="true"
+      ;;
+
     *)
       echo "::warning::Unknown stall recovery action: ${action} for issue #${issue_num}"
       return 1
@@ -5502,10 +5539,15 @@ run_standalone_stall_recovery() {
   fi
   orchestrator_managed_set="$(printf '%s\n' "${orchestrator_managed_set}" | grep -E '^[0-9]+$' | sort -u || true)"
 
-  local pipeline_labels='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge"]'
+  # ai:review-blocked is included so the standalone stall loop picks up
+  # issues stuck at that phase (e.g. autofix workflow failure poisoning
+  # the linked issue) and can dispatch the review-blocked judge via the
+  # dispatch_rb_judge recovery action.  See STALL_RECOVERY_ACTIONS
+  # ["ai:review-blocked"] in scripts/orchestrate_lib.py.
+  local pipeline_labels='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
   local labeled_issues='[]'
   local lbl
-  for lbl in ai:clarification ai:planning ai:awaiting-approval ai:implementing ai:done ai:ready-to-merge; do
+  for lbl in ai:clarification ai:planning ai:awaiting-approval ai:implementing ai:done ai:ready-to-merge ai:review-blocked; do
     local by_label
     by_label="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 1000 2>/dev/null || echo '[]')"
     labeled_issues="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${by_label}"))"
@@ -5578,7 +5620,15 @@ print(determine_phase(labels))
 PY
 )"
 
-    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:review-blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
+    # Phases the standalone loop does NOT act on.  ai:review-blocked was
+    # historically in this skip list because it had a dedicated inline
+    # handler (review_rb_judge.sh runs at the end of review_autofix.yml
+    # when max_iterations is reached).  That handler has no standalone
+    # trigger, so phases that land in ai:review-blocked without ever
+    # invoking the judge (e.g. the empty-editor failure mode) never
+    # escape.  ai:review-blocked is now recovered here via the
+    # dispatch_rb_judge action (see execute_stall_recovery_action).
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
       continue
     fi
 
@@ -6138,6 +6188,39 @@ PY
         STALL_RECOVERY_SHOULD_INCREMENT="false"
         took_action="true"
         ;;
+      dispatch_rb_judge)
+        # Autonomous escape from ai:review-blocked: dispatch the
+        # standalone review-blocked judge workflow for the linked PR.
+        # See execute_stall_recovery_action's dispatch_rb_judge case
+        # for the authoritative implementation pattern; this mirrors
+        # it within the standalone loop's switch.
+        local _std_rb_pr_num=""
+        if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
+          _std_rb_pr_num="${_STD_ITER_PR_NUM_CACHED}"
+        else
+          _std_rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        fi
+        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
+          echo "::warning::[standalone-stall] dispatch_rb_judge: no linked PR found for issue #${issue_num}; skipping."
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+        else
+          local _std_rb_rc=0
+          _dispatch_rb_judge_for_pr "${_std_rb_pr_num}" || _std_rb_rc=$?
+          if [ "${_std_rb_rc}" -eq 0 ]; then
+            echo "STALL_RECOVERY issue=${issue_num} reason=ai_review_blocked pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: dispatched review-blocked judge for PR #${_std_rb_pr_num} (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+          elif [ "${_std_rb_rc}" -eq 2 ]; then
+            # Already dispatched this cycle — judge is in flight.
+            echo "STALL_SKIP issue=${issue_num} reason=rb_judge_dispatch_deduped pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+          else
+            echo "::warning::[standalone-stall] dispatch_rb_judge for issue #${issue_num} PR #${_std_rb_pr_num} failed (rc=${_std_rb_rc})."
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+          fi
+        fi
+        took_action="true"
+        ;;
       *)
         echo "::warning::Unknown standalone stall action ${action} for issue #${issue_num}"
         ;;
@@ -6634,6 +6717,57 @@ _dispatch_review_for_conflicts()
 	done
 
 	echo "::warning::${log_prefix} Could not dispatch review workflow via workflow_dispatch."
+	return 1
+}
+
+# _dispatch_rb_judge_for_pr <pr_number>
+#
+# Trigger review_rb_judge_dispatch.yml via workflow_dispatch for the
+# given PR.  That workflow calls review_autofix.yml with
+# force_rb_judge=true, which short-circuits retrigger_guard to run only
+# the review-blocked judge (scripts/review_rb_judge.sh).  The judge
+# decides merge, fix, or close_and_reissue — giving ai:review-blocked
+# issues an autonomous escape path.
+#
+# Returns:
+#   0 — dispatched successfully (or already dispatched this cycle).
+#   1 — dispatch failed (e.g. workflow missing, PAT scope insufficient).
+#   2 — skipped (cycle-local duplicate-dispatch guard).
+#
+# API hygiene: reuses the cycle-local _CONFLICT_DISPATCH_TRACKER to
+# prevent duplicate dispatches within the same poll cycle, same as
+# _dispatch_review_for_conflicts.  ref resolves from the repo default
+# branch (main) because the judge does not need the PR's head ref to
+# run — it operates on the PR metadata directly via gh api.
+_dispatch_rb_judge_for_pr()
+{
+	local pr_number="$1"
+	local log_prefix="[rb-judge-dispatch] PR #${pr_number}"
+
+	if ! [[ "${pr_number}" =~ ^[0-9]+$ ]]; then
+		echo "::warning::${log_prefix} invalid pr_number; skipping."
+		return 1
+	fi
+
+	# Cycle-local duplicate-dispatch guard.  Reuses the conflict
+	# tracker file because both dispatches target review_autofix.yml
+	# (directly or indirectly) and cancel-in-progress concurrency
+	# would otherwise kill one with the other.
+	if grep -qx "rb-judge:${pr_number}" "${_CONFLICT_DISPATCH_TRACKER}" 2>/dev/null; then
+		echo "  ${log_prefix} Already dispatched in this poll cycle. Skipping."
+		return 2
+	fi
+
+	echo "  ${log_prefix} Dispatching review_rb_judge_dispatch.yml..."
+	if gh_retry gh workflow run review_rb_judge_dispatch.yml \
+		--repo "${GITHUB_REPOSITORY}" \
+		-f pr_number="${pr_number}" 2>/dev/null; then
+		echo "  ${log_prefix} Dispatched review_rb_judge_dispatch.yml."
+		echo "rb-judge:${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
+		return 0
+	fi
+
+	echo "::warning::${log_prefix} Could not dispatch review_rb_judge_dispatch.yml. Ensure the workflow exists on the default branch and the GH_PAT has workflow-dispatch scope."
 	return 1
 }
 

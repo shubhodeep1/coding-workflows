@@ -830,7 +830,18 @@ TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
-DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:blocked", "ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
+#
+# ai:review-blocked was previously in this set, but the review/autofix
+# workflow's dedicated handler (review_rb_judge.sh) only runs inline at
+# the end of a review_autofix.yml run — it has no standalone trigger.
+# When the dedicated handler goes silent (e.g. the empty-editor failure
+# mode that stamps ai:review-blocked on linked issues without ever
+# running the judge), the phase has no autonomous escape.  The stall
+# detector therefore now covers ai:review-blocked too: its ladder
+# dispatches review_rb_judge_dispatch.yml (which runs review_autofix.yml
+# with force_rb_judge=true) past the per-phase stall threshold.  See
+# STALL_RECOVERY_ACTIONS["ai:review-blocked"] below.
+DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
 
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.
@@ -847,6 +858,11 @@ DEFAULT_PHASE_STALL_THRESHOLDS: dict[str, int] = {
 	"ai:implementing": 120,
 	"ai:done": 120,
 	"ai:ready-to-merge": 60,
+	# ai:review-blocked: matches ai:done (120 min) so an in-flight
+	# review_autofix run that legitimately takes a long time to reach
+	# the inline rb_judge step does not get double-dispatched by the
+	# stall loop's dispatch_rb_judge action.
+	"ai:review-blocked": 120,
 }
 
 RUN_STALL_JUDGE_ACTION = "run_stall_judge"
@@ -892,6 +908,18 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 		"retrigger_validate",
 		"escalate_human",
 	],
+	# ai:review-blocked recovery: the dispatch_rb_judge action triggers
+	# review_rb_judge_dispatch.yml via workflow_dispatch, which runs
+	# review_autofix.yml with force_rb_judge=true — i.e. the dedicated
+	# review-blocked judge (scripts/review_rb_judge.sh) decides the next
+	# step (merge, fix, or close_and_reissue).  The two dispatch_rb_judge
+	# rungs mirror the two-retry allowance used elsewhere; escalate_human
+	# is the terminal fallback when ENABLE_STALL_HUMAN_TERMINALIZATION=true.
+	"ai:review-blocked": [
+		"dispatch_rb_judge",
+		"dispatch_rb_judge",
+		"escalate_human",
+	],
 }
 
 VALID_STALL_RECOVERY_ACTIONS: set[str] = {
@@ -913,6 +941,7 @@ STALL_RECOVERY_ACTION_PRIORITY: dict[str, int] = {
 	"retrigger_implement": 50,
 	"retrigger_review": 60,
 	"resolve_merge_conflict": 65,
+	"dispatch_rb_judge": 68,
 	"retrigger_validate": 70,
 	"attempt_merge": 80,
 	"close_and_reissue": 90,

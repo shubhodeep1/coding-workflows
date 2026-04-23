@@ -92,6 +92,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `STALL_THRESHOLD_IMPLEMENTING_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:implementing` phase. |
 | `STALL_THRESHOLD_DONE_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:done` phase (review/autofix). |
 | `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:ready-to-merge` phase. |
+| `STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:review-blocked` phase. Past this threshold the poller dispatches `review_rb_judge_dispatch.yml` (which runs `review_autofix.yml` with `force_rb_judge=true`) so `scripts/review_rb_judge.sh` decides merge, fix, or close-and-reissue. Review-blocked was previously a dedicated-handler phase with no standalone trigger; issues stamped `ai:review-blocked` by a review/autofix workflow failure that never reached the inline judge had no autonomous escape path. Matches the `ai:done` threshold so genuinely long in-flight autofix runs are not double-dispatched. |
 | `MAX_STALL_RECOVERIES_PER_ISSUE` | No | `5` | orchestrate_poll | Maximum stall recovery attempts per individual issue. Recovery selection uses `stall_recovery_count` against `STALL_RECOVERY_ACTIONS` (clamped to the last action), with optional escalation to `run_stall_judge` when enabled and the trigger count is reached. After exhausting this limit the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion. |
 | `STALL_JUDGE_TRIGGER_COUNT` | No | `2` | orchestrate_poll | Stall recovery attempt threshold at which the poller escalates from declarative ladder actions to `run_stall_judge` for deeper diagnostics and action selection. |
 | `ENABLE_STALL_JUDGE` | No | `true` | orchestrate_poll | Enables/disables stall-judge escalation (`run_stall_judge`) in orchestrator-managed and standalone stall recovery paths. |
@@ -912,6 +913,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `STALL_THRESHOLD_IMPLEMENTING_MINUTES` | `120` | Stall threshold for implementation phase |
 | `STALL_THRESHOLD_DONE_MINUTES` | `120` | Stall threshold for review/autofix phase |
 | `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | `60` | Stall threshold for ready-to-merge phase |
+| `STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES` | `120` | Stall threshold for `ai:review-blocked` phase; past threshold the poller dispatches `review_rb_judge_dispatch.yml` to run `review_rb_judge.sh` against the linked PR |
 | `MAX_STALL_RECOVERIES_PER_ISSUE` | `5` | Max stall recovery attempts per issue before skipping (declarative `STALL_RECOVERY_ACTIONS` + optional `run_stall_judge` escalation) |
 | `STALL_JUDGE_TRIGGER_COUNT` | `2` | Recovery-attempt threshold to invoke stall judge escalation (`run_stall_judge`) |
 | `ENABLE_STALL_JUDGE` | `true` | Enable/disable stall-judge escalation in orchestrator and standalone stall recovery |
