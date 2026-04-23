@@ -8,17 +8,42 @@ COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
 CUSTOM_TESTS="${CUSTOM_TESTS:-}"
 SKIP_TESTS="${SKIP_TESTS:-}"
+CUSTOM_TESTS_JSON="${CUSTOM_TESTS_JSON:-}"
+SKIP_TESTS_JSON="${SKIP_TESTS_JSON:-}"
 
 mkdir -p "${LOG_DIR}"
 
-if [ -z "${CUSTOM_TESTS}" ]; then
+if [ -z "${CUSTOM_TESTS_JSON}" ] && [ -n "${CUSTOM_TESTS}" ]; then
+	CUSTOM_TESTS_JSON="[\"${CUSTOM_TESTS}\"]"
+fi
+
+if [ -z "${SKIP_TESTS_JSON}" ] && [ -n "${SKIP_TESTS}" ]; then
+	SKIP_TESTS_JSON="[\"${SKIP_TESTS}\"]"
+fi
+
+if [ -z "${CUSTOM_TESTS_JSON}" ]; then
 	echo "1..1"
 	echo "not ok 1 - custom tests are configured"
-	echo "# CUSTOM_TESTS is empty. Configure .ai/validate.yml custom_tests for python-mongo-repo-checks."
+	echo "# CUSTOM_TESTS_JSON is empty. Configure .ai/validate.yml custom_tests for python-mongo-repo-checks."
 	exit 1
 fi
 
-read -r -a SKIP_LIST <<< "${SKIP_TESTS}"
+IFS=$'\n' read -r -d '' -a SKIP_LIST < <(
+	docker compose -f "${COMPOSE_FILE}" exec -T \
+		-e SKIP_TESTS_JSON="${SKIP_TESTS_JSON}" \
+		"${APP_SERVICE}" /bin/sh -c '
+			python3 - <<"PY"
+import json
+import os
+payload = os.environ.get("SKIP_TESTS_JSON", "")
+if not payload:
+	raise SystemExit(0)
+for item in json.loads(payload):
+	if isinstance(item, str) and item.strip():
+		print(item)
+PY
+		' && printf '\0'
+)
 
 should_skip()
 {
@@ -34,15 +59,17 @@ should_skip()
 
 IFS=$'\n' read -r -d '' -a TEST_LIST < <(
 	docker compose -f "${COMPOSE_FILE}" exec -T \
-		-e CUSTOM_TESTS="${CUSTOM_TESTS}" \
+		-e CUSTOM_TESTS_JSON="${CUSTOM_TESTS_JSON}" \
 		"${APP_SERVICE}" /bin/sh -c '
 			python3 - <<"PY"
+import json
 import os
-payload = os.environ.get("CUSTOM_TESTS", "")
-for item in payload.split("&&"):
-	item = item.strip()
-	if item:
-		print(item)
+payload = os.environ.get("CUSTOM_TESTS_JSON", "")
+for item in json.loads(payload):
+	if isinstance(item, str):
+		item = item.strip()
+		if item:
+			print(item)
 PY
 		' && printf '\0'
 )
@@ -55,7 +82,7 @@ done
 if [ "${test_count}" -eq 0 ]; then
 	echo "1..1"
 	echo "not ok 1 - custom tests parsed"
-	echo "# CUSTOM_TESTS did not yield executable commands"
+	echo "# CUSTOM_TESTS_JSON did not yield executable commands"
 	exit 1
 fi
 

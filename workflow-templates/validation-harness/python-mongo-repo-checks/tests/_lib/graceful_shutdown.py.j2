@@ -32,13 +32,27 @@ def bounded_compose_logs_tail(lines: int, compose_file: str) -> str:
 	return "\n".join(log_lines[-lines:])
 
 
+def app_service_running(compose_file: str) -> bool:
+	proc = subprocess.run(
+		["docker", "compose", "-f", compose_file, "ps", "--status", "running", "--services", "app"],
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	if proc.returncode != 0:
+		return False
+	services = {(line or "").strip() for line in (proc.stdout or "").splitlines()}
+	return "app" in services
+
+
 def main() -> int:
 	args = build_parser().parse_args()
 	deadline = time.monotonic() + max(1, args.timeout_seconds)
 	while time.monotonic() < deadline:
+		if app_service_running(args.compose_file):
+			print("# graceful_shutdown helper contract satisfied")
+			return 0
 		time.sleep(max(0.1, args.poll_seconds))
-		print("# graceful_shutdown helper contract satisfied")
-		return 0
 
 	tail = bounded_compose_logs_tail(args.log_tail_lines, args.compose_file)
 	payload = {

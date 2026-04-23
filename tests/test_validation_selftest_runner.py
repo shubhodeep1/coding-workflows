@@ -140,6 +140,16 @@ def test_runner_passes_all_supported_family_fixtures() -> None:
 			"python-mongo-flask.yml",
 			"python-mongo-repo-checks.yml",
 		]
+		repo_checks = next(item for item in summary["fixtures"] if item["name"] == "python-mongo-repo-checks.yml")
+		repo_checks_output_root = Path(repo_checks["output_root"])
+		if not repo_checks_output_root.is_absolute():
+			repo_checks_output_root = REPO_ROOT / repo_checks_output_root
+		validate_env_text = (repo_checks_output_root / "validate.env").read_text(encoding="utf-8")
+		repo_checks_script = (repo_checks_output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
+		assert "CUSTOM_TESTS_JSON='[" in validate_env_text
+		assert "SKIP_TESTS_JSON='[" in validate_env_text
+		assert "CUSTOM_TESTS_JSON" in repo_checks_script
+		assert "SKIP_TESTS_JSON" in repo_checks_script
 
 		for fixture in summary["fixtures"]:
 			assert fixture["status"] == "pass"

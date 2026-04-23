@@ -374,14 +374,19 @@ def test_renderer_repo_checks_family_dispatch_routing() -> None:
 		assert "python -m flask" not in compose_text
 		assert "FLASK_APP" not in compose_text
 		assert 'APP_URL: "${APP_URL:-}"' in compose_text
+		assert "CUSTOM_TESTS_JSON" in compose_text
+		assert "SKIP_TESTS_JSON" in compose_text
 
 		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
 		assert 'APP_SERVICE="app"' in env_text
 		assert 'APP_URL=""' in env_text
+		assert "CUSTOM_TESTS_JSON='[" in env_text
+		assert "SKIP_TESTS_JSON='[" in env_text
 
 		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
-		assert "CUSTOM_TESTS" in repo_checks_text
-		assert 'payload.split("&&")' in repo_checks_text
+		assert "CUSTOM_TESTS_JSON" in repo_checks_text
+		assert "SKIP_TESTS_JSON" in repo_checks_text
+		assert "json.loads(payload)" in repo_checks_text
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "python-mongo-repo-checks family for demo-project" in family_marker_text

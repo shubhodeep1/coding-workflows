@@ -91,8 +91,9 @@ def test_repo_checks_family_renders_repo_check_runner_and_passes_lint() -> None:
 		assert result.returncode == 0, result.stderr
 
 		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
-		assert "CUSTOM_TESTS" in repo_checks_text
-		assert 'payload.split("&&")' in repo_checks_text
+		assert "CUSTOM_TESTS_JSON" in repo_checks_text
+		assert "SKIP_TESTS_JSON" in repo_checks_text
+		assert "json.loads(payload)" in repo_checks_text
 		assert 'docker compose -f "${COMPOSE_FILE}" exec -T' in repo_checks_text
 
 		lint_result = subprocess.run(

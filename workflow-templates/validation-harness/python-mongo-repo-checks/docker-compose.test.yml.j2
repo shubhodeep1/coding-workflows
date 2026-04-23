@@ -28,6 +28,8 @@ services:
       HEALTH_TIMEOUT_SECONDS: "${HEALTH_TIMEOUT_SECONDS:-120}"
       HEALTH_POLL_INTERVAL_SECONDS: "${HEALTH_POLL_INTERVAL_SECONDS:-2}"
       TAIL_LINES: "${TAIL_LINES:-60}"
+      CUSTOM_TESTS_JSON: '${CUSTOM_TESTS_JSON:-{{ manifest.get("custom_tests", []) | tojson }}}'
+      SKIP_TESTS_JSON: '${SKIP_TESTS_JSON:-{{ manifest.get("skip_tests", []) | tojson }}}'
       CUSTOM_TESTS: "${CUSTOM_TESTS:-{{ manifest.get('custom_tests', []) | join(' && ') }}}"
       SKIP_TESTS: "${SKIP_TESTS:-{{ manifest.get('skip_tests', []) | join(' ') }}}"
     depends_on:
