@@ -2572,11 +2572,13 @@ jobs:
             exit 0
           fi
 
-          FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
-          if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
-            FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-              --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' || true)"
+          RUN_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" || true)"
+          FAILED_STEP_NAME=""
+          if [ -n "${RUN_JOBS_JSON}" ]; then
+            FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
+            if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
+              FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' 2>/dev/null || true)"
+            fi
           fi
           echo "failed_step_name=${FAILED_STEP_NAME}" >> "$GITHUB_OUTPUT"
 

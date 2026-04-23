@@ -91,7 +91,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 )
 
-_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
 
 # ensure_label_exists <label_name> [repo]
 #
@@ -137,11 +137,6 @@ ensure_label_exists() {
 	return 1
 }
 
-# set_issue_phase_label_resilient <issue_number> <target_label> [repo]
-#
-# Applies a target phase label while preserving non-phase labels and
-# enforcing exclusivity across ai:* phase labels. Uses GET+PUT for
-# atomic replacement, with POST fallback that fails open.
 set_issue_phase_label_resilient() {
 	local issue_number="${1:-}"
 	local target_label="${2:-}"
