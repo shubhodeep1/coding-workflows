@@ -174,6 +174,16 @@ def test_push_preflight_gate_runs_before_reviewer_models():
 def test_push_preflight_probe_and_markers_present():
     """Preflight must probe pushability and emit stable operational markers."""
     wf = _workflow()
+    preflight_header = (
+        "- name: Preflight pushability gate\n"
+        "        if: success() && env.PR_CLOSED != 'true'\n"
+        "        env:\n"
+        "          GH_TOKEN: ${{ secrets.GH_PAT }}\n"
+        "        run: |"
+    )
+    assert preflight_header in wf, (
+        "Expected preflight gate to expose GH_TOKEN for git push --dry-run auth parity"
+    )
     assert 'git push --dry-run origin "HEAD:${TARGET_BRANCH}"' in wf, (
         "Expected push preflight to probe remote pushability via git push --dry-run"
     )
@@ -188,6 +198,21 @@ def test_push_preflight_probe_and_markers_present():
     )
     assert "::error::PUSH_PREFLIGHT_BLOCKED_V1 reason=${push_preflight_reason}" in wf, (
         "Expected blocked preflight marker for definitive unpushable outcomes"
+    )
+    blocked_guard = 'if [ "${push_preflight_status}" = "blocked" ]; then'
+    blocked_pos = wf.find(blocked_guard)
+    assert blocked_pos != -1, "Expected blocked preflight guard in workflow"
+    assert wf.find("exit 1", blocked_pos) != -1, (
+        "Expected blocked preflight path to exit immediately"
+    )
+    assert 'if [ "${push_preflight_reason}" != "checkout_guard_unpushable" ]; then' not in wf, (
+        "Blocked preflight must not carve out checkout_guard_unpushable as non-fatal"
+    )
+    assert "printf 'non_fast_forward'" in wf, (
+        "Expected classifier to still detect non-fast-forward probe output"
+    )
+    assert "|non_fast_forward)" not in wf, (
+        "non_fast_forward must not be treated as a definitive unpushable reason"
     )
     assert "::warning::PUSH_PREFLIGHT_FAIL_OPEN_V1 reason=${push_preflight_reason}" in wf, (
         "Expected fail-open warning marker for ambiguous/transient probe failures"

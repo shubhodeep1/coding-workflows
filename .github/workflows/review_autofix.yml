@@ -1117,6 +1117,8 @@ jobs:
 
       - name: Preflight pushability gate
         if: success() && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -1154,7 +1156,7 @@ jobs:
 
           is_definitive_unpushable_reason() {
             case "$1" in
-              checkout_guard_unpushable|missing_target_branch|auth_or_repo_denied|protected_branch_policy|read_only_repo|ref_not_writable|non_fast_forward)
+              checkout_guard_unpushable|missing_target_branch|auth_or_repo_denied|protected_branch_policy|read_only_repo|ref_not_writable)
                 return 0
                 ;;
               *)
@@ -1220,9 +1222,7 @@ jobs:
 
           if [ "${push_preflight_status}" = "blocked" ]; then
             echo "::error::PUSH_PREFLIGHT_BLOCKED_V1 reason=${push_preflight_reason} can_push=${CAN_PUSH:-unset} target_branch=${TARGET_BRANCH:-unset}"
-            if [ "${push_preflight_reason}" != "checkout_guard_unpushable" ]; then
-              exit 1
-            fi
+            exit 1
           fi
           if [ "${push_preflight_status}" != "pass" ]; then
             echo "::warning::PUSH_PREFLIGHT_FAIL_OPEN_V1 reason=${push_preflight_reason} can_push=${CAN_PUSH:-unset} target_branch=${TARGET_BRANCH:-unset}"
