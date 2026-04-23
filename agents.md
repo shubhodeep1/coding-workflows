@@ -555,13 +555,13 @@ Safety net:
 - If both gates mis-fire and incorrectly soft-exit on an advance that was in fact our own autofix (e.g. identity API returned stale data), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/30 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch`. Worst-case recovery window: ~30 min. Same safety net as §20.1.
 - If both gates fail-open on detection error and the push subsequently hard-fails at the merge-retry step, the existing `phase_failed` ledger entry + Telegram failure alert fires as before. Detection failure gracefully degrades to the pre-gate behaviour.
 
-### 20.3 Ledger-Only Commit Auto-Merge
+### 20.3 Ledger Persistence (cache-backed) and the retained `LEDGER_ONLY_COMMIT` flag
 
 §20.1's skip used to create an interaction bug: when a review pass produced no productive edit but `scripts/review_issue_ledger.sh` still wrote `REVIEW_LEDGER_PATH`, the `commit_changes` step produced an `[ai-autofix]` commit whose only tracked path was the ledger. That commit set `DID_COMMIT=true`, which historically gated three "clean review" steps (ready-to-merge label, enable auto-merge, telegram success) out of firing. The subsequent `pull_request.synchronize` event was then skipped by §20.1, so there was no follow-up run in which those gates could fire. Result: a PR that the editor cleared as no-change got stuck in `mergeable_state=clean` indefinitely (see PR #1472).
 
 In the default configuration the ledger path is now `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` (per-PR, to prevent cross-PR merge conflicts on main) and is **gitignored**; cross-iteration persistence is handled by `actions/cache` restore/save steps wrapped around `Apply fixes with editor model` in `review_autofix.yml` (keys of the form `review-ledger-<repo>-pr-<N>-<run_id>-<run_attempt>` with `restore-keys: review-ledger-<repo>-pr-<N>-`). The ledger is updated on disk each iteration but never staged, so the ledger-only commit scenario the rest of this section describes **cannot manifest in the default configuration**. The contract below remains enforced because consumer repos that override `REVIEW_LEDGER_PATH` to a tracked path (or force-add the default path) still produce ledger-only commits, and the auto-merge gates must remain correct in that mode.
 
-Contract:
+Current model (post-#1469 fix):
 
 - `jobs.codex-agent.steps.commit_changes` writes a second signal alongside `DID_COMMIT` / `did_commit`: **`LEDGER_ONLY_COMMIT`** (env) and **`ledger_only_commit`** (step output). The flag is `true` iff `git diff-tree --no-commit-id --name-only -r HEAD` emits exactly one path equal to `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}`. When `commit_changes` runs, its default is `false` (including the no-commit branch). In the default configuration the ledger path is gitignored and never staged, so this comparison never matches and the flag is always `false`; the detector exists for consumer repos that override `REVIEW_LEDGER_PATH` to a tracked path. If `commit_changes` is skipped (e.g. `max_iterations_reached` / `PR_CLOSED` short-circuits), the env var and step output are undefined; downstream `if` expressions must not rely on the flag being set in that case (the `did_commit != 'true'` clause they OR with already handles the skipped-commit branch).
 - **Five gates** OR `env.LEDGER_ONLY_COMMIT == 'true'` into their existing `steps.commit_changes.outputs.did_commit != 'true'` clause:
@@ -573,15 +573,20 @@ Contract:
 - The push step (`DID_COMMIT == 'true' || CONFLICT_RESOLVED == 'true'`) is **not** touched. Ledger-only commits still push so `scripts/review_issue_ledger.sh` can read its own prior state on the next iteration — losing the ledger push would reset `persist_count` and re-open already-resolved issues as fresh findings.
 - The §20.1 gate skip is **not** touched either. The subsequent `synchronize` run is still skipped; clean-review work happens in the same run that produced the ledger-only commit.
 
-Why `LEDGER_ONLY_COMMIT` and not repurposing `DID_COMMIT`:
+Gates that still OR `LEDGER_ONLY_COMMIT == 'true'` with `did_commit != 'true'` (legacy, no-op in default config):
 
-- The push step, peer-dedup retrigger, and iteration counter all key off `DID_COMMIT`. Flipping it to `false` on ledger-only commits would lose the ledger push, defeating the ledger's cross-iteration persistence. Per CLAUDE.md §6 an existing identifier's semantics are immutable; add alongside.
-- The safety gates (`EDITOR_CHANGES_LOST`, `EDITOR_NOOP_SUSPICIOUS`) correctly skip on any `DID_COMMIT=true` before this fix because a productive edit commit self-evidently proves the editor ran. A ledger-only commit does **not** prove the editor ran (the ledger write happens in a separate pipeline stage), so those gates must still run — hence the explicit `|| LEDGER_ONLY_COMMIT == 'true'` in gates 1–2 as well as the clean-review gates 3–5.
+1. `Detect editor-claimed-but-uncommitted changes` (sets `EDITOR_CHANGES_LOST`).
+2. `Validate editor no-op disposition` (sets `EDITOR_NOOP_SUSPICIOUS`).
+3. `Mark linked issues ready to merge`.
+4. `Enable auto-merge on PR`.
+5. `Telegram success`.
 
-API cost audit (CLAUDE.md §15):
+Cache persistence contract:
 
-- The detection uses a single `git diff-tree --no-commit-id --name-only -r HEAD` — a local git operation, zero GitHub API calls.
-- No new `gh` invocations. No new batched or cached data. No cycle-local caching needed (decision is scoped to the single commit just produced).
+- `jobs.codex-agent.steps.Restore review-issue ledger` runs before the editor; `jobs.codex-agent.steps.Save review-issue ledger` runs immediately after `Apply fixes with editor model` (before `commit_changes`) with `if: always()` so the ledger for the current iteration is persisted even if a later step (push, conflict resolver) fails.
+- The save step writes `.ai/review_issue_ledger/` + `${REVIEW_LEDGER_PATH}` through `actions/cache/save@v4`, gated by `if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'`, with `continue-on-error: true` to fail open on cache upload errors.
+- The key includes `${{ github.repository }}` plus `run_id` + `run_attempt` so each run produces a distinct, repository-scoped cache entry; the `restore-keys` fallback gives every new iteration the latest previously-saved state for the same PR. GitHub's LRU eviction is 7 days since last access, which is well inside any active autofix cycle.
+- Missing cache on first run is handled by `scripts/review_issue_ledger.sh` by treating every current issue as `NEW`; `ledger_reset=1` is emitted only for malformed prior-ledger content.
 
 Operational rules:
 
