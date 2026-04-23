@@ -1147,15 +1147,10 @@ _fetch_issue_states_batch_graphql() {
     end=$(( start + batch_size ))
     [ "${end}" -gt "${count}" ] && end="${count}"
 
-    fragment=""
-    for ((i=start; i<end; i++)); do
-      n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]")"
-      [[ "${n}" =~ ^[0-9]+$ ]] || continue
-      fragment+=$'\n'"        i${i}: issue(number: ${n}) {
-          number
-          state
-        }"
-    done
+    fragment="$(printf '%s' "${numbers_json}" | jq -r --argjson start "${start}" --argjson end "${end}" '
+      .[$start:$end] | to_entries[] | select(.value | tostring | test("^[0-9]+$")) |
+      "        i\(.key + $start): issue(number: \(.value)) {\n          number\n          state\n        }"
+    ' 2>/dev/null || echo "")"
 
     if [ -z "${fragment}" ]; then
       start="${end}"
@@ -1181,7 +1176,7 @@ _fetch_issue_states_batch_graphql() {
       ) | from_entries
     ' 2>/dev/null || echo '{}')"
 
-    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
+    merged="$(jq -cn --argjson a "${merged}" --argjson b "${batch_transformed}" '$a * $b' 2>/dev/null || echo "${merged}")"
 
     start="${end}"
   done
