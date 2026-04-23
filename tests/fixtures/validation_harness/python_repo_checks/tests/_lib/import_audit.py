@@ -45,7 +45,7 @@ def main() -> int:
 		rc, output = run_isolated_import(module_name)
 		if rc != 0:
 			print(
-				f"not ok - isolated import failed module={module_name} rc={rc} output={output}",
+				f"# isolated import failed module={module_name} rc={rc} output={output}",
 				file=sys.stderr,
 			)
 			return 1

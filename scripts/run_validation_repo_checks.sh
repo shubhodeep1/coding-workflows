@@ -16,7 +16,7 @@ fi
 
 for check_cmd in "${CHECK_COMMANDS[@]}"; do
 	echo "# repo-check start: ${check_cmd}"
-	output_file="$(mktemp)"
+	output_file="$(mktemp)" || { echo "# repo-check error: mktemp failed" >&2; exit 1; }
 	set +e
 	(cd "${ROOT_DIR}" && timeout "${CHECK_TIMEOUT_SECS}" /bin/sh -c "${check_cmd}") >"${output_file}" 2>&1
 	check_rc=$?
