@@ -1094,7 +1094,7 @@ _fetch_issue_labels_batch_graphql() {
       ) | from_entries
     ' 2>/dev/null || echo '{}')"
 
-    merged="$(jq -cn --argjson a "${merged}" --argjson b "${batch_transformed}" '$a * $b' 2>/dev/null || echo "${merged}")"
+    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
 
     start="${end}"
   done
@@ -1167,7 +1167,7 @@ _fetch_issue_states_batch_graphql() {
       ) | from_entries
     ' 2>/dev/null || echo '{}')"
 
-    merged="$(jq -cn --argjson a "${merged}" --argjson b "${batch_transformed}" '$a * $b' 2>/dev/null || echo "${merged}")"
+    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
 
     start="${end}"
   done
