@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${LOG_DIR:-${ROOT_DIR}/logs}"
+COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+APP_SERVICE="${APP_SERVICE:-app}"
+CUSTOM_TESTS="${CUSTOM_TESTS:-}"
+SKIP_TESTS="${SKIP_TESTS:-}"
+
+mkdir -p "${LOG_DIR}"
+
+if [ -z "${CUSTOM_TESTS}" ]; then
+	echo "1..1"
+	echo "not ok 1 - custom tests are configured"
+	echo "# CUSTOM_TESTS is empty. Configure .ai/validate.yml custom_tests for python-mongo-repo-checks."
+	exit 1
+fi
+
+read -r -a SKIP_LIST <<< "${SKIP_TESTS}"
+
+should_skip()
+{
+	local test_name="$1"
+	local item
+	for item in "${SKIP_LIST[@]}"; do
+		if [ "${item}" = "${test_name}" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+IFS=$'\n' read -r -d '' -a TEST_LIST < <(
+	docker compose -f "${COMPOSE_FILE}" exec -T \
+		-e CUSTOM_TESTS="${CUSTOM_TESTS}" \
+		"${APP_SERVICE}" /bin/sh -c '
+			python3 - <<"PY"
+import os
+payload = os.environ.get("CUSTOM_TESTS", "")
+for item in payload.split("&&"):
+	item = item.strip()
+	if item:
+		print(item)
+PY
+		' && printf '\0'
+)
+
+test_count=0
+for _test_cmd in "${TEST_LIST[@]}"; do
+	test_count=$((test_count + 1))
+done
+
+if [ "${test_count}" -eq 0 ]; then
+	echo "1..1"
+	echo "not ok 1 - custom tests parsed"
+	echo "# CUSTOM_TESTS did not yield executable commands"
+	exit 1
+fi
+
+plan_count=0
+for test_cmd in "${TEST_LIST[@]}"; do
+	if should_skip "${test_cmd}"; then
+		continue
+	fi
+	plan_count=$((plan_count + 1))
+done
+
+if [ "${plan_count}" -eq 0 ]; then
+	echo "1..1"
+	echo "ok 1 - all custom tests explicitly skipped"
+	exit 0
+fi
+
+echo "1..${plan_count}"
+
+test_id=1
+for test_cmd in "${TEST_LIST[@]}"; do
+	if should_skip "${test_cmd}"; then
+		echo "# skipped command by skip_tests: ${test_cmd}"
+		continue
+	fi
+
+	test_log="${LOG_DIR}/repo_check_${test_id}.log"
+	set +e
+	docker compose -f "${COMPOSE_FILE}" exec -T \
+		-e REPO_CHECK_CMD="${test_cmd}" \
+		"${APP_SERVICE}" /bin/sh -c 'sh -eu -c "${REPO_CHECK_CMD}"' >"${test_log}" 2>&1
+	status=$?
+	set -e
+
+	if [ "${status}" -ne 0 ]; then
+		echo "not ok ${test_id} - repo check command: ${test_cmd}"
+		echo "# repo check command failed (exit=${status})"
+		echo "# log tail (${TAIL_LINES:-40} lines):"
+		tail -n "${TAIL_LINES:-40}" "${test_log}" 2>/dev/null || true
+		exit 1
+	fi
+
+	echo "ok ${test_id} - repo check command: ${test_cmd}"
+	test_id=$((test_id + 1))
+done

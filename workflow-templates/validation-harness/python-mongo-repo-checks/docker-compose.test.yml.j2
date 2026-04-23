@@ -1,0 +1,35 @@
+services:
+  mongo:
+    init: true
+    image: "{{ slots.get('mongo_image', 'mongo:7') }}"
+    environment:
+      MONGO_INITDB_DATABASE: "{{ slots.get('mongo_db_name', 'validation') }}"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - '/bin/sh -c "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" \"mongodb://127.0.0.1:27017/{{ slots.get('mongo_db_name', 'validation') }}\" >/dev/null"'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  app:
+    init: true
+    build:
+      context: ..
+      dockerfile: {{ output_root_name }}/Dockerfile.app
+    working_dir: /workspace
+    env_file:
+      - validate.env
+    environment:
+      APP_SERVICE: "${APP_SERVICE:-app}"
+      APP_URL: "${APP_URL:-}"
+      MONGO_URL: "${MONGO_URL:-mongodb://mongo:27017/{{ slots.get('mongo_db_name', 'validation') }}}"
+      HEALTH_TIMEOUT_SECONDS: "${HEALTH_TIMEOUT_SECONDS:-120}"
+      HEALTH_POLL_INTERVAL_SECONDS: "${HEALTH_POLL_INTERVAL_SECONDS:-2}"
+      TAIL_LINES: "${TAIL_LINES:-60}"
+      CUSTOM_TESTS: "${CUSTOM_TESTS:-{{ manifest.get('custom_tests', []) | join(' && ') }}}"
+      SKIP_TESTS: "${SKIP_TESTS:-{{ manifest.get('skip_tests', []) | join(' ') }}}"
+    depends_on:
+      mongo:
+        condition: service_healthy
