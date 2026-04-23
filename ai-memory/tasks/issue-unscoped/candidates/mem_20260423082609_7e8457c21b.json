@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:209 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The fallback regex for GitHub closing keywords is incomplete and can miss valid closing references or match invalid substrings/forms.\n  WHY: Reviewers disagree on intent, but the highest severity is medium; one reviewer notes the regex only includes `closes|fixes|resolves`, another notes GitHub also accepts `close|closed|fix|fixed|resolve|resolved`, and another flags lack of word boundaries/zero-separator matching that can create false positives.\n- .github/workflows/issue_pr_status.yml:276-293 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The GraphQL batch validation treats an all-null aliased response as success instead of falling back conservatively.\n  WHY: All reviewers agree the jq success path does not ensure meaningful issue data was extracted; if every aliased lookup is null, the workflow can skip REST fallback and incorrectly proceed as if no orchestrator-managed issues exist.\n- tests/test_issue_pr_status_payload_fallback_contract.py:49 | severity=low | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The regression test asserts the current fallback-regex string literally.\n  WHY: If the workflow regex is expanded, this test must be updated in lockstep or CI will fail.\n=== END CONSENSUS FINDINGS ===\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/issue_pr_status.yml:209 | severity=medium | confidence=5\n  PROBLEM: The fallback regex for GitHub closing keywords is incomplete.\n  WHY: It only includes `closes`, `fixes`, and `resolves`, so valid forms like `fixed #123` can be missed when the primary GraphQL field is empty.\n- .github/workflows/issue_pr_status.yml:276-291 | severity=medium | confidence=4\n  PROBLEM: The GraphQL batch validation does not verify that at least one aliased issue lookup returned a non-null value.\n  WHY: If every aliased issue is null, the workflow can treat the batch as successful and incorrectly apply labels or close issues.\n- tests/test_issue_pr_status_payload_fallback_contract.py:49 | severity=low | confidence=5\n  PROBLEM: The regression test strictly asserts the presence of the incomplete regex.\n  WHY: Updating the workflow regex without updating the test will fail CI.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/issue_pr_status.yml:209 | severity=medium | confidence=4\n  PROBLEM: The fallback regex only matches three of GitHub's nine supported closing keywords and includes an optional colon that GitHub doesn't recognize in auto-linking.\n  WHY: If a PR uses a supported keyword outside `closes|fixes|resolves`, or the colon variant, the fallback path will not detect the linked issue.\n- .github/workflows/issue_pr_status.yml:280-293 | severity=medium | confidence=3\n  PROBLEM: The GraphQL success path does not guard against the case where all aliased issue lookups return null.\n  WHY: The batch can be treated as successful with empty extracted issues, which can bypass the skip guard and reintroduce incorrect labeling/closing.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/issue_pr_status.yml:275-293 | severity=low | confidence=2\n  PROBLEM: Empty jq result treated as success, potentially missing orchestrator issues.\n  WHY: The inner check only validates jq exit code, not whether meaningful data was extracted, so partial GraphQL data can be misclassified as success.\n- .github/workflows/issue_pr_status.yml:275-293 | severity=low | confidence=2\n  PROBLEM: The inner if only validates that jq didn't error, not that meaningful data was extracted.\n  WHY: This can lead to false negatives in edge cases where GraphQL returns valid structure but incomplete data.\n- .github/workflows/issue_pr_status.yml:209 | severity=low | confidence=1\n  PROBLEM: The regex only matches plural forms, but GitHub also accepts singular and past-tense closing keywords.\n  WHY: This may miss legitimate closing references, though the reviewer explicitly says it is an intentional conservative choice and not a blocker.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/issue_pr_status.yml:209 | severity=medium | confidence=4\n  PROBLEM: The closing-keyword pattern lacks word boundaries before the keyword and allows zero separator characters between the keyword and `#`.\n  WHY: This can match substrings inside other words and invalid forms like `closes#123`, causing false-positive issue extraction.\n- .github/workflows/issue_pr_status.yml:276-290 | severity=medium | confidence=4\n  PROBLEM: The jq extraction block checks only the jq exit status, not whether any issue numbers were actually extracted.\n  WHY: If all aliased issue nodes are null, the workflow can skip REST fallback and proceed as if orchestrator-managed issues were absent.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "63970730151cb2500b748ab7b0a2fa3b752c5dddf0978411db08dd88ea69ac7b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1539,
+    "run_id": "24824032761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24824032761",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423082609_7e8457c21b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1539,
+    "run_id": "24824032761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T08:26:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
