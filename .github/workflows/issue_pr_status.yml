@@ -290,6 +290,8 @@ jobs:
                 [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
                 _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
                 if [ -z "${_orch_meta}" ]; then
+                  echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively skipping label/close mutation for this issue."
+                  ORCHESTRATED_ISSUES+="${_orch_num}"$'\n'
                   continue
                 fi
                 if printf '%s' "${_orch_meta}" | jq -e '
