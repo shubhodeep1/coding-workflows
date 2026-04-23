@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning context interpreted:\n- Clarification mapping: no `Q<ID>` questions were asked; `/answer [auto-answered-by-orchestrator]` is a continuation signal to proceed.\n- Ref context: `HEAD=73a100ae8c077b14d7b7b9331b6652cdd5aff171`, checked-out branch `orchestrator/project-1479`, integration metadata `orchestrator/project-1479`, mismatch `false`.\n- Conflict check: none found; issue statement matches code (the capture step currently hits `GET /repos/{repo}/actions/runs/{run_id}/jobs?per_page=100` twice).\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `tests/test_implement_post_codex_recovery.py`\n\n2. Functions/modules to implement\n- In `.github/workflows/implement.yml`, step `Capture post-Codex validation errors`:\n  - Replace the two separate run-jobs API reads with a single fetch of jobs JSON.\n  - Reuse that cached JSON for both extraction branches:\n    - failure selector: first failed step name\n    - cancelled selector fallback: first cancelled/in-progress step name\n  - Keep current fail-open behavior: if fetch fails or JSON is empty/invalid, `FAILED_STEP_NAME` stays empty and step continues.\n- Use the existing fail-open cache/fallback style already present in the same workflow (representative pattern: cached `ISSUE_LABELS_JSON` reuse in `Comment on issue failure`) as the implementation model.\n\n3. Data structures affected\n- Workflow-local shell variable for cached jobs payload (new local variable in run block; no persisted state).\n- Existing output keys remain unchanged:\n  - `captured`\n  - `failed_step_name`\n- Test mock GH state may need additive fields for call-count/assertion support (for example jobs API hit count), without changing existing keys/semantics.\n\n4. API or interface changes\n- No new external APIs.\n- Existing endpoint remains: `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100`.\n- Behavioral change is internal efficiency only (duplicate call removed).\n- No label contract, env var, or post-Codex diagnose contract changes.\n\n5. Potential risks and edge cases\n- `set -euo pipefail` can hard-fail if JSON parsing is not guarded; parsing from cached payload must remain `|| true`/safe.\n- Cancelled-path logic must still work when no failure step exists.\n- Empty/malformed payload must not change downstream labeling/comment behavior.\n- Avoid touching unrelated implement workflow logic outside the targeted capture step.\n\n6. Testing considerations\n- Update `tests/test_implement_post_codex_recovery.py` to verify single-fetch reuse semantics in the capture step.\n- Add/extend tests to cover:\n  - Failure case: one jobs API fetch, correct failed-step extraction.\n  - Cancelled fallback case: still one jobs API fetch, correct cancelled/in-progress extraction from same payload.\n  - Missing/invalid jobs payload: no crash, fail-open behavior preserved.\n- Keep existing post-Codex diagnose and label-flow tests unchanged and passing.\n- Run at least: `pytest tests/test_implement_post_codex_recovery.py` (and broader workflow tests if part of normal CI path).\n\nScope guard:\n- No DB collections are touched; no `/db/contracts/*.yml` update is required for this issue.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "645d5dd2b23d37ebbb033418fd15ee0ccb578a144b47ec2d526fe194ec739843",
+  "lineage": {
+    "issue_number": 1528,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24809833508",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24809833508",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1528"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260423003301_43d6923939",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1528,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24809833508"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1528",
+  "timestamps": {
+    "created_at": "2026-04-23T00:33:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
