@@ -514,7 +514,7 @@ jobs:
           if [ -f "scripts/render_validation_templates.py" ]; then
             python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
           else
-            echo "::warning::scripts/render_validation_templates.py is unavailable; skipping template dependency installation."
+            echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi
 
       - name: Run validation process
