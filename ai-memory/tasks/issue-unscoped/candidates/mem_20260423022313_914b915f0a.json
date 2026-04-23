@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: `_AI_PHASE_LABELS` was missing validation-related phase labels, causing `set_issue_phase_label_resilient` to leave stale phase labels during transitions.\n  WHY: If validation labels like `ai:validating` are not included in the known phase set, they are not removed during transitions and conflicting labels can persist on the issue.\n- .github/workflows/review_autofix.yml:1133 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: The `classify_push_probe_reason` `read-only` regex is slightly over-broad and may misclassify non-fatal stderr as a blocked push condition.\n  WHY: Reviewers disagreed on impact, but all noted the pattern could match unrelated output; use the highest severity reported? no\u2014highest reported here is low, and the issue is framed as a theoretical misclassification in the push-probe classifier.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  PROBLEM: `_AI_PHASE_LABELS` was missing validation phase labels, causing `set_issue_phase_label_resilient` to leave stale phase labels during transitions.\n  WHY: When transitioning from validation phases (e.g., `ai:validating` to `ai:done`), the missing labels wouldn't be removed from the issue, resulting in conflicting phase labels and incorrect state tracking.\n- .github/workflows/review_autofix.yml:~1133 | severity=low | confidence=2\n  PROBLEM: `classify_push_probe_reason`'s `read-only` pattern may theoretically match non-fatal messages, though likely indicates actual read-only repository in `git push` context.\n  WHY: If a non-fatal message containing \"read-only\" appears in git push stderr, it would be misclassified as a definitive unpushable reason (`read_only_repo`), causing unnecessary fail-fast instead of fail-open.\n- .github/workflows/review_autofix.yml:~1129 | severity=low | confidence=1\n  PROBLEM: First auth/repo-denied pattern could be more specific for git error format.\n  WHY: The regex could be tightened to better match Git error output such as `fatal: repository .* not found` and similar authorization failures.\n- .github/workflows/review_autofix.yml:~1200 | severity=low | confidence=1\n  PROBLEM: `push_probe_output` is only shown in the failure branch and truncated to 40 lines.\n  WHY: Showing only a tail of the probe output reduces observability when debugging complex auth or policy failures.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  PROBLEM: `_AI_PHASE_LABELS` was previously missing validation-related phase labels (`ai:validating`, `ai:validated`, etc.), which would prevent the `set_issue_phase_label_resilient` function from correctly removing stale labels during phase transitions.\n  WHY: The common phase label cleanup logic relies on subtracting the existing set of known phase labels from an issue's labels before adding the new target. If a label (like `ai:validating`) is present on an issue but not in this array, it would persist after a transition to `ai:done`, resulting in multiple conflicting phase labels on the same issue.\n- .github/workflows/review_autofix.yml:1133 | severity=low | confidence=3\n  PROBLEM: The grep pattern for `read-only|repository is archived|...` in the `classify_push_probe_reason` helper is slightly over-broad.\n  WHY: The string `read-only` can occasionally appear in Git output or standard error that is not related to the repository being in a read-only state (e.g., specific FS local mount warnings or advice output). While likely fatal in a `git push --dry-run` probe, it could lead to a `blocked` status and workflow exit for a condition that might be transient or irrelevant to the actual branch pushability.\n- .github/workflows/review_autofix.yml:approx line 1205 | severity=low | confidence=1\n  PROBLEM: Push preflight probe output is only displayed as a tail of 40 lines.\n  WHY: Displaying only a truncated tail makes it harder to debug complex auth or policy failures.\n- .github/workflows/review_autofix.yml:approx line 1128 | severity=low | confidence=1\n  PROBLEM: Auth/Repo-denied regex could miss some specific Git host error formats.\n  WHY: Adding `fatal: repository .* not found` explicitly to the first Grep pattern would improve coverage for that host error format.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "5541d6245b6e81bc4420eb6a09ecd120827b1ad2a71cc31ff170417222057ac7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1531,
+    "run_id": "24812716795",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24812716795",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423022313_914b915f0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1531,
+    "run_id": "24812716795"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T02:23:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
