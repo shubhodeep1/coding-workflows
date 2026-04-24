@@ -360,6 +360,79 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   echo "IS_INTEGRATION_SYNC=true" >> "$GITHUB_ENV"
 fi
 
+# Fingerprint-violation expansion of the resolver working set.
+# The integration fingerprint verifier (run post-codex, pre-commit by
+# review_conflict_resolve.sh) inspects the FULL post-resolve tree,
+# including files git auto-merged without emitting conflict markers.
+# When origin/BASE_BRANCH carries changes that silently revert a merged
+# sub-issue's intent, those files have no markers — the resolver prompt
+# never sees them, `git ls-files --unmerged` never lists them, and
+# check_resolver_diff.sh's touched ⊆ conflicted guard would reject any
+# edit to them.  Result: the verifier rejects the final tree for
+# violations the resolver was structurally unable to fix.
+#
+# Detect fingerprint violations against the in-progress merge tree NOW
+# (integration-sync only) and expand three artefacts the resolver + its
+# guards consume: the CONFLICTED_FILES_LIST (shown in the prompt), the
+# RESOLVER_ALLOWLIST_FILE (workflow-file violation guard in
+# review_conflict_resolve.sh), and the CONFLICTED_PATHS_FILE (built
+# below and fed to check_resolver_diff.sh).  Files that already had
+# markers are untouched — they were already in all three sets.
+#
+# Fail-open: if the verifier is missing (older script ref) or exits
+# with any plumbing error (exit 2), skip the expansion and let the
+# verifier's downstream hard-fail surface the issue normally.
+FP_VIOLATED_FILES_LIST=""
+if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
+   && [ -n "${INTEGRATION_FINGERPRINTS_FILE:-}" ] \
+   && [ -f "${INTEGRATION_FINGERPRINTS_FILE}" ] \
+   && [ -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+  _fp_violated_tmp="$(mktemp)"
+  _fp_list_exit=0
+  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      --list-violated-files "${INTEGRATION_FINGERPRINTS_FILE}" \
+      > "${_fp_violated_tmp}" 2>/dev/null || _fp_list_exit=$?
+  if [ "${_fp_list_exit}" -eq 0 ] && [ -s "${_fp_violated_tmp}" ]; then
+    sort -u -o "${_fp_violated_tmp}" "${_fp_violated_tmp}"
+    # Subtract files that were already reported as unmerged by git —
+    # they are in every set already, re-adding them just skews counts.
+    _fp_new_tmp="$(mktemp)"
+    comm -23 "${_fp_violated_tmp}" "${RESOLVER_ALLOWLIST_FILE}" \
+      > "${_fp_new_tmp}" || true
+    _fp_new_count="$(wc -l < "${_fp_new_tmp}" | tr -d '[:space:]')"
+    if [ "${_fp_new_count}" -gt 0 ]; then
+      echo "Fingerprint-violation expansion: ${_fp_new_count} auto-merged file(s) failed a fingerprint check — adding to resolver working set:"
+      sed 's/^/ - /' "${_fp_new_tmp}" || true
+      # Append to the unmerged-paths allowlist and re-sort+dedup so
+      # the workflow-file guard in review_conflict_resolve.sh and the
+      # conflicted-set in check_resolver_diff.sh both treat these
+      # files as in-scope.
+      cat "${_fp_new_tmp}" >> "${RESOLVER_ALLOWLIST_FILE}"
+      sort -u -o "${RESOLVER_ALLOWLIST_FILE}" "${RESOLVER_ALLOWLIST_FILE}"
+      # Rebuild CONFLICTED_FILES_COUNT / CONFLICTED_FILES_LIST so the
+      # resolver prompt names every auto-merged fingerprint-violating
+      # file alongside the git-marked conflicted files.  Preserves the
+      # "          - " indentation used by the prompt template.
+      FP_VIOLATED_FILES_LIST="$(cat "${_fp_new_tmp}")"
+      _combined_tmp="$(mktemp)"
+      {
+        [ -n "${CONFLICTED_FILES_RAW}" ] && printf '%s\n' "${CONFLICTED_FILES_RAW}"
+        cat "${_fp_new_tmp}"
+      } | sed '/^$/d' | sort -u > "${_combined_tmp}"
+      CONFLICTED_FILES_COUNT="$(wc -l < "${_combined_tmp}" | tr -d '[:space:]')"
+      CONFLICTED_FILES_LIST="$(sed 's/^/          - /' "${_combined_tmp}")"
+      echo "Resolver working set after fingerprint expansion: ${CONFLICTED_FILES_COUNT} file(s)."
+      rm -f "${_combined_tmp}"
+    fi
+    rm -f "${_fp_new_tmp}"
+  elif [ "${_fp_list_exit}" -ne 0 ]; then
+    echo "::warning::Fingerprint-violation expansion skipped — verifier exited ${_fp_list_exit} in --list-violated-files mode (plumbing failure). Resolver will still see the git-marked conflicted set; the post-codex verifier will surface any real violations."
+  fi
+  rm -f "${_fp_violated_tmp}"
+fi
+
 # Render the prompt template with substitutions. We pass placeholder
 # names + their values via env so the python one-liner stays under
 # GHA's 21,000-char per-step expression limit and avoids wrestling
@@ -419,6 +492,14 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
   # (rare but possible with --no-ff).
   git grep -lE '^(<<<<<<< |>>>>>>> )' -- ':!*.md' 2>/dev/null \
     >> "${CONFLICTED_PATHS_FILE}" || true
+  # Integration-sync fingerprint-violation expansion (see the block
+  # above): files git auto-merged without markers but that fail a
+  # captured sub-issue fingerprint are in-scope for the resolver, so
+  # check_resolver_diff.sh's touched ⊆ conflicted guard must allow
+  # edits to them.
+  if [ -n "${FP_VIOLATED_FILES_LIST}" ]; then
+    printf '%s\n' "${FP_VIOLATED_FILES_LIST}" >> "${CONFLICTED_PATHS_FILE}"
+  fi
   sort -u -o "${CONFLICTED_PATHS_FILE}" "${CONFLICTED_PATHS_FILE}"
   echo "Conflicted paths captured: $(wc -l < "${CONFLICTED_PATHS_FILE}") entries"
 fi

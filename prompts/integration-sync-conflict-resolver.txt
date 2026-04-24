@@ -15,8 +15,21 @@ and end lines are what you must look for and remove; this prompt deliberately
 does not reproduce them literally so a repository-wide scan for conflict
 markers does not match this file.
 
-Conflicted files reported by `git diff --name-only --diff-filter=U` ({{CONFLICTED_FILES_COUNT}} total):
+Files in scope for this resolver run ({{CONFLICTED_FILES_COUNT}} total):
 {{CONFLICTED_FILES_LIST}}
+
+Most entries in the list above are files `git merge` left with
+unresolved conflict markers.  Some entries may instead be files
+`git merge` auto-merged cleanly (no markers) but whose current
+content already fails a captured sub-issue fingerprint — i.e. the
+auto-merge silently reverted a merged sub-issue's intent.  For
+those entries there will be nothing to remove; your job is to
+edit the file so every `must_contain` pattern in INTENT_FINGERPRINTS
+re-matches and every `must_not_contain` pattern stops matching,
+typically by restoring the HEAD-side content the auto-merge
+discarded.  Both kinds of entry are in-scope for edits; anything
+NOT in the list above is out-of-scope and will cause the run to
+abort.
 
 === INTEGRATION PROJECT CONTEXT ===
 
@@ -55,8 +68,10 @@ fingerprinting was enabled):
 Resolve the merge conflicts in a way that satisfies ALL of these
 constraints simultaneously:
 
-1. Every conflicted file listed above must be free of Git conflict
-   markers after your edits.
+1. Every file in the in-scope list above that currently has Git
+   conflict markers must be free of them after your edits.  Files
+   in the list that have no markers (fingerprint-violation entries)
+   still need edits — see constraints 2 and 3.
 2. Every `must_contain` pattern in INTENT_FINGERPRINTS must still
    match somewhere in its file in the post-resolve tree.
 3. No `must_not_contain` pattern in INTENT_FINGERPRINTS may match
@@ -74,32 +89,39 @@ unrelated maintenance fixes that you should layer in additively.
 
 === HARD RULES ===
 
-- You MUST resolve EVERY conflicted file listed above in this single run.
-  Do not stop after fixing only one file or a subset.
+- You MUST handle EVERY file in the in-scope list above in this single
+  run.  Do not stop after fixing only one file or a subset.
 - Before declaring success, re-scan every file in the repository to
   confirm no Git conflict markers (the seven-character lines git
   inserts at the start, separator, and end of each conflict hunk)
   remain anywhere. If any remain, keep resolving until none are left.
-- Only resolve conflicts. Do not introduce new functionality.
+- Only resolve conflicts and fix the fingerprint violations listed
+  via INTENT_FINGERPRINTS.  Do not introduce new functionality.
 - Do not refactor unrelated code.
-- Do not modify files that do not contain conflict markers.
+- Do not modify files that are not in the in-scope list above.
 - Remove all conflict markers.
 - Ensure the final code compiles logically.
 - You may read repository files as needed.
 - You may modify repository files directly.
 - Do not generate patches.
 - Do not generate scripts.
-- Do not modify GitHub workflow files except when resolving merge conflicts.
+- Do not modify GitHub workflow files except when they appear in the
+  in-scope list above.
 - Do not access the network.
 
-HARD CONSTRAINT — out-of-conflict edits are rejected:
-Your edits will be diff-checked against the set of files that
-actually had merge conflicts.  Any file you modify that did NOT
-contain conflict markers will cause the run to abort with no
-commit.  Do not "improve" surrounding code.  Do not rewrite
-unrelated sections.  Do not add new helper scripts, env vars,
-or workflow steps.  If you find yourself wanting to edit a
-file that has no conflict markers, STOP and leave it alone.
+HARD CONSTRAINT — out-of-scope edits are rejected:
+Your edits will be diff-checked against the in-scope list above.
+Any file you modify that is NOT in that list will cause the run
+to abort with no commit.  Do not "improve" surrounding code.  Do
+not rewrite unrelated sections.  Do not add new helper scripts,
+env vars, or workflow steps.  If you find yourself wanting to
+edit a file that is not in the list above, STOP and leave it
+alone — even if you believe it is related to a fingerprint
+violation.  Fingerprint-violating files are already expanded
+into the list above by `scripts/review_conflict_prepare.sh`
+before this prompt is rendered; if a path you would need is
+missing, that is a plumbing bug to report, not one to route
+around.
 
 HARD CONSTRAINT — no inventing files or commands:
 Before you finalize, perform this self-check on every edit:

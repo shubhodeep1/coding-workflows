@@ -5345,6 +5345,116 @@ def test_verify_integration_fingerprints_skips_empty_object():
 		assert mod.main([str(empty)]) == 0
 
 
+def test_verify_integration_fingerprints_list_mode_returns_violated_files(capsys):
+	# --list-violated-files must print the violated file paths to stdout
+	# and always exit 0 when the JSON parses — the prepare-step
+	# expansion logic in scripts/review_conflict_prepare.sh relies on
+	# this contract to collect files Codex is allowed to edit.
+	mod = _verifier_module()
+	files = {
+		# must_contain missing → file-a violated.
+		"scripts/file_a.py": "different content",
+		# must_not_contain matches → file-b violated.
+		"scripts/file_b.py": "BANNED_LINE\n",
+		# both fingerprints satisfied → file-c NOT violated.
+		"scripts/file_c.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/file_a.py", "regex": r"NEEDED_PATTERN"},
+				{"file": "scripts/file_c.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [
+				{"file": "scripts/file_b.py", "regex": r"BANNED_LINE"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main(["--list-violated-files", str(fp)]) == 0
+		printed = capsys.readouterr().out.strip().splitlines()
+		assert printed == ["scripts/file_a.py", "scripts/file_b.py"], (
+			f"list-violated-files must emit sorted unique violated paths, got {printed!r}"
+		)
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_list_mode_emits_nothing_when_clean(capsys):
+	mod = _verifier_module()
+	files = {
+		"scripts/clean.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/clean.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main(["--list-violated-files", str(fp)]) == 0
+		assert capsys.readouterr().out == ""
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_list_mode_fails_open_on_missing_file():
+	# Plumbing failure (missing fingerprints path) must still exit 2 in
+	# list mode so the caller can distinguish "no violations" (exit 0,
+	# empty stdout) from "could not determine".
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td:
+		missing = Path(td) / "nope.json"
+		assert mod.main(["--list-violated-files", str(missing)]) == 2
+
+
+def test_verify_integration_fingerprints_list_mode_lists_missing_must_contain_file():
+	# A must_contain entry whose target file does not exist on disk at
+	# all is a violation — the resolver needs the path in its working
+	# set so it can (re-)create the file.
+	mod = _verifier_module()
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/vanished.py", "regex": r"ANY"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	# Sandbox has no files at all except the fingerprints.
+	sandbox, fp = _verifier_sandbox({}, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		import io
+		import contextlib
+
+		buf = io.StringIO()
+		with contextlib.redirect_stdout(buf):
+			rc = mod.main(["--list-violated-files", str(fp)])
+		assert rc == 0
+		assert buf.getvalue().strip().splitlines() == ["scripts/vanished.py"]
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def _extract_intent_fingerprint_extractor_py() -> str:
 	# Pull the embedded Python heredoc body out of the bash function
 	# capture_intent_fingerprints_for_merged_subissue so the extractor
