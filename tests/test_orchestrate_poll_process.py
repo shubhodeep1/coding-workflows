@@ -5422,6 +5422,49 @@ def test_verify_integration_fingerprints_list_mode_fails_open_on_missing_file():
 		assert mod.main(["--list-violated-files", str(missing)]) == 2
 
 
+def test_verify_integration_fingerprints_list_mode_never_prints_annotations_to_stdout(capsys):
+	# stdout contract: --list-violated-files emits file paths only.
+	# Any diagnostic output (::warning::, ::error::) MUST go to stderr.
+	# Regression guard for the PR #1581 review thread: a ::warning::
+	# leaked onto stdout would be captured as a phantom file path by
+	# scripts/review_conflict_prepare.sh and crash check_resolver_diff.sh
+	# downstream.  Exercise the _read_file fallback path (os.open
+	# raising an unexpected OSError on a real path) by pointing a
+	# must_contain fingerprint at the sandbox root — open(dir) raises
+	# IsADirectoryError on read, which is the non-FileNotFoundError
+	# branch that emits the stderr warning.
+	mod = _verifier_module()
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				# Point at the sandbox root (a directory) — open() will
+				# succeed but fh.read() raises IsADirectoryError in the
+				# generic except branch, exercising the warning path.
+				{"file": ".", "regex": r"ANY"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	sandbox, fp = _verifier_sandbox({}, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		rc = mod.main(["--list-violated-files", str(fp)])
+		captured = capsys.readouterr()
+		assert rc == 0
+		# stdout must contain ONLY file paths (one per line), never a
+		# GitHub Actions annotation line.
+		for line in captured.out.splitlines():
+			assert not line.startswith("::"), (
+				f"stdout contract violation: annotation leaked into list-violated-files output: {line!r}"
+			)
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def test_verify_integration_fingerprints_list_mode_lists_missing_must_contain_file():
 	# A must_contain entry whose target file does not exist on disk at
 	# all is a violation — the resolver needs the path in its working

@@ -394,6 +394,16 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
     python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       --list-violated-files "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${_fp_violated_tmp}" 2>/dev/null || _fp_list_exit=$?
+  # Belt-and-braces: the verifier's --list-violated-files contract
+  # guarantees stdout is file paths only (warnings go to stderr), but
+  # defensively strip any `::warning::` / `::error::` annotation line
+  # and empty lines here so a future regression in the verifier cannot
+  # pollute the resolver allowlist / conflicted-paths set with a
+  # phantom path like `::warning::...` that would then crash
+  # check_resolver_diff.sh's touched-subset guard downstream.
+  if [ -s "${_fp_violated_tmp}" ]; then
+    sed -i '/^::/d; /^[[:space:]]*$/d' "${_fp_violated_tmp}" 2>/dev/null || true
+  fi
   if [ "${_fp_list_exit}" -eq 0 ] && [ -s "${_fp_violated_tmp}" ]; then
     sort -u -o "${_fp_violated_tmp}" "${_fp_violated_tmp}"
     # Subtract files that were already reported as unmerged by git —

@@ -22,6 +22,14 @@ Two modes:
      working set so auto-merged files with silent sub-issue regressions
      are surfaced to Codex in addition to files git marked as unmerged.
 
+     stdout contract in this mode: file paths ONLY, one per line.
+     Any diagnostic output (::warning::, ::error::, debug prints)
+     MUST go to stderr so the caller can pipe stdout directly into
+     the expanded-working-set artefacts without post-filtering.
+     GitHub Actions captures annotations from stderr too, so routing
+     warnings to stderr does not suppress the operator-visible
+     annotation in the run log.
+
 Exit codes:
   0 — verify: all fingerprints satisfied (or none recorded — fail-open
       empty).  list-violated-files: always (prints zero or more paths).
@@ -81,9 +89,17 @@ def _read_file(path: str, cache: dict[str, str | None]) -> str | None:
 	except FileNotFoundError:
 		content = None
 	except Exception as exc:  # noqa: BLE001 — verifier must not crash on bad file
+		# Route to stderr: in --list-violated-files mode stdout carries
+		# file paths the caller consumes as data (see
+		# scripts/review_conflict_prepare.sh); a `::warning::` line on
+		# stdout would be captured as a phantom path and crash the
+		# downstream check_resolver_diff.sh guard.  GitHub Actions
+		# renders annotations from stderr too, so the verify-mode
+		# annotation contract is unaffected.
 		print(
 			f"::warning::fingerprint verifier could not read {path}: {exc}",
 			flush=True,
+			file=sys.stderr,
 		)
 		content = None
 	cache[path] = content
