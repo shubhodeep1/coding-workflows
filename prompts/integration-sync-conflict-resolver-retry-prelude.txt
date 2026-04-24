@@ -1,0 +1,53 @@
+=== PREVIOUS ATTEMPT VIOLATIONS (attempt {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}) ===
+
+Your previous attempt at resolving these merge conflicts produced output
+that failed post-resolve validation.  The working tree has been
+RESTORED to its post-`git merge` state — you are starting over from
+scratch, NOT layering new edits on top of your previous (rejected)
+output.
+
+Fix the specific violations listed below.  All constraints from the
+main task (see below after this prelude) still apply: in-scope list,
+per-file fingerprint pre-flight, no out-of-scope edits, no inventing
+files, synthesize rather than pick-a-side when both sides carry
+merged sub-issue intent.
+
+This is the most important retry hint: the violations below are the
+EXACT checks the `scripts/verify_integration_fingerprints.py`
+gate will re-run on your next output.  If you satisfy every one of
+them AND remove every remaining Git conflict marker, the commit
+will go through.  If even one is still violated, this whole review
+run is wasted.
+
+--- Files still containing unresolved Git conflict markers ({{MARKER_VIOLATION_COUNT}}) ---
+{{MARKER_VIOLATION_FILES}}
+
+For each file above, remove every `<<<<<<<`, `=======`, and `>>>>>>>`
+marker block.  The post-resolve file must compile/parse logically.
+When the conflict hunk involves merged sub-issue content, prefer the
+HEAD side or synthesize a hunk that layers the other side's
+maintenance fix on top of HEAD's sub-issue content — do NOT wholesale
+pick the default-branch side.
+
+--- Fingerprint regressions carried over from the previous attempt ({{FINGERPRINT_VIOLATION_COUNT}}) ---
+{{FINGERPRINT_VIOLATION_DETAILS}}
+
+For each violation above:
+  - `must_contain pattern missing from '<file>'` means your previous
+    resolution removed a line a merged sub-issue added.  Re-introduce
+    content matching that regex (usually by keeping the HEAD side or
+    synthesizing).
+  - `must_not_contain pattern reappeared in '<file>'` means your
+    previous resolution re-introduced a line a merged sub-issue
+    intentionally deleted.  Remove content matching that regex
+    (usually by keeping the HEAD side or synthesizing).
+
+Re-open each named file, locate the regex, and revise the resolution
+so every `must_contain` pattern matches somewhere in the file and no
+`must_not_contain` pattern matches anywhere.  The per-file fingerprint
+pre-flight loop in the main prompt still applies — do it for every
+file touched by your resolution, not just the ones listed above, so
+you do not trade one regression for another.
+
+=== ORIGINAL TASK ===
+
