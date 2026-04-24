@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:184-196 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: `VALIDATION_USE_TEMPLATES` is documented twice in the same section.\n  WHY: Both bullets describe the same toggle with nearly identical wording; reviewers agreed the later \"(supersedes)\" entry should replace the earlier one rather than coexist.\n- scripts/validate_process.sh:2262-2273 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The exit-14 template-renderer failure message is considered insufficiently actionable.\n  WHY: It points to `validate_generate.log` but some reviewers felt it still doesn't tell operators what to do next; other reviewers disputed this as already clear.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md:184-196 | severity=low | confidence=5\n  PROBLEM: Duplicate documentation bullet for `VALIDATION_USE_TEMPLATES`.\n  WHY: The new \"(supersedes)\" bullet was inserted in the middle instead of replacing the earlier entry, creating duplicate/conflicting docs.\n- scripts/validate_process.sh:2264-2266 | severity=low | confidence=3\n  PROBLEM: The exit 14 error message could be more actionable.\n  WHY: It mentions both failure modes and tells users to inspect `validate_generate.log`, but doesn't suggest a concrete next step.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:184 and 196 | severity=low | confidence=5\n  PROBLEM: Two nearly identical documentation bullets describe `VALIDATION_USE_TEMPLATES`.\n  WHY: The \"(supersedes)\" entry is redundant and confuses which entry is authoritative.\n- scripts/validate_process.sh:2262-2268 | severity=low | confidence=1\n  PROBLEM: The claim that exit 14 \"does not clearly cover both failure modes\" is a false positive.\n  WHY: The code already returns 14 for both missing python3 >= 3.9 and renderer-script failure, and the message states both cases explicitly.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:184 and 196 | severity=low | confidence=5\n  PROBLEM: Duplicate documentation bullet for `VALIDATION_USE_TEMPLATES`.\n  WHY: The later \"(supersedes)\" bullet repeats the same environment variable description instead of replacing the earlier one.\n- scripts/validate_process.sh:2262-2268 | severity=low | confidence=1\n  PROBLEM: The exit-14 message finding is disputed.\n  WHY: The message explicitly mentions both failure modes and tells operators to inspect `validate_generate.log`, so this reviewer considers it a false positive.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- agents.md:184-196\n  PROBLEM: Two entries for `VALIDATION_USE_TEMPLATES` overlap and read like a duplicate documentation update.\n  WHY: The later entry marked with \"(supersedes)\" repeats the same toggle description instead of cleanly replacing the earlier one.\n- scripts/validate_process.sh:2265-2273\n  PROBLEM: The exit-14 renderer failure message may still be unclear about the two failure modes.\n  WHY: The script says to inspect `validate_generate.log`, but the reviewer still judged the guidance as insufficiently specific.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- agents.md:196 | severity=low | confidence=4\n  PROBLEM: Duplicate documentation bullet for `VALIDATION_USE_TEMPLATES` toggle.\n  WHY: The line 196 bullet with \"(supersedes)\" duplicates the existing line 184 description instead of replacing it.\n- scripts/validate_process.sh:2265-2273\n  PROBLEM: The exit code 14 message is not a real issue.\n  WHY: The message already names both causes and tells the user to inspect `validate_generate.log`, so this reviewer \u0441\u0447\u0438\u0442\u0430\u0435\u0442 it actionable enough.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "fe80f998fd6d1367270d9f228c18683324f98feb188455b21fe1bb16e8e279d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24900533962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24900533962",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424165918_0a66d5752a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24900533962"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T16:59:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
