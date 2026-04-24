@@ -149,7 +149,7 @@ def test_external_tool_dependencies_custom_tests_pass_with_install_evidence() ->
 		assert "validation-lint: OK" in result.stdout
 
 
-def test_external_tool_dependencies_skip_when_selection_disables_runtime_and_custom_tests() -> None:
+def test_external_tool_dependencies_still_checks_canary_when_runtime_and_custom_tests_are_unselected() -> None:
 	with tempfile.TemporaryDirectory(prefix="validate-lint-tools-") as td:
 		root = Path(td)
 		_write(root / "tests/00_canary.sh", 'CANARY_TOOLS="${CANARY_TOOLS:-curl jq forge}"\n')
@@ -170,5 +170,6 @@ def test_external_tool_dependencies_skip_when_selection_disables_runtime_and_cus
 
 		result = _run(root)
 
-		assert result.returncode == 0
-		assert "validation-lint: OK" in result.stdout
+		assert result.returncode == 1
+		assert "[external-tool-dependencies]" in result.stdout
+		assert "forge" in result.stdout

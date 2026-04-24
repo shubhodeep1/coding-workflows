@@ -1094,16 +1094,17 @@ def _check_external_tool_dependencies(context: LintContext) -> list[Finding]:
 				continue
 			required_tools.append((tool, canary_path, canary_line))
 
-	hardhat_test = context.resolve("tests/30_hardhat_test.sh")
-	hardhat_lines = context.read_lines(hardhat_test)
-	if hardhat_lines is not None:
-		for idx, line in enumerate(hardhat_lines, start=1):
-			if line.lstrip().startswith("#"):
-				continue
-			clean_line = _strip_inline_comment(line)
-			if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", clean_line, re.IGNORECASE):
-				required_tools.append(("hardhat", hardhat_test, idx))
-				break
+	if context.is_test_output_selected("tests/30_hardhat_test.sh"):
+		hardhat_test = context.resolve("tests/30_hardhat_test.sh")
+		hardhat_lines = context.read_lines(hardhat_test)
+		if hardhat_lines is not None:
+			for idx, line in enumerate(hardhat_lines, start=1):
+				if line.lstrip().startswith("#"):
+					continue
+				clean_line = _strip_inline_comment(line)
+				if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", clean_line, re.IGNORECASE):
+					required_tools.append(("hardhat", hardhat_test, idx))
+					break
 
 	selection_metadata = context.selection_metadata()
 	custom_tests = selection_metadata.get("custom_tests")
