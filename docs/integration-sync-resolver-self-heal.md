@@ -10,7 +10,7 @@
 
 ### 1.1 Symptom
 
-PR #1569 (head `orchestrator/project-1469`) accumulated 18+ identical `**AI review/autofix failed — needs human intervention**` comments in a single ~13 hour window (`19:13Z 2026-04-23` → `06:02Z 2026-04-24`). The fallback comment text is generic; every comment was triggered by the `failure()` post-step at `review_autofix.yml:3392-3433`. Inspecting the underlying job logs (runs `24872524074`, `24869836943`, `24868131744` etc.) all show the same failing step:
+PR #1569 (head `orchestrator/project-1469`) accumulated 18+ identical `**AI review/autofix failed — needs human intervention**` comments in a single ~11 hour window (`19:13Z 2026-04-23` → `06:02Z 2026-04-24`). The fallback comment text is generic; every comment was triggered by the `failure()` post-step at `review_autofix.yml:3392-3433`. Inspecting the underlying job logs (runs `24872524074`, `24869836943`, `24868131744` etc.) all show the same failing step:
 
 > `review / codex-agent` → step **"Run Codex resolver, validate, stage, commit"** →
 > `::error::Integration fingerprint verification FAILED — resolver output regressed merged sub-issue intent`
@@ -29,14 +29,14 @@ The hard-fail in `verify_integration_fingerprints.py:307-319` is a *whole-tree, 
 
 - If **any** `must_contain` pattern is unsatisfied or **any** `must_not_contain` pattern matches, exit 1.
 - The resolver wrapper refuses to stage `[ai-merge-resolve]`, no commit is pushed, no new HEAD lands, and `mergeable_state` stays `dirty`.
-- The orchestrator stall-poller cron re-kicks `review_autofix.yml` via `workflow_dispatch` (the cron bypass at `review_autofix.yml:201-205`) ~every 20–40 min.
+- The orchestrator stall-poller re-kicks `review_autofix.yml` via `workflow_dispatch` (the cron bypass at `review_autofix.yml:201-205`), with cadence determined by the poll schedule (`internal-orchestrate-poll.yml`, `cron: */5 * * * *`) and further gated by `CONFLICT_DISPATCH_COOLDOWN_SECS` (default `900`s, see `scripts/orchestrate_poll_process.sh:782`) plus the in-flight check at `scripts/orchestrate_poll_process.sh:2564`.
 - Same tree → same verifier outcome → same failure → same generic comment. Loop.
 
 ### 1.3 What is already decoupled (and what is not)
 
 The **clean** sync path is *already* independent of the verifier:
 
-- `attempt_integration_branch_main_sync` in `scripts/orchestrate_poll_process.sh` calls GitHub's server-side merge API directly:
+- `sync_default_into_integration_branch` in `scripts/orchestrate_poll_process.sh:2631` calls GitHub's server-side merge API directly:
   ```text
   scripts/orchestrate_poll_process.sh:2724-2727
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
@@ -307,7 +307,7 @@ For implementation reference, the exact lines this plan touches or reads:
 | `scripts/verify_integration_fingerprints.py:294-305` | Silent-regression detector + ratio log | §5.1.3 (kept; supplemented by per-fingerprint classification) |
 | `scripts/verify_integration_fingerprints.py:307-319` | The hard-fail block whose *cause set* this plan narrows | §5.1.3 (`regressed_by_resolver` only) |
 | `scripts/verify_integration_fingerprints.py:328-358` | `main()` arg parsing — extension point for new flags | §5.1.2, §5.1.3, §5.1.5 |
-| `scripts/orchestrate_poll_process.sh:2724-2727` | Clean-sync API call (already verifier-decoupled) | §1.3 (no change needed) |
+| `scripts/orchestrate_poll_process.sh:2631,2724-2727` | Clean-sync API call in `sync_default_into_integration_branch` (already verifier-decoupled) | §1.3 (no change needed) |
 | `scripts/orchestrate_poll_process.sh:2503,2518` | `integration_sync_status="conflict"` setters | §1.3 (signal that triggers the resolver path; no change) |
 | `scripts/review_conflict_prepare.sh:265-389` | Integration-sync detection + fingerprints-file staging | §5.1 (baseline path lives in same `RUNTIME_DIR`) |
 | `scripts/review_conflict_resolve.sh` | Resolver wrapper that calls the verifier | §4, §5.1 (callsite addition) |
