@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:183-196 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: `VALIDATION_USE_TEMPLATES` is documented twice with the same contract, including a \"(supersedes)\" variant.\n  WHY: The duplicated canonical env-var documentation makes the operator-facing contract ambiguous.\n\n- .github/workflows/validate.yml:517-529 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi_k2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The Python dependency-install step runs based on renderer presence and uses `continue-on-error`, so pip failures are deferred and the step does unnecessary work when template mode is off.\n  WHY: Fail-open dependency installation hides setup problems until later renderer execution and wastes work on runs that cannot use templates.\n\n- scripts/validate_process.sh:58 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3-coder-plus]\n  PROBLEM: `VALIDATION_USE_TEMPLATES` now defaults to `true`, removing the old freehand fallback for callers that still set it to `false`.\n  WHY: Repositories that depend on the previous behavior now hit a hard failure instead of the fallback path.\n\n- scripts/validate_process.sh:2159-2166 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The template-mode guard error message is not actionable enough to guide operators to the correct fix.\n  WHY: When this guard trips, users get a failure without enough remediation guidance.\n\n- scripts/validate_process.sh:2159-2166 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3-coder-plus]\n  PROBLEM: The freehand generation path was removed, so setting `VALIDATION_USE_TEMPLATES=false` now hard-fails with no fallback.\n  WHY: Any repository still relying on freehand generation loses the previous behavior and must migrate fully to templates.\n\n- scripts/validate_process.sh:2262-2268 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Exit code 14 covers both missing/too-old Python and renderer script failure.\n  WHY: A single exit code forces operators to inspect logs to distinguish environment problems from renderer bugs.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md:184 and 196\n  PROBLEM: Duplicate documentation entry for `VALIDATION_USE_TEMPLATES`\n  WHY: Creates confusion in documentation; operators may not know which entry is canonical\n\n- scripts/validate_process.sh:2262-2268\n  PROBLEM: Exit code 14 handling conflates Python availability failure and renderer script failure\n  WHY: Diagnostic clarity is reduced; operators cannot distinguish between missing Python vs broken renderer\n\n- scripts/validate_process.sh:2159-2166\n  PROBLEM: Template mode guard error message could be more actionable\n  WHY: Operators may not understand how to resolve the issue\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md\n  PROBLEM: `VALIDATION_USE_TEMPLATES` documentation is duplicated in `agents.md`\n  WHY: The same contract is documented twice, creating documentation ambiguity\n\n- scripts/validate_process.sh:2262-2268\n  PROBLEM: Exit code 14 conflates two distinct failure scenarios: Python unavailability and renderer script failure\n  WHY: A single exit code makes diagnostics harder because operators cannot distinguish the root cause from the exit code alone\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:183 and 195\n  PROBLEM: Duplicate documentation entry for `VALIDATION_USE_TEMPLATES`.\n  WHY: This creates ambiguity about which documentation is canonical.\n\n- scripts/validate_process.sh:2262-2268\n  PROBLEM: Exit code 14 conflates two distinct failure scenarios: Python unavailability and renderer script failure.\n  WHY: Debugging is less efficient because operators must inspect logs to distinguish environment setup issues from renderer bugs.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- scripts/validate_process.sh:58\n  PROBLEM: The script now defaults `VALIDATION_USE_TEMPLATES` to `true` and removes any fallback to freehand generation when this is set to `false`.\n  WHY: Repositories that explicitly set `VALIDATION_USE_TEMPLATES=false` will encounter a hard failure instead of the previous fallback path.\n\n- scripts/validate_process.sh:2159-2166\n  PROBLEM: The freehand generation path was completely removed, and template mode now hard-fails when it is not enabled.\n  WHY: There is no fallback path for the validation system if template mode is false.\n\n- .github/workflows/validate.yml:517-529\n  PROBLEM: The Python dependency-install step now runs whenever `render_validation_templates.py` exists, not gated by `VALIDATION_USE_TEMPLATES`.\n  WHY: pip failures are only surfaced later by the renderer, and unnecessary work is performed when template mode is off.\n\n- agents.md:184-196\n  PROBLEM: `VALIDATION_USE_TEMPLATES` is documented twice with identical contracts.\n  WHY: The duplicate creates ambiguity in documentation because both entries describe the same env-var contract.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- agents.md:184 and 196\n  PROBLEM: The same VALIDATION_USE_TEMPLATES contract is documented twice in agents.md.\n  WHY: Both entries describe identical behavior and create documentation ambiguity for operators.\n\n- scripts/validate_process.sh:2262-2268\n  PROBLEM: The renderer exit code 14 is used for both Python unavailability and renderer script execution failure.\n  WHY: These are distinct failure modes that require different operator responses, so a single exit code reduces diagnostic precision.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e3b9cec2554211146cc5c67230351d6c6e3b97a2d3f2eff8c8627735a344d53b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24908866215",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24908866215",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424201051_6a3bcafeaa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24908866215"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T20:10:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
