@@ -32,6 +32,11 @@ on:
         required: false
         default: true
         type: boolean
+      force_rb_judge:
+        description: "Skip reviewers/editor/commit and run only the review-blocked judge (used by the stall poller to escape ai:review-blocked)"
+        required: false
+        default: false
+        type: boolean
     secrets:
       GH_PAT:
         required: true
@@ -47,6 +52,11 @@ on:
         type: string
       allow_workflow_edits:
         description: "Allow AI/editor changes to .github/workflows files"
+        required: false
+        default: false
+        type: boolean
+      force_rb_judge:
+        description: "Skip reviewers/editor/commit and run only the review-blocked judge (used by the stall poller to escape ai:review-blocked)"
         required: false
         default: false
         type: boolean
@@ -70,7 +80,7 @@ env:
   XPOLL_SUMMARISER_MODEL: ${{ vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-5.4-mini' }}
   XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'xhigh' }}
   XPOLL_SUMMARISER_LINES_PER_REVIEWER: ${{ vars.XPOLL_SUMMARISER_LINES_PER_REVIEWER || '160' }}
-  XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '1200' }}
+  XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}
   XPOLL_SUMMARISER_MAX_INPUT_LINES: ${{ vars.XPOLL_SUMMARISER_MAX_INPUT_LINES || '3000' }}
 
 jobs:
@@ -1172,6 +1182,7 @@ jobs:
         id: retrigger_guard
         env:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
+          FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -1189,7 +1200,17 @@ jobs:
           echo "Consecutive autofix commits: ${autofix_count} (max: ${MAX_AUTOFIX_ITERATIONS})"
           echo "autofix_iteration=${autofix_count}" >> "$GITHUB_OUTPUT"
 
-          if [ "${autofix_count}" -ge "${MAX_AUTOFIX_ITERATIONS}" ]; then
+          # force_rb_judge short-circuit: the stall poller dispatches the
+          # review workflow with this input set when a linked issue has
+          # been stuck at ai:review-blocked past the stall threshold.
+          # Force max_iterations_reached=true so the reviewer/editor/
+          # commit steps (all gated on max_iterations_reached != 'true')
+          # are skipped and the rb_judge step fires directly against the
+          # existing PR state.
+          if [ "${FORCE_RB_JUDGE}" = "true" ]; then
+            echo "force_rb_judge=true — forcing max_iterations_reached=true to run only the review-blocked judge."
+            echo "max_iterations_reached=true" >> "$GITHUB_OUTPUT"
+          elif [ "${autofix_count}" -ge "${MAX_AUTOFIX_ITERATIONS}" ]; then
             echo "Max autofix iterations reached — skipping review/editor."
             echo "max_iterations_reached=true" >> "$GITHUB_OUTPUT"
           else
@@ -1799,6 +1820,34 @@ jobs:
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          # Empty-editor-output short-circuit.
+          #
+          # If the editor produced no structured summary AND no file
+          # changes were committed, this run has nothing meaningful to
+          # report — the synthetic fallback summary (below) would be a
+          # false positive that masks a codex crash/timeout/empty-prompt.
+          # Post a distinct, retry-friendly comment, signal the
+          # failure handlers to NOT apply ai:review-blocked for this
+          # specific cause, and fail the step so the stall poller can
+          # retry the review later instead of poisoning the linked
+          # issue with an unrecoverable label.
+          if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
+            echo "::warning::Editor produced no summary and no committed changes — treating as retryable no-op."
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            NOOP_BODY="$(cat <<EOF
+          **AI review/autofix produced no output — will retry**
+
+          The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient codex crash, timeout, or empty prompt rather than a reviewable defect in the PR. No \`ai:review-blocked\` label is being applied for this run.
+
+          [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
+          EOF
+          )"
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
+            echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"
+            exit 1
+          fi
 
           if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
             cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
@@ -3283,7 +3332,7 @@ jobs:
           fi
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3341,7 +3390,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |

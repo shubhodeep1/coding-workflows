@@ -438,7 +438,7 @@ When a sub-issue PR merges into an orchestrator integration branch (head matches
 
 When a `main → integration_branch` sync conflict subsequently triggers `heal_integration_branch_conflict`:
 
-- The resolver dispatch uses `prompts/integration-sync-conflict-resolver.txt` (rendered by `.github/workflows/review_autofix.yml` when the head ref matches `orchestrator/project-*`) instead of the generic `prompts/conflict-resolver.txt`. The integration template injects the tracking-issue title/body, the merged sub-issues list, and the full `merged_issue_fingerprints` JSON, and instructs the model to synthesise rather than pick a side when both sides of a hunk carry merged sub-issue intent.
+- The resolver dispatch uses `prompts/integration-sync-conflict-resolver.txt` (rendered by `.github/workflows/review_autofix.yml` when the head ref matches `orchestrator/project-*`) instead of the generic `prompts/conflict-resolver.txt`. The integration template injects the tracking-issue title/body, the merged sub-issues list, and the full `merged_issue_fingerprints` JSON, and instructs the model to synthesize rather than pick a side when both sides of a hunk carry merged sub-issue intent. The template carries two hardening blocks targeting the dominant wholesale-revert failure mode ("pick default-branch side verbatim"): a "do NOT pick the default-branch side verbatim" rule tying non-empty-fingerprint files to "keep HEAD or synthesize", and a per-file fingerprint pre-flight loop that reconciles every `must_contain` / `must_not_contain` pattern for a file before moving on, plus a self-check that requires the model to report each pattern's match status before declaring success.
 - After the codex resolver writes the working tree but **before** the `[ai-merge-resolve]` commit lands, the resolver step calls `scripts/verify_integration_fingerprints.py` against the captured fingerprints. A `must_contain` regex that no longer matches, or a `must_not_contain` regex that reappears, hard-fails the resolver step with `::error::` annotations. The merge state is left intact so the next poll tick re-enters healing and escalates to the integration judge (per `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1` default).
 - The retry budget is **branch-aware** in `heal_integration_branch_conflict`: orchestrator integration branches honour the tighter `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES` (default 1), all other dispatch sites honour the historical `INTEGRATION_CONFLICT_MAX_RETRIES` (default 3).
 
@@ -653,7 +653,8 @@ Contract:
 - The failure-notification step branches its `BODY` on `${EDITOR_SUMMARY_POSTED:-false}`:
   - When `true` — post a narrower "AI review/autofix encountered a post-editor failure" body that names the downstream step domains (push, conflict resolver, label/auto-merge, telemetry) and notes that the summary comment is visible, not that editor execution necessarily succeeded.
   - When unset/false — post the original generic body (true editor / dependency / infra failure path).
-- The label step (`Mark linked issues review-blocked (workflow failure)`) and `Telegram failure` are **not** gated on `EDITOR_SUMMARY_POSTED`. A failure is still a failure regardless of which comment variant is appropriate; the linked issue still needs `ai:review-blocked` and the operator still needs the Telegram alert.
+- The label step (`Mark linked issues review-blocked (workflow failure)`) and the failure-notification step **are** gated on `env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'` (see §20.6). This gate has a tighter scope than `EDITOR_SUMMARY_POSTED`: it fires only when the editor produced no structured summary AND no committed changes — i.e. there was nothing meaningful for the workflow to report. A generic post-editor failure (push race, conflict resolver abort, auto-merge config error) does not set `AUTOFIX_EDITOR_EMPTY_NOOP`, so it still flows through the label step and still tags `ai:review-blocked` as before.
+- `Telegram failure` remains **ungated** by both signals. An operator still wants the alert regardless of which branch fired — the alert wording is generic ("PR autofix failed"), so it does not mis-attribute anything.
 
 Operational rules:
 
@@ -665,7 +666,47 @@ API cost audit (CLAUDE.md §15):
 
 - Zero new `gh` calls. The branch is a local `if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then ... fi` around the existing single `gh api .../comments` POST. No new batched data, no new cache.
 
-### 20.6 Claude-Branch Skip
+### 20.6 Empty-Editor-Output Retry Gate (`AUTOFIX_EDITOR_EMPTY_NOOP`)
+
+`jobs.codex-agent`'s `Post editor summary comment` step now short-circuits when both invariants hold:
+
+1. `EDITOR_SUMMARY_FILE` is empty or missing (codex produced no structured summary).
+2. `COMMITTED_FILES_FILE` is empty (no file changes landed on the branch).
+
+In that combined state the step:
+
+- Posts a distinct "AI review/autofix produced no output — will retry" comment on the PR. This body explicitly tells the reader that **no `ai:review-blocked` label is being applied** and that the stall poller will retry the review.
+- Sets `AUTOFIX_EDITOR_EMPTY_NOOP=true` in `$GITHUB_ENV`.
+- Exits the step non-zero (so CI still fails, `Telegram failure` still alerts).
+
+Contract:
+
+- `AUTOFIX_EDITOR_EMPTY_NOOP` is set **only** from `Post editor summary comment` when both invariants above hold. Do not set it from any other step; no other failure mode qualifies.
+- `Mark linked issues review-blocked (workflow failure)` and `Post review-blocked comment on PR (workflow failure)` both add `env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'` to their `if:`. That gate is *additive* over the existing `failure() && env.PR_CLOSED != 'true'` condition — it only narrows, never widens.
+- The failure domain this guard closes: the empty-editor run used to synthesize a fallback summary comment, pretend the editor "completed", and let a downstream step (telemetry plumbing, label/auto-merge) trip the generic `failure()` handlers — which then stamped `ai:review-blocked` on the linked issue with no autonomous escape. See the §4 dispatch_rb_judge ladder for why that stamping is now the escape-less state it was.
+- Rollback: if this gate misfires (e.g. codex's summary file format changes and the workflow no longer recognizes a legitimate summary), remove the `AUTOFIX_EDITOR_EMPTY_NOOP != 'true'` conditions from the two failure handlers. The empty-output short-circuit can stay; its worst-case effect is a single extra comment on the PR.
+
+Rename is a breaking change per CLAUDE.md §6 — add alongside, never in place.
+
+### 20.7 Autonomous `ai:review-blocked` Escape (`dispatch_rb_judge`)
+
+Historically `ai:review-blocked` lived in `orchestrate_lib.DEDICATED_HANDLER_PHASES`: the stall detector ignored the phase on the assumption that `review_rb_judge.sh` (step `Review-blocked judge decision` inside `review_autofix.yml`) would always run when an issue entered it. That assumption fails for any PR where `review_autofix.yml` itself errors before reaching the judge step (empty-editor run, push race, conflict resolver abort, etc.) — the workflow's `failure()` handler still stamps `ai:review-blocked` on the linked issue, but the judge never fires.
+
+Fix:
+
+- `ai:review-blocked` is **no longer** in `DEDICATED_HANDLER_PHASES`. The stall detector now sees the phase.
+- `STALL_RECOVERY_ACTIONS["ai:review-blocked"] = ["dispatch_rb_judge", "dispatch_rb_judge", "escalate_human"]` with threshold `DEFAULT_PHASE_STALL_THRESHOLDS["ai:review-blocked"] = 120` min (matches `ai:done` so long in-flight autofix runs are not double-dispatched). Override via `STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES`.
+- `dispatch_rb_judge` (priority 68 in `STALL_RECOVERY_ACTION_PRIORITY`) calls helper `_dispatch_rb_judge_for_pr <pr_number>` in `scripts/orchestrate_poll_process.sh`, which fires `review_rb_judge_dispatch.yml` via `gh workflow run`. That workflow in turn calls `review_autofix.yml` with `force_rb_judge=true`.
+- `review_autofix.yml`'s `Count autofix iterations` step reads `force_rb_judge` and, when true, forces `max_iterations_reached=true` so all reviewer/editor/commit steps (gated on `max_iterations_reached != 'true'`) are skipped and the `Review-blocked judge decision` step fires directly against the existing PR state.
+- Linked-PR lookup prefers the shared `STALL_MANAGED_LINKED_PR_CACHE` (managed path) / `_STD_ITER_PR_NUM_CACHED` (standalone path), falling back to `_issue_cross_ref_pr_number_last` (legacy REST). No new per-issue API calls in the common case.
+- Cycle-local duplicate-dispatch guard: `_dispatch_rb_judge_for_pr` records `rb-judge:<pr_number>` into `_CONFLICT_DISPATCH_TRACKER` (reused because both dispatches ultimately target `review_autofix.yml` and cancel-in-progress concurrency would otherwise kill one with the other).
+
+Rollback plan:
+
+- To disable autonomous escape without reverting the phase-ladder change, either set `ENABLE_STALL_HUMAN_TERMINALIZATION=true` (then `dispatch_rb_judge → escalate_human` on the third attempt) or restore `ai:review-blocked` into `DEDICATED_HANDLER_PHASES`. Both are surface-area-small reverts.
+- Renames of `dispatch_rb_judge`, `force_rb_judge`, or `_dispatch_rb_judge_for_pr` are breaking changes per CLAUDE.md §6.
+
+### 20.8 Claude-Branch Skip
 
 PRs whose head branch starts with `claude/` (e.g. `claude/investigate-poller-stalled-prs-STfJ5`) are ad-hoc Claude sessions that live outside the orchestrator / issue-driven autofix loop. Running the full reviewer panel + editor on them spends LLM budget without the surrounding automation (tracking-issue ledger, orchestrator stall recovery, validation fan-out) that the autofix loop exists to serve, so the gate skips them unconditionally.
 

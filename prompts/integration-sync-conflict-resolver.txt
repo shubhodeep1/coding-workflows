@@ -129,6 +129,37 @@ fingerprint pattern as a hard test case your resolution has to pass.
 When in doubt between two valid synthetic resolutions, pick the one
 that keeps MORE merged sub-issue intent verbatim.
 
+HARD CONSTRAINT — do NOT pick the default-branch side verbatim:
+The single most common failure mode at this step is "pick the
+default-branch (other) side of every hunk and drop the integration
+(HEAD) side". That wholesale-revert pattern will fail fingerprint
+verification because it drops every `must_contain` line the merged
+sub-issues added and reintroduces every `must_not_contain` line they
+deleted. Whenever INTENT_FINGERPRINTS has a non-empty entry for a
+conflicted file, the correct resolution is almost never "pick the
+other side" — it is either "pick HEAD" or "synthesize a hunk that
+layers the other side's unrelated maintenance fix on top of HEAD's
+sub-issue content". Before writing the resolved hunk, look up that
+file in INTENT_FINGERPRINTS above and reconcile your resolution
+against every `must_contain` / `must_not_contain` pattern for it.
+
+HARD CONSTRAINT — per-file fingerprint pre-flight:
+For every conflicted file that has fingerprint entries in
+INTENT_FINGERPRINTS (even just one), before you finalize that file:
+1. Read the post-resolve content of that file.
+2. For each `must_contain` regex listed for that file across all
+   sub-issues: confirm the pattern still matches the post-resolve
+   content. If it does not, your resolution regressed that
+   sub-issue's intent — revise the hunk to re-introduce the matching
+   content (usually by keeping the HEAD side or synthesizing).
+3. For each `must_not_contain` regex listed for that file across
+   all sub-issues: confirm the pattern does NOT match the post-
+   resolve content. If it does, your resolution resurrected a line
+   a sub-issue intentionally deleted — revise the hunk to drop that
+   line (usually by keeping the HEAD side or synthesizing).
+4. Repeat until every fingerprint for that file is satisfied, THEN
+   move on to the next file. Do NOT leave this check "for the end".
+
 Final output must be plain text.
 
 Output sections:
@@ -143,10 +174,18 @@ Intent preserved:
 Self-check:
 - confirm every edited file contained conflict markers
 - confirm every file path referenced by your edits exists in the repository
-- confirm no `must_not_contain` fingerprint pattern matches the
-  post-resolve tree
-- confirm every `must_contain` fingerprint pattern still matches the
-  post-resolve tree
+- for each `must_not_contain` fingerprint pattern: report the file
+  path, the first 80 chars of the pattern, and confirm it does NOT
+  match the post-resolve content of that file
+- for each `must_contain` fingerprint pattern: report the file path,
+  the first 80 chars of the pattern, and confirm it DOES still match
+  the post-resolve content of that file
+- if any fingerprint check fails, DO NOT declare success — revise the
+  resolution for the affected file and re-run the check. The commit
+  is gated by `scripts/verify_integration_fingerprints.py` running
+  the same checks immediately after your run; a regression reported
+  there wastes the entire run and stalls the integration branch
+  until the next orchestrator poll tick.
 
 Notes:
 - brief explanation if any resolution required choosing one side
