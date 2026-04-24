@@ -708,7 +708,7 @@ Rollback plan:
 
 ### 20.8 Claude-Branch Skip
 
-PRs whose head branch starts with `claude/` (e.g. `claude/investigate-poller-stalled-prs-STfJ5`) are ad-hoc Claude sessions that live outside the orchestrator / issue-driven autofix loop. Running the full reviewer panel + editor on them spends LLM budget without the surrounding automation (tracking-issue ledger, orchestrator stall recovery, validation fan-out) that the autofix loop exists to serve, so the gate skips them unconditionally.
+PRs whose head branch starts with `claude/` (e.g. `claude/investigate-poller-stalled-prs-STfJ5`) are ad-hoc Claude sessions that live outside the orchestrator / issue-driven autofix loop. Running the full reviewer panel + editor on them spends LLM budget without the surrounding automation (tracking-issue ledger, orchestrator stall recovery, validation fan-out) that the autofix loop exists to serve, so the gate skips them whenever the PR head ref is successfully retrieved and matches `claude/*`. When the head ref cannot be retrieved the run is blocked by the pre-existing `pr_state_unknown` branch instead (see the fail-closed bullet below).
 
 Contract:
 
