@@ -122,6 +122,9 @@ ensure_implement_fixup_labels() {
 }
 
 FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+if [ -z "${FAILED_STEP_JOBS_JSON}" ]; then
+  FAILED_STEP_JOBS_JSON='{"jobs":[]}'
+fi
 FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
   [.jobs[].steps[]
     | select(
@@ -165,13 +168,13 @@ DIFF_FILE="${RUNTIME_DIR}/implement_diagnose_git_diff.txt"
 UNTRACKED_LIST_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_files.txt"
 UNTRACKED_CONTEXT_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_context.txt"
 git diff HEAD > "${DIFF_FILE}" || true
-git ls-files --others --exclude-standard > "${UNTRACKED_LIST_FILE}" || true
+git ls-files --others --exclude-standard -z > "${UNTRACKED_LIST_FILE}" || true
 
 {
   if [ ! -s "${UNTRACKED_LIST_FILE}" ]; then
     echo "(none)"
   else
-    while IFS= read -r untracked_path; do
+    while IFS= read -r -d '' untracked_path; do
       [ -n "${untracked_path}" ] || continue
       lower_untracked_path="$(printf '%s' "${untracked_path}" | tr '[:upper:]' '[:lower:]')"
       case "${lower_untracked_path}" in
@@ -184,8 +187,10 @@ git ls-files --others --exclude-standard > "${UNTRACKED_LIST_FILE}" || true
       esac
       echo "--- ${untracked_path} ---"
       if [ -f "${untracked_path}" ]; then
-        if grep -Iq . "${untracked_path}" 2>/dev/null; then
-          head -c 16000 "${untracked_path}" || true
+        if [ ! -s "${untracked_path}" ]; then
+          echo "[empty file]"
+        elif grep -Iq . -- "${untracked_path}" 2>/dev/null; then
+          head -c 16000 -- "${untracked_path}" || true
           if [ "$(wc -c < "${untracked_path}" 2>/dev/null || echo 0)" -gt 16000 ]; then
             echo
             echo "[truncated to 16000 bytes]"

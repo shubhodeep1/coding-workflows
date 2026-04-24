@@ -1083,9 +1083,6 @@ def _check_bounded_tail_capture(context: LintContext) -> list[Finding]:
 
 def _check_external_tool_dependencies(context: LintContext) -> list[Finding]:
 	findings: list[Finding] = []
-	if not _runtime_http_tests_required(context):
-		if not context.selection_metadata().get("custom_tests"):
-			return findings
 
 	canary_path, canary_line, canary_tools = _extract_canary_tools(context)
 	required_tools: list[tuple[str, Path, int]] = []
