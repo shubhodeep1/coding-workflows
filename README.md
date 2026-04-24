@@ -1549,9 +1549,13 @@ self-heal patches cannot be merged without explicit human action.
 
 ### Hints Configuration (`.ai/validate.yml`)
 
-- You can optionally add `.ai/validate.yml` in a consumer repo to guide harness generation and diagnosis.
+- `.ai/validate.yml` is required when template-mode validation runs (`VALIDATION_USE_TEMPLATES=true`, the default).
 - Baseline example: [`examples/ai-validate-hints.yml`](examples/ai-validate-hints.yml).
-- If `.ai/validate.yml` is absent, validation now runs a lightweight discovery phase that generates an ephemeral runtime hints file (not committed).
+- Supported manifest test-selection controls:
+  - `skip_tests`: optional list of logical test IDs to omit for the selected family.
+  - `custom_tests`: optional ordered list of deterministic shell commands; renderer emits TAP wrappers `tests/40_custom_01.sh`, `tests/41_custom_02.sh`, ... in manifest order.
+- For `python-mongo-flask`, valid `skip_tests` IDs are `family_marker`, `http_smoke`, `import_audit`, `graceful_shutdown`.
+- `canary` is mandatory and cannot be skipped.
 
 ### Validation Harness Lifecycle
 

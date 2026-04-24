@@ -26,7 +26,7 @@ import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 try:
 	import yaml
@@ -75,6 +75,7 @@ TOOL_INSTALL_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 EXTERNAL_APP_TOOLS = ("forge", "cast", "hardhat")
+SELECTION_METADATA_PATH = "_meta/test_selection.json"
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ class LintContext:
 		self._line_cache: dict[Path, list[str] | None] = {}
 		self._escape_cache: dict[Path, dict[int, set[str]]] = {}
 		self._dockerfile_text_cache: str | None = None
+		self._selection_metadata_cache: dict[str, Any] | None = None
 
 	def resolve(self, relative_path: str) -> Path:
 		return self.root / relative_path
@@ -169,6 +171,46 @@ class LintContext:
 
 		self._dockerfile_text_cache = " ".join(sanitized)
 		return self._dockerfile_text_cache
+
+	def selected_test_outputs(self) -> set[str]:
+		metadata = self.selection_metadata()
+		selected_outputs = metadata.get("selected_test_outputs")
+		if not isinstance(selected_outputs, list):
+			return set()
+		result: set[str] = set()
+		for item in selected_outputs:
+			if isinstance(item, str) and item.strip():
+				result.add(item.strip())
+		return result
+
+	def is_test_output_selected(self, relative_path: str) -> bool:
+		selected = self.selected_test_outputs()
+		if not selected:
+			return True
+		return relative_path in selected
+
+	def selection_metadata(self) -> dict[str, Any]:
+		if self._selection_metadata_cache is not None:
+			return self._selection_metadata_cache
+
+		meta_path = self.resolve(SELECTION_METADATA_PATH)
+		text = self.read_text(meta_path)
+		if text is None:
+			self._selection_metadata_cache = {}
+			return self._selection_metadata_cache
+
+		try:
+			payload = json.loads(text)
+		except json.JSONDecodeError:
+			self._selection_metadata_cache = {}
+			return self._selection_metadata_cache
+
+		if not isinstance(payload, dict):
+			self._selection_metadata_cache = {}
+			return self._selection_metadata_cache
+
+		self._selection_metadata_cache = payload
+		return self._selection_metadata_cache
 
 	def _get_escape_map(self, path: Path) -> dict[int, set[str]]:
 		if path in self._escape_cache:
@@ -874,8 +916,16 @@ def _line_with_token(lines: list[str], token: str) -> int:
 	return 1
 
 
+def _runtime_http_tests_required(context: LintContext) -> bool:
+	return context.is_test_output_selected("tests/11_http_smoke.sh") or context.is_test_output_selected(
+		"tests/30_graceful_shutdown.sh"
+	)
+
+
 def _check_graceful_shutdown_hooks(context: LintContext) -> list[Finding]:
 	findings: list[Finding] = []
+	if not context.is_test_output_selected("tests/30_graceful_shutdown.sh"):
+		return findings
 
 	py_test = context.resolve("tests/30_graceful_shutdown.sh")
 	py_helper = context.resolve("tests/_lib/graceful_shutdown.py")
@@ -1044,16 +1094,41 @@ def _check_external_tool_dependencies(context: LintContext) -> list[Finding]:
 				continue
 			required_tools.append((tool, canary_path, canary_line))
 
-	hardhat_test = context.resolve("tests/30_hardhat_test.sh")
-	hardhat_lines = context.read_lines(hardhat_test)
-	if hardhat_lines is not None:
-		for idx, line in enumerate(hardhat_lines, start=1):
-			if line.lstrip().startswith("#"):
+	if context.is_test_output_selected("tests/30_hardhat_test.sh"):
+		hardhat_test = context.resolve("tests/30_hardhat_test.sh")
+		hardhat_lines = context.read_lines(hardhat_test)
+		if hardhat_lines is not None:
+			for idx, line in enumerate(hardhat_lines, start=1):
+				if line.lstrip().startswith("#"):
+					continue
+				clean_line = _strip_inline_comment(line)
+				if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", clean_line, re.IGNORECASE):
+					required_tools.append(("hardhat", hardhat_test, idx))
+					break
+
+	selection_metadata = context.selection_metadata()
+	custom_tests = selection_metadata.get("custom_tests")
+	if isinstance(custom_tests, list):
+		for custom_test in custom_tests:
+			if not isinstance(custom_test, dict):
 				continue
-			clean_line = _strip_inline_comment(line)
-			if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", clean_line, re.IGNORECASE):
-				required_tools.append(("hardhat", hardhat_test, idx))
-				break
+			output_rel_path = custom_test.get("output_rel_path")
+			if not isinstance(output_rel_path, str) or not output_rel_path.strip():
+				continue
+			if not context.is_test_output_selected(output_rel_path):
+				continue
+			required_tool_list = custom_test.get("required_tools")
+			if not isinstance(required_tool_list, list):
+				continue
+			command_path = context.resolve(output_rel_path)
+			line_no = 1
+			command = custom_test.get("command")
+			if isinstance(command, str) and command.strip():
+				line_no = context.find_line(command_path, re.escape(command.strip()))
+			for tool in required_tool_list:
+				if not isinstance(tool, str) or not tool.strip():
+					continue
+				required_tools.append((tool.strip(), command_path, line_no))
 
 	deduped: list[tuple[str, Path, int]] = []
 	seen: set[tuple[str, str, int]] = set()

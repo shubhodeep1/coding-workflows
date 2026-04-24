@@ -452,16 +452,16 @@ case "${DIAG_STATUS}" in
 
       FIX_BODY_FULL="${FIX_BODY_BASE}
 
----
-**Orchestrator metadata** (do not edit)
-- Tracking issue: #${TRACKING_ISSUE_NUM}
-- Integration branch: ${PR_BASE_BRANCH}
-- Local ID: \`${FIX_ID}\`
-- Type: implement-fix-up (post-codex-validation)
-- Source issue: #${ISSUE_NUMBER}
-- Failed step: ${FAILED_STEP_NAME}
-- Priority: ${FIX_PRIORITY}
-- Managed by: AI Orchestrator"
+      ---
+      **Orchestrator metadata** (do not edit)
+      - Tracking issue: #${TRACKING_ISSUE_NUM}
+      - Integration branch: ${PR_BASE_BRANCH}
+      - Local ID: \`${FIX_ID}\`
+      - Type: implement-fix-up (post-codex-validation)
+      - Source issue: #${ISSUE_NUMBER}
+      - Failed step: ${FAILED_STEP_NAME}
+      - Priority: ${FIX_PRIORITY}
+      - Managed by: AI Orchestrator"
 
       CREATE_ERR_FILE="$(mktemp)"
       if FIX_URL="$(gh_retry gh issue create \

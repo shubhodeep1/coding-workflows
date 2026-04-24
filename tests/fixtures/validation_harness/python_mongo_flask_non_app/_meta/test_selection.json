@@ -1,0 +1,36 @@
+{
+  "custom_tests": [
+    {
+      "command": "python3 scripts/render_validation_templates.py --help >/dev/null",
+      "index": 1,
+      "output_rel_path": "tests/40_custom_01.sh",
+      "required_tools": []
+    },
+    {
+      "command": "python3 scripts/validation_lint.py --help >/dev/null",
+      "index": 2,
+      "output_rel_path": "tests/41_custom_02.sh",
+      "required_tools": []
+    }
+  ],
+  "family": "python-mongo-flask",
+  "runtime_http_tests_enabled": false,
+  "schema_version": 1,
+  "selected_test_ids": [
+    "canary",
+    "family_marker",
+    "import_audit"
+  ],
+  "selected_test_outputs": [
+    "tests/00_canary.sh",
+    "tests/10_family_marker.sh",
+    "tests/20_import_audit.sh",
+    "tests/40_custom_01.sh",
+    "tests/41_custom_02.sh",
+    "tests/90_tap_report.sh"
+  ],
+  "skip_test_ids": [
+    "http_smoke",
+    "graceful_shutdown"
+  ]
+}

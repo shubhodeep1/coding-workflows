@@ -5,9 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
 CANARY_TOOLS=(
-	'curl'
-	'jq'
+	'bash'
 	'python3'
+	'jq'
 )
 
 echo "1..3"
