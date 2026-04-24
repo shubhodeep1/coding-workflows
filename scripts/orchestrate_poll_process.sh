@@ -6194,10 +6194,21 @@ PY
         # See execute_stall_recovery_action's dispatch_rb_judge case
         # for the authoritative implementation pattern; this mirrors
         # it within the standalone loop's switch.
+        #
+        # Linked-PR lookup uses the per-iteration _std_linked_json cache
+        # (populated at the top of this loop iteration from the
+        # batched GraphQL _candidate_details_json — same shape:
+        # {number, state, merged, head_ref, ...}), NOT
+        # _STD_ITER_PR_NUM_CACHED.  The latter is only declared inside
+        # the `if action == retrigger_review` block above; because
+        # bash `local` is function-scoped (not block-scoped), a prior
+        # iteration's retrigger_review value would otherwise leak into
+        # this iteration's dispatch_rb_judge and dispatch against the
+        # wrong PR.  Using _std_linked_json avoids both the leak and
+        # the redundant REST fallback.
         local _std_rb_pr_num=""
-        if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
-          _std_rb_pr_num="${_STD_ITER_PR_NUM_CACHED}"
-        else
+        _std_rb_pr_num="$(printf '%s' "${_std_linked_json:-null}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
           _std_rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
         fi
         if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
