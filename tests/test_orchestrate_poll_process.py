@@ -5345,7 +5345,25 @@ def test_verify_integration_fingerprints_skips_empty_object():
 		assert mod.main([str(empty)]) == 0
 
 
-def test_verify_integration_fingerprints_list_mode_returns_violated_files(capsys):
+def _run_verifier_list_mode(mod, fp_path: "Path") -> tuple[int, str, str]:
+	"""Invoke `mod.main(['--list-violated-files', str(fp_path)])` with
+	stdout+stderr captured via io.StringIO, returning (rc, stdout, stderr).
+
+	The in-tree custom test harness at the bottom of this file calls each
+	`test_*` function with zero args (see `main()` below), so pytest
+	fixtures like `capsys` are not available — use this helper instead.
+	"""
+	import io
+	import contextlib
+
+	out_buf = io.StringIO()
+	err_buf = io.StringIO()
+	with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+		rc = mod.main(["--list-violated-files", str(fp_path)])
+	return rc, out_buf.getvalue(), err_buf.getvalue()
+
+
+def test_verify_integration_fingerprints_list_mode_returns_violated_files():
 	# --list-violated-files must print the violated file paths to stdout
 	# and always exit 0 when the JSON parses — the prepare-step
 	# expansion logic in scripts/review_conflict_prepare.sh relies on
@@ -5376,8 +5394,9 @@ def test_verify_integration_fingerprints_list_mode_returns_violated_files(capsys
 	prev_cwd = os.getcwd()
 	try:
 		os.chdir(sandbox)
-		assert mod.main(["--list-violated-files", str(fp)]) == 0
-		printed = capsys.readouterr().out.strip().splitlines()
+		rc, out, _err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		printed = out.strip().splitlines()
 		assert printed == ["scripts/file_a.py", "scripts/file_b.py"], (
 			f"list-violated-files must emit sorted unique violated paths, got {printed!r}"
 		)
@@ -5386,7 +5405,7 @@ def test_verify_integration_fingerprints_list_mode_returns_violated_files(capsys
 		shutil.rmtree(sandbox, ignore_errors=True)
 
 
-def test_verify_integration_fingerprints_list_mode_emits_nothing_when_clean(capsys):
+def test_verify_integration_fingerprints_list_mode_emits_nothing_when_clean():
 	mod = _verifier_module()
 	files = {
 		"scripts/clean.py": "EXPECTED_LINE\n",
@@ -5405,8 +5424,9 @@ def test_verify_integration_fingerprints_list_mode_emits_nothing_when_clean(caps
 	prev_cwd = os.getcwd()
 	try:
 		os.chdir(sandbox)
-		assert mod.main(["--list-violated-files", str(fp)]) == 0
-		assert capsys.readouterr().out == ""
+		rc, out, _err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		assert out == ""
 	finally:
 		os.chdir(prev_cwd)
 		shutil.rmtree(sandbox, ignore_errors=True)
@@ -5422,7 +5442,7 @@ def test_verify_integration_fingerprints_list_mode_fails_open_on_missing_file():
 		assert mod.main(["--list-violated-files", str(missing)]) == 2
 
 
-def test_verify_integration_fingerprints_list_mode_never_prints_annotations_to_stdout(capsys):
+def test_verify_integration_fingerprints_list_mode_never_prints_annotations_to_stdout():
 	# stdout contract: --list-violated-files emits file paths only.
 	# Any diagnostic output (::warning::, ::error::) MUST go to stderr.
 	# Regression guard for the PR #1581 review thread: a ::warning::
@@ -5451,12 +5471,11 @@ def test_verify_integration_fingerprints_list_mode_never_prints_annotations_to_s
 	prev_cwd = os.getcwd()
 	try:
 		os.chdir(sandbox)
-		rc = mod.main(["--list-violated-files", str(fp)])
-		captured = capsys.readouterr()
+		rc, out, _err = _run_verifier_list_mode(mod, fp)
 		assert rc == 0
 		# stdout must contain ONLY file paths (one per line), never a
 		# GitHub Actions annotation line.
-		for line in captured.out.splitlines():
+		for line in out.splitlines():
 			assert not line.startswith("::"), (
 				f"stdout contract violation: annotation leaked into list-violated-files output: {line!r}"
 			)
