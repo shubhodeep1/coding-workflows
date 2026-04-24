@@ -4618,8 +4618,17 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
       fi
       if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
-        echo "::warning::dispatch_rb_judge: no linked PR found for issue #${issue_num}; skipping."
-        return 1
+        # No linked PR — the judge has nothing to act on.  Increment
+        # the recovery count so the ladder can progress to the next
+        # rung (escalate_human after MAX_STALL_RECOVERIES_PER_ISSUE).
+        # Returning 1 without incrementing would trap the issue in an
+        # infinite dispatch_rb_judge loop because the count never
+        # advances.  Operator visibility is preserved via the warning
+        # and Telegram note below.
+        echo "::warning::dispatch_rb_judge: no linked PR found for issue #${issue_num}; counting as an attempt so the ladder can escalate."
+        tg_notify "Stall recovery: dispatch_rb_judge for issue #${issue_num} could not find a linked PR (stuck ${stall_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt — will escalate to escalate_human at the end of the ladder."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+        STALL_RECOVERY_SHOULD_INCREMENT="true"
+        return 0
       fi
       local rb_dispatch_rc=0
       _dispatch_rb_judge_for_pr "${rb_pr_num}" || rb_dispatch_rc=$?
@@ -6212,8 +6221,13 @@ PY
           _std_rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
         fi
         if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
-          echo "::warning::[standalone-stall] dispatch_rb_judge: no linked PR found for issue #${issue_num}; skipping."
-          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          # No linked PR — see execute_stall_recovery_action's
+          # dispatch_rb_judge case for the same rationale: count this
+          # as an attempt so the ladder can escalate to escalate_human
+          # instead of looping forever.
+          echo "::warning::[standalone-stall] dispatch_rb_judge: no linked PR found for issue #${issue_num}; counting as an attempt so the ladder can escalate."
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: dispatch_rb_judge could not find a linked PR (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt — will escalate to escalate_human at the end of the ladder." "WARNING"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
         else
           local _std_rb_rc=0
           _dispatch_rb_judge_for_pr "${_std_rb_pr_num}" || _std_rb_rc=$?
@@ -6741,9 +6755,13 @@ _dispatch_review_for_conflicts()
 # issues an autonomous escape path.
 #
 # Returns:
-#   0 — dispatched successfully (or already dispatched this cycle).
-#   1 — dispatch failed (e.g. workflow missing, PAT scope insufficient).
-#   2 — skipped (cycle-local duplicate-dispatch guard).
+#   0 — dispatched successfully this cycle.
+#   1 — dispatch failed (e.g. invalid pr_number, workflow missing, PAT
+#       scope insufficient).
+#   2 — skipped (cycle-local duplicate-dispatch guard: the same PR
+#       already had a judge dispatch queued earlier this tick).  Callers
+#       must treat this as an in-flight success — do NOT increment the
+#       stall recovery count, and do NOT re-attempt in the same tick.
 #
 # API hygiene: reuses the cycle-local _CONFLICT_DISPATCH_TRACKER to
 # prevent duplicate dispatches within the same poll cycle, same as

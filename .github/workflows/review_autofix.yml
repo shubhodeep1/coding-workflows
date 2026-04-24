@@ -1162,7 +1162,7 @@ jobs:
         id: retrigger_guard
         env:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
-          FORCE_RB_JUDGE: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge) && 'true' || 'false' }}
+          FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
