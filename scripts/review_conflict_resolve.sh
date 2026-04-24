@@ -227,11 +227,20 @@ _verify_fingerprints_soft() {
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
   # Extract per-violation lines and strip the annotation prefix so
-  # the retry prelude gets clean, human-readable bullets.
+  # the retry prelude gets clean, human-readable bullets.  Only
+  # exit 1 (real hard violations) populates the violations file;
+  # exit 2 is a plumbing failure (malformed fingerprints JSON,
+  # missing verifier binary elsewhere) and retrying against it
+  # cannot make progress, so we fail-open just like the
+  # pre-restructure post-loop case statement did
+  # (`2|*) echo "::warning::..."`).  The loop's success check
+  # treats exit 0 and exit 2 symmetrically.
   if [ "${RESOLVER_FP_EXIT}" -eq 1 ] && [ -s "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" ]; then
     grep -E '^::error::  - ' "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" \
       | sed 's/^::error::  - //' \
       > "${RESOLVER_FP_VIOLATIONS_FILE}" || true
+  elif [ "${RESOLVER_FP_EXIT}" -eq 2 ]; then
+    echo "::warning::Integration fingerprint verification could not run (exit 2 — plumbing failure); continuing without intent guard for this commit. See ${RESOLVER_FP_VERIFIER_OUTPUT_FILE} for details."
   fi
 }
 
@@ -293,7 +302,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   _verify_fingerprints_soft
   _fp_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]')"
 
-  if [ "${_marker_count}" -eq 0 ] && [ "${RESOLVER_FP_EXIT}" -eq 0 ]; then
+  # Success: no residual markers AND verifier was non-rejecting.
+  # Treat exit 0 (all fingerprints satisfied) and exit 2 (plumbing
+  # failure — fail-open per the verifier's contract, same as the
+  # pre-restructure `2|*) echo "::warning::..."` branch) as both
+  # passing the soft gate.  Only exit 1 is a real violation
+  # worth retrying against.
+  if [ "${_marker_count}" -eq 0 ] && { [ "${RESOLVER_FP_EXIT}" -eq 0 ] || [ "${RESOLVER_FP_EXIT}" -eq 2 ]; }; then
     echo "Conflict resolver succeeded on attempt ${attempt} (soft validation passed)."
     # Re-emit the verifier's info line at normal verbosity so
     # operators see the "must_contain satisfied N/M" summary
