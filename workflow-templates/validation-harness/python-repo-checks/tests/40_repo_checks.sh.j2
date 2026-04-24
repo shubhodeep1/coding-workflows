@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
+
+COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+APP_SERVICE="${APP_SERVICE:-app}"
+REPO_CHECK_ENTRY="${REPO_CHECK_ENTRY:-{{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') }}}"
+
+echo "1..1"
+
+set +e
+docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c "${REPO_CHECK_ENTRY}"
+checks_rc=$?
+set -e
+
+if [ "${checks_rc}" -ne 0 ]; then
+	tap_not_ok 1 "repo-local validation checks"
+	echo "# repo check command failed: ${REPO_CHECK_ENTRY}"
+	exit 1
+fi
+
+tap_ok 1 "repo-local validation checks"

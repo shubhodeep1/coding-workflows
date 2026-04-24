@@ -16,42 +16,56 @@ def _workflow_text() -> str:
 
 def test_validate_workflow_bootstrap_fetches_template_assets() -> None:
 	wf = _workflow_text()
-	assert 'copy_from_ref_or_local "scripts/render_validation_templates.py" "scripts/render_validation_templates.py.tmp" "false" "true"' in wf
-	assert 'copy_from_ref_or_local "scripts/templates/slot_manifest.schema.json" "scripts/templates/slot_manifest.schema.json.tmp" "false" "true"' in wf
-	assert 'copy_from_ref_or_local "${template_path}" "${template_path}" "false" "true" || true' in wf
-	assert "workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2" in wf
-	assert "workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2" in wf
-	assert "workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/Dockerfile.app.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/_lib/graceful_shutdown.sh.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/tests/00_canary.sh.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/tests/10_family_marker.sh.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2" in wf
-	assert "workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/00_canary.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/10_family_marker.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/10_http_smoke.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/30_graceful_shutdown.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/90_tap_report.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/_lib/http_smoke.py.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-flask/tests/_lib/import_audit.py.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/docker-compose.test.yml.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/validate.env.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/00_canary.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/10_family_marker.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/20_import_audit.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/30_graceful_shutdown.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/90_tap_report.sh.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/graceful_shutdown.py.j2" in wf
-	assert "workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2" in wf
+	required_snippets = [
+		'copy_from_ref_or_local "scripts/render_validation_templates.py" "scripts/render_validation_templates.py.tmp" "false" "true"',
+		'copy_from_ref_or_local "scripts/templates/slot_manifest.schema.json" "scripts/templates/slot_manifest.schema.json.tmp" "false" "true"',
+		'copy_from_ref_or_local "${template_path}" "${template_path}" "false" "true" || true',
+		"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
+		"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
+		"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/Dockerfile.app.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/_lib/graceful_shutdown.sh.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/tests/00_canary.sh.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/tests/10_family_marker.sh.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2",
+		"workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/00_canary.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/10_family_marker.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/10_http_smoke.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/30_graceful_shutdown.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/90_tap_report.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/_lib/http_smoke.py.j2",
+		"workflow-templates/validation-harness/python-mongo-flask/tests/_lib/import_audit.py.j2",
+		"workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2",
+		"workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/00_canary.sh.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/10_family_marker.sh.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/20_import_audit.sh.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/30_graceful_shutdown.sh.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/40_repo_checks.sh.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/90_tap_report.sh.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/_lib/graceful_shutdown.py.j2",
+		"workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/docker-compose.test.yml.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/validate.env.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/00_canary.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/10_family_marker.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/20_import_audit.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/30_graceful_shutdown.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/90_tap_report.sh.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/graceful_shutdown.py.j2",
+		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2",
+	]
+	for snippet in required_snippets:
+		assert snippet in wf
 
 
 def test_validate_workflow_passes_template_default_env() -> None:

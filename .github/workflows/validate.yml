@@ -343,6 +343,16 @@ jobs:
           workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2
           workflow-templates/validation-harness/python-mongo-flask/tests/_lib/http_smoke.py.j2
           workflow-templates/validation-harness/python-mongo-flask/tests/_lib/import_audit.py.j2
+          workflow-templates/validation-harness/python-repo-checks/Dockerfile.app.j2
+          workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/00_canary.sh.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/10_family_marker.sh.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/20_import_audit.sh.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/30_graceful_shutdown.sh.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/40_repo_checks.sh.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/90_tap_report.sh.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/_lib/graceful_shutdown.py.j2
+          workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2
           workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2
           workflow-templates/validation-harness/python-mongo-repo-checks/docker-compose.test.yml.j2
           workflow-templates/validation-harness/python-mongo-repo-checks/validate.env.j2

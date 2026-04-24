@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CHECK_TIMEOUT_SECS=600
+
+CHECK_COMMANDS=(
+	"python3 tests/test_render_validation_templates.py"
+	"python3 tests/test_family_python_repo_checks.py"
+	"python3 tests/test_validate_process_template_mode.py"
+	"python3 tests/test_validate_workflow_validate_bootstrap.py"
+)
+
+if [ "$#" -gt 0 ]; then
+	CHECK_COMMANDS=("$@")
+fi
+
+for check_cmd in "${CHECK_COMMANDS[@]}"; do
+	echo "# repo-check start: ${check_cmd}"
+	output_file="$(mktemp)" || { echo "# repo-check error: mktemp failed" >&2; exit 1; }
+	set +e
+	(cd "${ROOT_DIR}" && timeout "${CHECK_TIMEOUT_SECS}" /bin/sh -c "${check_cmd}") >"${output_file}" 2>&1
+	check_rc=$?
+	set -e
+	if [ "${check_rc}" -ne 0 ]; then
+		echo "# repo-check failed: ${check_cmd} rc=${check_rc} timeout_secs=${CHECK_TIMEOUT_SECS}" >&2
+		cat "${output_file}" >&2
+		rm -f "${output_file}"
+		exit 1
+	fi
+	cat "${output_file}"
+	rm -f "${output_file}"
+	echo "# repo-check ok: ${check_cmd}"
+done
