@@ -5345,6 +5345,222 @@ def test_verify_integration_fingerprints_skips_empty_object():
 		assert mod.main([str(empty)]) == 0
 
 
+def _run_verifier_list_mode(mod, fp_path: "Path") -> tuple[int, str, str]:
+	"""Invoke `mod.main(['--list-violated-files', str(fp_path)])` with
+	stdout+stderr captured via io.StringIO, returning (rc, stdout, stderr).
+
+	The in-tree custom test harness at the bottom of this file calls each
+	`test_*` function with zero args (see `main()` below), so pytest
+	fixtures like `capsys` are not available — use this helper instead.
+	"""
+	import io
+	import contextlib
+
+	out_buf = io.StringIO()
+	err_buf = io.StringIO()
+	with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+		rc = mod.main(["--list-violated-files", str(fp_path)])
+	return rc, out_buf.getvalue(), err_buf.getvalue()
+
+
+def test_verify_integration_fingerprints_list_mode_returns_violated_files():
+	# --list-violated-files must print the violated file paths to stdout
+	# and always exit 0 when the JSON parses — the prepare-step
+	# expansion logic in scripts/review_conflict_prepare.sh relies on
+	# this contract to collect files Codex is allowed to edit.
+	mod = _verifier_module()
+	files = {
+		# must_contain missing → file-a violated.
+		"scripts/file_a.py": "different content",
+		# must_not_contain matches → file-b violated.
+		"scripts/file_b.py": "BANNED_LINE\n",
+		# both fingerprints satisfied → file-c NOT violated.
+		"scripts/file_c.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/file_a.py", "regex": r"NEEDED_PATTERN"},
+				{"file": "scripts/file_c.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [
+				{"file": "scripts/file_b.py", "regex": r"BANNED_LINE"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		rc, out, _err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		printed = out.strip().splitlines()
+		assert printed == ["scripts/file_a.py", "scripts/file_b.py"], (
+			f"list-violated-files must emit sorted unique violated paths, got {printed!r}"
+		)
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_list_mode_emits_nothing_when_clean():
+	mod = _verifier_module()
+	files = {
+		"scripts/clean.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/clean.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		rc, out, _err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		assert out == ""
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_list_mode_fails_open_on_missing_file():
+	# Plumbing failure (missing fingerprints path) must still exit 2 in
+	# list mode so the caller can distinguish "no violations" (exit 0,
+	# empty stdout) from "could not determine".  Also assert the
+	# ::warning:: stays off stdout — the whole point of routing plumbing
+	# warnings to stderr is so list-mode stdout is paths-only even on
+	# fail-open paths.
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td:
+		missing = Path(td) / "nope.json"
+		rc, out, err = _run_verifier_list_mode(mod, missing)
+		assert rc == 2
+		assert out == "", f"plumbing warning leaked to stdout in list mode: {out!r}"
+		assert "::warning::" in err, (
+			f"expected ::warning:: annotation on stderr so operators still see it, got stderr={err!r}"
+		)
+
+
+def test_verify_integration_fingerprints_list_mode_missing_path_arg_keeps_stdout_clean():
+	# No positional path + no env var → main() returns 2 with a
+	# ::warning:: on stderr and nothing on stdout.
+	mod = _verifier_module()
+	# Scrub env so the verifier's env-fallback path is exercised.
+	prev_env = os.environ.pop("INTEGRATION_FINGERPRINTS_FILE", None)
+	try:
+		import io
+		import contextlib
+
+		out_buf = io.StringIO()
+		err_buf = io.StringIO()
+		with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+			rc = mod.main(["--list-violated-files"])
+		assert rc == 2
+		assert out_buf.getvalue() == "", (
+			f"no-path-supplied warning leaked to stdout in list mode: {out_buf.getvalue()!r}"
+		)
+		assert "::warning::" in err_buf.getvalue()
+	finally:
+		if prev_env is not None:
+			os.environ["INTEGRATION_FINGERPRINTS_FILE"] = prev_env
+
+
+def test_verify_integration_fingerprints_list_mode_unparseable_json_keeps_stdout_clean():
+	# JSON parse failure in list mode → exit 2, empty stdout, warning on stderr.
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td:
+		bad = Path(td) / "bad.json"
+		bad.write_text("not json at all", encoding="utf-8")
+		rc, out, err = _run_verifier_list_mode(mod, bad)
+		assert rc == 2
+		assert out == "", f"JSON-parse warning leaked to stdout: {out!r}"
+		assert "::warning::" in err
+
+
+def test_verify_integration_fingerprints_list_mode_never_prints_annotations_to_stdout():
+	# stdout contract: --list-violated-files emits file paths only.
+	# Any diagnostic output (::warning::, ::error::) MUST go to stderr.
+	# Regression guard for the PR #1581 review thread: a ::warning::
+	# leaked onto stdout would be captured as a phantom file path by
+	# scripts/review_conflict_prepare.sh and crash check_resolver_diff.sh
+	# downstream.  Exercise the _read_file fallback path (os.open
+	# raising an unexpected OSError on a real path) by pointing a
+	# must_contain fingerprint at the sandbox root — open(dir) raises
+	# IsADirectoryError on read, which is the non-FileNotFoundError
+	# branch that emits the stderr warning.
+	mod = _verifier_module()
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				# Point at the sandbox root (a directory) — open() will
+				# succeed but fh.read() raises IsADirectoryError in the
+				# generic except branch, exercising the warning path.
+				{"file": ".", "regex": r"ANY"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	sandbox, fp = _verifier_sandbox({}, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		rc, out, _err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		# stdout must contain ONLY file paths (one per line), never a
+		# GitHub Actions annotation line.
+		for line in out.splitlines():
+			assert not line.startswith("::"), (
+				f"stdout contract violation: annotation leaked into list-violated-files output: {line!r}"
+			)
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_list_mode_lists_missing_must_contain_file():
+	# A must_contain entry whose target file does not exist on disk at
+	# all is a violation — the resolver needs the path in its working
+	# set so it can (re-)create the file.
+	mod = _verifier_module()
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/vanished.py", "regex": r"ANY"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	# Sandbox has no files at all except the fingerprints.
+	sandbox, fp = _verifier_sandbox({}, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		import io
+		import contextlib
+
+		buf = io.StringIO()
+		with contextlib.redirect_stdout(buf):
+			rc = mod.main(["--list-violated-files", str(fp)])
+		assert rc == 0
+		assert buf.getvalue().strip().splitlines() == ["scripts/vanished.py"]
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def _extract_intent_fingerprint_extractor_py() -> str:
 	# Pull the embedded Python heredoc body out of the bash function
 	# capture_intent_fingerprints_for_merged_subissue so the extractor

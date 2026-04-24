@@ -7,9 +7,34 @@ orchestrator state field `merged_issue_fingerprints`) and walks each
 sub-issue's `must_contain` / `must_not_contain` regex lists against the
 post-resolve working tree (i.e. the cwd this script is invoked from).
 
+Two modes:
+
+  1. Default (verify): exit 0 if all fingerprints are satisfied, 1 on
+     violation, 2 on plumbing failure. Used by the conflict-resolver
+     step post-codex, pre-commit.
+
+  2. --list-violated-files <fingerprints.json>: print one unique file
+     path per line of every file that currently fails at least one
+     fingerprint check (must_contain not matching, or must_not_contain
+     matching, or must_contain referenced file missing). Always exits 0
+     even when violations exist; plumbing failures still exit 2. Used by
+     `scripts/review_conflict_prepare.sh` to expand the resolver's
+     working set so auto-merged files with silent sub-issue regressions
+     are surfaced to Codex in addition to files git marked as unmerged.
+
+     stdout contract in this mode: file paths ONLY, one per line.
+     Any diagnostic output (::warning::, ::error::, debug prints)
+     MUST go to stderr so the caller can pipe stdout directly into
+     the expanded-working-set artefacts without post-filtering.
+     GitHub Actions captures annotations from stderr too, so routing
+     warnings to stderr does not suppress the operator-visible
+     annotation in the run log.
+
 Exit codes:
-  0 — All fingerprints satisfied (or none recorded — fail-open empty).
-  1 — At least one fingerprint violation.
+  0 — verify: all fingerprints satisfied (or none recorded — fail-open
+      empty).  list-violated-files: always (prints zero or more paths).
+  1 — verify: at least one fingerprint violation. Not used in
+      list-violated-files mode.
   2 — Plumbing failure (file missing, JSON unparseable). Caller is
       expected to treat exit 2 as a soft warning, not a hard reject —
       the captured fingerprints might be stale or absent for legitimate
@@ -64,9 +89,17 @@ def _read_file(path: str, cache: dict[str, str | None]) -> str | None:
 	except FileNotFoundError:
 		content = None
 	except Exception as exc:  # noqa: BLE001 — verifier must not crash on bad file
+		# Route to stderr: in --list-violated-files mode stdout carries
+		# file paths the caller consumes as data (see
+		# scripts/review_conflict_prepare.sh); a `::warning::` line on
+		# stdout would be captured as a phantom path and crash the
+		# downstream check_resolver_diff.sh guard.  GitHub Actions
+		# renders annotations from stderr too, so the verify-mode
+		# annotation contract is unaffected.
 		print(
 			f"::warning::fingerprint verifier could not read {path}: {exc}",
 			flush=True,
+			file=sys.stderr,
 		)
 		content = None
 	cache[path] = content
@@ -81,6 +114,75 @@ def _fp_key(fp: Any) -> tuple[str, str] | None:
 	if not path or not regex_src:
 		return None
 	return (path, regex_src)
+
+
+def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
+	"""Return a sorted, de-duplicated list of file paths that currently
+	fail at least one fingerprint check against the cwd tree.
+
+	Mirrors the matching logic in :func:`verify` but records only the
+	offending file paths (for expanding the resolver's working set
+	pre-codex) — does not emit ::error:: annotations and never fails
+	hard on a violation.
+	"""
+	violated: set[str] = set()
+	file_cache: dict[str, str | None] = {}
+
+	for issue_key, entry in fingerprints.items():
+		if not isinstance(entry, dict):
+			continue
+		must_contain = entry.get("must_contain", []) or []
+		must_not_contain = entry.get("must_not_contain", []) or []
+
+		# Cross-dedup: skip (file, regex) pairs recorded in both lists
+		# for this issue (historic capture false positives).
+		mc_with_keys = [(fp, _fp_key(fp)) for fp in must_contain]
+		mnc_with_keys = [(fp, _fp_key(fp)) for fp in must_not_contain]
+		mc_keys = {k for _, k in mc_with_keys if k is not None}
+		mnc_keys = {k for _, k in mnc_with_keys if k is not None}
+		shared_keys = mc_keys & mnc_keys
+		if shared_keys:
+			must_contain = [fp for fp, key in mc_with_keys if key not in shared_keys]
+			must_not_contain = [fp for fp, key in mnc_with_keys if key not in shared_keys]
+
+		for fp in must_contain:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			regex_src = fp.get("regex", "")
+			if not path or not regex_src:
+				continue
+			content = _read_file(path, file_cache)
+			if content is None:
+				# Referenced file missing entirely — treat as violated
+				# so the resolver gets a chance to restore it.
+				violated.add(path)
+				continue
+			try:
+				pattern = re.compile(regex_src)
+			except re.error:
+				continue
+			if not pattern.search(content):
+				violated.add(path)
+
+		for fp in must_not_contain:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			regex_src = fp.get("regex", "")
+			if not path or not regex_src:
+				continue
+			content = _read_file(path, file_cache)
+			if content is None:
+				continue
+			try:
+				pattern = re.compile(regex_src)
+			except re.error:
+				continue
+			if pattern.search(content):
+				violated.add(path)
+
+	return sorted(violated)
 
 
 def verify(fingerprints: dict[str, Any], branch: str) -> int:
@@ -225,20 +327,42 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
 	args = list(sys.argv[1:] if argv is None else argv)
+
+	# Optional --list-violated-files <fingerprints.json> mode.  Keep the
+	# flag parsing deliberately minimal (no argparse) so this stays a
+	# single-file utility safe to bootstrap on older script refs.
+	list_mode = False
+	if args and args[0] == "--list-violated-files":
+		list_mode = True
+		args = args[1:]
+
 	fp_path = args[0] if args else os.environ.get("INTEGRATION_FINGERPRINTS_FILE", "")
 	if not fp_path:
+		# Route to stderr so the stdout contract ("file paths ONLY") holds
+		# in list mode even on plumbing failures.  GitHub Actions still
+		# renders ::warning:: annotations from stderr.
 		print(
 			"::warning::verify_integration_fingerprints: no fingerprints path supplied (positional arg or INTEGRATION_FINGERPRINTS_FILE env); skipping verification.",
 			flush=True,
+			file=sys.stderr,
 		)
 		return 2
 
 	branch = os.environ.get("INTEGRATION_BRANCH_NAME", "")
 	data, err = _load_fingerprints(fp_path)
 	if err is not None:
-		print(f"::warning::{err}; skipping verification.", flush=True)
+		# Same rationale as above — stderr keeps list-mode stdout clean.
+		print(f"::warning::{err}; skipping verification.", flush=True, file=sys.stderr)
 		return 2
 	assert data is not None  # for type narrowing
+
+	if list_mode:
+		# Always exit 0 in list mode — the caller is collecting input
+		# for the resolver's working set, not enforcing.  Empty JSON
+		# simply prints nothing.
+		for path in list_violated_files(data):
+			print(path, flush=True)
+		return 0
 
 	if not data:
 		print(
