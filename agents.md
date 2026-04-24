@@ -673,13 +673,13 @@ Contract:
 
 - **Gate job** (`jobs.gate.steps.evaluate` in `.github/workflows/review_autofix.yml`) — the same `gh api repos/<repo>/pulls/<n>` call that already fetches `.state` / `.merged` now also fetches `.head.ref` (no additional API call). When `.head.ref` matches the glob `claude/*`, the gate sets `should_run=false` and writes `skip_reason=claude_branch`. The check runs after `pr_closed` / `draft_or_skip_ai` / `skip_ai_marker` so those existing classifications still win when applicable (e.g. a merged `claude/*` PR keeps `skip_reason=pr_closed` and the `post_merge_dispatch` path still fires for orchestrator-linked issues).
 - **All triggers are gated**, including `workflow_dispatch`. The operator escape hatch for a `claude/*` branch is to rename the branch (or merge it) rather than to force the reviewer panel — unlike §20.1's `self_triggered_autofix`, there is no productive re-verification to unlock. Orchestrator conflict-dispatch and `EDITOR_CHANGES_LOST` re-dispatch paths already never target `claude/*` branches (those branches are never on an orchestrator tracking issue), so this does not affect the existing dispatch contracts.
-- **Fail-open on API error**: if the `gh api` call fails, `pr_head_ref` stays empty and the `claude/*` case is not entered (`[ -n "${pr_head_ref}" ]` guard). The gate falls through to normal run — a GitHub API blip must not silently drop review on a non-`claude/*` PR.
+- **Fail-closed at the shared-fetch layer**: the `claude_branch` check reuses the same `gh api repos/<repo>/pulls/<n>` response that classifies `pr_state` / `pr_merged`. If that fetch fails, `pr_state` stays empty and the pre-existing `pr_state_unknown` branch sets `should_run=false` *before* the `claude_branch` check is reached — the whole run is blocked until PR metadata can be retrieved, not silently routed around the new skip. The inner `[ -n "${pr_head_ref}" ]` guard on the `claude_branch` case is belt-and-suspenders: it prevents a spurious skip if `.head.ref` is somehow empty while `.state` is populated, which the shared fetch contract does not produce in practice.
 
 Log prefix contract (stable — renames are breaking changes per CLAUDE.md §6):
 
 - `AUTOFIX_GATE_SKIP reason=claude_branch pr=<n> head_ref=<ref>` — gate skip decision. Downstream log analysis should treat `claude_branch` as a distinct bucket from `self_triggered_autofix` / `draft_or_skip_ai` / `skip_ai_marker`.
 
-API cost audit (CLAUDE.md §17):
+API cost audit (CLAUDE.md §15):
 
 - Zero new `gh` calls. The existing per-run `gh api repos/<repo>/pulls/<n>` invocation's `--jq` filter was extended from `[.state, (.merged // false)] | @tsv` to `[.state, (.merged // false), (.head.ref // "")] | @tsv`. Net API cost is strongly negative on the hit path — one gate probe saves the full downstream reviewer/editor pipeline (7 LLM calls + dependent `gh` traffic).
 
