@@ -65,6 +65,7 @@ RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 # ----------------------------------------------------------------------
 INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS=3
 RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
+RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing.txt"
 RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
 RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
 RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
@@ -78,17 +79,31 @@ RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt
 # allowlist are off-limits to the resolver anyway (enforced by
 # the post-loop allowlist guard + check_resolver_diff.sh), so a
 # per-file allowlist snapshot is sufficient.
+#
+# Delete/modify conflicts: an allowlist path is listed as unmerged
+# even when the working-tree file is absent (e.g. both-sides-deleted,
+# or modify/delete resolved to deletion).  Record those paths in
+# RESOLVER_ATTEMPT_BASE_MISSING_FILE so the restore function can
+# `rm -f` them between retries — otherwise a file created by a
+# failed attempt at such a path would leak into the next attempt's
+# tree and silently violate the "retry starts from post-merge-replay
+# state" contract.
+: > "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"
 if [ -f "${RESOLVER_ALLOWLIST_FILE}" ] && [ -s "${RESOLVER_ALLOWLIST_FILE}" ]; then
   mkdir -p "${RESOLVER_ATTEMPT_BASE_DIR}"
   while IFS= read -r _snap_path; do
     [ -z "${_snap_path}" ] && continue
-    [ -f "${_snap_path}" ] || continue
+    if [ ! -f "${_snap_path}" ]; then
+      printf '%s\n' "${_snap_path}" >> "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"
+      continue
+    fi
     _snap_dst_dir="${RESOLVER_ATTEMPT_BASE_DIR}/$(dirname "${_snap_path}")"
     mkdir -p "${_snap_dst_dir}"
     cp -a "${_snap_path}" "${RESOLVER_ATTEMPT_BASE_DIR}/${_snap_path}"
   done < "${RESOLVER_ALLOWLIST_FILE}"
   _snap_count="$(find "${RESOLVER_ATTEMPT_BASE_DIR}" -type f 2>/dev/null | wc -l | tr -d '[:space:]')"
-  echo "Resolver retry-base snapshot captured: ${_snap_count} file(s)."
+  _snap_missing_count="$(wc -l < "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}" | tr -d '[:space:]')"
+  echo "Resolver retry-base snapshot captured: ${_snap_count} file(s), ${_snap_missing_count} allowlist path(s) absent at snapshot time (delete/rename conflicts — will be re-deleted on restore)."
 fi
 
 # _restore_attempt_base: restore every snapshotted allowlist file to
@@ -111,6 +126,20 @@ _restore_attempt_base() {
       cp -a "${_src}" "${_rpath}" || _rc=1
     fi
   done < "${RESOLVER_ALLOWLIST_FILE}"
+  # Re-delete allowlist paths that were absent at snapshot time
+  # (delete/modify, both-sides-deleted, or rename conflicts).  A
+  # failed first attempt may have created files at those paths
+  # trying to resolve the conflict; leaving them in place would
+  # mean the retry's starting tree silently differs from the
+  # post-merge-replay state.  Restricted to the missing-list
+  # captured before attempt 1, so we never touch anything outside
+  # the resolver's allowlist scope.
+  if [ -s "${RESOLVER_ATTEMPT_BASE_MISSING_FILE:-/nonexistent}" ]; then
+    while IFS= read -r _missing_rpath; do
+      [ -z "${_missing_rpath}" ] && continue
+      [ -e "${_missing_rpath}" ] && rm -f -- "${_missing_rpath}"
+    done < "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"
+  fi
   return "${_rc}"
 }
 
