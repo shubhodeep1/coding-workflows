@@ -338,16 +338,21 @@ def main(argv: list[str] | None = None) -> int:
 
 	fp_path = args[0] if args else os.environ.get("INTEGRATION_FINGERPRINTS_FILE", "")
 	if not fp_path:
+		# Route to stderr so the stdout contract ("file paths ONLY") holds
+		# in list mode even on plumbing failures.  GitHub Actions still
+		# renders ::warning:: annotations from stderr.
 		print(
 			"::warning::verify_integration_fingerprints: no fingerprints path supplied (positional arg or INTEGRATION_FINGERPRINTS_FILE env); skipping verification.",
 			flush=True,
+			file=sys.stderr,
 		)
 		return 2
 
 	branch = os.environ.get("INTEGRATION_BRANCH_NAME", "")
 	data, err = _load_fingerprints(fp_path)
 	if err is not None:
-		print(f"::warning::{err}; skipping verification.", flush=True)
+		# Same rationale as above — stderr keeps list-mode stdout clean.
+		print(f"::warning::{err}; skipping verification.", flush=True, file=sys.stderr)
 		return 2
 	assert data is not None  # for type narrowing
 

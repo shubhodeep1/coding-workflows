@@ -5435,11 +5435,55 @@ def test_verify_integration_fingerprints_list_mode_emits_nothing_when_clean():
 def test_verify_integration_fingerprints_list_mode_fails_open_on_missing_file():
 	# Plumbing failure (missing fingerprints path) must still exit 2 in
 	# list mode so the caller can distinguish "no violations" (exit 0,
-	# empty stdout) from "could not determine".
+	# empty stdout) from "could not determine".  Also assert the
+	# ::warning:: stays off stdout — the whole point of routing plumbing
+	# warnings to stderr is so list-mode stdout is paths-only even on
+	# fail-open paths.
 	mod = _verifier_module()
 	with tempfile.TemporaryDirectory() as td:
 		missing = Path(td) / "nope.json"
-		assert mod.main(["--list-violated-files", str(missing)]) == 2
+		rc, out, err = _run_verifier_list_mode(mod, missing)
+		assert rc == 2
+		assert out == "", f"plumbing warning leaked to stdout in list mode: {out!r}"
+		assert "::warning::" in err, (
+			f"expected ::warning:: annotation on stderr so operators still see it, got stderr={err!r}"
+		)
+
+
+def test_verify_integration_fingerprints_list_mode_missing_path_arg_keeps_stdout_clean():
+	# No positional path + no env var → main() returns 2 with a
+	# ::warning:: on stderr and nothing on stdout.
+	mod = _verifier_module()
+	# Scrub env so the verifier's env-fallback path is exercised.
+	prev_env = os.environ.pop("INTEGRATION_FINGERPRINTS_FILE", None)
+	try:
+		import io
+		import contextlib
+
+		out_buf = io.StringIO()
+		err_buf = io.StringIO()
+		with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+			rc = mod.main(["--list-violated-files"])
+		assert rc == 2
+		assert out_buf.getvalue() == "", (
+			f"no-path-supplied warning leaked to stdout in list mode: {out_buf.getvalue()!r}"
+		)
+		assert "::warning::" in err_buf.getvalue()
+	finally:
+		if prev_env is not None:
+			os.environ["INTEGRATION_FINGERPRINTS_FILE"] = prev_env
+
+
+def test_verify_integration_fingerprints_list_mode_unparseable_json_keeps_stdout_clean():
+	# JSON parse failure in list mode → exit 2, empty stdout, warning on stderr.
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td:
+		bad = Path(td) / "bad.json"
+		bad.write_text("not json at all", encoding="utf-8")
+		rc, out, err = _run_verifier_list_mode(mod, bad)
+		assert rc == 2
+		assert out == "", f"JSON-parse warning leaked to stdout: {out!r}"
+		assert "::warning::" in err
 
 
 def test_verify_integration_fingerprints_list_mode_never_prints_annotations_to_stdout():
