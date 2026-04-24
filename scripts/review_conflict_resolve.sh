@@ -39,19 +39,358 @@ PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
 CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 
-attempt=1
-while [ "${attempt}" -le 3 ]; do
-  tmp_output="$(mktemp)"
-  if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${CONFLICT_RESOLVER_PROMPT_FILE}")" > "${tmp_output}"; then
-    if [ -s "${tmp_output}" ]; then
-      mv "${tmp_output}" "${CONFLICT_RESOLVER_SUMMARY_FILE}"
-      echo "Conflict resolver succeeded on attempt ${attempt}."
-      break
+# ----------------------------------------------------------------------
+# Retry-loop hardening (fix for the recurring integration-sync
+# "fingerprint verification FAILED" class of run failures).
+#
+# Previously the retry loop only retried when `codex exec` itself
+# failed or produced empty output — both rare.  Real quality gates
+# (residual conflict markers, fingerprint regressions) were evaluated
+# post-loop, so a bad-but-well-formed model output terminated the
+# run with no retry consumed on the actual failure mode.  Large
+# integration PRs hit this reliably.
+#
+# The restructured loop below runs the soft quality gates (marker
+# pre-scan + fingerprint verify) INSIDE the retry loop.  On a soft
+# failure the working tree is restored to the post-merge-replay
+# state captured here, and the next attempt is given a reflexion
+# prompt naming the exact violations it must fix.  Hard gates
+# (workflow-file allowlist, check_resolver_diff.sh) still run once
+# post-loop on the accepted attempt — retrying them is unsafe (a
+# hallucinated workflow edit must never be handed back to the
+# model as "try again, here's what went wrong").
+#
+# INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS bounds the loop; kept at
+# 3 to match the pre-restructure codex-liveness retry count.
+# ----------------------------------------------------------------------
+INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS=3
+RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
+RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing.txt"
+RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
+RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
+RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
+RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
+
+# Snapshot every in-scope file (the resolver's allowlist, which
+# prepare step populated with git-marked unmerged paths plus the
+# fingerprint-violation expansion set) so retries re-start from
+# the same post-merge-replay state instead of layering new edits
+# on top of the previous rejected output.  Files outside the
+# allowlist are off-limits to the resolver anyway (enforced by
+# the post-loop allowlist guard + check_resolver_diff.sh), so a
+# per-file allowlist snapshot is sufficient.
+#
+# Delete/modify conflicts: an allowlist path is listed as unmerged
+# even when the working-tree file is absent (e.g. both-sides-deleted,
+# or modify/delete resolved to deletion).  Record those paths in
+# RESOLVER_ATTEMPT_BASE_MISSING_FILE so the restore function can
+# `rm -f` them between retries — otherwise a file created by a
+# failed attempt at such a path would leak into the next attempt's
+# tree and silently violate the "retry starts from post-merge-replay
+# state" contract.
+: > "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"
+if [ -f "${RESOLVER_ALLOWLIST_FILE}" ] && [ -s "${RESOLVER_ALLOWLIST_FILE}" ]; then
+  mkdir -p "${RESOLVER_ATTEMPT_BASE_DIR}"
+  while IFS= read -r _snap_path; do
+    [ -z "${_snap_path}" ] && continue
+    if [ ! -f "${_snap_path}" ]; then
+      printf '%s\n' "${_snap_path}" >> "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"
+      continue
     fi
+    _snap_dst_dir="${RESOLVER_ATTEMPT_BASE_DIR}/$(dirname "${_snap_path}")"
+    mkdir -p "${_snap_dst_dir}"
+    cp -a "${_snap_path}" "${RESOLVER_ATTEMPT_BASE_DIR}/${_snap_path}"
+  done < "${RESOLVER_ALLOWLIST_FILE}"
+  _snap_count="$(find "${RESOLVER_ATTEMPT_BASE_DIR}" -type f 2>/dev/null | wc -l | tr -d '[:space:]')"
+  _snap_missing_count="$(wc -l < "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}" | tr -d '[:space:]')"
+  echo "Resolver retry-base snapshot captured: ${_snap_count} file(s), ${_snap_missing_count} allowlist path(s) absent at snapshot time (delete/rename conflicts — will be re-deleted on restore)."
+fi
+
+# _restore_attempt_base: restore every snapshotted allowlist file to
+# its post-merge-replay content.  Used between retries so each
+# attempt sees the same starting tree.  Falls open on a missing
+# snapshot (the pre-loop snapshot step only runs when the allowlist
+# is non-empty; an empty allowlist means there was nothing to
+# resolve anyway).
+_restore_attempt_base() {
+  if [ ! -d "${RESOLVER_ATTEMPT_BASE_DIR}" ]; then
+    echo "::warning::Resolver retry-base snapshot missing at ${RESOLVER_ATTEMPT_BASE_DIR}; retry will layer on top of previous attempt's output."
+    return 0
   fi
-  rm -f "${tmp_output}"
-  if [ "${attempt}" -eq 3 ]; then
-    echo "Conflict resolver failed after retries."
+  local _rc=0
+  while IFS= read -r _rpath; do
+    [ -z "${_rpath}" ] && continue
+    local _src="${RESOLVER_ATTEMPT_BASE_DIR}/${_rpath}"
+    if [ -f "${_src}" ]; then
+      mkdir -p "$(dirname "${_rpath}")" 2>/dev/null || true
+      cp -a "${_src}" "${_rpath}" || _rc=1
+    fi
+  done < "${RESOLVER_ALLOWLIST_FILE}"
+  # Re-delete allowlist paths that were absent at snapshot time
+  # (delete/modify, both-sides-deleted, or rename conflicts).  A
+  # failed first attempt may have created files at those paths
+  # trying to resolve the conflict; leaving them in place would
+  # mean the retry's starting tree silently differs from the
+  # post-merge-replay state.  Restricted to the missing-list
+  # captured before attempt 1, so we never touch anything outside
+  # the resolver's allowlist scope.
+  if [ -s "${RESOLVER_ATTEMPT_BASE_MISSING_FILE:-/nonexistent}" ]; then
+    while IFS= read -r _missing_rpath; do
+      [ -z "${_missing_rpath}" ] && continue
+      [ -e "${_missing_rpath}" ] && rm -f -- "${_missing_rpath}"
+    done < "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"
+  fi
+  return "${_rc}"
+}
+
+# _build_retry_prompt: render the reflexion prelude with the
+# previous attempt's violations substituted in, then concatenate
+# with the original resolver prompt.  Writes the combined prompt
+# to ${RESOLVER_RETRY_PROMPT_FILE} and echoes that path.
+#
+# Only applied when IS_INTEGRATION_SYNC=true — the prelude text
+# references INTENT_FINGERPRINTS and merged-sub-issue semantics
+# that only the integration-sync resolver prompt carries.  For
+# non-integration runs (generic conflict-resolver prompt) the
+# retry uses the original prompt verbatim, which is still a
+# strict improvement over today's one-shot behaviour because the
+# working tree is now reset between attempts.
+#
+# Fail-open: if the prelude template is missing (older script_ref
+# on a consumer repo), retry with the original prompt verbatim
+# and emit a warning.  The soft retry itself is the core win; the
+# reflexion content is an optimisation on top of it.
+_build_retry_prompt() {
+  local _prev_attempt="$1"
+  local _marker_file="$2"
+  local _fp_file="$3"
+  local _prelude_tpl="${SUPPORT_PROMPTS_DIR:-prompts}/integration-sync-conflict-resolver-retry-prelude.txt"
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] || [ ! -f "${_prelude_tpl}" ]; then
+    if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then
+      echo "::warning::Resolver retry prelude template missing at ${_prelude_tpl}; retrying with original prompt verbatim (no reflexion)."
+    fi
+    cp -a "${CONFLICT_RESOLVER_PROMPT_FILE}" "${RESOLVER_RETRY_PROMPT_FILE}"
+    return 0
+  fi
+  local _marker_count=0 _fp_count=0
+  local _marker_list="(none)" _fp_details="(none)"
+  if [ -s "${_marker_file}" ]; then
+    _marker_count="$(wc -l < "${_marker_file}" | tr -d '[:space:]')"
+    _marker_list="$(sed 's/^/          - /' "${_marker_file}")"
+  fi
+  if [ -s "${_fp_file}" ]; then
+    _fp_count="$(wc -l < "${_fp_file}" | tr -d '[:space:]')"
+    _fp_details="$(sed 's/^/          - /' "${_fp_file}")"
+  fi
+  # Render via python3 (same substitution pattern as
+  # review_conflict_prepare.sh) so multi-line values with shell
+  # metacharacters do not need quoting gymnastics.
+  PRELUDE_TPL="${_prelude_tpl}" \
+    ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
+    PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
+    MAX_ATTEMPTS="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
+    MARKER_VIOLATION_COUNT="${_marker_count}" \
+    MARKER_VIOLATION_FILES="${_marker_list}" \
+    FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
+    FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
+    python3 -c "import os,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8').read(); keys=['PREVIOUS_ATTEMPT_NUMBER','MAX_ATTEMPTS','MARKER_VIOLATION_COUNT','MARKER_VIOLATION_FILES','FINGERPRINT_VIOLATION_COUNT','FINGERPRINT_VIOLATION_DETAILS']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+    > "${RESOLVER_RETRY_PROMPT_FILE}"
+}
+
+# _scan_residual_markers: write the list of in-scope files that
+# still contain unresolved Git conflict markers to
+# ${RESOLVER_MARKER_VIOLATIONS_FILE}.  Scans only files in the
+# allowlist — the resolver has no business editing anything else,
+# and a stray marker inside an unrelated file would be a
+# pre-existing repo state, not a resolver regression.
+_scan_residual_markers() {
+  : > "${RESOLVER_MARKER_VIOLATIONS_FILE}"
+  [ -s "${RESOLVER_ALLOWLIST_FILE}" ] || return 0
+  while IFS= read -r _mpath; do
+    [ -z "${_mpath}" ] && continue
+    [ -f "${_mpath}" ] || continue
+    # Match only the canonical start/end markers.  The `=======`
+    # separator is intentionally omitted — every conflict hunk
+    # has a matching start and end, so scanning for either is
+    # sufficient, and a bare `=======` line could legitimately
+    # appear in prose/documentation files.  Same pattern
+    # `review_conflict_prepare.sh` uses for its belt-and-suspenders
+    # git-grep conflicted-paths capture.
+    if grep -qE '^(<<<<<<< |>>>>>>> )' -- "${_mpath}" 2>/dev/null; then
+      printf '%s\n' "${_mpath}" >> "${RESOLVER_MARKER_VIOLATIONS_FILE}"
+    fi
+  done < "${RESOLVER_ALLOWLIST_FILE}"
+}
+
+# _verify_fingerprints_soft: run verify_integration_fingerprints.py
+# with annotations suppressed (routed to a capture file) on
+# intermediate attempts so retried-away failures do not spam the
+# GHA log with false-positive error annotations.  On the final
+# attempt the caller re-runs the verifier at normal verbosity so
+# the abort annotation is visible exactly as today.
+#
+# Sets RESOLVER_FP_EXIT to the verifier exit code and writes the
+# parsed violation list (one per line, without `::error::  - `
+# prefix) to ${RESOLVER_FP_VIOLATIONS_FILE}.
+RESOLVER_FP_EXIT=0
+_verify_fingerprints_soft() {
+  RESOLVER_FP_EXIT=0
+  : > "${RESOLVER_FP_VIOLATIONS_FILE}"
+  : > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}"
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    return 0
+  fi
+  if [ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || [ ! -f "${INTEGRATION_FINGERPRINTS_FILE}" ]; then
+    return 0
+  fi
+  local _fp_size
+  _fp_size="$(wc -c < "${INTEGRATION_FINGERPRINTS_FILE}" 2>/dev/null || echo 0)"
+  if [ "${_fp_size}" -le 2 ]; then
+    return 0
+  fi
+  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+    return 0
+  fi
+  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      "${INTEGRATION_FINGERPRINTS_FILE}" \
+      > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
+  # Extract per-violation lines and strip the annotation prefix so
+  # the retry prelude gets clean, human-readable bullets.  Only
+  # exit 1 (real hard violations) populates the violations file;
+  # exit 2 is a plumbing failure (malformed fingerprints JSON,
+  # missing verifier binary elsewhere) and retrying against it
+  # cannot make progress, so we fail-open just like the
+  # pre-restructure post-loop case statement did
+  # (`2|*) echo "::warning::..."`).  The loop's success check
+  # treats exit 0 and exit 2 symmetrically.
+  if [ "${RESOLVER_FP_EXIT}" -eq 1 ] && [ -s "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" ]; then
+    grep -E '^::error::  - ' "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" \
+      | sed 's/^::error::  - //' \
+      > "${RESOLVER_FP_VIOLATIONS_FILE}" || true
+  elif [ "${RESOLVER_FP_EXIT}" -eq 2 ]; then
+    echo "::warning::Integration fingerprint verification could not run (exit 2 — plumbing failure); continuing without intent guard for this commit. See ${RESOLVER_FP_VERIFIER_OUTPUT_FILE} for details."
+  fi
+}
+
+attempt=1
+while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
+  # On retries: restore the working tree to its post-merge-replay
+  # state (so retries don't compound the previous attempt's bad
+  # edits) and build a reflexion prompt naming the previous
+  # attempt's violations.
+  if [ "${attempt}" -gt 1 ]; then
+    _restore_attempt_base || echo "::warning::Resolver retry-base restore reported a non-fatal error; continuing."
+    _build_retry_prompt "$((attempt - 1))" \
+      "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
+      "${RESOLVER_FP_VIOLATIONS_FILE}"
+    _effective_prompt_file="${RESOLVER_RETRY_PROMPT_FILE}"
+    echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]'), prev fingerprint_violations=$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]'))."
+  else
+    _effective_prompt_file="${CONFLICT_RESOLVER_PROMPT_FILE}"
+  fi
+
+  tmp_output="$(mktemp)"
+  if ! codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${_effective_prompt_file}")" > "${tmp_output}"; then
+    rm -f "${tmp_output}"
+    if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
+      echo "Conflict resolver failed after retries."
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+    continue
+  fi
+  if [ ! -s "${tmp_output}" ]; then
+    rm -f "${tmp_output}"
+    if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
+      echo "Conflict resolver failed after retries."
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+    continue
+  fi
+  mv "${tmp_output}" "${CONFLICT_RESOLVER_SUMMARY_FILE}"
+  echo "Conflict resolver produced output on attempt ${attempt}; running soft validation."
+
+  # Soft validation #1: residual Git conflict markers.  A
+  # resolver output that leaves markers behind never parses
+  # correctly downstream and always represents a regression
+  # from the post-merge state — retry is strictly better than
+  # abort here.  Cheap (single grep per in-scope file), runs
+  # before the Python-heavy fingerprint verifier.
+  _scan_residual_markers
+  _marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]')"
+
+  # Soft validation #2: integration-sync fingerprint verification.
+  # On intermediate attempts the verifier output is captured
+  # (no annotations); on the final attempt we re-run it at
+  # normal verbosity below so the operator-facing error messages
+  # match today's log shape exactly.
+  _verify_fingerprints_soft
+  _fp_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]')"
+
+  # Success: no residual markers AND verifier was non-rejecting.
+  # Treat exit 0 (all fingerprints satisfied) and exit 2 (plumbing
+  # failure — fail-open per the verifier's contract, same as the
+  # pre-restructure `2|*) echo "::warning::..."` branch) as both
+  # passing the soft gate.  Only exit 1 is a real violation
+  # worth retrying against.
+  if [ "${_marker_count}" -eq 0 ] && { [ "${RESOLVER_FP_EXIT}" -eq 0 ] || [ "${RESOLVER_FP_EXIT}" -eq 2 ]; }; then
+    echo "Conflict resolver succeeded on attempt ${attempt} (soft validation passed)."
+    # Re-emit the verifier's info line at normal verbosity so
+    # operators see the "must_contain satisfied N/M" summary
+    # that exists today.  Plumbing-exit (2) was not a soft
+    # failure; just pass through any captured output.
+    if [ -s "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" ]; then
+      cat "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" || true
+    fi
+    break
+  fi
+
+  echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed soft validation: residual_markers=${_marker_count} fingerprint_violations=${_fp_count}."
+  if [ "${_marker_count}" -gt 0 ]; then
+    echo "Files with residual Git conflict markers (first 10):"
+    head -10 "${RESOLVER_MARKER_VIOLATIONS_FILE}" | sed 's/^/  - /' || true
+  fi
+  if [ "${_fp_count}" -gt 0 ]; then
+    echo "Fingerprint violations (first 10):"
+    head -10 "${RESOLVER_FP_VIOLATIONS_FILE}" | sed 's/^/  - /' || true
+  fi
+
+  if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
+    # Final attempt exhausted.  Re-run the verifier at normal
+    # verbosity so the annotated ::error:: lines (including the
+    # "Aborting [ai-merge-resolve] commit: integration
+    # fingerprint verification rejected the resolver output."
+    # string consumed by downstream tooling) land in the log
+    # exactly as today.  The IS_INTEGRATION_SYNC gate keeps
+    # non-integration runs on their current path.
+    if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
+       && [ -n "${INTEGRATION_FINGERPRINTS_FILE:-}" ] \
+       && [ -f "${INTEGRATION_FINGERPRINTS_FILE}" ] \
+       && [ -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+      _final_fp_exit=0
+      INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+        python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+          "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
+      if [ "${_final_fp_exit}" -eq 1 ]; then
+        echo "::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output."
+        echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+        exit 1
+      fi
+    fi
+    if [ "${_marker_count}" -gt 0 ]; then
+      echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts; ${_marker_count} file(s) still contain unresolved Git conflict markers. Aborting [ai-merge-resolve] commit."
+      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      exit 1
+    fi
+    # Any other soft-failure class falls through to a generic
+    # abort so the orchestrator integration judge takes over on
+    # the next poll tick.
+    echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with soft-validation failures that could not be auto-recovered."
+    echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
     exit 1
   fi
   attempt=$((attempt + 1))
@@ -321,94 +660,27 @@ if [ -n "$(git status --porcelain)" ]; then
   fi
 
   # ============================================================
-  # Integration-sync intent fingerprint verification (#1057
-  # auto-heal hardening).
+  # Integration-sync intent fingerprint verification now runs
+  # INSIDE the retry loop above (see the "Retry-loop hardening"
+  # block at the top of this script).  Moving it from here to
+  # inside the loop is the fix for the recurring
+  # "Aborting [ai-merge-resolve] commit: integration
+  # fingerprint verification rejected the resolver output."
+  # failure on large integration PRs — previously the verifier
+  # ran once post-loop and any violation terminated the run
+  # with zero retries consumed on the real failure class.
   #
-  # When this resolver run is acting on an orchestrator
-  # integration branch (IS_INTEGRATION_SYNC=true was exported
-  # by the prepare step), the orchestrator state has captured
-  # intent fingerprints for every sub-issue PR that has merged
-  # into this branch.  Verify the resolver's output preserves
-  # those fingerprints BEFORE creating the [ai-merge-resolve]
-  # commit:
-  #
-  #   - must_contain[]: every regex MUST still match its file
-  #     in the post-resolve tree.  A failed match means the
-  #     resolver removed a line the merged sub-issue added —
-  #     a silent intent regression.
-  #
-  #   - must_not_contain[]: no regex may match its file in
-  #     the post-resolve tree.  A successful match means the
-  #     resolver re-introduced a line the merged sub-issue
-  #     deleted — a silent intent regression.
-  #
-  # Going-forward only (Q4:A): sub-issues merged before
-  # fingerprinting was enabled have no entries in the
-  # fingerprints JSON and are silently skipped.  Fail-open on
-  # any plumbing error: a missing fingerprints file or
-  # unparseable JSON logs a warning and lets the resolver
-  # commit through (the existing check_resolver_diff.sh
-  # guards still apply).  Verification failures, however, are
-  # HARD errors — the whole point is to surface silent
-  # regressions before they ship.
-  #
-  # #5 silent-regression detector: as a belt-and-braces signal
-  # for the "resolver took the other side verbatim" failure
-  # mode, also emit a warning if the post-resolve tree
-  # contains strictly fewer total must_contain markers than
-  # were captured.  The hard match check above already
-  # rejects any specific drop, but the count delta is a
-  # cheap way to catch coordinated regressions in the logs.
-  if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then
-    if [ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || [ ! -f "${INTEGRATION_FINGERPRINTS_FILE}" ]; then
-      echo "::warning::Integration fingerprint verification skipped — INTEGRATION_FINGERPRINTS_FILE missing. Resolver commit allowed but downstream sub-issue intent regressions will not be caught by this guard."
-    else
-      _fp_size="$(wc -c < "${INTEGRATION_FINGERPRINTS_FILE}" 2>/dev/null || echo 0)"
-      if [ "${_fp_size}" -le 2 ]; then
-        echo "Integration fingerprint verification: no fingerprints recorded for any merged sub-issue (${INTEGRATION_FINGERPRINTS_FILE} is empty/{}). Skipping verification."
-      else
-        echo "Integration fingerprint verification: checking resolver output against captured intent fingerprints..."
-        # Delegate to scripts/verify_integration_fingerprints.py
-        # (optional bootstrap entry — see OPTIONAL_BOOTSTRAP_SCRIPTS).
-        # Exit codes:
-        #   0 — all fingerprints satisfied
-        #   1 — at least one fingerprint violation (HARD error)
-        #   2 — plumbing failure (file missing / unparseable):
-        #       FAIL OPEN — warn and continue.
-        # Older consumer script_refs may not have the verifier yet;
-        # in that case the bootstrap step warns and continues, and
-        # we fall open here too.
-        _fp_verifier_exit=0
-        if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
-          echo "::warning::verify_integration_fingerprints.py not bootstrapped on this script_ref; integration fingerprint verification skipped (fail-open). Resolver commit allowed."
-          _fp_verifier_exit=2
-        else
-          INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
-            python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
-              "${INTEGRATION_FINGERPRINTS_FILE}" || _fp_verifier_exit=$?
-        fi
-        case "${_fp_verifier_exit}" in
-          0)
-            ;;
-          1)
-            # Hard violation — surface as a structured error
-            # and bail out of the resolver step.  The merge
-            # state is left intact so the orchestrator's
-            # next poll tick re-enters heal_integration_-
-            # branch_conflict, which (per Q3:A default
-            # INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1) will
-            # immediately escalate to the integration judge.
-            echo "::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output."
-            echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
-            exit 1
-            ;;
-          2|*)
-            echo "::warning::Integration fingerprint verification could not run (exit ${_fp_verifier_exit}); continuing without intent guard for this commit."
-            ;;
-        esac
-      fi
-    fi
-  fi
+  # IS_INTEGRATION_SYNC gate, fingerprints-file gate, size
+  # check, and the fail-open-on-plumbing-error (exit 2)
+  # semantics all live in _verify_fingerprints_soft and the
+  # exhausted-retry tail in the loop above.  The hard error
+  # string ("Aborting [ai-merge-resolve] commit: integration
+  # fingerprint verification rejected the resolver output.")
+  # is preserved verbatim at the end of the loop's final
+  # attempt so downstream tooling (and
+  # tests/test_orchestrate_poll_process.py) continues to
+  # match.
+  # ============================================================
 
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
   git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
