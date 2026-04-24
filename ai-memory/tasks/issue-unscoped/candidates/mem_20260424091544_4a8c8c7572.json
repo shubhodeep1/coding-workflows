@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_lint.py:918-922 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `_runtime_http_tests_required` is defined but never called.\n  WHY: All reviewers that mentioned it said the helper is dead code and the logic has been inlined with `context.is_test_output_selected()`.\n- agents.md:183-195 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: `VALIDATION_USE_TEMPLATES` is documented twice in the same section.\n  WHY: Two entries describe the same environment variable, which creates redundant documentation.\n- scripts/validate_process.sh:1798-1801 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `classify_preflight_failure()` still checks for `Missing validation/validate.env`, but that message is no longer emitted.\n  WHY: The preflight path no longer logs that exact string, so this branch can never match.\n- scripts/implement_diagnose_post_codex_failure.sh:191-192 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `grep -Iq .` misclassifies newline-only text files as binary in the diagnostic helper.\n  WHY: `.` does not match newline characters, so files containing only newlines fall through to `[binary file omitted]`.\n- scripts/validation_lint.py:1091-1097 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `hardhat` is special-cased out of the generic canary-tool dependency check.\n  WHY: Minimax and z-ai reported the bypass as a bug, while moonshot said it is intentional because hardhat is validated elsewhere.\n- scripts/render_validation_templates.py:290-301 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `CUSTOM_TEST_COMMAND` runs via `/bin/sh -c` in a separate shell from the bash wrapper.\n  WHY: Wrapper-local variables will not be available to the command, though minimax noted that this may be intentional for self-contained custom tests.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validation_lint.py:919-922 | confidence=5\n  PROBLEM: `_runtime_http_tests_required` is defined but never called anywhere in the codebase.\n  WHY: The code now uses `context.is_test_output_selected()` directly instead of this helper.\n- agents.md:184 and 195 | confidence=5\n  PROBLEM: `VALIDATION_USE_TEMPLATES` is documented twice.\n  WHY: The environment variable appears once at line 184 and again at line 195 with a \"(supersedes)\" marker.\n- scripts/validate_process.sh:1798-1800 | confidence=4\n  PROBLEM: `classify_preflight_failure()` checks for `Missing validation/validate.env`.\n  WHY: That exact string is no longer emitted by `run_preflight_checks()`, so the branch is dead.\n- scripts/implement_diagnose_post_codex_failure.sh:192 | confidence=5\n  PROBLEM: `grep -Iq .` misclassifies newline-only text files as binary.\n  WHY: `.` does not match newline characters, so files containing only newlines get reported as `[binary file omitted]`.\n- scripts/validation_lint.py:1094-1097 | confidence=4\n  PROBLEM: `hardhat` bypasses the canary-tool dependency check.\n  WHY: If `hardhat` appears in `CANARY_TOOLS`, the loop skips verifying that the Dockerfile installs it.\n- scripts/render_validation_templates.py:290-301 | severity=low | confidence=3\n  PROBLEM: `CUSTOM_TEST_COMMAND` runs in a separate shell from the bash wrapper.\n  WHY: Wrapper-local variables won't be available to the command, though this appears to be by design for self-contained trusted commands.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validation_lint.py:918-921 | confidence=5\n  PROBLEM: `_runtime_http_tests_required` is defined but never called anywhere in the codebase.\n  WHY: A grep found only the definition, so the helper is leftover dead code from refactoring.\n- scripts/implement_diagnose_post_codex_failure.sh:191 | confidence=4\n  PROBLEM: `grep -Iq .` misclassifies newline-only text files as binary.\n  WHY: `.` does not match newline characters, so a file containing only newlines falls into the `[binary file omitted]` path.\n- scripts/validate_process.sh:1798-1801 | confidence=4\n  PROBLEM: `classify_preflight_failure()` still checks for `Missing validation/validate.env`.\n  WHY: That exact message is no longer emitted by `run_preflight_checks()`, so this branch can never match.\n- scripts/validation_lint.py:1092-1094 | confidence=2\n  PROBLEM: `hardhat` is skipped by the generic canary-tool dependency check.\n  WHY: Moonshot considered it intentional because hardhat has dedicated validation immediately after this block, so the bypass avoids double-counting.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/validation_lint.py:918-921 | confidence=5\n  PROBLEM: `_runtime_http_tests_required` is defined but never referenced anywhere in the codebase.\n  WHY: The graceful-shutdown validation now checks `context.is_test_output_selected()` inline instead of using this helper.\n- agents.md:183 and 194 | confidence=5\n  PROBLEM: `VALIDATION_USE_TEMPLATES` is documented twice in the same section.\n  WHY: The same environment variable appears twice, which conflicts with the append-only documentation rule and creates confusion.\n- scripts/validate_process.sh:1798-1800 | confidence=4\n  PROBLEM: `classify_preflight_failure()` still checks for `Missing validation/validate.env`.\n  WHY: `run_preflight_checks()` no longer emits that exact message, so the branch can never match.\n- scripts/implement_diagnose_post_codex_failure.sh:191-192 | confidence=4\n  PROBLEM: `grep -Iq .` misclassifies newline-only text files as binary in diagnostic output.\n  WHY: `.` does not match newline characters, so text files containing only blank lines fall through to `[binary file omitted]`.\n- scripts/validation_lint.py:1091-1094 | confidence=3\n  PROBLEM: Hardhat has an explicit bypass in the canary_tools dependency check.\n  WHY: z-ai judged it as low priority and said the logic is intentional but lacks a comment explaining the asymmetry.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "efb350faf5be42c074ee6eb7ccf8be16d3dfcddc488be070ab238a47dcc6562f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1569,
+    "run_id": "24880155541",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24880155541",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424091544_4a8c8c7572",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1569,
+    "run_id": "24880155541"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T09:15:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
