@@ -87,7 +87,7 @@ A stuck branch therefore keeps running its **own** (older) `verify_integration_f
 | File | Change | Magnitude |
 | --- | --- | --- |
 | `scripts/verify_integration_fingerprints.py` | Add two CLI flags: `--baseline-fingerprints-state <path>` (capture-mode write) and `--compare-against-baseline <path>` (verify-mode read). When `--compare-against-baseline` is supplied, demote pre-existing failures to `::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1` and only `return 1` for new (post-resolve) failures. Default behaviour (no flags) unchanged. | Medium (adds two modes + JSON I/O; the existing `verify()` function refactored to compute per-fingerprint pass/fail set, with the absolute-vs-delta decision applied at the bottom). |
-| `scripts/review_conflict_resolve.sh` | Wrap the existing resolver invocation: (1) before invoking codex, run `verify_integration_fingerprints.py --baseline-fingerprints-state <runtime>/baseline_fp_state.json "${INTEGRATION_FINGERPRINTS_FILE}"` against the *pre-resolve* worktree; (2) after codex commits its tree, run `verify_integration_fingerprints.py --compare-against-baseline <runtime>/baseline_fp_state.json "${INTEGRATION_FINGERPRINTS_FILE}"`. If the baseline-capture step fails for any reason (script missing, IO error, malformed JSON), fall back to the existing absolute check — fail-open on the fail-open path, fail-closed on the safety check. | Small (15-30 lines: two new invocations + one error path). |
+| `scripts/review_conflict_resolve.sh` | Wrap the existing resolver invocation: (1) before invoking codex, run `verify_integration_fingerprints.py --baseline-fingerprints-state <runtime>/baseline_fp_state.json "${INTEGRATION_FINGERPRINTS_FILE}"` against the *pre-resolve* worktree; (2) after codex writes its tree to the working copy *but before* the `git commit -m "[ai-merge-resolve]…"` step, run `verify_integration_fingerprints.py --compare-against-baseline <runtime>/baseline_fp_state.json "${INTEGRATION_FINGERPRINTS_FILE}"`. The verifier remains a pre-commit gate — a non-zero exit prevents the `[ai-merge-resolve]` commit from being created, so no regression ever lands in branch history. If the baseline-capture step fails for any reason (script missing, IO error, malformed JSON), fall back to the existing absolute check — fail-open on the fail-open path, fail-closed on the safety check. | Small (15-30 lines: two new invocations + one error path). |
 | `.github/workflows/review_autofix.yml` | Add a third bootstrap list `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` whose lookup order is `.codex-workflow-src-main/scripts/${f}` first, `.codex-workflow-src/scripts/${f}` fallback. Initial members: `verify_integration_fingerprints.py`, `review_conflict_resolve.sh`, `review_conflict_prepare.sh`. Bootstrap loop emits `::notice::Bootstrapped ${f} from main snapshot (branch copy ignored)` whenever the main snapshot is preferred over a branch copy that exists. | Small (one new array, one new for-loop matching the existing optional-loop shape at L482-489). |
 | `README.md` | Document the new `--baseline-fingerprints-state` / `--compare-against-baseline` verifier modes, the `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` rationale, and the `PRE_EXISTING_FINGERPRINT_DRIFT_V1` marker so an operator grepping action logs knows what to look for. | Small (one section addition under the existing "Integration sync resolver" prose). |
 | `agents.md` | One-line entry per env/CLI-flag addition under the existing `verify_integration_fingerprints.py` and `review_autofix.yml` anchors. Append-only per CLAUDE.md §6 / the agents.md append-only rule. | Tiny. |
@@ -114,18 +114,22 @@ A new "baseline" file captures the *pre-resolve* satisfaction status of every fi
   "fingerprints": {
     "<issue_key>": {
       "must_contain": [
-        { "fp_key": "<stable hash of pattern+path>", "path": "scripts/foo.py", "pattern": "...", "satisfied": true },
-        { "fp_key": "...", "path": "...", "pattern": "...", "satisfied": false }
+        { "fp_key": ["scripts/foo.py", "<regex>"], "file": "scripts/foo.py", "regex": "<regex>", "satisfied": true },
+        { "fp_key": ["...", "..."], "file": "...", "regex": "...", "satisfied": false }
       ],
       "must_not_contain": [
-        { "fp_key": "...", "path": "...", "pattern": "...", "satisfied": true }
+        { "fp_key": ["...", "..."], "file": "...", "regex": "...", "satisfied": true }
       ]
     }
   }
 }
 ```
 
-`fp_key` reuses the existing `_fp_key(fp)` helper (already in the file at the top of the violation-iteration loops, e.g. `verify_integration_fingerprints.py:139,215`) so the same identity is used across baseline-write and compare-read. `satisfied` is the boolean outcome of the existing `re.search` test (single source of truth — refactor the inner regex test into a helper `_fp_satisfied(fp, tree_root) -> bool` and use it from both modes).
+Field-naming notes (kept consistent with the existing fingerprints input schema in `scripts/verify_integration_fingerprints.py:112-113`):
+
+- `file` and `regex` mirror the keys the existing verifier already reads from the input fingerprints JSON. Reusing those names lets `_fp_satisfied` (see below) accept either a baseline-list entry or a raw input fingerprint without a key-rewrite shim.
+- `fp_key` is the JSON-array serialisation of the existing `_fp_key(fp)` Python tuple `(file, regex_src)` (declared at `verify_integration_fingerprints.py:109` returning `tuple[str, str] | None`). A JSON array is chosen over a hashed string so the value remains human-readable in the baseline file (operator triage on a stuck branch is faster when `fp_key` is grep-able as the same path/regex pair that appears in the `::warning::` output) and so a future change to the tuple's element ordering produces a visible doc-diff rather than a silently-different hash. No new hashing function is introduced; baseline-write does `json.dumps(list(_fp_key(fp)))` and compare-read does `tuple(entry["fp_key"])` to round-trip back to the existing tuple shape that the rest of the verifier already keys off (`verify_integration_fingerprints.py:139,215`). If the helper's tuple shape is ever changed (e.g. extended to 3 elements), bump the baseline `schema_version`.
+- `satisfied` is the boolean outcome of the existing `re.search` test; refactor the inner regex test into a single helper `_fp_satisfied(fp, file_cache) -> bool` and use it from both capture-mode and compare-mode (and from the existing `verify()` and `list_violated_files()` so there is exactly one source of truth for the matching logic).
 
 #### 5.1.2 Capture mode (`--baseline-fingerprints-state <out_path>`)
 
@@ -142,7 +146,10 @@ Important: capture mode runs the *same* deduplication as verify (`_fp_key`-based
 
 When this flag is supplied alongside the existing positional `<fingerprints.json>` arg:
 
-1. Load `<baseline_path>`. Validate `schema_version == 1` and that the `fingerprints` keyset is a *subset* of the current `<fingerprints.json>` keyset. If the baseline is missing fingerprints that exist in the current set (e.g. a sub-issue was merged between baseline-capture and now), treat those as "must hold absolutely" — they had no pre-resolve baseline to compare against, so they fall back to the existing absolute check.
+1. Load `<baseline_path>`. Validate `schema_version == 1` only — do **not** require the baseline keyset to be a subset of the current `<fingerprints.json>` keyset. Asymmetric handling per direction:
+   - **Baseline has keys the current set does not** (e.g. a sub-issue was reverted or removed from orchestrator state between capture and compare): silently ignore those extra baseline entries; they describe a sub-issue we no longer need to verify.
+   - **Current set has keys the baseline does not** (e.g. a sub-issue was merged between baseline-capture and now): treat each such fingerprint as "must hold absolutely" — it had no pre-resolve baseline so it falls back to the existing absolute check, *per fingerprint*, without abandoning the baseline-mode benefit for the keys that do match.
+   This avoids the failure mode where a single missing/extra key forces the entire run back to absolute verification.
 2. Walk the current cwd tree exactly as `verify()` does today, computing per-`fp_key` `satisfied`.
 3. For each fingerprint, classify into one of four buckets:
    - `still_passing` — baseline `satisfied=true`, current `satisfied=true` → silent pass.
