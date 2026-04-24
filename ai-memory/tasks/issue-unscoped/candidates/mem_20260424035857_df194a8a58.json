@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:71 | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'xhigh' }}` conflicts with the documented `medium` default.\n  WHY: Reviewers said the workflow's unset-variable behavior is slower than the documented intent in README.md, agents.md, and the script comments, which can increase timeout pressure.\n- .github/workflows/review_autofix.yml:73-298 | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}` together with `timeout-minutes: 180` can leave the job enough time for only a few failed retries.\n  WHY: One reviewer treated the cutoff as acceptable degraded behavior, but the others flagged that repeated timeouts can hit the GitHub Actions limit after about 3-4 attempts, leaving most of the 10-retry loop unused.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:73-298 | confidence=4\n  PROBLEM: `XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}` plus `timeout-minutes: 180` can let the workflow hit its job timeout before the summariser exhausts its retries.\n  WHY: If the summariser keeps timing out, the review run can fail before the intended retry budget is used.\n- .github/workflows/review_autofix.yml:71 | confidence=5\n  PROBLEM: `XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'xhigh' }}` is `xhigh` even though the README, agents.md, and script comments say `medium`.\n  WHY: That mismatch makes the actual runtime behavior slower than expected and increases timeout risk.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:73-298 | confidence=3\n  PROBLEM: `XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}` and `timeout-minutes: 180` leave room for only about 3-4 retry attempts before the budget is exhausted.\n  WHY: If the summariser repeatedly times out, GitHub Actions can kill the run before the 10-attempt retry loop finishes.\n- .github/workflows/review_autofix.yml:71 | confidence=4\n  PROBLEM: The workflow defaults `XPOLL_SUMMARISER_REASONING` to `xhigh`, while `README.md:70` and `scripts/summarize_reviewer_consensus.sh:129` still document `medium`.\n  WHY: Operators reading the docs will expect `medium`, but the workflow actually uses `xhigh`, which is slower and can worsen timeout pressure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:71 | confidence=4\n  PROBLEM: `XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'xhigh' }}` conflicts with `README.md:70` and `scripts/summarize_reviewer_consensus.sh:63`, which document `medium`.\n  WHY: Using `xhigh` significantly increases processing time and token consumption, so the unset-variable behavior differs from the documented intent and can contribute to timeouts.\n- .github/workflows/review_autofix.yml:73-298 | confidence=3\n  PROBLEM: `XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}` and `timeout-minutes: 180` mean the retry loop can run out of workflow time after only about three attempts.\n  WHY: That leaves most of the 10 intended retries unused, which is a degraded operational scenario even though the job will fail loudly.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:71 | confidence=5\n  PROBLEM: `XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'xhigh' }}` is documented as `medium` in `README.md:71` and `scripts/summarize_reviewer_consensus.sh:26`.\n  WHY: When the variable is unset, the workflow uses `xhigh`, so users expecting `medium` will see longer processing times than the docs describe.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "99872220fe4d7f4e1c52ed6d059376732471f08e1d3ab0450fbdd99a7541eed4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1575,
+    "run_id": "24870692988",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24870692988",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424035857_df194a8a58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1575,
+    "run_id": "24870692988"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T03:58:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
