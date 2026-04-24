@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; raw_status=harness_error; summary=Validation failed due to harness error; failure_summary=Validation harness error: Root cause: the `python-repo-checks` family-marker template renders a script that emits only a plain marker string and no TAP lines. The relevant upstream template is `workflow-templates/validation-harness/python-repo-checks/tests/10_family_marker.sh.j2`, which currently renders only `echo \"python-repo-checks family for {{ slots.project_name }}\"`. In the failing run, that exact behavior showed up in `validation/logs/10_family_marker.sh`, and `scripts/validate_driver.",
+  "fingerprint": "5c0dfd0de06044fd634b94f04180ae27611a4997f40dcca1496dada80856d911",
+  "lineage": {
+    "issue_number": 1579,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24872491428",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24872491428",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260424044418_550d5eb553",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1579,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24872491428"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-24T04:44:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
