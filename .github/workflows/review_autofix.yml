@@ -115,16 +115,15 @@ jobs:
 
           pr_state=""
           pr_merged="false"
+          pr_head_ref=""
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             SHOULD_RUN="false"
             SKIP_REASON="invalid_pr_number"
             echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
           else
-            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false)] | @tsv')"; then
-              pr_state="${_pr_gate%%$'\t'*}"
-              pr_merged="${_pr_gate#*$'\t'}"
-              [ "${pr_merged}" = "${_pr_gate}" ] && pr_merged="false"
-              pr_merged="$(printf '%s' "${pr_merged}" | tr '[:upper:]' '[:lower:]')"
+            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // "")] | @tsv')"; then
+              IFS=$'\t' read -r pr_state pr_merged pr_head_ref <<< "${_pr_gate}" || true
+              pr_merged="$(printf '%s' "${pr_merged:-false}" | tr '[:upper:]' '[:lower:]')"
             fi
           fi
 
@@ -144,6 +143,27 @@ jobs:
           elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
             SHOULD_RUN="false"
             SKIP_REASON="skip_ai_marker"
+          fi
+
+          # Claude-branch skip:
+          # Exclude PRs whose head branch starts with "claude/" (e.g.
+          # claude/investigate-poller-stalled-prs-STfJ5). These are
+          # ad-hoc Claude sessions outside the orchestrator / issue-driven
+          # autofix loop; running the reviewer+editor panel on them spends
+          # LLM budget without the surrounding automation (tracking-issue
+          # ledger, orchestrator stall recovery, validation fan-out) that
+          # the autofix loop is designed to serve. The check applies to
+          # every trigger — including workflow_dispatch — because the
+          # operator escape hatch for these branches is to rename/merge
+          # the branch rather than force a review cycle.
+          if [ "${SHOULD_RUN}" = "true" ] && [ -n "${pr_head_ref}" ]; then
+            case "${pr_head_ref}" in
+              claude/*)
+                SHOULD_RUN="false"
+                SKIP_REASON="claude_branch"
+                echo "AUTOFIX_GATE_SKIP reason=claude_branch pr=${PR_NUMBER} head_ref=${pr_head_ref}"
+                ;;
+            esac
           fi
 
           # Self-triggered autofix skip:
