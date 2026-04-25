@@ -3847,9 +3847,19 @@ issue_has_active_workflow() {
 }
 
 # Cancel zombie workflow runs for a specific issue.
-# A zombie is a run that has been in_progress for longer than the stall
-# threshold. Cancelling prevents resource waste and avoids conflicts with
-# the recovery action (e.g., two implement runs on the same branch).
+# A zombie is a pipeline run (clarify, plan, implement, orchestrate, etc.)
+# that has been in_progress for longer than the stall threshold.
+# Cancelling prevents resource waste and avoids conflicts with the recovery
+# action (e.g., two implement runs on the same branch).
+#
+# Review-family workflows (ai-review.yml, internal-review.yml,
+# review_autofix.yml) are explicitly excluded: they share the issue's head
+# branch (ai/issue-N) but are not part of the orchestrator's pipeline, and
+# legitimate review/edit passes can take longer than STALL_THRESHOLD_MINUTES
+# without being stuck.  Cancelling them mid-flight produces sporadic
+# `exit code 143 / runner has received a shutdown signal` failures on the
+# consumer repo's review jobs.  Mirrors the inclusion list at the
+# `workflow_outcomes` query site so the two filters stay in lockstep.
 cancel_zombie_runs_for_issue() {
   local issue_num="$1"
   local now_epoch
@@ -3871,6 +3881,14 @@ cancel_zombie_runs_for_issue() {
      ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch |
      select(($now - $start_epoch) >= $threshold) |
      select(.head_branch // "" | test("(^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)" + $issue + "(?:[^0-9]|$)")) |
+     select((
+       (.name // "") == "AI Review"
+       or (.name // "") == "Internal Review"
+       or (.name // "") == "Review Autofix"
+       or ((.path // "") | endswith("ai-review.yml"))
+       or ((.path // "") | endswith("internal-review.yml"))
+       or ((.path // "") | endswith("review_autofix.yml"))
+     ) | not) |
      .id
     ] | .[]
   ' 2>/dev/null || true)"
