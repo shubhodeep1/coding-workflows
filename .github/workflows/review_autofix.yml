@@ -1647,8 +1647,55 @@ jobs:
         env:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
           FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
+          # Orchestrator PR autofix flow (see README §"Orchestrator PR autofix flow"):
+          # When enabled, classify the PR by base/head branch:
+          #   - orch_intermediate (sub-issue PR → orchestrator/project-*):
+          #       cap autofix at 1 iteration, skip judge entirely, then
+          #       enable auto-merge so the orchestrator merges the PR into
+          #       the integration branch as soon as CI is green + mergeable.
+          #   - orch_final (orchestrator/project-* → any non-orch base, i.e.
+          #       the default branch): keep MAX_AUTOFIX_ITERATIONS=3 inner
+          #       loop; the orchestrate_poll_process.sh judge-cycle cap is
+          #       bypassed for this phase, giving unlimited 3-autofix→judge
+          #       cycles until the PR is mergeable.
+          #   - other (non-orchestrator PR): unchanged legacy behavior.
+          # Setting ORCH_PR_AUTOFIX_FLOW_ENABLED=false reverts every PR to
+          # the legacy uniform 3-autofix→judge→cap-25 flow without code
+          # changes.
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
+          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
+
+          # ----- Orchestrator PR mode classification -----
+          orch_pr_mode="other"
+          if [ "${ORCH_PR_AUTOFIX_FLOW_ENABLED}" = "true" ]; then
+            _head_ref_class=""
+            _base_ref_class=""
+            if [ -f "${PR_META_FILE}" ]; then
+              _head_ref_class="$(jq -r '.headRefName // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
+              _base_ref_class="$(jq -r '.baseRefName // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
+            fi
+            if [ -n "${_head_ref_class}" ] && echo "${_head_ref_class}" | grep -Eq "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+              if [ -n "${_base_ref_class}" ] && echo "${_base_ref_class}" | grep -Eq "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+                orch_pr_mode="orch_intermediate"
+              else
+                orch_pr_mode="orch_final"
+              fi
+            fi
+          fi
+          echo "Orchestrator PR mode: ${orch_pr_mode} (head='${_head_ref_class:-?}' base='${_base_ref_class:-?}', flow_enabled=${ORCH_PR_AUTOFIX_FLOW_ENABLED})"
+          echo "orch_pr_mode=${orch_pr_mode}" >> "$GITHUB_OUTPUT"
+
+          # Per-mode autofix cap override.  orch_final and other keep the
+          # legacy default (3 unless overridden by repo var).  orch_intermediate
+          # is capped at 1 so the PR merges into the integration branch after
+          # a single reviewer→editor→commit pass.
+          effective_max_iterations="${MAX_AUTOFIX_ITERATIONS}"
+          if [ "${orch_pr_mode}" = "orch_intermediate" ]; then
+            effective_max_iterations="1"
+            echo "orch_intermediate: capping autofix iterations at ${effective_max_iterations} (legacy default was ${MAX_AUTOFIX_ITERATIONS})."
+          fi
 
           # Count consecutive [ai-autofix] commits from HEAD backwards.
           autofix_count=0
@@ -1661,8 +1708,25 @@ jobs:
             fi
           done
 
-          echo "Consecutive autofix commits: ${autofix_count} (max: ${MAX_AUTOFIX_ITERATIONS})"
+          echo "Consecutive autofix commits: ${autofix_count} (max: ${effective_max_iterations})"
           echo "autofix_iteration=${autofix_count}" >> "$GITHUB_OUTPUT"
+
+          # skip_judge=true short-circuits the rb_judge step and the
+          # review-blocked label markers downstream.  Set for orch_intermediate
+          # only — these PRs merge into the integration branch after one
+          # autofix round regardless of remaining reviewer findings; the judge
+          # is reserved for the final integration→main PR loop.  The
+          # force_rb_judge stall-recovery escape hatch (dispatched by the
+          # orchestrator stall poller via review_rb_judge_dispatch.yml) MUST
+          # remain functional for stuck intermediate PRs, so when
+          # FORCE_RB_JUDGE=true we suppress skip_judge — the judge runs and
+          # decides merge / fix / close-and-reissue per the stall-recovery
+          # contract.
+          if [ "${orch_pr_mode}" = "orch_intermediate" ] && [ "${FORCE_RB_JUDGE}" != "true" ]; then
+            echo "skip_judge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_judge=false" >> "$GITHUB_OUTPUT"
+          fi
 
           # force_rb_judge short-circuit: the stall poller dispatches the
           # review workflow with this input set when a linked issue has
@@ -1674,7 +1738,7 @@ jobs:
           if [ "${FORCE_RB_JUDGE}" = "true" ]; then
             echo "force_rb_judge=true — forcing max_iterations_reached=true to run only the review-blocked judge."
             echo "max_iterations_reached=true" >> "$GITHUB_OUTPUT"
-          elif [ "${autofix_count}" -ge "${MAX_AUTOFIX_ITERATIONS}" ]; then
+          elif [ "${autofix_count}" -ge "${effective_max_iterations}" ]; then
             echo "Max autofix iterations reached — skipping review/editor."
             echo "max_iterations_reached=true" >> "$GITHUB_OUTPUT"
           else
@@ -2998,7 +3062,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3074,7 +3138,7 @@ jobs:
 
       - name: Review-blocked judge decision
         id: rb_judge
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3100,7 +3164,7 @@ jobs:
             exit "${_judge_exit}"
           fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3181,7 +3245,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
@@ -3211,7 +3275,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -3555,7 +3619,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3743,7 +3807,7 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram review-blocked judge decision
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
