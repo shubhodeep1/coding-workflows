@@ -1676,10 +1676,32 @@ jobs:
               _head_ref_class="$(jq -r '.headRefName // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
               _base_ref_class="$(jq -r '.baseRefName // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
             fi
+            # Pre-validate ORCH_INTEGRATION_BRANCH_PATTERN before classifying:
+            #   - Empty pattern would match every ref (`grep -Eq -- ""` matches
+            #     everything), misclassifying every PR as orch_intermediate or
+            #     orch_final.
+            #   - Invalid POSIX ERE makes `grep -Eq` exit with status 2 rather
+            #     than 1; if a misconfigured regex slipped past code review,
+            #     every classifier call would log a noisy regex error.
+            # Both cases fall open to orch_pr_mode=other (legacy behavior) with
+            # one ::warning:: log line, so a misconfigured repo var cannot
+            # brick `review_autofix` runs for non-orchestrator PRs.
+            _pattern_ok="true"
+            if [ -z "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then
+              echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to orch_pr_mode=other for this run."
+              _pattern_ok="false"
+            else
+              _pattern_check_exit=0
+              printf 'x\n' | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}" >/dev/null 2>&1 || _pattern_check_exit=$?
+              if [ "${_pattern_check_exit}" -ge 2 ]; then
+                echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${_pattern_check_exit}); falling back to orch_pr_mode=other for this run."
+                _pattern_ok="false"
+              fi
+            fi
             # Use `printf` + `grep -Eq --` so a repo-configured pattern that
             # happens to start with `-` (e.g. `-orchestrator/...`) is parsed
             # as the regex argument and not as a grep option / echo flag.
-            if [ -n "${_head_ref_class}" ] && printf '%s\n' "${_head_ref_class}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+            if [ "${_pattern_ok}" = "true" ] && [ -n "${_head_ref_class}" ] && printf '%s\n' "${_head_ref_class}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
               if [ -n "${_base_ref_class}" ] && printf '%s\n' "${_base_ref_class}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
                 orch_pr_mode="orch_intermediate"
               else
