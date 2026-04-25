@@ -625,10 +625,16 @@ _sync_integration_and_rebase_subissue()
 		return 0
 	fi
 
-	local _wh="" _rc=0
+	local _wh="" _rc=0 _tmp_branch="ai-premerge-rebase-${pr_num}-$$"
 	_wh="$(mktemp -d -t premerge-rebase.XXXXXX 2>/dev/null)" || return 0
-	if ! git worktree add --quiet --detach "${_wh}" "${head_sha}" 2>/dev/null; then
+	# `git rebase` requires being on a branch — `git worktree add --detach`
+	# leaves HEAD detached and would fail with "fatal: You are not
+	# currently on a branch", which the soft-failure path would
+	# misclassify as a rebase conflict and trigger an unnecessary
+	# defer.  Use `-B` to create/reset a per-pid temp branch.
+	if ! git worktree add --quiet -B "${_tmp_branch}" "${_wh}" "${head_sha}" 2>/dev/null; then
 		rm -rf "${_wh}" 2>/dev/null || true
+		git branch -D "${_tmp_branch}" >/dev/null 2>&1 || true
 		return 0
 	fi
 
@@ -651,6 +657,7 @@ _sync_integration_and_rebase_subissue()
 	fi
 
 	git worktree remove --force "${_wh}" >/dev/null 2>&1 || true
+	git branch -D "${_tmp_branch}" >/dev/null 2>&1 || true
 	return "${_rc}"
 }
 
