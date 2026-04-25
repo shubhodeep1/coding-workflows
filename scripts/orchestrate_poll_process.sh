@@ -556,7 +556,18 @@ _bump_merge_deferral_count()
 #
 # Returns:
 #   0 — alignment done (or not needed); caller should proceed
-#   1 — sub-issue rebase produced conflicts; caller should defer
+# Returns:
+#   0 — already aligned, no push happened; caller should proceed
+#   1 — sub-issue rebase produced conflicts; caller should defer + bump
+#       _bump_merge_deferral_count
+#   2 — alignment pushed a new SHA on the integration branch and/or the
+#       sub-issue head; caller should defer the merge for one tick so
+#       the new SHA's CI can re-run before squash-merge fires.  Branch
+#       protection's required-checks gate is server-side and lags the
+#       force-push by seconds, and the non-`--auto` fallback merge
+#       path can otherwise race ahead of the new SHA's checks.  Defer
+#       on rc=2 does NOT consume the _bump_merge_deferral_count budget
+#       — this is expected one-tick latency, not a failure.
 #
 # Usage: _sync_integration_and_rebase_subissue <pr_num> <head_ref> <integration_branch>
 _sync_integration_and_rebase_subissue()
@@ -564,6 +575,7 @@ _sync_integration_and_rebase_subissue()
 	local pr_num="$1"
 	local head_ref="$2"
 	local integration_branch="$3"
+	local _did_push=0
 
 	if [ -z "${pr_num}" ] || [ -z "${head_ref}" ] || [ -z "${integration_branch}" ]; then
 		return 0
@@ -607,6 +619,7 @@ _sync_integration_and_rebase_subissue()
 				    origin "${merged_sha}:refs/heads/${integration_branch}" >/dev/null 2>&1; then
 					echo "  [premerge-rebase] ${integration_branch}: merged ${default_branch}@${main_sha:0:7} (pre-merge alignment)."
 					int_sha="${merged_sha}"
+					_did_push=1
 				else
 					echo "  [premerge-rebase] ${integration_branch}: opportunistic ${default_branch}-merge succeeded but force-push failed; skipping pre-merge alignment for PR #${pr_num}."
 				fi
@@ -622,6 +635,9 @@ _sync_integration_and_rebase_subissue()
 
 	# Step 2: rebase sub-issue head onto integration tip.
 	if git merge-base --is-ancestor "${int_sha}" "${head_sha}" 2>/dev/null; then
+		if [ "${_did_push}" -eq 1 ]; then
+			return 2
+		fi
 		return 0
 	fi
 
@@ -647,6 +663,7 @@ _sync_integration_and_rebase_subissue()
 		if git push --force-with-lease="${head_ref}:${head_sha}" \
 		    origin "${rebased_sha}:refs/heads/${head_ref}" >/dev/null 2>&1; then
 			echo "  [premerge-rebase] PR #${pr_num}: rebased ${head_ref} onto ${integration_branch}@${int_sha:0:7}."
+			_did_push=1
 		else
 			echo "::warning::[premerge-rebase] PR #${pr_num}: rebase succeeded but force-push failed; proceeding without alignment."
 		fi
@@ -658,6 +675,9 @@ _sync_integration_and_rebase_subissue()
 
 	git worktree remove --force "${_wh}" >/dev/null 2>&1 || true
 	git branch -D "${_tmp_branch}" >/dev/null 2>&1 || true
+	if [ "${_rc}" -eq 0 ] && [ "${_did_push}" -eq 1 ]; then
+		return 2
+	fi
 	return "${_rc}"
 }
 
@@ -8296,19 +8316,38 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		  # Pre-merge alignment: opportunistically sync integration with
 		  # main and rebase the sub-issue head onto the integration tip
 		  # so the squash-merge captures only the sub-issue's intent and
-		  # integration->main drift is bounded.  On rebase conflict the
-		  # merge is deferred via the same _bump_merge_deferral_count
-		  # counter the sibling-conflict probe uses.
+		  # integration->main drift is bounded.  Three return codes:
+		  #   0 — already aligned, proceed with merge this tick
+		  #   1 — rebase conflict; defer + bump _bump_merge_deferral_count
+		  #   2 — alignment force-pushed a new SHA; defer one tick (no
+		  #       bump) so the new SHA's CI re-runs before squash-merge.
+		  #       _pr_checks_completed above evaluated against the
+		  #       pre-rebase head SHA, and the non-`--auto` fallback
+		  #       merge path (`elif gh pr merge --squash`) does NOT
+		  #       wait for required checks server-side, so a same-tick
+		  #       merge could otherwise race ahead of the new head's
+		  #       checks rerun.
 		  if [ -n "${RTM_INTEGRATION_BRANCH}" ] && [ -n "${_rtm_head_ref}" ] && [ "${_rtm_head_ref}" != "null" ]; then
-		    if ! _sync_integration_and_rebase_subissue "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}"; then
-		      _rtm_defer_count="$(_bump_merge_deferral_count "${WAVE_IDX}" "${rtm_issue}")"
-		      [[ "${_rtm_defer_count}" =~ ^[0-9]+$ ]] || _rtm_defer_count=0
-		      echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — pre-merge rebase conflicts."
-		      if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
-		        tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent pre-merge rebase conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
-		      fi
-		      continue
-		    fi
+		    _premerge_rc=0
+		    _sync_integration_and_rebase_subissue "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}" || _premerge_rc=$?
+		    case "${_premerge_rc}" in
+		      0)
+		        : # already aligned; proceed with merge below
+		        ;;
+		      2)
+		        echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} one tick — alignment pushed a new SHA, letting CI re-run before squash-merge."
+		        continue
+		        ;;
+		      *)
+		        _rtm_defer_count="$(_bump_merge_deferral_count "${WAVE_IDX}" "${rtm_issue}")"
+		        [[ "${_rtm_defer_count}" =~ ^[0-9]+$ ]] || _rtm_defer_count=0
+		        echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — pre-merge rebase conflicts."
+		        if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
+		          tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent pre-merge rebase conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+		        fi
+		        continue
+		        ;;
+		    esac
 		  fi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
 		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
