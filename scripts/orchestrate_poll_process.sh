@@ -530,6 +530,130 @@ _bump_merge_deferral_count()
 		"${STATE_FILE}" 2>/dev/null | head -n1
 }
 
+# _sync_integration_and_rebase_subissue — pre-merge alignment helper.
+#
+# Before squash-merging a ready-to-merge sub-issue PR into an
+# orchestrator/project-* integration branch, opportunistically:
+#   (1) merge the default branch into the integration branch when
+#       it can be done without textual conflicts, so the integration
+#       branch is kept current with main between sub-issue merges
+#       (this prevents the integration->main drift that produces the
+#       large fingerprint-regression set the integration-sync
+#       resolver fails to converge on); and
+#   (2) rebase the sub-issue head onto the (now possibly-updated)
+#       integration tip so the squash-merge captures only the
+#       sub-issue's own intent, never main's content as a side
+#       effect.  This keeps fingerprint capture (which uses
+#       GitHub's three-dot PR diff at capture_intent_fingerprints_
+#       for_merged_subissue) accurate.
+#
+# Both steps are best-effort and fail open: when step (1) would
+# require textual conflict resolution it is skipped (review_autofix
+# integration-sync still handles that on its own trigger), and when
+# step (2) hits conflicts the merge is deferred via the caller's
+# existing _bump_merge_deferral_count flow.  Uses git only — zero
+# GH API calls.
+#
+# Returns:
+#   0 — alignment done (or not needed); caller should proceed
+#   1 — sub-issue rebase produced conflicts; caller should defer
+#
+# Usage: _sync_integration_and_rebase_subissue <pr_num> <head_ref> <integration_branch>
+_sync_integration_and_rebase_subissue()
+{
+	local pr_num="$1"
+	local head_ref="$2"
+	local integration_branch="$3"
+
+	if [ -z "${pr_num}" ] || [ -z "${head_ref}" ] || [ -z "${integration_branch}" ]; then
+		return 0
+	fi
+	if ! command -v git >/dev/null 2>&1; then
+		return 0
+	fi
+
+	local default_branch="${DEFAULT_BRANCH:-main}"
+	if [ "${integration_branch}" = "${default_branch}" ]; then
+		return 0
+	fi
+
+	git fetch --no-tags --quiet origin "${default_branch}" "${integration_branch}" "${head_ref}" 2>/dev/null || return 0
+
+	local main_ref="refs/remotes/origin/${default_branch}"
+	local int_ref="refs/remotes/origin/${integration_branch}"
+	local head_full="refs/remotes/origin/${head_ref}"
+	local r
+	for r in "${main_ref}" "${int_ref}" "${head_full}"; do
+		git rev-parse --verify --quiet "${r}" >/dev/null 2>&1 || return 0
+	done
+
+	local main_sha int_sha head_sha
+	main_sha="$(git rev-parse "${main_ref}")"
+	int_sha="$(git rev-parse "${int_ref}")"
+	head_sha="$(git rev-parse "${head_full}")"
+
+	# Step 1: opportunistic main -> integration sync.
+	if ! git merge-base --is-ancestor "${main_sha}" "${int_sha}" 2>/dev/null; then
+		local _ws=""
+		_ws="$(mktemp -d -t premerge-int-sync.XXXXXX 2>/dev/null)" || _ws=""
+		if [ -n "${_ws}" ] && git worktree add --quiet --detach "${_ws}" "${int_sha}" 2>/dev/null; then
+			if (cd "${_ws}" && \
+				git -c user.email="orchestrator@coding-workflows" \
+				    -c user.name="orchestrator" \
+				    merge --no-edit --no-ff "${main_sha}" >/dev/null 2>&1); then
+				local merged_sha
+				merged_sha="$(git -C "${_ws}" rev-parse HEAD)"
+				if git push --force-with-lease="${integration_branch}:${int_sha}" \
+				    origin "${merged_sha}:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+					echo "  [premerge-rebase] ${integration_branch}: merged ${default_branch}@${main_sha:0:7} (pre-merge alignment)."
+					int_sha="${merged_sha}"
+				else
+					echo "  [premerge-rebase] ${integration_branch}: opportunistic ${default_branch}-merge succeeded but force-push failed; skipping pre-merge alignment for PR #${pr_num}."
+				fi
+			else
+				(cd "${_ws}" && git merge --abort >/dev/null 2>&1) || true
+				echo "  [premerge-rebase] ${integration_branch}: ${default_branch} cannot merge cleanly (textual conflicts); skipping step 1 for PR #${pr_num}, integration-sync resolver will handle."
+			fi
+			git worktree remove --force "${_ws}" >/dev/null 2>&1 || true
+		elif [ -n "${_ws}" ]; then
+			rm -rf "${_ws}" 2>/dev/null || true
+		fi
+	fi
+
+	# Step 2: rebase sub-issue head onto integration tip.
+	if git merge-base --is-ancestor "${int_sha}" "${head_sha}" 2>/dev/null; then
+		return 0
+	fi
+
+	local _wh="" _rc=0
+	_wh="$(mktemp -d -t premerge-rebase.XXXXXX 2>/dev/null)" || return 0
+	if ! git worktree add --quiet --detach "${_wh}" "${head_sha}" 2>/dev/null; then
+		rm -rf "${_wh}" 2>/dev/null || true
+		return 0
+	fi
+
+	if (cd "${_wh}" && \
+		git -c user.email="orchestrator@coding-workflows" \
+		    -c user.name="orchestrator" \
+		    rebase "${int_sha}" >/dev/null 2>&1); then
+		local rebased_sha
+		rebased_sha="$(git -C "${_wh}" rev-parse HEAD)"
+		if git push --force-with-lease="${head_ref}:${head_sha}" \
+		    origin "${rebased_sha}:refs/heads/${head_ref}" >/dev/null 2>&1; then
+			echo "  [premerge-rebase] PR #${pr_num}: rebased ${head_ref} onto ${integration_branch}@${int_sha:0:7}."
+		else
+			echo "::warning::[premerge-rebase] PR #${pr_num}: rebase succeeded but force-push failed; proceeding without alignment."
+		fi
+	else
+		(cd "${_wh}" && git rebase --abort >/dev/null 2>&1) || true
+		echo "  [premerge-rebase] PR #${pr_num}: rebase of ${head_ref} onto ${integration_branch} hit conflicts; deferring merge."
+		_rc=1
+	fi
+
+	git worktree remove --force "${_wh}" >/dev/null 2>&1 || true
+	return "${_rc}"
+}
+
 # ---------------------------------------------------------------
 # Helper: Fetch PR JSON once and extract multiple fields.
 #
@@ -813,6 +937,22 @@ INTEGRATION_SYNC_CONFLICT_MAX_RETRIES="${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES:-
 if ! [[ "${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES}" =~ ^[0-9]+$ ]]; then
   echo "::warning::INTEGRATION_SYNC_CONFLICT_MAX_RETRIES must be a non-negative integer; defaulting to 1"
   INTEGRATION_SYNC_CONFLICT_MAX_RETRIES="1"
+fi
+
+# INTEGRATION_CONFLICT_LIFETIME_MAX — global lifetime cap on the total
+# number of resolver+judge dispatches per integration branch before the
+# orchestrator gives up and flips status to "failed".  Unlike the
+# per-burst INTEGRATION_*_CONFLICT_MAX_RETRIES counters (which reset to
+# 0 after each judge escalation), this counter is additive across all
+# dispatch episodes for the lifetime of the tracking-issue state and
+# is only zeroed when the tracking-issue state itself is rebuilt.
+# Prevents the multi-hour alternating resolver-judge loop observed on
+# orchestrator/project-1479 (PR #1533) where every judge invocation
+# reset unresolved_ticks but the merge stayed dirty as main moved.
+INTEGRATION_CONFLICT_LIFETIME_MAX="${INTEGRATION_CONFLICT_LIFETIME_MAX:-10}"
+if ! [[ "${INTEGRATION_CONFLICT_LIFETIME_MAX}" =~ ^[0-9]+$ ]] || [ "${INTEGRATION_CONFLICT_LIFETIME_MAX}" -lt 1 ]; then
+  echo "::warning::INTEGRATION_CONFLICT_LIFETIME_MAX must be a positive integer; defaulting to 10"
+  INTEGRATION_CONFLICT_LIFETIME_MAX="10"
 fi
 
 post_tracking_comment() {
@@ -2052,6 +2192,7 @@ ensure_integration_conflict_state_fields() {
         integration_conflict_dispatch_count: (.integration_conflict_dispatch_count // 0),
         integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
         integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0),
+        integration_conflict_total_dispatches: (.integration_conflict_total_dispatches // 0),
         merged_issue_fingerprints: (.merged_issue_fingerprints // {}),
         final_merge_attempt_count: (.final_merge_attempt_count // 0)
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -2705,6 +2846,30 @@ heal_integration_branch_conflict() {
   dispatch_count="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
   local unresolved_ticks
   unresolved_ticks="$(jq -r '.integration_conflict_unresolved_ticks // 0' "${STATE_FILE}")"
+  local total_dispatches
+  total_dispatches="$(jq -r '.integration_conflict_total_dispatches // 0' "${STATE_FILE}")"
+
+  # Lifetime cap: once we've issued INTEGRATION_CONFLICT_LIFETIME_MAX
+  # total resolver+judge dispatches across all retry episodes for this
+  # integration branch, force a terminal "failed" state regardless of
+  # whether the per-episode counters would still permit another
+  # attempt.  Catches the alternating resolver/judge loop where each
+  # judge invocation resets unresolved_ticks to 0 but the merge stays
+  # dirty as main keeps moving (orchestrator/project-1479, 2026-04-25).
+  if [ "${total_dispatches}" -ge "${INTEGRATION_CONFLICT_LIFETIME_MAX}" ]; then
+    jq --arg err "lifetime dispatch cap (${INTEGRATION_CONFLICT_LIFETIME_MAX}) reached" \
+      '.status = "failed" |
+       .final_merge_status = "failed" |
+       .integration_sync_status = "failed" |
+       .integration_sync_last_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    post_tracking_comment "## ❌ Integration self-healing capped
+
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit the lifetime dispatch cap of ${INTEGRATION_CONFLICT_LIFETIME_MAX} resolver+judge attempts. Manual intervention required."
+    tg_notify "❌ Integration self-healing capped at ${INTEGRATION_CONFLICT_LIFETIME_MAX} dispatches for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
+    return 1
+  fi
 
   jq --arg err "${error_msg}" \
     '.integration_sync_status = "conflict" |
@@ -2730,7 +2895,14 @@ heal_integration_branch_conflict() {
     if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}"; then
       # Reset unresolved ticks so the resolver loop can resume after
       # the judge's push. Keep dispatch_count as audit trail.
-      jq '.integration_sync_status = "healing" | .integration_conflict_unresolved_ticks = 0 | .integration_sync_last_error = ""' \
+      # integration_conflict_total_dispatches counts judge invocations
+      # too — they share the lifetime cap with resolver dispatches.
+      total_dispatches=$((total_dispatches + 1))
+      jq --argjson total "${total_dispatches}" \
+        '.integration_sync_status = "healing" |
+         .integration_conflict_unresolved_ticks = 0 |
+         .integration_conflict_total_dispatches = $total |
+         .integration_sync_last_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_tracking_comment "## 🛠️ Integration judge invoked
 
@@ -2791,10 +2963,12 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
   case "${dispatch_rc}" in
     0)
       dispatch_count=$((dispatch_count + 1))
-      jq --argjson count "${dispatch_count}" --argjson ts "${now_ts}" \
+      total_dispatches=$((total_dispatches + 1))
+      jq --argjson count "${dispatch_count}" --argjson ts "${now_ts}" --argjson total "${total_dispatches}" \
         '.integration_sync_status = "healing" |
          .integration_conflict_dispatch_count = $count |
-         .integration_conflict_dispatch_ts = $ts' \
+         .integration_conflict_dispatch_ts = $ts |
+         .integration_conflict_total_dispatches = $total' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       # Only post a user-facing comment on the FIRST dispatch of this
       # conflict episode to avoid the every-tick spam pattern seen on
@@ -8075,6 +8249,23 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		      echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
 		      if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
 		        tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+		      fi
+		      continue
+		    fi
+		  fi
+		  # Pre-merge alignment: opportunistically sync integration with
+		  # main and rebase the sub-issue head onto the integration tip
+		  # so the squash-merge captures only the sub-issue's intent and
+		  # integration->main drift is bounded.  On rebase conflict the
+		  # merge is deferred via the same _bump_merge_deferral_count
+		  # counter the sibling-conflict probe uses.
+		  if [ -n "${RTM_INTEGRATION_BRANCH}" ] && [ -n "${_rtm_head_ref}" ] && [ "${_rtm_head_ref}" != "null" ]; then
+		    if ! _sync_integration_and_rebase_subissue "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}"; then
+		      _rtm_defer_count="$(_bump_merge_deferral_count "${WAVE_IDX}" "${rtm_issue}")"
+		      [[ "${_rtm_defer_count}" =~ ^[0-9]+$ ]] || _rtm_defer_count=0
+		      echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — pre-merge rebase conflicts."
+		      if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
+		        tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent pre-merge rebase conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
 		      fi
 		      continue
 		    fi
