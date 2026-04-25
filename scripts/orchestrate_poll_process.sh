@@ -2573,6 +2573,18 @@ invoke_judge_for_integration_conflict() {
   local retries
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
 
+  # Pull the structured per-sub-issue intent fingerprints from state so
+  # the judge gets the same hard verification contract the resolver
+  # already operates against (must_contain / must_not_contain regex
+  # patterns per file per merged sub-issue).  Without this the judge
+  # had to re-derive intent from the truncated PR diff alone, which is
+  # the gap that let main-side reverts ship past the judge in PR #1533
+  # 2026-04-25.  Compact JSON so the prompt stays well under the
+  # 120KB budget alongside the truncated diff.
+  local intent_fingerprints
+  intent_fingerprints="$(jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" 2>/dev/null || echo "{}")"
+  [ -n "${intent_fingerprints}" ] || intent_fingerprints='{}'
+
   {
     cat "${judge_static_file}"
     echo
@@ -2608,11 +2620,32 @@ invoke_judge_for_integration_conflict() {
     printf '%s\n' "${pr_diff}"
     echo '```'
     echo
+    echo "Merged sub-issue intent fingerprints (verification contract):"
+    echo "Each entry is keyed by GitHub issue number; \`must_contain\`"
+    echo "patterns are regexes that MUST match in the post-resolve tree,"
+    echo "\`must_not_contain\` patterns are regexes that MUST NOT match."
+    echo "After you push, \`scripts/verify_integration_fingerprints.py\`"
+    echo "is run against this exact JSON — every violation is a hard"
+    echo "rejection that returns the project to this judge cycle.  Use"
+    echo "this as the authoritative spec when reconciling conflicts;"
+    echo "the truncated PR diff above is context, the fingerprints are"
+    echo "the test."
+    echo '```json'
+    printf '%s\n' "${intent_fingerprints}"
+    echo '```'
+    echo
     echo "Rules:"
-    echo "1. Preserve all intent from merged sub-issues."
+    echo "1. Preserve all intent from merged sub-issues — every"
+    echo "   \`must_contain\` regex must still match the post-resolve"
+    echo "   working tree, every \`must_not_contain\` regex must not."
     echo "2. Do not rewrite history of ${default_branch}."
     echo "3. Prefer merge commits over rebase for the integration branch."
-    echo "4. If conflicts are semantic rather than textual, surface a"
+    echo "4. When a hunk has both ${default_branch} content and merged"
+    echo "   sub-issue content, synthesize rather than pick a side —"
+    echo "   wholesale reverts to \`${default_branch}\`'s version are"
+    echo "   the dominant failure mode the fingerprint contract is"
+    echo "   designed to catch."
+    echo "5. If conflicts are semantic rather than textual, surface a"
     echo "   short diagnosis in the commit message."
   } > "${prompt_file}"
 
