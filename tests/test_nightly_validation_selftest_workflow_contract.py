@@ -30,7 +30,7 @@ def test_workflow_runs_matrix_and_always_uploads_artifacts() -> None:
 	assert '--log-dir "artifacts/validation-selftest-logs"' in wf
 	assert '- name: Upload validation self-test artifacts' in wf
 	assert 'if: always()' in wf
-	assert 'uses: actions/upload-artifact@v4' in wf
+	assert 'uses: actions/upload-artifact@v6' in wf
 	assert 'artifacts/validation-selftest-summary.json' in wf
 	assert 'artifacts/validation-selftest-logs/' in wf
 
