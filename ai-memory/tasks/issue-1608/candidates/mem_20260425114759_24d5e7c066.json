@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Finish validation template rollout with real fixture self-tests and status tracking\",\"issues\":[{\"id\":\"nightly-selftest-fixture-repo-wiring\",\"title\":\"Wire nightly validation self-test to real fixture repos\",\"priority\":1},{\"id\":\"nightly-selftest-status-publisher\",\"title\":\"Publish nightly validation self-test status and streak\",\"priority\":2},{\"id\":\"validation-template-rollout-docs-finalization\",\"title\":\"Finalize validation-template rollout docs and status snapshots\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"nightly-selftest-fixture-repo-wiring\",\"to\":\"nightly-selftest-status-publisher\"},{\"from\":\"nightly-selftest-status-publisher\",\"to\":\"validation-template-rollout-docs-finalization\"}]}",
+  "fingerprint": "8d77756e776bb489dbc32602907c9e400a7208c221f6afbf0128e1867e1051fc",
+  "lineage": {
+    "issue_number": 1608,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24929758634",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24929758634",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260425114759_24d5e7c066",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1608,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24929758634"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Finish validation template rollout with real fixture self-tests and status tracking' into 3 issues (tracking #1608)",
+  "timestamps": {
+    "created_at": "2026-04-25T11:47:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
