@@ -176,18 +176,32 @@ def resolve_memory_reference_source_dir(base_dir: Path, memory_root_relative: st
 
 
 def _sync_memory_reference_files(source_root: Path, destination_root: Path) -> None:
+    # Resolve schemas dir: prefer the consumer-repo source tree, then fall
+    # back to the workflow-source clone advertised via SUPPORT_AI_MEMORY_DIR.
+    # Symmetric with the config resolution below; protects validation when
+    # the consumer repo does not vendor ai-memory/schemas/.
+    source_schemas: Path | None = None
     if source_root.exists():
-        source_schemas = source_root / "schemas"
+        candidate_schemas = source_root / "schemas"
+        if candidate_schemas.exists():
+            source_schemas = candidate_schemas
+    if source_schemas is None:
+        support_dir = os.environ.get("SUPPORT_AI_MEMORY_DIR")
+        if support_dir:
+            candidate_support_schemas = Path(support_dir) / "schemas"
+            if candidate_support_schemas.exists():
+                source_schemas = candidate_support_schemas
+
+    if source_schemas is not None:
         destination_schemas = destination_root / "schemas"
-        if source_schemas.exists():
-            for schema_file in sorted(source_schemas.glob("*.json")):
-                if not schema_file.is_file():
-                    continue
-                destination_schemas.mkdir(parents=True, exist_ok=True)
-                destination_file = destination_schemas / schema_file.name
-                if destination_file.is_symlink():
-                    raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
-                shutil.copy2(schema_file, destination_file)
+        for schema_file in sorted(source_schemas.glob("*.json")):
+            if not schema_file.is_file():
+                continue
+            destination_schemas.mkdir(parents=True, exist_ok=True)
+            destination_file = destination_schemas / schema_file.name
+            if destination_file.is_symlink():
+                raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
+            shutil.copy2(schema_file, destination_file)
 
     # Resolve retrieval_profiles.v1.json: prefer the consumer-repo source
     # tree (preserves prior behaviour), then fall back to the workflow-source
