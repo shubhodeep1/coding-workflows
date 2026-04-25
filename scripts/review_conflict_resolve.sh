@@ -88,36 +88,30 @@ _dispatch_integration_judge_now() {
   # Dedup: the poller's per-repo concurrency group already
   # serialises runs, but firing while one is queued/active just
   # adds to the queue.  Skip when an existing run will pick up
-  # the new state on the next slot.
-  local _active_json _active_count
-  _active_json="$(GH_TOKEN="${GH_PAT}" gh run list \
+  # the new state on the next slot.  Uses gh's built-in --jq
+  # for consistency with the rest of the codebase (no embedded
+  # python3 -c snippet) and so a non-JSON / empty response from
+  # gh falls open via the trailing `|| echo 0` rather than
+  # silently miscounting.
+  local _active_count
+  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
       --workflow="${_poll_workflow}" \
       --repo "${GITHUB_REPOSITORY}" \
       --status in_progress \
       --limit 1 \
-      --json databaseId 2>/dev/null || true)"
-  _active_count="$(printf '%s' "${_active_json}" | python3 -c 'import json,sys
-try:
-  data = json.load(sys.stdin)
-  print(len(data) if isinstance(data, list) else 0)
-except Exception:
-  print(0)' 2>/dev/null || echo 0)"
+      --json databaseId \
+      --jq 'length' 2>/dev/null || echo 0)"
   if [ "${_active_count}" != "0" ]; then
     echo "Skipping immediate orchestrator-poll dispatch: a poller run is already in_progress (will scan integration-sync state on the next concurrency slot)."
     return 0
   fi
-  _active_json="$(GH_TOKEN="${GH_PAT}" gh run list \
+  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
       --workflow="${_poll_workflow}" \
       --repo "${GITHUB_REPOSITORY}" \
       --status queued \
       --limit 1 \
-      --json databaseId 2>/dev/null || true)"
-  _active_count="$(printf '%s' "${_active_json}" | python3 -c 'import json,sys
-try:
-  data = json.load(sys.stdin)
-  print(len(data) if isinstance(data, list) else 0)
-except Exception:
-  print(0)' 2>/dev/null || echo 0)"
+      --json databaseId \
+      --jq 'length' 2>/dev/null || echo 0)"
   if [ "${_active_count}" != "0" ]; then
     echo "Skipping immediate orchestrator-poll dispatch: a poller run is already queued (will scan integration-sync state when it starts)."
     return 0
