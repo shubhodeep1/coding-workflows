@@ -490,6 +490,20 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     if cmp -s "${_np_cur}" "${_np_prev}"; then
       echo "::warning::Conflict resolver no-progress detected: attempt ${attempt} produced the same ${_fp_count} fingerprint violation(s) as attempt $((attempt - 1)). Escalating to orchestrator integration judge instead of continuing the retry loop."
       attempt="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}"
+    else
+      # Count-not-decreasing fallback: even if the violation text
+      # changed (different patterns regressing each attempt), if the
+      # count did not strictly decrease the model is not converging
+      # toward zero violations.  Observed in 2026-04-25 PR #1533
+      # (project-1479) where every attempt produced 25 violations
+      # from a different subset of fingerprints, so cmp -s saw three
+      # different files and the strict early-exit did not fire.
+      _fp_count_prev="$(wc -l < "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" 2>/dev/null | tr -d '[:space:]')"
+      _fp_count_prev="${_fp_count_prev:-0}"
+      if [ "${_fp_count}" -ge "${_fp_count_prev}" ]; then
+        echo "::warning::Conflict resolver no-progress detected: attempt ${attempt} produced ${_fp_count} fingerprint violation(s), not fewer than the ${_fp_count_prev} from attempt $((attempt - 1)). Escalating to orchestrator integration judge instead of continuing the retry loop."
+        attempt="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}"
+      fi
     fi
     rm -f "${_np_cur}" "${_np_prev}" 2>/dev/null || true
   fi
