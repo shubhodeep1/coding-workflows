@@ -2133,7 +2133,11 @@ fi
 # can consume them. Never clobber an existing committed manifest.
 if [ "${HINTS_SOURCE:-}" = "discovered" ] || [ "${HINTS_SOURCE:-}" = "cache" ]; then
   if [ ! -f .ai/validate.yml ] && [ -s "${VALIDATE_HINTS_FILE}" ]; then
-    if mkdir -p .ai 2>/dev/null && cp "${VALIDATE_HINTS_FILE}" .ai/validate.yml; then
+    if [ -L .ai ]; then
+      echo "::warning::Refusing to materialize ${HINTS_SOURCE} hints into .ai/validate.yml because .ai is a symlink." >&2
+    elif [ -e .ai ] && [ ! -d .ai ]; then
+      echo "::warning::Refusing to materialize ${HINTS_SOURCE} hints into .ai/validate.yml because .ai exists but is not a directory." >&2
+    elif mkdir -p .ai 2>/dev/null && cp "${VALIDATE_HINTS_FILE}" .ai/validate.yml; then
       echo "Materialized ${HINTS_SOURCE} hints into .ai/validate.yml for template renderer."
     else
       echo "::warning::Failed to materialize ${HINTS_SOURCE} hints into .ai/validate.yml; template renderer will report manifest as missing." >&2
