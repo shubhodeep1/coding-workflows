@@ -51,13 +51,20 @@ the matching key. `viaPackages` churns whenever lockfile resolution shifts
 (npm version bumps, deduped graphs, hoisting changes), so allowlist entries
 silently drift out from under themselves.
 
-**Fix.** The matching key must be `severity + package` (optionally
-`+ advisorySources` or the GHSA ID). `viaPackages` becomes informational
-metadata on each entry, not part of the identity.
+**Fix.** The matching key must be `severity + package + advisory ID`, where
+the advisory ID is the GHSA ID (preferred) or the CVE (fallback when the
+GHSA ID is absent from the audit output). Including the advisory ID is a
+hard security requirement: two distinct vulnerabilities in the same package
+can share a severity, and keying the allowlist on `severity + package`
+alone would silently allowlist the second one once the first was approved.
+`viaPackages` and any other transitive-resolution metadata become
+informational fields on each entry, not part of the identity.
 
 **Acceptance.** A finding allowlisted under one lockfile resolution is still
 recognized after `npm install` produces a different `viaPackages` chain for
-the same `severity + package`.
+the same `severity + package + advisory ID`. Two distinct advisories in the
+same package at the same severity produce two distinct allowlist entries
+with no collision.
 
 #### A2 — Add `audit:ci --write` regen mode
 
@@ -68,7 +75,12 @@ cause of multiple cycles of churn on PR #178.
 **Fix.** Add a `--write` flag to the `audit:ci` script that rewrites
 `dependency-audit-allowlist.json` from the current `npm audit --json`,
 preserving `reason`, `owner`, and `expiresOn` when an existing entry's
-matching key (per A1) matches.
+matching key (per A1) matches. For the one-time migration off the legacy
+key (which included `viaPackages`), `--write` must fall back to the
+legacy key when the new key produces no match, so existing curated
+metadata is not lost on the first regen. The fallback is dropped (and the
+legacy key removed from the codepath) in a follow-up once all legacy
+entries have been migrated.
 
 **Acceptance.** `npm run audit:ci -- --write` produces a valid allowlist on
 a clean checkout, and a follow-up `npm run audit:ci` (no flag) exits 0.
@@ -156,8 +168,13 @@ escalate to a human comment.
   variation but sensitive to genuinely new failure modes.
 - Additive — does not replace `MAX_VALIDATION_RECOVERY_ATTEMPTS`. Whichever
   fires first wins.
-- Persist the rolling fingerprint window in the orchestrator state file under
-  a new field; treat absence as zero (idempotent).
+- Persist the last failure fingerprint and its consecutive-repeat counter
+  as two new fields in the orchestrator state file (e.g.
+  `judge_last_fingerprint` and `judge_fingerprint_repeat_count`). A new
+  fingerprint resets the counter to 1; an identical fingerprint increments
+  it. Treat absence of the counter as zero (idempotent on first run). The
+  tracking is a simple consecutive-repeat counter, **not** a windowed
+  history of past failures.
 
 **Acceptance.** A synthetic test that returns the same judge justification
 across N+1 cycles escalates to a human comment instead of dispatching another
