@@ -1416,7 +1416,7 @@ jobs:
             fi
             # Exclude check-runs from the current workflow run (matched via
             # `details_url` containing `/actions/runs/${SELF_RUN_ID}/job/`) so
-            # the codex-agent step's own in_progress check-run does not keep
+            # the codex-agent job's own in_progress check-run does not keep
             # the count perpetually above zero. Sibling workflow runs on the
             # same SHA (e.g. the implement run's `Agent` job) are still waited
             # on. Fail-open to count=0 on jq error.
