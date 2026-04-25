@@ -9839,8 +9839,13 @@ with open('${STATE_FILE}', 'w') as f:
   ORCH_FLOW_ENABLED_FOR_CAP="${ORCH_PR_AUTOFIX_FLOW_ENABLED:-true}"
   FINAL_PR_PHASE_CAP_BYPASS="false"
   if [ "${ORCH_FLOW_ENABLED_FOR_CAP}" = "true" ]; then
-    _final_pr_for_cap="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-    _final_pr_status_for_cap="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+    # Single jq invocation reads both fields and emits them joined by ":"
+    # (neither field can contain ":" — final_merge_pr is a JSON number,
+    # final_merge_status is one of pending|merged|failed|conflict|
+    # superseded-by-main).  Bash parameter expansion splits the result.
+    _final_pr_data="$(jq -r '[.final_merge_pr // "", .final_merge_status // "pending"] | join(":")' "${STATE_FILE}" 2>/dev/null || echo ":pending")"
+    _final_pr_for_cap="${_final_pr_data%%:*}"
+    _final_pr_status_for_cap="${_final_pr_data#*:}"
     if [ -n "${_final_pr_for_cap}" ] && [ "${_final_pr_for_cap}" != "null" ] && [ "${_final_pr_status_for_cap}" = "pending" ]; then
       FINAL_PR_PHASE_CAP_BYPASS="true"
     fi
