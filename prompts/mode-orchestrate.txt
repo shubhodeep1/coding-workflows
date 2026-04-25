@@ -63,8 +63,8 @@ Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable iss
   in-tree alternative (e.g. `tests/fixtures/...`, `examples/...`,
   `scripts/...`, `workflow-templates/...`) before generating the issue. If
   no in-tree alternative exists, OMIT the sub-issue and surface the gap as
-  a note in `project_summary` or as a follow-up comment on the tracking
-  issue, rather than filing an unimplementable sub-issue.
+  a note in `project_summary`, rather than filing an unimplementable
+  sub-issue.
 
 File partitioning rules (MANDATORY — prevents merge conflicts between parallel
 sibling issues within the same wave):
