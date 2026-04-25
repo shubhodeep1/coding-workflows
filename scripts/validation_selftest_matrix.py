@@ -102,7 +102,9 @@ def _discover_fixtures(fixtures_root: Path) -> list[FixtureSpec]:
 		[
 			child.resolve()
 			for child in fixtures_root.iterdir()
-			if child.is_dir() and not child.name.startswith(".")
+			if child.is_dir()
+			and not child.name.startswith(".")
+			and (child / ".ai" / "validate.yml").is_file()
 		]
 	)
 	if fixture_dirs:

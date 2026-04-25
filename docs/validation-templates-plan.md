@@ -218,7 +218,7 @@ service-side CLIs`) and is live on `claude/analyze-job-logs-JKNlF`.
 
 - In-tree fixture workspaces under `tests/fixtures/selftest/python-mongo-flask` and `tests/fixtures/selftest/node-hardhat-solidity`
 - Nightly CI job that prepares fixture workspace clones, renders templates from each fixture's `.ai/validate.yml`, lints output, and runs `scripts/validate_driver.sh`
-- Green-run streak counter surfaced in `README.md` badge
+- Green-run streak counter documented in `README.md` status section (documentation-only; no badge)
 
 ### M7 — Flip flag default + remove freehand path (after 2 weeks clean runs)
 

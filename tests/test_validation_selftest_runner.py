@@ -187,7 +187,7 @@ def _assert_stage_logs_exist(fixture: dict) -> None:
 		assert log_path.exists(), f"missing stage log {stage_name}: {log_path}"
 
 
-def test_runner_passes_all_supported_family_fixtures() -> None:
+def test_runner_passes_two_supported_family_fixtures() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-selftest-runner-") as td:
 		work_root = Path(td)
 		fixtures_root = work_root / "fixtures"
@@ -236,7 +236,7 @@ def test_runner_passes_all_supported_family_fixtures() -> None:
 			_assert_stage_logs_exist(fixture)
 
 
-def test_runner_surfaces_clone_failure_when_manifest_is_missing() -> None:
+def test_runner_ignores_directories_without_manifest() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-selftest-runner-") as td:
 		work_root = Path(td)
 		fixtures_root = work_root / "fixtures"
@@ -258,20 +258,14 @@ def test_runner_surfaces_clone_failure_when_manifest_is_missing() -> None:
 			logs_root,
 			runtime_command="python3 -c \"print('runtime ok')\"",
 		)
-		assert result.returncode == 1
+		assert result.returncode == 0
 		assert summary_path.exists()
 
 		summary = _load_summary(summary_path)
-		assert summary["overall_status"] == "fail"
-		assert summary["totals"]["fixtures"] == 2
-		assert summary["totals"]["failed"] == 1
-		failed_fixture = next(item for item in summary["fixtures"] if item["status"] == "fail")
-		assert failed_fixture["name"] == "broken-node"
-		assert failed_fixture["stages"]["clone"]["status"] == "fail"
-		assert failed_fixture["stages"]["render"]["status"] == "skipped"
-		assert failed_fixture["stages"]["lint"]["status"] == "skipped"
-		assert failed_fixture["stages"]["runtime"]["status"] == "skipped"
-		assert "clone" in failed_fixture["log_paths"]
+		assert summary["overall_status"] == "pass"
+		assert summary["totals"] == {"fixtures": 1, "passed": 1, "failed": 0}
+		fixture_names = sorted(item["name"] for item in summary["fixtures"])
+		assert fixture_names == ["python-mongo-flask"]
 
 
 def test_runner_surfaces_render_failure_in_summary() -> None:
