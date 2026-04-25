@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validation_selftest_runner.py:412-419 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: main() still calls two test functions by their old names after they were renamed.\n  WHY: Direct execution of the test file in CI will raise NameError because the referenced symbols no longer exist.\n- .github/workflows/nightly-validation-selftest.yml:16-17 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The workflow requests write permissions that are broader than a typical self-test job.\n  WHY: Three reviewers flagged the elevated permissions; others noted they are intended for committing the status file and uploading artifacts.\n- CI check-run:lint | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The lint check-run is failing.\n  WHY: The reported failed `lint` check blocks merge readiness.\n- tests/fixtures/selftest/node-hardhat-solidity/package.json:7-10 | severity=medium | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: DevDependencies were changed from caret ranges to exact versions.\n  WHY: Exact pinning reduces automatic minor/patch updates; other reviewers considered this intentional for fixture determinism.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validation_selftest_runner.py:413-414 | severity=critical | confidence=5\n  PROBLEM: main() calls renamed test functions that no longer exist.\n  WHY: Running the file as a script will raise NameError and fail CI.\n- .github/workflows/nightly-validation-selftest.yml:16-17 | severity=medium | confidence=3\n  PROBLEM: Workflow permissions are broader than a typical self-test job.\n  WHY: The job requests contents: write and actions: write, which increases the security surface.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validation_selftest_runner.py:413-414 | severity=critical | confidence=5\n  PROBLEM: main() still calls renamed test functions.\n  WHY: Executing `python3 tests/test_validation_selftest_runner.py` will crash with NameError.\n- CI check-run:lint | severity=high | confidence=5\n  PROBLEM: The lint check-run is failing.\n  WHY: The check-run context shows `failed[0].name: lint` and `failed[0].conclusion: failure`, which blocks merge.\n- .github/workflows/nightly-validation-selftest.yml:~17 | severity=medium | confidence=4\n  PROBLEM: Workflow requests excessive permissions.\n  WHY: `contents: write` and `actions: write` are broader than a self-test job typically needs.\n- tests/fixtures/selftest/node-hardhat-solidity/package.json:7-10 | severity=medium | confidence=2\n  PROBLEM: DevDependencies were pinned to exact versions.\n  WHY: This removes automatic minor and patch updates, potentially delaying dependency bug fixes.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validation_selftest_runner.py:412-413 | severity=critical | confidence=5\n  PROBLEM: main() still calls test functions by their old names after they were renamed.\n  WHY: Running the file directly in CI will raise NameError because the old symbols no longer exist.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- tests/test_validation_selftest_runner.py:412-413 | severity=critical | confidence=5\n  PROBLEM: The main() function calls test functions by their old names after they were renamed.\n  WHY: CI execution of the test file will raise NameError because the old function names no longer exist.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_validation_selftest_runner.py:412-419 | severity=critical | confidence=5\n  PROBLEM: The main() function calls test functions by their old names after they were renamed.\n  WHY: Executing the script in CI will raise NameError because the referenced symbols no longer exist.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "dc305e0d8835127df0271cc44d97a623b58dff06b2f6f18b9795930b926f7548",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1628,
+    "run_id": "24936632572",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24936632572",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260425180853_4de090a65a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1628,
+    "run_id": "24936632572"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-25T18:08:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
