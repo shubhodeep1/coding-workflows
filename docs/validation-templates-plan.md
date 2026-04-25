@@ -288,6 +288,14 @@ service-side CLIs`) and is live on `claude/analyze-job-logs-JKNlF`.
 
 ## Source-of-truth status snapshots
 
+### Snapshot — 2026-04-25
+
+| Milestone | Status | Objective evidence from repository |
+| --- | --- | --- |
+| M5 — Refresh workflow + auto-merge gate | Done | `scripts/validation_refresh_runner.py` enables green-path auto-merge directly with `gh pr merge --squash --auto` and falls back to draft + diagnostics when auto-merge enablement fails; no separate `auto-merge:validation-refresh` label path is required. |
+| M6 — Nightly self-test coverage | Done | `.github/workflows/nightly-validation-selftest.yml` runs nightly/manual, uploads `artifacts/validation-selftest-summary.json` + `artifacts/validation-selftest-logs/`, and updates committed streak/status artifact `analysis/validation-selftest-status.json` via `scripts/validation_selftest_status.py`; README now documents the status/streak surface. |
+| M7 — Flip default + remove freehand path | Done | `.github/workflows/validate.yml` and `scripts/validate_process.sh` default `VALIDATION_USE_TEMPLATES=true`, freehand generation paths are removed, and template-mode behavior is covered by the current validation tests. |
+
 ### Snapshot — 2026-04-22
 
 | Milestone | Status | Objective evidence from repository |
