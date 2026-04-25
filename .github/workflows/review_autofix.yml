@@ -1676,8 +1676,11 @@ jobs:
               _head_ref_class="$(jq -r '.headRefName // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
               _base_ref_class="$(jq -r '.baseRefName // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
             fi
-            if [ -n "${_head_ref_class}" ] && echo "${_head_ref_class}" | grep -Eq "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
-              if [ -n "${_base_ref_class}" ] && echo "${_base_ref_class}" | grep -Eq "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+            # Use `printf` + `grep -Eq --` so a repo-configured pattern that
+            # happens to start with `-` (e.g. `-orchestrator/...`) is parsed
+            # as the regex argument and not as a grep option / echo flag.
+            if [ -n "${_head_ref_class}" ] && printf '%s\n' "${_head_ref_class}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+              if [ -n "${_base_ref_class}" ] && printf '%s\n' "${_base_ref_class}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
                 orch_pr_mode="orch_intermediate"
               else
                 orch_pr_mode="orch_final"
