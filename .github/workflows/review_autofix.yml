@@ -1347,6 +1347,11 @@ jobs:
       - name: Collect PR check-run failures (CI/lint autofix context)
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Used by the in-flight filter below to exclude this workflow run's
+          # own check-runs (most notably `review / codex-agent`, which is
+          # `in_progress` while this step polls) from the wait count, so the
+          # loop cannot self-wait until CHECK_RUNS_WAIT_TIMEOUT_SECS expires.
+          SELF_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -1409,7 +1414,23 @@ jobs:
               _final_status="api_error"
               break
             fi
-            _in_flight="$(jq '[.check_runs // [] | .[] | select(.status == "in_progress" or .status == "queued")] | length' "${_raw_file}" 2>/dev/null || echo 0)"
+            # Exclude check-runs from the current workflow run (matched via
+            # `details_url` containing `/actions/runs/${SELF_RUN_ID}/job/`) so
+            # the codex-agent step's own in_progress check-run does not keep
+            # the count perpetually above zero. Sibling workflow runs on the
+            # same SHA (e.g. the implement run's `Agent` job) are still waited
+            # on. Fail-open to count=0 on jq error.
+            _in_flight="$(jq --arg run_id "${SELF_RUN_ID:-}" '
+              [
+                .check_runs // []
+                | .[]
+                | select(.status == "in_progress" or .status == "queued")
+                | select(
+                    ($run_id == "")
+                    or (((.details_url // "") | contains("/actions/runs/" + $run_id + "/job/")) | not)
+                  )
+              ] | length
+            ' "${_raw_file}" 2>/dev/null || echo 0)"
             if [ "${_in_flight}" = "0" ]; then
               _final_status="ready"
               break
