@@ -53,6 +53,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:orchestrator-validate-required"]="c5def5"
 	["ai:comprehensive-test-pending"]="1d76db"
 	["ai:needs-prompt-review"]="fbca04"
+	["ai:review-skipped"]="c2e0c6"
+	["force-review"]="fbca04"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -89,6 +91,8 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:orchestrator-validate-required"]="Orchestrator issue requires validate phase before completion"
 	["ai:comprehensive-test-pending"]="Pending comprehensive release callback dispatch."
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
+	["ai:review-skipped"]="Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
+	["force-review"]="Force a full review_autofix cycle, bypassing the deterministic pre-review skip"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

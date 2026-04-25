@@ -137,16 +137,20 @@ jobs:
           pr_merged="false"
           pr_head_ref=""
           pr_labels=""
+          pr_additions=""
+          pr_deletions=""
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             SHOULD_RUN="false"
             SKIP_REASON="invalid_pr_number"
             echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
           else
             # CLAUDE.md §15: extend the existing PR fetch to also return
-            # labels so the deterministic-skip force-review override below
-            # does not need a second API call.
-            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // ""), ((.labels // []) | map(.name) | join(","))] | @tsv')"; then
-              IFS=$'\t' read -r pr_state pr_merged pr_head_ref pr_labels <<< "${_pr_gate}" || true
+            # labels (force-review override check below) and per-PR
+            # additions/deletions totals (deterministic-skip size check).
+            # The /pulls/{n} endpoint already exposes these; using them
+            # avoids a paginated /files call on the small-diff branch.
+            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // ""), ((.labels // []) | map(.name) | join(",")), (.additions // 0), (.deletions // 0)] | @tsv')"; then
+              IFS=$'\t' read -r pr_state pr_merged pr_head_ref pr_labels pr_additions pr_deletions <<< "${_pr_gate}" || true
               pr_merged="$(printf '%s' "${pr_merged:-false}" | tr '[:upper:]' '[:lower:]')"
             fi
           fi
@@ -288,66 +292,83 @@ jobs:
             if [ "${FORCE_REVIEW}" = "true" ]; then
               echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
             else
-              # Fail-open: if the files API call fails for any reason, fall
-              # through to a normal review run rather than risk silently
-              # skipping a PR that should have been reviewed.
-              pr_files_json=""
-              if pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, additions: .additions, deletions: .deletions}]' 2>/dev/null)"; then
-                :
+              # Size check uses the .additions/.deletions totals already
+              # returned by the PR-state fetch above (no extra API call).
+              # Bash arithmetic test fails open ("not small") if either
+              # value is non-numeric.
+              SMALL_DIFF="false"
+              max_add="${AUTOFIX_SKIP_MAX_ADDITIONS:-10}"
+              max_del="${AUTOFIX_SKIP_MAX_DELETIONS:-10}"
+              if [ -n "${pr_additions}" ] && [ -n "${pr_deletions}" ] \
+                && [ "${pr_additions}" -le "${max_add}" ] 2>/dev/null \
+                && [ "${pr_deletions}" -le "${max_del}" ] 2>/dev/null; then
+                SMALL_DIFF="true"
               fi
 
-              if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
-                total_additions="$(printf '%s' "${pr_files_json}" | jq '[.[].additions] | add // 0' 2>/dev/null || echo 0)"
-                total_deletions="$(printf '%s' "${pr_files_json}" | jq '[.[].deletions] | add // 0' 2>/dev/null || echo 0)"
-                file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo 0)"
-
-                # Doc-only check: every changed file must match the doc-glob
-                # set. Any non-matching file disqualifies the PR.
-                DOC_ONLY="false"
-                if [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ] && [ "${file_count}" != "0" ]; then
-                  DOC_ONLY="true"
-                  while IFS= read -r fname; do
-                    [ -n "${fname}" ] || continue
-                    base="${fname##*/}"
-                    case "${fname}" in
-                      docs/*) continue ;;
-                    esac
-                    lc_base="${base,,}"
-                    case "${lc_base}" in
-                      *.md|*.txt|*.rst) continue ;;
-                    esac
-                    case "${base}" in
-                      LICENSE*|CHANGELOG*) continue ;;
-                    esac
-                    DOC_ONLY="false"
-                    break
-                  done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
+              # Doc-only check: only reach for the paginated /files API if
+              # (a) the operator hasn't disabled the doc-only branch AND
+              # (b) the cheap size check did not already qualify the PR.
+              # /files is the only call where filenames are available;
+              # /pulls/{n} does not include them.
+              DOC_ONLY="false"
+              file_count=""
+              if [ "${SMALL_DIFF}" != "true" ] && [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
+                # `gh api --paginate --jq '[…]'` emits one JSON array per
+                # page. Without `jq -s 'add // []'` the concatenated output
+                # is not a single valid JSON document and downstream jq
+                # silently falls back to 0/empty — which on a >1-page PR
+                # would erroneously evaluate as doc-only. Slurp + add
+                # merges all pages into one array. JSON parse failure
+                # treats the lookup as unavailable (fail-open below).
+                pr_files_json=""
+                if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+                  pr_files_json=""
                 fi
 
-                # Size check: BOTH additions ≤ max AND deletions ≤ max.
-                SMALL_DIFF="false"
-                max_add="${AUTOFIX_SKIP_MAX_ADDITIONS:-10}"
-                max_del="${AUTOFIX_SKIP_MAX_DELETIONS:-10}"
-                if [ "${total_additions}" -le "${max_add}" ] 2>/dev/null && [ "${total_deletions}" -le "${max_del}" ] 2>/dev/null; then
-                  SMALL_DIFF="true"
+                if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
+                  file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo 0)"
+                  if [ "${file_count}" != "0" ]; then
+                    DOC_ONLY="true"
+                    while IFS= read -r fname; do
+                      [ -n "${fname}" ] || continue
+                      base="${fname##*/}"
+                      lc_fname="${fname,,}"
+                      lc_base="${base,,}"
+                      case "${lc_fname}" in
+                        docs/*) continue ;;
+                      esac
+                      case "${lc_base}" in
+                        *.md|*.txt|*.rst) continue ;;
+                      esac
+                      # LICENSE / CHANGELOG: case-insensitive prefix on
+                      # basename — matches GitHub's own license/changelog
+                      # detection (recognises license.txt, Changelog.md,
+                      # LICENCE, etc.).
+                      case "${lc_base}" in
+                        license*|changelog*) continue ;;
+                      esac
+                      DOC_ONLY="false"
+                      break
+                    done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
+                  fi
+                else
+                  echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — /files fetch failed or empty, doc-only check inconclusive."
                 fi
-
-                if [ "${DOC_ONLY}" = "true" ]; then
-                  DETERMINISTIC_SKIP="true"
-                  DET_SKIP_REASON="docs_only"
-                  SHOULD_RUN="false"
-                  SKIP_REASON="deterministic_skip_docs_only"
-                elif [ "${SMALL_DIFF}" = "true" ]; then
-                  DETERMINISTIC_SKIP="true"
-                  DET_SKIP_REASON="small_diff"
-                  SHOULD_RUN="false"
-                  SKIP_REASON="deterministic_skip_small_diff"
-                fi
-
-                echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count} additions=${total_additions} deletions=${total_deletions} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON}"
-              else
-                echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — fail-open, full review will run."
               fi
+
+              if [ "${DOC_ONLY}" = "true" ]; then
+                DETERMINISTIC_SKIP="true"
+                DET_SKIP_REASON="docs_only"
+                SHOULD_RUN="false"
+                SKIP_REASON="deterministic_skip_docs_only"
+              elif [ "${SMALL_DIFF}" = "true" ]; then
+                DETERMINISTIC_SKIP="true"
+                DET_SKIP_REASON="small_diff"
+                SHOULD_RUN="false"
+                SKIP_REASON="deterministic_skip_small_diff"
+              fi
+
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON}"
             fi
           fi
 
@@ -480,8 +501,13 @@ jobs:
             gh_retry gh label create "${label}" --repo "${repo}" --color "${color}" --description "${desc}" >/dev/null 2>&1 || true
           }
 
-          # 1) PR-side audit label
-          ensure_label_exists "ai:review-skipped" "${REPOSITORY}" "c5def5" "Deterministic gate skipped reviewer panel + editor cycle"
+          # 1) PR-side audit label. Color + description mirror the central
+          # catalog in scripts/label_helpers.sh so `ensure_label_exists`
+          # produces an identical label regardless of which job creates it
+          # first. This job intentionally does not load label_helpers.sh
+          # (avoids the heavyweight workflow-source checkout); the inline
+          # definitions must stay in lockstep with the catalog.
+          ensure_label_exists "ai:review-skipped" "${REPOSITORY}" "c2e0c6" "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
           if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
             -f "labels[]=ai:review-skipped" >/dev/null 2>&1; then
             echo "::warning::Failed to add ai:review-skipped label to PR #${PR_NUMBER}."
