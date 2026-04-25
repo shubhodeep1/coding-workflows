@@ -2591,9 +2591,16 @@ _refresh_integration_resolver_tooling() {
           continue
         fi
         if git checkout "refs/remotes/origin/${default_branch}" -- "${f}" 2>/dev/null; then
-          git add -- "${f}" 2>/dev/null || true
-          refreshed_count=$((refreshed_count + 1))
-          refreshed_list+="${f} "
+          # Only count the file as refreshed if `git add` succeeds, so
+          # the commit message and refreshed_count never claim a file
+          # was updated when its staging actually failed (e.g. a path
+          # permission issue or .gitignore conflict).
+          if git add -- "${f}" 2>/dev/null; then
+            refreshed_count=$((refreshed_count + 1))
+            refreshed_list+="${f} "
+          else
+            echo "::warning::${log_prefix} git add failed for ${f}; excluding from refresh commit." >&2
+          fi
         fi
       done
 
