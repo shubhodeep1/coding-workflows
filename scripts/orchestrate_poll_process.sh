@@ -10026,7 +10026,32 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Raising MAX_JUDGE_CYCLES from ${MAX_JUDGE} to dynamic floor ${DYNAMIC_FLOOR} (total_waves=${TOTAL_WAVES} × 2)."
     MAX_JUDGE="${DYNAMIC_FLOOR}"
   fi
-  if [ "$((JUDGE_STALL_CYCLES + 1))" -gt "${MAX_JUDGE}" ]; then
+  # Final-PR-phase cap bypass (Orchestrator PR autofix flow contract):
+  # When the integration→default-branch PR is open and pending merge,
+  # the judge stall cycle cap is bypassed so the final PR can run
+  # unlimited 3-autofix→judge→3-autofix→… cycles until it is mergeable.
+  # The cap remains in force for everything else (intermediate-PR
+  # phase, sub-issue stalls, recovery loops) to preserve the existing
+  # infinite-loop guarantee.  Set ORCH_PR_AUTOFIX_FLOW_ENABLED=false
+  # (repo var) to revert to the legacy uniform-cap behavior.
+  ORCH_FLOW_ENABLED_FOR_CAP="${ORCH_PR_AUTOFIX_FLOW_ENABLED:-true}"
+  FINAL_PR_PHASE_CAP_BYPASS="false"
+  if [ "${ORCH_FLOW_ENABLED_FOR_CAP}" = "true" ]; then
+    # Single jq invocation reads both fields and emits them joined by ":"
+    # (neither field can contain ":" — final_merge_pr is a JSON number,
+    # final_merge_status is one of pending|merged|failed|conflict|
+    # superseded-by-main).  Bash parameter expansion splits the result.
+    _final_pr_data="$(jq -r '[.final_merge_pr // "", .final_merge_status // "pending"] | join(":")' "${STATE_FILE}" 2>/dev/null || echo ":pending")"
+    _final_pr_for_cap="${_final_pr_data%%:*}"
+    _final_pr_status_for_cap="${_final_pr_data#*:}"
+    if [ -n "${_final_pr_for_cap}" ] && [ "${_final_pr_for_cap}" != "null" ] && [ "${_final_pr_status_for_cap}" = "pending" ]; then
+      FINAL_PR_PHASE_CAP_BYPASS="true"
+    fi
+  fi
+  if [ "${FINAL_PR_PHASE_CAP_BYPASS}" = "true" ] && [ "$((JUDGE_STALL_CYCLES + 1))" -gt "${MAX_JUDGE}" ]; then
+    echo "[final-merge] judge cap bypassed (final-PR loop active: PR #${_final_pr_for_cap}, status=${_final_pr_status_for_cap}); JUDGE_STALL_CYCLES=$((JUDGE_STALL_CYCLES + 1)) > MAX_JUDGE=${MAX_JUDGE}, proceeding to judge invocation."
+  fi
+  if [ "${FINAL_PR_PHASE_CAP_BYPASS}" != "true" ] && [ "$((JUDGE_STALL_CYCLES + 1))" -gt "${MAX_JUDGE}" ]; then
     echo "::error::Judge stall cycle limit reached ($((JUDGE_STALL_CYCLES + 1)) > ${MAX_JUDGE}). Marking project as failed."
     jq '.status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
