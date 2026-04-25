@@ -1,0 +1,10 @@
+type: python-mongo-flask
+entry: app.py
+port: 8000
+slots:
+  project_name: nightly-selftest-python-mongo
+  canary_tools:
+    - curl
+    - jq
+    - python3
+  tap_plan: 2

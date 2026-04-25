@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Run validation harness self-tests across fixture manifests."""
+"""Run validation harness self-tests across fixture workspaces."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -12,14 +13,21 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 SCHEMA_VERSION = "1"
 
 
+class FixtureSpec(NamedTuple):
+	name: str
+	source_path: Path
+	manifest_path: Path
+	legacy_manifest: bool = False
+
+
 def build_parser() -> argparse.ArgumentParser:
-	parser = argparse.ArgumentParser(description="Run validation harness self-tests for fixture manifests.")
+	parser = argparse.ArgumentParser(description="Run validation harness self-tests for fixture workspaces.")
 	parser.add_argument(
 		"--repo-root",
 		default=".",
@@ -27,8 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	parser.add_argument(
 		"--fixtures-root",
-		default="examples/validation-fixtures",
-		help="Directory containing fixture manifests.",
+		default="tests/fixtures/selftest",
+		help="Directory containing fixture workspaces.",
 	)
 	parser.add_argument(
 		"--summary-path",
@@ -41,9 +49,20 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Directory for per-fixture stage logs.",
 	)
 	parser.add_argument(
+		"--runtime-command",
+		default="bash scripts/validate_driver.sh",
+		help="Runtime validation command executed in each prepared fixture workspace.",
+	)
+	parser.add_argument(
+		"--runtime-timeout-seconds",
+		type=int,
+		default=1800,
+		help="Timeout in seconds for the runtime validation command (default: 1800).",
+	)
+	parser.add_argument(
 		"--skip-compose-config",
 		action="store_true",
-		help="Skip docker compose config sanity check.",
+		help="Legacy no-op retained for backward compatibility.",
 	)
 	return parser
 
@@ -66,42 +85,103 @@ def _utc_timestamp() -> str:
 	return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _discover_fixtures(fixtures_root: Path) -> list[Path]:
+def _fixture_log_name(fixture_name: str) -> str:
+	safe = fixture_name.strip().replace("/", "__")
+	safe = safe.replace("\\", "__")
+	if not safe:
+		return "fixture"
+	return safe
+
+
+def _discover_fixtures(fixtures_root: Path) -> list[FixtureSpec]:
+	if not fixtures_root.exists() or not fixtures_root.is_dir():
+		return []
+
 	fixtures_root_resolved = fixtures_root.resolve()
-	manifests = sorted(fixtures_root.glob("*.yml")) + sorted(fixtures_root.glob("*.yaml"))
-	filtered: list[Path] = []
-	for path in manifests:
-		if not path.is_file():
+	fixture_dirs = sorted(
+		[
+			child.resolve()
+			for child in fixtures_root.iterdir()
+			if child.is_dir() and not child.name.startswith(".")
+		]
+	)
+	if fixture_dirs:
+		return [
+			FixtureSpec(
+				name=fixture_dir.name,
+				source_path=fixture_dir,
+				manifest_path=fixture_dir / ".ai" / "validate.yml",
+				legacy_manifest=False,
+			)
+			for fixture_dir in fixture_dirs
+		]
+
+	manifest_paths = sorted(fixtures_root.glob("*.yml")) + sorted(fixtures_root.glob("*.yaml"))
+	discovered: list[FixtureSpec] = []
+	for manifest_path in manifest_paths:
+		if not manifest_path.is_file():
 			continue
-		resolved = path.resolve()
+		resolved = manifest_path.resolve()
 		try:
 			resolved.relative_to(fixtures_root_resolved)
 		except ValueError:
 			continue
-		filtered.append(resolved)
-	return sorted(set(filtered))
+		discovered.append(
+			FixtureSpec(
+				name=manifest_path.name,
+				source_path=resolved.parent,
+				manifest_path=resolved,
+				legacy_manifest=True,
+			)
+		)
+	return discovered
 
 
-def _write_command_log(log_path: Path, command: list[str], cwd: Path, result: subprocess.CompletedProcess[str], duration: float) -> None:
+def _write_command_log(
+	log_path: Path,
+	command: list[str],
+	cwd: Path,
+	result: subprocess.CompletedProcess[str],
+	duration: float,
+	*,
+	env_overrides: dict[str, str] | None = None,
+) -> None:
 	log_path.parent.mkdir(parents=True, exist_ok=True)
 	payload = [
 		f"command: {shlex.join(command)}",
 		f"cwd: {cwd.as_posix()}",
 		f"exit_code: {result.returncode}",
 		f"duration_seconds: {duration:.3f}",
-		"--- stdout ---",
-		result.stdout,
-		"--- stderr ---",
-		result.stderr,
 	]
+	if env_overrides:
+		payload.append(f"env_overrides: {json.dumps(env_overrides, sort_keys=True)}")
+	payload.extend(
+		[
+			"--- stdout ---",
+			result.stdout,
+			"--- stderr ---",
+			result.stderr,
+		]
+	)
 	try:
 		log_path.write_text("\n".join(payload), encoding="utf-8")
 	except OSError as exc:
 		print(f"validation-selftest: unable to write log {log_path}: {exc}", file=sys.stderr)
 
 
-def _run_command(command: list[str], cwd: Path, log_path: Path, repo_root: Path) -> dict[str, Any]:
+def _run_command(
+	command: list[str],
+	cwd: Path,
+	log_path: Path,
+	repo_root: Path,
+	*,
+	timeout_seconds: int = 300,
+	env_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
 	started = time.monotonic()
+	run_env = os.environ.copy()
+	if env_overrides:
+		run_env.update(env_overrides)
 	try:
 		result = subprocess.run(
 			command,
@@ -109,7 +189,8 @@ def _run_command(command: list[str], cwd: Path, log_path: Path, repo_root: Path)
 			text=True,
 			capture_output=True,
 			check=False,
-			timeout=300,
+			timeout=timeout_seconds,
+			env=run_env,
 		)
 	except FileNotFoundError as exc:
 		result = subprocess.CompletedProcess(command, 127, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
@@ -127,13 +208,31 @@ def _run_command(command: list[str], cwd: Path, log_path: Path, repo_root: Path)
 	except Exception as exc:
 		result = subprocess.CompletedProcess(command, 1, stdout="", stderr=f"{exc.__class__.__name__}: {exc}")
 	duration = time.monotonic() - started
-	_write_command_log(log_path, command, cwd, result, duration)
+	_write_command_log(log_path, command, cwd, result, duration, env_overrides=env_overrides)
 	return {
 		"status": "pass" if result.returncode == 0 else "fail",
 		"exit_code": result.returncode,
 		"duration_seconds": round(duration, 3),
 		"log_path": _repo_rel(log_path, repo_root),
 	}
+
+
+def _write_prepare_log(log_path: Path, source_path: Path, workspace_path: Path, manifest_path: Path, error: str | None = None) -> None:
+	command = ["prepare_fixture_workspace", source_path.as_posix(), workspace_path.as_posix()]
+	if error:
+		result = subprocess.CompletedProcess(command, 1, stdout="", stderr=error)
+	else:
+		result = subprocess.CompletedProcess(
+			command,
+			0,
+			stdout=(
+				f"source_path: {source_path.as_posix()}\n"
+				f"workspace_path: {workspace_path.as_posix()}\n"
+				f"manifest_path: {manifest_path.as_posix()}"
+			),
+			stderr="",
+		)
+	_write_command_log(log_path, command, workspace_path.parent, result, 0.0)
 
 
 def _skipped_stage(reason: str) -> dict[str, Any]:
@@ -143,216 +242,211 @@ def _skipped_stage(reason: str) -> dict[str, Any]:
 	}
 
 
+def _stage_clone(
+	repo_root: Path,
+	fixture: FixtureSpec,
+	fixture_log_dir: Path,
+) -> tuple[dict[str, Any], Path | None, Path | None]:
+	log_path = fixture_log_dir / "clone.log"
+	workspace_root = fixture_log_dir / "workspace"
+	if workspace_root.exists():
+		shutil.rmtree(workspace_root)
+
+	if not fixture.source_path.exists():
+		error = f"Fixture source path does not exist: {fixture.source_path.as_posix()}"
+		_write_prepare_log(log_path, fixture.source_path, workspace_root, fixture.manifest_path, error=error)
+		return {
+			"status": "fail",
+			"error": error,
+			"log_path": _repo_rel(log_path, repo_root),
+		}, None, None
+
+	if not fixture.source_path.is_dir() and not fixture.legacy_manifest:
+		error = f"Fixture source path is not a directory: {fixture.source_path.as_posix()}"
+		_write_prepare_log(log_path, fixture.source_path, workspace_root, fixture.manifest_path, error=error)
+		return {
+			"status": "fail",
+			"error": error,
+			"log_path": _repo_rel(log_path, repo_root),
+		}, None, None
+
+	started = time.monotonic()
+	try:
+		if fixture.legacy_manifest:
+			workspace_manifest = workspace_root / ".ai" / "validate.yml"
+			workspace_manifest.parent.mkdir(parents=True, exist_ok=True)
+			if not fixture.manifest_path.exists():
+				raise FileNotFoundError(f"Fixture manifest missing: {fixture.manifest_path.as_posix()}")
+			shutil.copy2(fixture.manifest_path, workspace_manifest)
+		else:
+			if not fixture.manifest_path.exists():
+				raise FileNotFoundError(f"Fixture manifest missing: {fixture.manifest_path.as_posix()}")
+			shutil.copytree(
+				fixture.source_path,
+				workspace_root,
+				dirs_exist_ok=False,
+				ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+			)
+			workspace_manifest = workspace_root / ".ai" / "validate.yml"
+			if not workspace_manifest.exists():
+				raise FileNotFoundError(
+					f"Prepared workspace is missing .ai/validate.yml: {workspace_manifest.as_posix()}"
+				)
+	except (OSError, shutil.Error, FileNotFoundError) as exc:
+		duration = time.monotonic() - started
+		_write_prepare_log(log_path, fixture.source_path, workspace_root, fixture.manifest_path, error=str(exc))
+		return {
+			"status": "fail",
+			"error": str(exc),
+			"duration_seconds": round(duration, 3),
+			"log_path": _repo_rel(log_path, repo_root),
+		}, None, None
+
+	duration = time.monotonic() - started
+	_write_prepare_log(log_path, fixture.source_path, workspace_root, workspace_manifest)
+	return {
+		"status": "pass",
+		"duration_seconds": round(duration, 3),
+		"log_path": _repo_rel(log_path, repo_root),
+		"workspace_path": _repo_rel(workspace_root, repo_root),
+		"workspace_manifest_path": _repo_rel(workspace_manifest, repo_root),
+	}, workspace_root, workspace_manifest
+
+
 def _stage_render(repo_root: Path, manifest_path: Path, output_root: Path, fixture_log_dir: Path) -> dict[str, Any]:
 	log_path = fixture_log_dir / "render.log"
+	if output_root.exists():
+		shutil.rmtree(output_root)
+	output_root.mkdir(parents=True, exist_ok=True)
 	command = [
 		sys.executable,
-		"scripts/render_validation_templates.py",
+		str(repo_root / "scripts" / "render_validation_templates.py"),
 		"--manifest",
 		str(manifest_path),
 		"--schema",
-		"scripts/templates/slot_manifest.schema.json",
+		str(repo_root / "scripts" / "templates" / "slot_manifest.schema.json"),
 		"--templates-root",
-		"workflow-templates/validation-harness",
+		str(repo_root / "workflow-templates" / "validation-harness"),
 		"--output-root",
 		str(output_root),
 	]
-	return _run_command(command, repo_root, log_path, repo_root)
+	return _run_command(command, output_root.parent, log_path, repo_root)
 
 
 def _stage_lint(repo_root: Path, output_root: Path, fixture_log_dir: Path) -> dict[str, Any]:
 	log_path = fixture_log_dir / "lint.log"
 	command = [
 		sys.executable,
-		"scripts/validation_lint.py",
+		str(repo_root / "scripts" / "validation_lint.py"),
 		str(output_root),
 	]
-	return _run_command(command, repo_root, log_path, repo_root)
+	return _run_command(command, output_root.parent, log_path, repo_root)
 
 
-def _run_sanity_check(command: list[str], cwd: Path) -> tuple[int, str, str, float]:
-	started = time.monotonic()
-	try:
-		result = subprocess.run(
-			command,
-			cwd=str(cwd),
-			text=True,
-			capture_output=True,
-			check=False,
-			timeout=30,
+def _stage_runtime(
+	repo_root: Path,
+	workspace_root: Path,
+	fixture_log_dir: Path,
+	*,
+	runtime_command: str,
+	runtime_timeout_seconds: int,
+) -> dict[str, Any]:
+	log_path = fixture_log_dir / "runtime.log"
+	command = shlex.split(runtime_command)
+	if not command:
+		_write_prepare_log(
+			log_path,
+			workspace_root,
+			workspace_root,
+			workspace_root / ".ai" / "validate.yml",
+			error="Runtime command is empty",
 		)
-		duration = time.monotonic() - started
-		return result.returncode, result.stdout, result.stderr, duration
-	except FileNotFoundError as exc:
-		duration = time.monotonic() - started
-		return 127, "", f"{exc.__class__.__name__}: {exc}", duration
-	except subprocess.TimeoutExpired as exc:
-		duration = time.monotonic() - started
-		stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-		stderr_tail = exc.stderr if isinstance(exc.stderr, str) else ""
-		if isinstance(exc.stdout, bytes):
-			stdout = exc.stdout.decode("utf-8", errors="replace")
-		if isinstance(exc.stderr, bytes):
-			stderr_tail = exc.stderr.decode("utf-8", errors="replace")
-		stderr = f"{exc.__class__.__name__}: {exc}"
-		if stderr_tail:
-			stderr = f"{stderr}\n{stderr_tail}"
-		return 124, stdout, stderr, duration
-	except Exception as exc:
-		duration = time.monotonic() - started
-		return 1, "", f"{exc.__class__.__name__}: {exc}", duration
+		return {
+			"status": "fail",
+			"error": "Runtime command is empty",
+			"log_path": _repo_rel(log_path, repo_root),
+		}
 
+	def _resolve_command_path(token: str) -> str:
+		token_path = Path(token)
+		if token_path.is_absolute():
+			return token
+		workspace_candidate = workspace_root / token_path
+		if workspace_candidate.exists():
+			return token
+		repo_candidate = repo_root / token_path
+		if repo_candidate.exists():
+			return str(repo_candidate)
+		return token
 
-def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, skip_compose_config: bool) -> dict[str, Any]:
-	log_path = fixture_log_dir / "sanity.log"
-	checks: list[dict[str, Any]] = []
-	log_sections: list[str] = []
-	overall_status = "pass"
-	stage_started = time.monotonic()
-
-	for shell_file in sorted(output_root.rglob("*.sh")):
-		command = ["bash", "-n", str(shell_file)]
-		exit_code, stdout, stderr, duration = _run_sanity_check(command, repo_root)
-		status = "pass" if exit_code == 0 else "fail"
-		if status == "fail":
-			overall_status = "fail"
-		checks.append(
-			{
-				"name": f"bash_syntax:{_repo_rel(shell_file, repo_root)}",
-				"status": status,
-				"exit_code": exit_code,
-				"duration_seconds": round(duration, 3),
-			}
-		)
-		log_sections.extend(
-			[
-				f"check: bash_syntax:{_repo_rel(shell_file, repo_root)}",
-				f"command: {shlex.join(command)}",
-				f"exit_code: {exit_code}",
-				f"duration_seconds: {duration:.3f}",
-				"--- stdout ---",
-				stdout,
-				"--- stderr ---",
-				stderr,
-				"",
-			]
-		)
-
-	for python_file in sorted(output_root.rglob("*.py")):
-		command = [sys.executable, "-m", "py_compile", str(python_file)]
-		exit_code, stdout, stderr, duration = _run_sanity_check(command, repo_root)
-		status = "pass" if exit_code == 0 else "fail"
-		if status == "fail":
-			overall_status = "fail"
-		checks.append(
-			{
-				"name": f"python_compile:{_repo_rel(python_file, repo_root)}",
-				"status": status,
-				"exit_code": exit_code,
-				"duration_seconds": round(duration, 3),
-			}
-		)
-		log_sections.extend(
-			[
-				f"check: python_compile:{_repo_rel(python_file, repo_root)}",
-				f"command: {shlex.join(command)}",
-				f"exit_code: {exit_code}",
-				f"duration_seconds: {duration:.3f}",
-				"--- stdout ---",
-				stdout,
-				"--- stderr ---",
-				stderr,
-				"",
-			]
-		)
-
-	compose_file = output_root / "docker-compose.test.yml"
-	if skip_compose_config:
-		checks.append(
-			{
-				"name": "docker_compose_config",
-				"status": "skipped",
-				"reason": "skip_compose_config=true",
-			}
-		)
-		log_sections.append("check: docker_compose_config\nstatus: skipped\nreason: skip_compose_config=true\n")
-	elif compose_file.exists():
-		command = ["docker", "compose", "-f", str(compose_file), "config"]
-		exit_code, stdout, stderr, duration = _run_sanity_check(command, repo_root)
-		status = "pass" if exit_code == 0 else "fail"
-		if status == "fail":
-			overall_status = "fail"
-		checks.append(
-			{
-				"name": "docker_compose_config",
-				"status": status,
-				"exit_code": exit_code,
-				"duration_seconds": round(duration, 3),
-			}
-		)
-		log_sections.extend(
-			[
-				"check: docker_compose_config",
-				f"command: {shlex.join(command)}",
-				f"exit_code: {exit_code}",
-				f"duration_seconds: {duration:.3f}",
-				"--- stdout ---",
-				stdout,
-				"--- stderr ---",
-				stderr,
-				"",
-			]
-		)
+	resolved_command = list(command)
+	if Path(resolved_command[0]).name in {"bash", "sh"} and len(resolved_command) >= 2:
+		resolved_command[1] = _resolve_command_path(resolved_command[1])
 	else:
-		checks.append(
-			{
-				"name": "docker_compose_config",
-				"status": "skipped",
-				"reason": "no docker-compose.test.yml in output",
-			}
-		)
-		log_sections.append("check: docker_compose_config\nstatus: skipped\nreason: no docker-compose.test.yml in output\n")
+		resolved_command[0] = _resolve_command_path(resolved_command[0])
 
-	stage_duration = time.monotonic() - stage_started
-	log_path.parent.mkdir(parents=True, exist_ok=True)
-	try:
-		log_path.write_text("\n".join(log_sections), encoding="utf-8")
-	except OSError as exc:
-		print(f"validation-selftest: unable to write log {log_path}: {exc}", file=sys.stderr)
-	return {
-		"status": overall_status,
-		"duration_seconds": round(stage_duration, 3),
-		"checks": checks,
-		"log_path": _repo_rel(log_path, repo_root),
+	env_overrides = {
+		"VALIDATE_ENV_FILE": "validation/validate.env",
+		"COMPOSE_FILE": "validation/docker-compose.test.yml",
+		"TEST_DIR": "validation/tests",
+		"LOG_DIR": str((workspace_root / "validation" / "logs").resolve()),
 	}
+	return _run_command(
+		resolved_command,
+		workspace_root,
+		log_path,
+		repo_root,
+		timeout_seconds=runtime_timeout_seconds,
+		env_overrides=env_overrides,
+	)
 
 
-def _run_fixture(repo_root: Path, manifest_path: Path, logs_root: Path, skip_compose_config: bool) -> dict[str, Any]:
-	fixture_name = manifest_path.name
-	fixture_log_dir = logs_root / fixture_name
-	output_root = fixture_log_dir / "validation"
-	if output_root.exists():
-		shutil.rmtree(output_root)
-	output_root.mkdir(parents=True, exist_ok=True)
-
+def _run_fixture(
+	repo_root: Path,
+	fixture: FixtureSpec,
+	logs_root: Path,
+	*,
+	runtime_command: str,
+	runtime_timeout_seconds: int,
+) -> dict[str, Any]:
+	fixture_log_dir = logs_root / _fixture_log_name(fixture.name)
 	fixture_started = time.monotonic()
 	stages: dict[str, dict[str, Any]] = {}
 
-	render = _stage_render(repo_root, manifest_path, output_root, fixture_log_dir)
-	stages["render"] = render
-	if render["status"] == "pass":
+	clone_stage, workspace_root, workspace_manifest = _stage_clone(
+		repo_root=repo_root,
+		fixture=fixture,
+		fixture_log_dir=fixture_log_dir,
+	)
+	stages["clone"] = clone_stage
+
+	output_root: Path | None = None
+	if clone_stage["status"] == "pass" and workspace_root is not None and workspace_manifest is not None:
+		output_root = workspace_root / "validation"
+		render = _stage_render(repo_root, workspace_manifest, output_root, fixture_log_dir)
+		stages["render"] = render
+	else:
+		stages["render"] = _skipped_stage("clone_failed")
+
+	if stages["render"]["status"] == "pass" and output_root is not None:
 		lint = _stage_lint(repo_root, output_root, fixture_log_dir)
 		stages["lint"] = lint
 	else:
 		stages["lint"] = _skipped_stage("render_failed")
 
-	if stages["render"]["status"] == "pass" and stages["lint"]["status"] == "pass":
-		stages["sanity"] = _stage_sanity(repo_root, output_root, fixture_log_dir, skip_compose_config)
+	if stages["render"]["status"] == "pass" and stages["lint"]["status"] == "pass" and workspace_root is not None:
+		stages["runtime"] = _stage_runtime(
+			repo_root,
+			workspace_root,
+			fixture_log_dir,
+			runtime_command=runtime_command,
+			runtime_timeout_seconds=runtime_timeout_seconds,
+		)
 	else:
-		stages["sanity"] = _skipped_stage("prior_stage_failed")
+		stages["runtime"] = _skipped_stage("prior_stage_failed")
 
 	fixture_status = "pass"
-	for stage_name in ("render", "lint", "sanity"):
+	for stage_name in ("clone", "render", "lint", "runtime"):
 		if stages[stage_name]["status"] == "fail":
 			fixture_status = "fail"
 			break
@@ -364,15 +458,20 @@ def _run_fixture(repo_root: Path, manifest_path: Path, logs_root: Path, skip_com
 		if "log_path" in stage_payload
 	}
 
-	return {
-		"name": fixture_name,
-		"manifest_path": _repo_rel(manifest_path, repo_root),
+	result: dict[str, Any] = {
+		"name": fixture.name,
+		"fixture_path": _repo_rel(fixture.source_path, repo_root),
+		"manifest_path": _repo_rel(fixture.manifest_path, repo_root),
 		"status": fixture_status,
 		"duration_seconds": round(fixture_duration, 3),
 		"stages": stages,
 		"log_paths": log_paths,
-		"output_root": _repo_rel(output_root, repo_root),
 	}
+	if workspace_root is not None:
+		result["workspace_path"] = _repo_rel(workspace_root, repo_root)
+	if output_root is not None:
+		result["output_root"] = _repo_rel(output_root, repo_root)
+	return result
 
 
 def _build_summary(repo_root: Path, fixture_results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -398,6 +497,16 @@ def main(argv: list[str] | None = None) -> int:
 	summary_path = _resolve_path(repo_root, args.summary_path)
 	logs_root = _resolve_path(repo_root, args.log_dir)
 
+	if args.skip_compose_config:
+		print(
+			"validation-selftest: --skip-compose-config is deprecated and ignored in runtime mode",
+			file=sys.stderr,
+		)
+
+	runtime_timeout_seconds = args.runtime_timeout_seconds
+	if runtime_timeout_seconds <= 0:
+		runtime_timeout_seconds = 1800
+
 	fixtures = _discover_fixtures(fixtures_root)
 	logs_root.mkdir(parents=True, exist_ok=True)
 
@@ -414,20 +523,24 @@ def main(argv: list[str] | None = None) -> int:
 			},
 			"fixtures": [],
 			"repo_root": _repo_rel(repo_root, repo_root),
-			"error": f"No fixture manifests found in {fixtures_root.as_posix()}",
+			"error": (
+				"No fixture workspaces or manifests found in "
+				f"{fixtures_root.as_posix()} (expected fixture directories containing .ai/validate.yml)"
+			),
 		}
 		summary_path.parent.mkdir(parents=True, exist_ok=True)
 		summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 		print(summary["error"], file=sys.stderr)
 		return 1
 
-	for manifest_path in fixtures:
+	for fixture in fixtures:
 		fixture_results.append(
 			_run_fixture(
 				repo_root=repo_root,
-				manifest_path=manifest_path,
+				fixture=fixture,
 				logs_root=logs_root,
-				skip_compose_config=args.skip_compose_config,
+				runtime_command=args.runtime_command,
+				runtime_timeout_seconds=runtime_timeout_seconds,
 			)
 		)
 
