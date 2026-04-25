@@ -2481,7 +2481,18 @@ jobs:
         # short-circuit together — any change to one must be mirrored to the
         # other. See the comment block on the prepare step for why the step
         # was split.
+        #
+        # timeout-minutes is the safety net for a hung codex exec call.  The
+        # script-internal retry loop does up to INTEGRATION_SYNC_RESOLVER_MAX_
+        # ATTEMPTS=3 attempts, with the no-progress check biting after attempt
+        # 2 when fingerprint violations are stable; one observed worst-case
+        # attempt was ~58 min, so 60 min caps a single hung attempt without
+        # killing well-behaved 3-attempt runs.  On hit, the EXIT trap in
+        # review_conflict_resolve.sh fires the immediate orchestrator-poll
+        # dispatch so the integration judge takes over without waiting for
+        # the */5 cron tick.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        timeout-minutes: 60
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |

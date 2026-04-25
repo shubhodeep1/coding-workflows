@@ -40,6 +40,113 @@ CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 
 # ----------------------------------------------------------------------
+# Immediate orchestrator-poll dispatch on resolver bail (Q3: A).
+#
+# When the resolver path cannot deliver a clean [ai-merge-resolve]
+# commit (loop exhaustion, no-progress detection, allowlist guard
+# failure, check_resolver_diff rejection), the integration-sync
+# unattended escalation is the orchestrator integration judge,
+# which lives inside scripts/orchestrate_poll_process.sh and is
+# invoked on each */5 cron tick of internal-orchestrate-poll.yml.
+# Cron lag is up to 5 min; for an integration branch already
+# blocked on a contradictory merge, that is 5 min of wasted human
+# attention if alerts fired.  Fire a workflow_dispatch immediately
+# instead so the judge picks up on the next available scheduling
+# slot.
+#
+# Concurrency: orchestrate_poll.yml has
+# `concurrency.group: ai-orchestrate-poll-${{ github.repository }}`
+# with `cancel-in-progress: false`, so a dispatched run queues
+# behind any active cron-tick run rather than racing it.  To avoid
+# stacking dispatches when several PRs bail at once, dedup against
+# already in_progress / queued poller runs before firing.
+#
+# Fail-open: any failure in the dispatch path (missing GH_PAT,
+# rate limit, unknown workflow name on a consumer repo) is a
+# warning, not a hard failure — the cron tick remains the safety
+# net so unattendedness is preserved either way.
+#
+# Gate on IS_INTEGRATION_SYNC=true: the integration judge only
+# applies to orchestrator/project-* branches.  Non-integration
+# resolver failures continue along the existing path
+# (synchronize-event re-trigger of the review pipeline).
+_RESOLVER_DISPATCH_FIRED=0
+_dispatch_integration_judge_now() {
+  [ "${_RESOLVER_DISPATCH_FIRED}" -eq 1 ] && return 0
+  _RESOLVER_DISPATCH_FIRED=1
+
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    return 0
+  fi
+  if [ -z "${GH_PAT:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+    echo "::warning::Skipping immediate orchestrator-poll dispatch: GH_PAT or GITHUB_REPOSITORY unset. Cron tick will pick up the integration-sync stall within 5 min."
+    return 0
+  fi
+
+  local _poll_workflow="${ORCHESTRATE_POLL_WORKFLOW_FILE:-internal-orchestrate-poll.yml}"
+
+  # Dedup: the poller's per-repo concurrency group already
+  # serialises runs, but firing while one is queued/active just
+  # adds to the queue.  Skip when an existing run will pick up
+  # the new state on the next slot.
+  local _active_json _active_count
+  _active_json="$(GH_TOKEN="${GH_PAT}" gh run list \
+      --workflow="${_poll_workflow}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --status in_progress \
+      --limit 1 \
+      --json databaseId 2>/dev/null || true)"
+  _active_count="$(printf '%s' "${_active_json}" | python3 -c 'import json,sys
+try:
+  data = json.load(sys.stdin)
+  print(len(data) if isinstance(data, list) else 0)
+except Exception:
+  print(0)' 2>/dev/null || echo 0)"
+  if [ "${_active_count}" != "0" ]; then
+    echo "Skipping immediate orchestrator-poll dispatch: a poller run is already in_progress (will scan integration-sync state on the next concurrency slot)."
+    return 0
+  fi
+  _active_json="$(GH_TOKEN="${GH_PAT}" gh run list \
+      --workflow="${_poll_workflow}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --status queued \
+      --limit 1 \
+      --json databaseId 2>/dev/null || true)"
+  _active_count="$(printf '%s' "${_active_json}" | python3 -c 'import json,sys
+try:
+  data = json.load(sys.stdin)
+  print(len(data) if isinstance(data, list) else 0)
+except Exception:
+  print(0)' 2>/dev/null || echo 0)"
+  if [ "${_active_count}" != "0" ]; then
+    echo "Skipping immediate orchestrator-poll dispatch: a poller run is already queued (will scan integration-sync state when it starts)."
+    return 0
+  fi
+
+  if GH_TOKEN="${GH_PAT}" gh workflow run "${_poll_workflow}" \
+       --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
+    echo "Dispatched ${_poll_workflow} on ${GITHUB_REPOSITORY} to fast-track integration-judge escalation (resolver could not produce a clean commit)."
+  else
+    echo "::warning::Failed to dispatch ${_poll_workflow}; cron tick will pick up the integration-sync stall within 5 min."
+  fi
+}
+
+# EXIT trap — fires the dispatch on any non-zero exit from this
+# script (resolver loop exhaustion, no-progress, allowlist guard,
+# check_resolver_diff failure).  Idempotent (function early-returns
+# after first call).  The exit-0 paths (no staged changes after
+# resolver) intentionally bypass the dispatch — the resolver
+# succeeded in deciding no commit was needed.
+_resolver_exit_trap() {
+  local _rc=$?
+  if [ "${_rc}" -ne 0 ]; then
+    _dispatch_integration_judge_now || true
+  fi
+  return "${_rc}"
+}
+trap _resolver_exit_trap EXIT
+
+# ----------------------------------------------------------------------
 # Retry-loop hardening (fix for the recurring integration-sync
 # "fingerprint verification FAILED" class of run failures).
 #
@@ -69,6 +176,7 @@ RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing
 RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
 RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
 RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
+RESOLVER_FP_VIOLATIONS_PREV_FILE="${RUNTIME_DIR}/resolver_fp_violations_prev.txt"
 RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
 
 # Snapshot every in-scope file (the resolver's allowlist, which
@@ -359,6 +467,39 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     head -10 "${RESOLVER_FP_VIOLATIONS_FILE}" | sed 's/^/  - /' || true
   fi
 
+  # No-progress detection: if attempt N's fingerprint violation set
+  # is identical to attempt N-1's, the model has already seen the
+  # reflexion prompt and reproduced the same output — additional
+  # retries are extremely unlikely to make progress.  Promote the
+  # attempt counter to MAX so the existing exhaustion block runs
+  # (re-emits the annotated verifier output, sets CONFLICT_RESOLVED=
+  # false, exit 1).  This keeps the abort shape symmetric with the
+  # natural-exhaustion path, so downstream tooling (orchestrator
+  # poller integration-judge dispatch, telegram failure alert,
+  # ai:integration-judge-failed transitions) sees the same signal
+  # whether the loop bailed early or ran to MAX_ATTEMPTS.
+  #
+  # Restricted to IS_INTEGRATION_SYNC=true: only fingerprint
+  # violations carry stable per-pattern identity.  Residual-marker
+  # failures are excluded — marker presence/absence routinely
+  # changes between attempts and is not a reliable progress signal.
+  # Comparison is sort-then-cmp so any future verifier-output
+  # reordering does not cause a false negative.
+  if [ "${attempt}" -gt 1 ] \
+     && [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
+     && [ "${_fp_count}" -gt 0 ] \
+     && [ -s "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" ]; then
+    _np_cur="$(mktemp)"
+    _np_prev="$(mktemp)"
+    sort -- "${RESOLVER_FP_VIOLATIONS_FILE}"     > "${_np_cur}"  || true
+    sort -- "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" > "${_np_prev}" || true
+    if cmp -s "${_np_cur}" "${_np_prev}"; then
+      echo "::warning::Conflict resolver no-progress detected: attempt ${attempt} produced the same ${_fp_count} fingerprint violation(s) as attempt $((attempt - 1)). Escalating to orchestrator integration judge instead of continuing the retry loop."
+      attempt="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}"
+    fi
+    rm -f "${_np_cur}" "${_np_prev}" 2>/dev/null || true
+  fi
+
   if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
     # Final attempt exhausted.  Re-run the verifier at normal
     # verbosity so the annotated ::error:: lines (including the
@@ -392,6 +533,12 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with soft-validation failures that could not be auto-recovered."
     echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
     exit 1
+  fi
+  # Snapshot this attempt's fingerprint violations so the next
+  # iteration's no-progress check has a reference.  cp -a preserves
+  # an empty file if the verifier produced none.
+  if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
+    cp -a "${RESOLVER_FP_VIOLATIONS_FILE}" "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" || true
   fi
   attempt=$((attempt + 1))
   sleep 2
