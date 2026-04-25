@@ -542,13 +542,17 @@ jobs:
           # (review_autofix.yml's preflight step), so absence warns but does
           # not fail.  Install when available so downstream tooling that reads
           # SUPPORT_AGENTS_FILE has the canonical workflow-source copy.
-          if [ ! -f "${SUPPORT_AGENTS_FILE}" ]; then
+          # Note: SUPPORT_AGENTS_FILE is only exported via $GITHUB_ENV, so it
+          # is not set as a shell variable in this step.  Reference
+          # ${SUPPORT_ROOT_DIR}/agents.md directly to avoid an unbound
+          # variable error under set -u.
+          if [ ! -f "${SUPPORT_ROOT_DIR}/agents.md" ]; then
             src=".codex-workflow-src/agents.md"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/agents.md" ]; then
               src=".codex-workflow-src-main/agents.md"
             fi
             if [ -f "${src}" ]; then
-              install -m 0644 "${src}" "${SUPPORT_AGENTS_FILE}"
+              install -m 0644 "${src}" "${SUPPORT_ROOT_DIR}/agents.md"
             else
               echo "::warning::agents.md not available in checked-out support sources for ${SCRIPT_REF}; downstream features that reference SUPPORT_AGENTS_FILE will see SOFT_MISSING."
             fi
