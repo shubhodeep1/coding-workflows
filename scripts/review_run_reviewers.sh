@@ -320,6 +320,23 @@ ${LAST_COMMIT_STAT_FILE}
 File:
 ${PR_ALL_COMMENTS_CONTEXT_FILE}
 
+7. CI / LINT CHECK-RUN FAILURES (HIGH PRIORITY)
+   Snapshot of failed and incomplete GitHub check-runs on the PR head SHA.
+   The header lists collection_status, failed_count, and incomplete_count.
+   Each failed entry includes name, conclusion, app slug, and (when the
+   provider populates it) a short title/summary describing the failure.
+   Treat every failed check-run as a concrete defect signal: the underlying
+   CI/lint job has already proven the failure exists. When you can map a
+   failed check-run to a code site in the diff, raise it as a high-confidence
+   finding so the editor pass fixes it. If a failed check-run cannot be
+   mapped to the diff, still surface it as a finding so the editor can
+   investigate. collection_status: disabled / unavailable / api_error /
+   writer_error / timeout means no signal is available — do not treat
+   absence of failures as confirmed-passing.
+
+File:
+${PR_CHECK_RUNS_CONTEXT_FILE}
+
 Example commands:
 
 cat ${LAST_RUN_DIFF_FILE}
@@ -328,6 +345,7 @@ cat ${PR_CHANGED_FILES_FILE}
 cat ${LAST_RUN_DIFF_STAT_FILE}
 cat ${LAST_COMMIT_STAT_FILE}
 cat ${PR_ALL_COMMENTS_CONTEXT_FILE}
+cat ${PR_CHECK_RUNS_CONTEXT_FILE}
 
 REVIEW PRIORITY RULES
 
