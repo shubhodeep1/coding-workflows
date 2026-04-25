@@ -1680,6 +1680,14 @@ self-heal patches cannot be merged without explicit human action.
   - Pipeline failure with no file diff: records error and does not create a no-op PR.
   - Workflow writes machine-readable summary JSON, appends a human summary to `$GITHUB_STEP_SUMMARY`, and sends Telegram failure notification (`TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID`) on workflow failure.
 
+### Nightly Validation Self-Test Status
+
+- Workflow: [`.github/workflows/nightly-validation-selftest.yml`](.github/workflows/nightly-validation-selftest.yml) runs on nightly cron (`15 2 * * *`) and manual `workflow_dispatch`.
+- Each run uploads `artifacts/validation-selftest-summary.json` and `artifacts/validation-selftest-logs/` in artifact `validation-selftest-<run_id>-<run_attempt>`.
+- The same run updates committed status file `analysis/validation-selftest-status.json` via `scripts/validation_selftest_status.py`.
+- Track `consecutive_green_runs`, `latest_run.overall_status`, `latest_run.generated_at`, and `latest_run.totals.{fixtures,passed,failed}`.
+- Streak semantics: a new passing run increments `consecutive_green_runs`; a failing run resets it to `0`; an identical rerun preserves the existing count.
+
 ## Repository Structure
 
 ```

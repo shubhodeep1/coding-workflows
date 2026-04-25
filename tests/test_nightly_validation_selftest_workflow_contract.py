@@ -25,14 +25,33 @@ def test_workflow_has_nightly_schedule_and_manual_dispatch() -> None:
 def test_workflow_runs_matrix_and_always_uploads_artifacts() -> None:
 	wf = _workflow_text()
 	assert 'python3 scripts/validation_selftest_matrix.py' in wf
-	assert '--fixtures-root "examples/validation-fixtures"' in wf
+	assert '--fixtures-root "tests/fixtures/selftest"' in wf
 	assert '--summary-path "artifacts/validation-selftest-summary.json"' in wf
 	assert '--log-dir "artifacts/validation-selftest-logs"' in wf
+	assert '--runtime-command "bash scripts/validate_driver.sh"' in wf
 	assert '- name: Upload validation self-test artifacts' in wf
 	assert 'if: always()' in wf
 	assert 'uses: actions/upload-artifact@v6' in wf
 	assert 'artifacts/validation-selftest-summary.json' in wf
 	assert 'artifacts/validation-selftest-logs/' in wf
+	assert '- name: Update validation self-test status artifact' in wf
+	assert 'python3 scripts/validation_selftest_status.py' in wf
+	assert '--summary-path "artifacts/validation-selftest-summary.json"' in wf
+	assert '--status-path "analysis/validation-selftest-status.json"' in wf
+
+
+def test_workflow_commits_only_status_file_when_changed() -> None:
+	wf = _workflow_text()
+	assert 'permissions:' in wf
+	assert 'contents: write' in wf
+	assert '- name: Commit validation self-test status' in wf
+	assert "if: always() && github.ref_type == 'branch'" in wf
+	assert 'status_file="analysis/validation-selftest-status.json"' in wf
+	assert 'git add "${status_file}"' in wf
+	assert 'if git diff --cached --quiet; then' in wf
+	assert 'git commit -m "chore: update validation self-test status"' in wf
+	assert 'git pull --rebase origin "${TARGET_BRANCH}"' in wf
+	assert 'git push origin "HEAD:${TARGET_BRANCH}"' in wf
 
 
 def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
@@ -44,6 +63,7 @@ def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
 	assert '(.overall_status // "unknown")' in wf
 	assert '(.totals.fixtures // 0)' in wf
 	assert '.fixtures[]?' in wf
+	assert '.stages.clone.status' in wf
 	assert '] | @tsv' in wf
 	assert 'GITHUB_STEP_SUMMARY' in wf
 
@@ -51,6 +71,7 @@ def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
 def main() -> int:
 	test_workflow_has_nightly_schedule_and_manual_dispatch()
 	test_workflow_runs_matrix_and_always_uploads_artifacts()
+	test_workflow_commits_only_status_file_when_changed()
 	test_workflow_emits_machine_readable_summary_to_step_summary()
 	return 0
 

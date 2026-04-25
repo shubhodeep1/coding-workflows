@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write
       actions: write
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
@@ -42,9 +42,10 @@ jobs:
           set -euo pipefail
           python3 scripts/validation_selftest_matrix.py \
             --repo-root "${GITHUB_WORKSPACE}" \
-            --fixtures-root "examples/validation-fixtures" \
+            --fixtures-root "tests/fixtures/selftest" \
             --summary-path "artifacts/validation-selftest-summary.json" \
-            --log-dir "artifacts/validation-selftest-logs"
+            --log-dir "artifacts/validation-selftest-logs" \
+            --runtime-command "bash scripts/validate_driver.sh"
 
       - name: Upload validation self-test artifacts
         if: always()
@@ -88,7 +89,7 @@ jobs:
           ' "${summary_file}" 2>/dev/null || true)"
           fixture_lines="$(jq -r '
             .fixtures[]?
-            | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")"
+            | "- " + .name + ": " + .status + " (clone=" + .stages.clone.status + ", render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", runtime=" + .stages.runtime.status + ")"
           ' "${summary_file}" 2>/dev/null || true)"
           IFS=$'	' read -r status fixtures passed failed <<<"${summary_data}"
           status="${status:-unknown}"
@@ -112,3 +113,35 @@ jobs:
               echo "- fixture results unavailable"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Update validation self-test status artifact
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/validation_selftest_status.py \
+            --summary-path "artifacts/validation-selftest-summary.json" \
+            --status-path "analysis/validation-selftest-status.json"
+
+      - name: Commit validation self-test status
+        if: always() && github.ref_type == 'branch'
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          status_file="analysis/validation-selftest-status.json"
+          if [ ! -f "${status_file}" ]; then
+            echo "Status file missing; skipping commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${status_file}"
+          if git diff --cached --quiet; then
+            echo "No status changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update validation self-test status"
+          git pull --rebase origin "${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
