@@ -410,8 +410,8 @@ def test_legacy_manifest_layout_still_supported_for_unit_tests() -> None:
 
 
 def main() -> int:
-	test_runner_passes_all_supported_family_fixtures()
-	test_runner_surfaces_clone_failure_when_manifest_is_missing()
+	test_runner_passes_two_supported_family_fixtures()
+	test_runner_ignores_directories_without_manifest()
 	test_runner_surfaces_render_failure_in_summary()
 	test_runner_surfaces_lint_failure_in_summary()
 	test_runner_surfaces_runtime_failure_in_summary()
