@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write
       actions: write
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
@@ -113,3 +113,35 @@ jobs:
               echo "- fixture results unavailable"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Update validation self-test status artifact
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/validation_selftest_status.py \
+            --summary-path "artifacts/validation-selftest-summary.json" \
+            --status-path "analysis/validation-selftest-status.json"
+
+      - name: Commit validation self-test status
+        if: always() && github.ref_type == 'branch'
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          status_file="analysis/validation-selftest-status.json"
+          if [ ! -f "${status_file}" ]; then
+            echo "Status file missing; skipping commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${status_file}"
+          if git diff --cached --quiet; then
+            echo "No status changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update validation self-test status"
+          git pull --rebase origin "${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
