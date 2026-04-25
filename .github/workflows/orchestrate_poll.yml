@@ -390,6 +390,13 @@ jobs:
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
+          # Master switch for the orchestrator-aware PR autofix flow.  Read
+          # by the final-PR-phase MAX_JUDGE_CYCLES cap bypass in
+          # scripts/orchestrate_poll_process.sh and by review_autofix.yml's
+          # PR-mode classifier.  Default `true`; set repo var to `false` to
+          # restore the legacy uniform 3-autofix → judge → cap-25 flow on
+          # both the per-PR review side AND the orchestrator-poller side.
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
