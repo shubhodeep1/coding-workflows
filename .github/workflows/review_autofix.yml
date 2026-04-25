@@ -90,6 +90,8 @@ jobs:
       should_run: ${{ steps.evaluate.outputs.should_run }}
       post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
       skip_reason: ${{ steps.evaluate.outputs.skip_reason }}
+      deterministic_skip: ${{ steps.evaluate.outputs.deterministic_skip }}
+      det_skip_reason: ${{ steps.evaluate.outputs.det_skip_reason }}
     steps:
       - name: Evaluate review gate
         id: evaluate
@@ -106,6 +108,24 @@ jobs:
           PR_BODY: ${{ inputs.pr_body }}
           AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
           AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
+          # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
+          # Skip the reviewer panel + editor cycle when:
+          #   * AUTOFIX_SKIP_DOC_ONLY=true (default) AND every changed file
+          #     matches the doc-only globs: *.md, *.txt, *.rst, LICENSE*,
+          #     CHANGELOG*, docs/**.
+          #   * OR total additions ≤ AUTOFIX_SKIP_MAX_ADDITIONS (default 10)
+          #     AND total deletions ≤ AUTOFIX_SKIP_MAX_DELETIONS (default 10).
+          # Override per PR: title contains [force-review] OR PR has the
+          # `force-review` label — skip is bypassed and full review runs.
+          # When the gate fires, the sibling `deterministic-skip-merge` job
+          # adds `ai:review-skipped` to the PR, sets `ai:ready-to-merge` on
+          # linked issues, and enables auto-merge — mirroring the tail of the
+          # normal codex-agent job. Merge-conflict resolution is NOT run on
+          # the skip path; conflicts fall through to the orchestrator stall
+          # recovery cron, which can re-dispatch with a force-review override.
+          AUTOFIX_SKIP_DOC_ONLY: ${{ vars.AUTOFIX_SKIP_DOC_ONLY }}
+          AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
+          AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
         run: |
           set -euo pipefail
 
@@ -116,13 +136,17 @@ jobs:
           pr_state=""
           pr_merged="false"
           pr_head_ref=""
+          pr_labels=""
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             SHOULD_RUN="false"
             SKIP_REASON="invalid_pr_number"
             echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
           else
-            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // "")] | @tsv')"; then
-              IFS=$'\t' read -r pr_state pr_merged pr_head_ref <<< "${_pr_gate}" || true
+            # CLAUDE.md §15: extend the existing PR fetch to also return
+            # labels so the deterministic-skip force-review override below
+            # does not need a second API call.
+            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // ""), ((.labels // []) | map(.name) | join(","))] | @tsv')"; then
+              IFS=$'\t' read -r pr_state pr_merged pr_head_ref pr_labels <<< "${_pr_gate}" || true
               pr_merged="$(printf '%s' "${pr_merged:-false}" | tr '[:upper:]' '[:lower:]')"
             fi
           fi
@@ -241,9 +265,97 @@ jobs:
             fi
           fi
 
+          # Deterministic pre-review skip (last gate check):
+          # If all earlier gates have passed (SHOULD_RUN still true) and the
+          # PR qualifies as doc-only or under the size threshold, flip
+          # SHOULD_RUN to false and route the PR to the
+          # `deterministic-skip-merge` sibling job, which preserves the
+          # ai:ready-to-merge + auto-merge tail of the normal review path.
+          # See header env-block comment for full semantics.
+          DETERMINISTIC_SKIP="false"
+          DET_SKIP_REASON=""
+          if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            FORCE_REVIEW="false"
+            if printf "%s" "${PR_TITLE}" | grep -Fq "[force-review]"; then
+              FORCE_REVIEW="true"
+            fi
+            if [ -n "${pr_labels}" ]; then
+              case ",${pr_labels}," in
+                *,force-review,*) FORCE_REVIEW="true" ;;
+              esac
+            fi
+
+            if [ "${FORCE_REVIEW}" = "true" ]; then
+              echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
+            else
+              # Fail-open: if the files API call fails for any reason, fall
+              # through to a normal review run rather than risk silently
+              # skipping a PR that should have been reviewed.
+              pr_files_json=""
+              if pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename, additions: .additions, deletions: .deletions}]' 2>/dev/null)"; then
+                :
+              fi
+
+              if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
+                total_additions="$(printf '%s' "${pr_files_json}" | jq '[.[].additions] | add // 0' 2>/dev/null || echo 0)"
+                total_deletions="$(printf '%s' "${pr_files_json}" | jq '[.[].deletions] | add // 0' 2>/dev/null || echo 0)"
+                file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo 0)"
+
+                # Doc-only check: every changed file must match the doc-glob
+                # set. Any non-matching file disqualifies the PR.
+                DOC_ONLY="false"
+                if [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ] && [ "${file_count}" != "0" ]; then
+                  DOC_ONLY="true"
+                  while IFS= read -r fname; do
+                    [ -n "${fname}" ] || continue
+                    base="${fname##*/}"
+                    case "${fname}" in
+                      docs/*) continue ;;
+                    esac
+                    lc_base="${base,,}"
+                    case "${lc_base}" in
+                      *.md|*.txt|*.rst) continue ;;
+                    esac
+                    case "${base}" in
+                      LICENSE*|CHANGELOG*) continue ;;
+                    esac
+                    DOC_ONLY="false"
+                    break
+                  done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
+                fi
+
+                # Size check: BOTH additions ≤ max AND deletions ≤ max.
+                SMALL_DIFF="false"
+                max_add="${AUTOFIX_SKIP_MAX_ADDITIONS:-10}"
+                max_del="${AUTOFIX_SKIP_MAX_DELETIONS:-10}"
+                if [ "${total_additions}" -le "${max_add}" ] 2>/dev/null && [ "${total_deletions}" -le "${max_del}" ] 2>/dev/null; then
+                  SMALL_DIFF="true"
+                fi
+
+                if [ "${DOC_ONLY}" = "true" ]; then
+                  DETERMINISTIC_SKIP="true"
+                  DET_SKIP_REASON="docs_only"
+                  SHOULD_RUN="false"
+                  SKIP_REASON="deterministic_skip_docs_only"
+                elif [ "${SMALL_DIFF}" = "true" ]; then
+                  DETERMINISTIC_SKIP="true"
+                  DET_SKIP_REASON="small_diff"
+                  SHOULD_RUN="false"
+                  SKIP_REASON="deterministic_skip_small_diff"
+                fi
+
+                echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count} additions=${total_additions} deletions=${total_deletions} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON}"
+              else
+                echo "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE pr=${PR_NUMBER} — fail-open, full review will run."
+              fi
+            fi
+          fi
+
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
           echo "skip_reason=${SKIP_REASON}" >> "${GITHUB_OUTPUT}"
+          echo "deterministic_skip=${DETERMINISTIC_SKIP}" >> "${GITHUB_OUTPUT}"
+          echo "det_skip_reason=${DET_SKIP_REASON}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -321,6 +433,116 @@ jobs:
           if [ "${validation_dispatched}" = "false" ]; then
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi
+
+  # Deterministic skip path: fires when the gate detects a doc-only PR or a
+  # PR under the +/- LOC threshold. Mirrors the labeler + auto-merge tail of
+  # the codex-agent job so the orchestrator phase machine still advances
+  # (ai:ready-to-merge on linked issues) and the PR auto-merges as it would
+  # after a normal clean review. Reviewer panel, editor, summarizer, and
+  # merge-conflict resolver are all skipped — if a conflict exists,
+  # auto-merge will block and the orchestrator stall cron re-dispatches.
+  deterministic-skip-merge:
+    needs: gate
+    runs-on: ubuntu-latest
+    if: ${{ needs.gate.outputs.deterministic_skip == 'true' }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      DET_SKIP_REASON: ${{ needs.gate.outputs.det_skip_reason }}
+      ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+    steps:
+      - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Skipping deterministic-skip-merge: invalid PR number '${PR_NUMBER}'."
+            exit 0
+          fi
+
+          # Inline retry wrapper (mirrors gh_retry pattern from
+          # SUPPORT_SCRIPTS_DIR/gh_helpers.sh; we avoid loading the full
+          # support source here to keep this job lightweight).
+          gh_retry() {
+            local n=0 max=4 delay=2
+            while :; do
+              if "$@"; then return 0; fi
+              n=$((n+1))
+              if [ "${n}" -ge "${max}" ]; then return 1; fi
+              sleep "${delay}"
+              delay=$((delay*2))
+            done
+          }
+
+          ensure_label_exists() {
+            local label="$1" repo="$2" color="$3" desc="$4"
+            gh_retry gh label create "${label}" --repo "${repo}" --color "${color}" --description "${desc}" >/dev/null 2>&1 || true
+          }
+
+          # 1) PR-side audit label
+          ensure_label_exists "ai:review-skipped" "${REPOSITORY}" "c5def5" "Deterministic gate skipped reviewer panel + editor cycle"
+          if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
+            -f "labels[]=ai:review-skipped" >/dev/null 2>&1; then
+            echo "::warning::Failed to add ai:review-skipped label to PR #${PR_NUMBER}."
+          fi
+
+          # 2) Linked-issue resolution (mirrors post-merge-validate-dispatch:
+          # GraphQL closingIssuesReferences with body/title regex fallback).
+          issue_numbers="$(gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map(.number) | .[]' 2>/dev/null || true)"
+
+          if [ -z "${issue_numbers}" ]; then
+            pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            repository_escaped="${REPOSITORY//./\\.}"
+            issue_numbers="$(echo "${pr_data}" | grep -oiE "(github\\.com/${repository_escaped}/issues/[0-9]+|${repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+          fi
+
+          if [ -n "${issue_numbers}" ]; then
+            ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}" "0e8a16" "PR review complete and ready to merge"
+            while IFS= read -r issue_number; do
+              [ -n "${issue_number}" ] || continue
+              echo "Setting ai:ready-to-merge on issue #${issue_number}"
+              if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f "labels[]=ai:ready-to-merge" >/dev/null 2>&1; then
+                echo "::warning::Failed to set ai:ready-to-merge on issue #${issue_number}."
+              fi
+            done <<< "${issue_numbers}"
+          else
+            echo "No linked issues found for PR #${PR_NUMBER} — skipping issue labeling."
+          fi
+
+          # 3) Auto-merge (mirrors codex-agent's "Enable auto-merge on PR" step)
+          if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+            echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
+          else
+            echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
+            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto; then
+              echo "Auto-merge enabled. PR will merge once all required checks pass."
+            else
+              echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
+            fi
+          fi
+
+          # 4) Workflow run summary
+          {
+            echo "## Deterministic skip gate fired"
+            echo ""
+            echo "- **PR:** #${PR_NUMBER}"
+            echo "- **Skip reason:** \`${DET_SKIP_REASON}\`"
+            echo "- **Reviewer panel + editor cycle:** SKIPPED"
+            if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+              echo "- **Auto-merge:** ENABLED (squash)"
+            else
+              echo "- **Auto-merge:** disabled by ENABLE_AUTO_MERGE"
+            fi
+            echo ""
+            echo "To force a full review on a future run, add the \`force-review\` label to the PR or include \`[force-review]\` in the title, then re-trigger the workflow."
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   codex-agent:
     needs: gate
