@@ -47,9 +47,13 @@ Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable iss
 - DO NOT generate sub-issues whose acceptance criteria require committing
   files into, opening PRs against, or running CI in repositories other than
   this one.
-- DO NOT generate sub-issues whose runtime path depends on private cross-
-  repo fetches or `GH_PAT`-authenticated clones of other repos as part of
-  the implementation work itself.
+- DO NOT generate sub-issues that require creating, modifying, or otherwise
+  depending for completion on direct changes in other repositories. Also do
+  not depend on unspecified, implicitly discovered, or nonexistent external
+  repos. Read-only fetches/clones of explicitly identified `<owner>/<repo>`
+  targets at explicit refs are allowed only when the implementation and
+  acceptance criteria remain entirely in this repo and the behavior can be
+  validated with deterministic in-tree/offline coverage.
 - Mentions of other repositories for context are fine when the WORK happens
   in this repo. Examples that ARE in scope: editing
   `.github/ai/consumer_repos.json` (which lists external dispatch targets),
