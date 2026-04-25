@@ -176,23 +176,38 @@ def resolve_memory_reference_source_dir(base_dir: Path, memory_root_relative: st
 
 
 def _sync_memory_reference_files(source_root: Path, destination_root: Path) -> None:
-    if not source_root.exists():
-        return
+    if source_root.exists():
+        source_schemas = source_root / "schemas"
+        destination_schemas = destination_root / "schemas"
+        if source_schemas.exists():
+            for schema_file in sorted(source_schemas.glob("*.json")):
+                if not schema_file.is_file():
+                    continue
+                destination_schemas.mkdir(parents=True, exist_ok=True)
+                destination_file = destination_schemas / schema_file.name
+                if destination_file.is_symlink():
+                    raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
+                shutil.copy2(schema_file, destination_file)
 
-    source_schemas = source_root / "schemas"
-    destination_schemas = destination_root / "schemas"
-    if source_schemas.exists():
-        for schema_file in sorted(source_schemas.glob("*.json")):
-            if not schema_file.is_file():
-                continue
-            destination_schemas.mkdir(parents=True, exist_ok=True)
-            destination_file = destination_schemas / schema_file.name
-            if destination_file.is_symlink():
-                raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
-            shutil.copy2(schema_file, destination_file)
+    # Resolve retrieval_profiles.v1.json: prefer the consumer-repo source
+    # tree (preserves prior behaviour), then fall back to the workflow-source
+    # clone advertised via SUPPORT_AI_MEMORY_DIR.  Without the fallback, every
+    # consumer repo that does not vendor ai-memory/config/ silently degrades
+    # to an empty retrieval set with an AI_MEMORY_ERROR warning.
+    config_filename = "retrieval_profiles.v1.json"
+    source_config: Path | None = None
+    if source_root.exists():
+        candidate_in_tree = source_root / "config" / config_filename
+        if candidate_in_tree.is_file():
+            source_config = candidate_in_tree
+    if source_config is None:
+        support_dir = os.environ.get("SUPPORT_AI_MEMORY_DIR")
+        if support_dir:
+            candidate_support = Path(support_dir) / "config" / config_filename
+            if candidate_support.is_file():
+                source_config = candidate_support
 
-    source_config = source_root / "config" / "retrieval_profiles.v1.json"
-    if source_config.is_file():
+    if source_config is not None:
         destination_config = destination_root / "config"
         destination_config.mkdir(parents=True, exist_ok=True)
         destination_file = destination_config / source_config.name

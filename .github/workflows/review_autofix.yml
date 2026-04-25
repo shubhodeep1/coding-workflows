@@ -499,6 +499,20 @@ jobs:
             fi
           done
 
+          # Mirror the schema install above for the retrieval profiles
+          # config so consumer repos that do not vendor ai-memory/config/
+          # still get a workflow-source copy.  The memory library's
+          # _sync_memory_reference_files reads SUPPORT_AI_MEMORY_DIR as a
+          # fallback when the consumer-repo source path lacks the file.
+          retrieval_profiles_src=".codex-workflow-src/ai-memory/config/retrieval_profiles.v1.json"
+          if [ ! -f "${retrieval_profiles_src}" ] && [ -f ".codex-workflow-src-main/ai-memory/config/retrieval_profiles.v1.json" ]; then
+            retrieval_profiles_src=".codex-workflow-src-main/ai-memory/config/retrieval_profiles.v1.json"
+          fi
+          mkdir -p "${SUPPORT_AI_MEMORY_DIR}/config"
+          if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json" ] && [ -f "${retrieval_profiles_src}" ]; then
+            install -m 0644 "${retrieval_profiles_src}" "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json"
+          fi
+
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
           if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
             catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
@@ -523,6 +537,22 @@ jobs:
               install -m 0644 "${src}" "${target_path}"
             fi
           done
+
+          # Soft install: agents.md is checked by preflight via check_soft_file
+          # (review_autofix.yml's preflight step), so absence warns but does
+          # not fail.  Install when available so downstream tooling that reads
+          # SUPPORT_AGENTS_FILE has the canonical workflow-source copy.
+          if [ ! -f "${SUPPORT_AGENTS_FILE}" ]; then
+            src=".codex-workflow-src/agents.md"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/agents.md" ]; then
+              src=".codex-workflow-src-main/agents.md"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_AGENTS_FILE}"
+            else
+              echo "::warning::agents.md not available in checked-out support sources for ${SCRIPT_REF}; downstream features that reference SUPPORT_AGENTS_FILE will see SOFT_MISSING."
+            fi
+          fi
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
             src=".codex-workflow-src/prompts/mode-judge-review-blocked.txt"
