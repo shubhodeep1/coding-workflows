@@ -1648,20 +1648,24 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
           FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
           # Orchestrator PR autofix flow (see README §"Orchestrator PR autofix flow"):
-          # When enabled, classify the PR by base/head branch:
+          # When enabled, classify the PR by base/head branch for orchestrator-
+          # side observability and the orch_final cap bypass:
           #   - orch_intermediate (sub-issue PR → orchestrator/project-*):
-          #       cap autofix at 1 iteration, skip judge entirely, then
-          #       enable auto-merge so the orchestrator merges the PR into
-          #       the integration branch as soon as CI is green + mergeable.
+          #       inner loop matches the legacy default (MAX_AUTOFIX_ITERATIONS,
+          #       judge runs after exhaustion). Catches blocking issues per
+          #       sub-issue PR instead of letting them accumulate and surface
+          #       en masse on the integration→default-branch final merge.
           #   - orch_final (orchestrator/project-* → any non-orch base, i.e.
-          #       the default branch): keep MAX_AUTOFIX_ITERATIONS=3 inner
-          #       loop; the orchestrate_poll_process.sh judge-cycle cap is
-          #       bypassed for this phase, giving unlimited 3-autofix→judge
-          #       cycles until the PR is mergeable.
+          #       the default branch): same inner loop as legacy default; the
+          #       orchestrate_poll_process.sh judge-cycle cap is bypassed for
+          #       this phase, giving unlimited 3-autofix→judge cycles until
+          #       the PR is mergeable.
           #   - other (non-orchestrator PR): unchanged legacy behavior.
-          # Setting ORCH_PR_AUTOFIX_FLOW_ENABLED=false reverts every PR to
-          # the legacy uniform 3-autofix→judge→cap-25 flow without code
-          # changes.
+          # Setting ORCH_PR_AUTOFIX_FLOW_ENABLED=false forces orch_pr_mode to
+          # stay at "other" (the classifier never inspects head/base) and
+          # disables the orchestrator-side cap bypass; per-PR autofix loops
+          # are unaffected (they already use MAX_AUTOFIX_ITERATIONS in every
+          # mode).
           ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
@@ -1712,15 +1716,13 @@ jobs:
           echo "Orchestrator PR mode: ${orch_pr_mode} (head='${_head_ref_class:-?}' base='${_base_ref_class:-?}', flow_enabled=${ORCH_PR_AUTOFIX_FLOW_ENABLED})"
           echo "orch_pr_mode=${orch_pr_mode}" >> "$GITHUB_OUTPUT"
 
-          # Per-mode autofix cap override.  orch_final and other keep the
-          # legacy default (3 unless overridden by repo var).  orch_intermediate
-          # is capped at 1 so the PR merges into the integration branch after
-          # a single reviewer→editor→commit pass.
+          # All modes use MAX_AUTOFIX_ITERATIONS (legacy default 3).  The
+          # former orch_intermediate cap of 1 was removed: catching blocking
+          # issues per sub-issue PR (where the diff is small and the linked-
+          # issue context is narrow) is cheaper and more reliable than
+          # front-loading the entire review burden onto the final integration
+          # → default-branch merge.
           effective_max_iterations="${MAX_AUTOFIX_ITERATIONS}"
-          if [ "${orch_pr_mode}" = "orch_intermediate" ]; then
-            effective_max_iterations="1"
-            echo "orch_intermediate: capping autofix iterations at ${effective_max_iterations} (legacy default was ${MAX_AUTOFIX_ITERATIONS})."
-          fi
 
           # Count consecutive [ai-autofix] commits from HEAD backwards.
           autofix_count=0
@@ -1736,22 +1738,17 @@ jobs:
           echo "Consecutive autofix commits: ${autofix_count} (max: ${effective_max_iterations})"
           echo "autofix_iteration=${autofix_count}" >> "$GITHUB_OUTPUT"
 
-          # skip_judge=true short-circuits the rb_judge step and the
-          # review-blocked label markers downstream.  Set for orch_intermediate
-          # only — these PRs merge into the integration branch after one
-          # autofix round regardless of remaining reviewer findings; the judge
-          # is reserved for the final integration→main PR loop.  The
-          # force_rb_judge stall-recovery escape hatch (dispatched by the
-          # orchestrator stall poller via review_rb_judge_dispatch.yml) MUST
-          # remain functional for stuck intermediate PRs, so when
-          # FORCE_RB_JUDGE=true we suppress skip_judge — the judge runs and
-          # decides merge / fix / close-and-reissue per the stall-recovery
-          # contract.
-          if [ "${orch_pr_mode}" = "orch_intermediate" ] && [ "${FORCE_RB_JUDGE}" != "true" ]; then
-            echo "skip_judge=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip_judge=false" >> "$GITHUB_OUTPUT"
-          fi
+          # skip_judge is retained as a step output for backward compat with
+          # downstream gate expressions (e.g. the rb_judge step's
+          # `steps.retrigger_guard.outputs.skip_judge != 'true'` guard) but
+          # is now always emitted as `false` — the orch_intermediate
+          # short-circuit was removed so every mode runs the per-PR judge
+          # after autofix exhaustion.  The force_rb_judge stall-recovery
+          # escape hatch (dispatched by the orchestrator stall poller via
+          # review_rb_judge_dispatch.yml) is unaffected; FORCE_RB_JUDGE=true
+          # still forces max_iterations_reached=true below so the rb_judge
+          # step fires directly.
+          echo "skip_judge=false" >> "$GITHUB_OUTPUT"
 
           # force_rb_judge short-circuit: the stall poller dispatches the
           # review workflow with this input set when a linked issue has
