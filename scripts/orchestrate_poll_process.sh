@@ -2479,6 +2479,191 @@ invoke_judge_for_integration_conflict() {
   return 1
 }
 
+# _refresh_integration_resolver_tooling — copy the resolver toolchain
+# (scripts + prompts the merge-conflict resolver consumes) from
+# default_branch onto the integration branch as an [ai-maint] commit
+# when their content hashes differ.
+#
+# Why: review_autofix.yml dispatches with --ref <integration_branch>,
+# so the workflow YAML AND its support scripts come from the
+# integration branch's tip — the same tip that, by definition, has not
+# yet absorbed default_branch.  When a fix lands on default_branch
+# that the resolver itself depends on (e.g. PR #1581 added the
+# fingerprint-violation expansion to scripts/review_conflict_prepare.sh
+# so auto-merge regressions outside the unmerged set become editable),
+# the integration branch can deadlock: the only path to pick up the
+# fix is `main -> orchestrator/project-N` sync, but that sync needs
+# the fix to succeed.  This helper breaks the deadlock by force-
+# refreshing only the resolver's own toolchain — the smallest set of
+# files that, if stale, would silently sabotage the next dispatch.
+#
+# Scope: orchestrator/project-* branches only; no-op otherwise.  The
+# refreshed file set is intentionally narrow (no .github/workflows/*,
+# no app code) so the maintenance commit cannot drag unrelated
+# default_branch changes onto the integration branch and create a
+# new wave of conflicts.
+#
+# Side effects: pushes a commit on success.  The push fires
+# pull_request.synchronize on the integration PR which itself
+# triggers review_autofix.yml; the explicit dispatch in
+# heal_integration_branch_conflict still fires immediately after, and
+# the cancel-in-progress concurrency on review_autofix.yml resolves
+# the race.  Idempotent: when nothing has drifted (no file hashes
+# differ) the function is a no-op, no commit is created, and no push
+# is attempted.
+#
+# API hygiene (per CLAUDE.md §15): zero gh API calls.  Uses local git
+# (fetch + worktree + push) only.  All git failures fail-open with a
+# ::warning:: so the heal flow proceeds with whatever tooling the
+# integration branch already has.
+#
+# Usage: _refresh_integration_resolver_tooling <integration_branch> <default_branch>
+# Returns: always 0 (fail-open).
+_refresh_integration_resolver_tooling() {
+  local integration_branch="$1"
+  local default_branch="$2"
+
+  case "${integration_branch}" in
+    orchestrator/project-*) ;;
+    *) return 0 ;;
+  esac
+  [ -n "${default_branch}" ] || return 0
+
+  local log_prefix="[resolver-tooling-refresh] ${integration_branch}"
+
+  # Files kept in sync with default_branch.  Limited to the
+  # resolver-side of conflict resolution: the prepare/resolve scripts,
+  # the post-resolver fingerprint verifier, the touched-subset guard,
+  # and the prompt templates the resolver renders.  Adding entries
+  # here is a contract change — see agents.md §18.
+  local refresh_files=(
+    "scripts/review_conflict_prepare.sh"
+    "scripts/review_conflict_resolve.sh"
+    "scripts/verify_integration_fingerprints.py"
+    "scripts/check_resolver_diff.sh"
+    "prompts/conflict-resolver.txt"
+    "prompts/integration-sync-conflict-resolver.txt"
+    "prompts/integration-sync-conflict-resolver-retry-prelude.txt"
+  )
+
+  local runtime_dir="${RUNTIME_DIR:-/tmp}"
+  local wt="${runtime_dir}/resolver-tooling-refresh-wt-$$-${RANDOM:-0}"
+
+  local attempt
+  for attempt in 1 2 3; do
+    rm -rf "${wt}" 2>/dev/null || true
+
+    if ! git fetch --quiet --no-tags --prune origin \
+        "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
+        "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+        2>/dev/null; then
+      echo "::warning::${log_prefix} git fetch failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
+      [ "${attempt}" -lt 3 ] && sleep 1 && continue
+      return 0
+    fi
+
+    if ! git worktree add --quiet --detach "${wt}" \
+         "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
+      echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
+      [ "${attempt}" -lt 3 ] && sleep 1 && continue
+      return 0
+    fi
+
+    local subshell_rc=0
+    (
+      cd "${wt}" || exit 9
+      git config user.name "codex-bot"
+      git config user.email "codex@users.noreply.github.com"
+
+      local refreshed_count=0
+      local refreshed_list=""
+      local f main_hash int_hash
+      for f in "${refresh_files[@]}"; do
+        # Skip if file does not exist on default_branch — never delete
+        # an integration-branch file just because main lacks it.
+        if ! git cat-file -e "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null; then
+          continue
+        fi
+        main_hash="$(git rev-parse "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
+        int_hash="$(git rev-parse "HEAD:${f}" 2>/dev/null || echo "")"
+        [ -n "${main_hash}" ] || continue
+        if [ "${main_hash}" = "${int_hash}" ]; then
+          continue
+        fi
+        if git checkout "refs/remotes/origin/${default_branch}" -- "${f}" 2>/dev/null; then
+          git add -- "${f}" 2>/dev/null || true
+          refreshed_count=$((refreshed_count + 1))
+          refreshed_list+="${f} "
+        fi
+      done
+
+      if [ "${refreshed_count}" -eq 0 ]; then
+        echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        exit 0
+      fi
+
+      if git diff --cached --quiet; then
+        # Edge case: checkout reported success but git sees no staged
+        # change (e.g. mode-only update on a filesystem without exec
+        # bit).  Skip rather than create an empty commit.
+        echo "  ${log_prefix} ${refreshed_count} file(s) marked but no staged diff; skipping commit."
+        exit 0
+      fi
+
+      local body=""
+      body+="Files refreshed (${refreshed_count}):"$'\n'
+      local _f
+      for _f in ${refreshed_list}; do
+        body+=" - ${_f}"$'\n'
+      done
+      body+=$'\n'
+      body+="Brings the integration branch's resolver toolchain up to date with"$'\n'
+      body+="${default_branch} so any bug fixes shipped there take effect on the next"$'\n'
+      body+="review_autofix dispatch instead of being blocked behind the deadlock"$'\n'
+      body+="where the integration branch's stale resolver scripts cannot resolve"$'\n'
+      body+="the conflicts that block ${default_branch} from being merged in."$'\n'
+      body+=$'\n'
+      body+="Triggered by _refresh_integration_resolver_tooling in"$'\n'
+      body+="scripts/orchestrate_poll_process.sh."
+      if ! git commit --quiet \
+            -m "[ai-maint] refresh resolver tooling from ${default_branch}" \
+            -m "${body}" 2>/dev/null; then
+        exit 1
+      fi
+
+      if ! git push --quiet origin "HEAD:refs/heads/${integration_branch}" 2>/dev/null; then
+        exit 2
+      fi
+      echo "  ${log_prefix} pushed [ai-maint] refresh: ${refreshed_count} file(s) updated from ${default_branch}."
+      exit 0
+    )
+    subshell_rc=$?
+    git worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}" 2>/dev/null || true
+
+    case "${subshell_rc}" in
+      0)
+        return 0
+        ;;
+      2)
+        # Push race (non-fast-forward).  Refetch and retry; matches
+        # the pattern in _record_merge_conflict_telemetry.
+        if [ "${attempt}" -lt 3 ]; then
+          sleep 1
+          continue
+        fi
+        echo "::warning::${log_prefix} push race exhausted; proceeding to dispatch with current tip."
+        return 0
+        ;;
+      *)
+        echo "::warning::${log_prefix} refresh subshell exit ${subshell_rc}; proceeding to dispatch with current tooling."
+        return 0
+        ;;
+    esac
+  done
+
+  return 0
+}
+
 # Drive one iteration of the self-healing loop for the integration
 # branch. Must be called when we know a conflict exists (either from
 # a 409 in sync_default_into_integration_branch or from a
@@ -2565,6 +2750,18 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
     echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${CONFLICT_DISPATCH_COOLDOWN_SECS}s); deferring resolver dispatch for PR #${final_pr}."
     return 0
   fi
+
+  # Force-refresh the resolver toolchain on the integration branch
+  # from default_branch BEFORE dispatching, so any bug fixes shipped
+  # to default_branch (e.g. PR #1581's --list-violated-files
+  # expansion) take effect on this dispatch instead of being trapped
+  # behind the deadlock where the integration branch's stale
+  # resolver scripts cannot resolve the conflicts that block
+  # default_branch from being merged in.  Fail-open: any git error
+  # logs ::warning:: and falls through to the dispatch below.  See
+  # the helper docstring above for the full rationale and the
+  # function's contract.
+  _refresh_integration_resolver_tooling "${integration_branch}" "${default_branch}"
 
   # Dispatch the existing review/autofix workflow against the final PR.
   local dispatch_rc=0
