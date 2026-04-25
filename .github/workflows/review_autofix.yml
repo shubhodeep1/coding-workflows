@@ -1661,8 +1661,9 @@ jobs:
           #       this phase, giving unlimited 3-autofix→judge cycles until
           #       the PR is mergeable.
           #   - other (non-orchestrator PR): unchanged legacy behavior.
-          # Setting ORCH_PR_AUTOFIX_FLOW_ENABLED=false disables the classifier
-          # output and the orchestrator-side cap bypass; per-PR autofix loops
+          # Setting ORCH_PR_AUTOFIX_FLOW_ENABLED=false forces orch_pr_mode to
+          # stay at "other" (the classifier never inspects head/base) and
+          # disables the orchestrator-side cap bypass; per-PR autofix loops
           # are unaffected (they already use MAX_AUTOFIX_ITERATIONS in every
           # mode).
           ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
