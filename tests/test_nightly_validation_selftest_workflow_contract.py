@@ -25,9 +25,10 @@ def test_workflow_has_nightly_schedule_and_manual_dispatch() -> None:
 def test_workflow_runs_matrix_and_always_uploads_artifacts() -> None:
 	wf = _workflow_text()
 	assert 'python3 scripts/validation_selftest_matrix.py' in wf
-	assert '--fixtures-root "examples/validation-fixtures"' in wf
+	assert '--fixtures-root "tests/fixtures/selftest"' in wf
 	assert '--summary-path "artifacts/validation-selftest-summary.json"' in wf
 	assert '--log-dir "artifacts/validation-selftest-logs"' in wf
+	assert '--runtime-command "bash scripts/validate_driver.sh"' in wf
 	assert '- name: Upload validation self-test artifacts' in wf
 	assert 'if: always()' in wf
 	assert 'uses: actions/upload-artifact@v6' in wf
@@ -44,6 +45,7 @@ def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
 	assert '(.overall_status // "unknown")' in wf
 	assert '(.totals.fixtures // 0)' in wf
 	assert '.fixtures[]?' in wf
+	assert '.stages.clone.status' in wf
 	assert '] | @tsv' in wf
 	assert 'GITHUB_STEP_SUMMARY' in wf
 
