@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_selftest_matrix.py:95-136 | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `_discover_fixtures()` treats every non-hidden directory as a fixture without verifying that `.ai/validate.yml` exists.\n  WHY: This admits non-fixture directories into the pipeline and later fails when the manifest is missing; one reviewer disputed it because `_stage_clone()` does perform a later missing-manifest check.\n- scripts/validation_selftest_matrix.py:507-510 | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Non-positive `runtime_timeout_seconds` values are silently rewritten to `1800` instead of being rejected.\n  WHY: This masks invalid user input and makes configuration errors harder to notice.\n- tests/fixtures/selftest/python-mongo-flask/app.py:6-8 | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `health()` is annotated as `tuple[dict[str, str], int]`, but it returns `jsonify({\"status\": \"ok\"}), 200`.\n  WHY: `jsonify()` returns a Flask `Response`, so the annotation is misleading and type checkers will flag it.\n- tests/fixtures/selftest/python-mongo-flask/app.py:1 | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: If the Flask fixture annotation is corrected to use `Response`, the import for `Response` is missing.\n  WHY: Without that import, changing the annotation would raise `NameError` at import time.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validation_selftest_matrix.py:95-136 | confidence=5\n  PROBLEM: `_discover_fixtures()` returns all non-hidden directories without verifying `.ai/validate.yml` exists, and `manifest_path` is still set to `.ai/validate.yml` even when that file is absent.\n  WHY: This creates fixture specs that later fail in `_stage_clone()` when the manifest is missing.\n- tests/fixtures/selftest/python-mongo-flask/app.py:6-8 | confidence=4\n  PROBLEM: `health()` is annotated as `tuple[dict[str, str], int]` even though it returns `jsonify(...), 200`.\n  WHY: The annotation does not match the actual Flask return value and will mislead type checkers.\n- scripts/validation_selftest_matrix.py:507-510 | confidence=4\n  PROBLEM: Non-positive timeout values are silently corrected to `1800` instead of being validated.\n  WHY: Invalid input is accepted and changed without warning, which is surprising and masks configuration mistakes.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validation_selftest_matrix.py:95-136 | confidence=5\n  PROBLEM: `_discover_fixtures()` treats every non-hidden directory under `fixtures_root` as a fixture but does not verify that `.ai/validate.yml` exists.\n  WHY: A non-fixture directory will be discovered and then fail later with a missing-manifest error during cloning.\n- tests/fixtures/selftest/python-mongo-flask/app.py:6-8 | confidence=4\n  PROBLEM: `health()` is annotated as `tuple[dict[str, str], int]`, but `jsonify()` returns a Flask `Response` object.\n  WHY: The annotation is inaccurate for the fixture and type checkers like mypy will flag it.\n- scripts/validation_selftest_matrix.py:507-510 | confidence=3\n  PROBLEM: Non-positive timeout values are silently corrected to `1800` in `main()` instead of being validated at argument parse time.\n  WHY: Users who pass `--runtime-timeout-seconds=-1` or `0` get a different value than requested without any error.\n- tests/fixtures/selftest/python-mongo-flask/app.py:1 | confidence=3\n  PROBLEM: If the annotation is changed to use `Response`, that name must be imported.\n  WHY: Otherwise the updated annotation would raise `NameError` at import time.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validation_selftest_matrix.py:95-136 | confidence=4\n  PROBLEM: `_discover_fixtures()` returns all non-hidden directories as fixtures without checking for `.ai/validate.yml`.\n  WHY: Non-fixture directories can be pulled into the workflow and only fail later when the manifest is missing.\n- tests/fixtures/selftest/python-mongo-flask/app.py:6-8 | confidence=4\n  PROBLEM: `health()` is annotated as `tuple[dict[str, str], int]`, but `jsonify()` returns a Flask `Response`.\n  WHY: The annotation is inaccurate and does not reflect the real return type.\n- scripts/validation_selftest_matrix.py:507-510 | confidence=3\n  PROBLEM: Non-positive timeout values are silently corrected to `1800` instead of being rejected.\n  WHY: Invalid inputs are masked rather than surfaced during argument parsing.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/validation_selftest_matrix.py:507-510 | confidence=3\n  PROBLEM: Non-positive timeout values are silently corrected to `1800` instead of being rejected with a clear error.\n  WHY: This violates least surprise and hides invalid configuration values.\n- tests/fixtures/selftest/python-mongo-flask/app.py:6-8 | confidence=3\n  PROBLEM: The `health()` return annotation says `tuple[dict[str, str], int]`, but `jsonify()` returns a Flask `Response`.\n  WHY: The annotation is inaccurate, though it has no runtime effect in Flask.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "22834c225af7c130c3a79e6c223fb3e5e347d74090e33b7ff858ec43da282584",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1628,
+    "run_id": "24935313605",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24935313605",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260425170001_53c1c3a477",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1628,
+    "run_id": "24935313605"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-25T17:00:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
