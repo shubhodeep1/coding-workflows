@@ -5,13 +5,34 @@
   "entry_id": "processed_command_1609_4319651319_approved",
   "issue_number": 1609,
   "metadata": {
+    "branch": "ai/issue-1609",
+    "changed_files": [
+      ".github/workflows/nightly-validation-selftest.yml",
+      "docs/validation-templates-plan.md",
+      "scripts/validation_selftest_matrix.py",
+      "tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml",
+      "tests/fixtures/selftest/node-hardhat-solidity/contracts/Counter.sol",
+      "tests/fixtures/selftest/node-hardhat-solidity/hardhat.config.ts",
+      "tests/fixtures/selftest/node-hardhat-solidity/package.json",
+      "tests/fixtures/selftest/node-hardhat-solidity/test/counter.ts",
+      "tests/fixtures/selftest/python-mongo-flask/.ai/validate.yml",
+      "tests/fixtures/selftest/python-mongo-flask/app.py",
+      "tests/fixtures/selftest/python-mongo-flask/requirements.txt",
+      "tests/test_nightly_validation_selftest_workflow_contract.py",
+      "tests/test_validation_selftest_runner.py"
+    ],
+    "issue_number": 1609,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1609",
+    "pr_number": 1615,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1615",
+    "run_attempt": "1",
+    "run_id": "24931338377",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24931338377"
   },
   "run_attempt": 1,
   "run_id": "24931338377",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-25T12:53:16Z",
+  "status": "completed",
+  "timestamp": "2026-04-25T13:36:46Z",
   "workflow": "implement"
 }
