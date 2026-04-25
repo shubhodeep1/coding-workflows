@@ -44,12 +44,18 @@ The three projects are independent and can run in parallel:
 
 #### A1 — Drop `viaPackages` from the audit-finding identity key
 
-**Problem.** The validator's finding-ID composer (`composeFindingId` in
-`scripts/security/check-npm-audit.js`) and the exact-Map-key match in
-`evaluatePolicy` include `viaPackages` (the transitive resolution path) in
-the matching key. `viaPackages` churns whenever lockfile resolution shifts
-(npm version bumps, deduped graphs, hoisting changes), so allowlist entries
-silently drift out from under themselves.
+**Problem.** The validator referenced here lives in consumer repos today as
+`scripts/security/check-npm-audit.js` (observed in flight on PRs #168 / #177
+/ #178); it is **not** yet present in this repository and is expected to be
+vendored here as part of Project A — see A4 for the templating side of the
+contract. In the consumer-repo implementation, the finding-ID composer
+(`composeFindingId`) and the exact-Map-key match in `evaluatePolicy`
+include `viaPackages` (the transitive resolution path) in the matching key.
+`viaPackages` churns whenever lockfile resolution shifts (npm version
+bumps, deduped graphs, hoisting changes), so allowlist entries silently
+drift out from under themselves. The bug must be fixed both in the
+consumer-repo copies in flight today and in the version that lands in this
+repository when the template is introduced.
 
 **Fix.** The matching key must be `severity + package + advisory ID`, where
 the advisory ID is the GHSA ID (preferred) or the CVE (fallback when the
@@ -104,20 +110,29 @@ audit-gate fix-ups for upstream-driven `npm audit` churn entirely.
 
 #### A4 — Vendor `check-npm-audit.js` whenever `package.json` references it
 
-**Problem.** A template apply step in this repo injects
-`"audit:ci": "node scripts/security/check-npm-audit.js"` into a consumer
-`package.json` without dropping the script in `scripts/security/`. PR #168
-spent a whole cycle re-introducing the missing file (#177 → #178), proving
-the two halves are split across template units.
+**Problem.** This repository does **not** currently ship a
+security-dependency-audit template; the `audit:ci` gate exists today only as
+ad-hoc per-repo wiring in consumer repos (PRs #168 / #177 / #178). When the
+gate is templated and shipped from this repo (as part of Project A), the
+template will need to inject `"audit:ci": "node
+scripts/security/check-npm-audit.js"` into a consumer `package.json` **and**
+drop `scripts/security/check-npm-audit.js` in the same template unit. The
+failure mode to design against is the one already observed in the in-flight
+consumer wiring: PR #168 spent a whole cycle re-introducing the missing
+script file (#177 → #178) precisely because the two halves were split across
+template units. The new template must not repeat that split.
 
-**Fix.** The same template unit that mutates `package.json` must also copy
-`scripts/security/check-npm-audit.js` (and any required helper). Equivalently,
-the `package.json` mutation may be made conditional on the script being
-present in the source tree.
+**Fix.** Whichever template unit injects the `audit:ci` line into
+`package.json` must also vendor `scripts/security/check-npm-audit.js` (and
+any required helper). Equivalently, the `package.json` mutation may be made
+conditional on the script being present in the source tree.
 
-**Acceptance.** A fresh consumer-repo apply produces a working
-`npm run audit:ci` on the first cycle. The contract is exercised by an
-existing or new fixture in the nightly self-test matrix.
+**Acceptance.** A fresh consumer-repo apply through the new template
+produces a working `npm run audit:ci` on the first cycle. The contract is
+exercised by an existing or new fixture in the nightly self-test matrix
+(#1608 family). If Project A decides not to introduce a template after all
+and to keep the gate as per-repo wiring, A4 collapses into a documentation
+note rather than a templating change — surface that decision explicitly.
 
 ### Dependencies (within Project A)
 
@@ -134,13 +149,18 @@ existing or new fixture in the nightly self-test matrix.
 
 1. Detect and break loops where the judge fails for the *same reason* across
    consecutive cycles.
-2. Preserve the validation-recovery budget across `/judge_resume` so that
-   "human required" stays "human required."
+2. Preserve the judge / non-validation recovery budget (`recovery_count`,
+   `judge_stall_cycles`) across `/judge_resume` so that "human required"
+   stays "human required."
 
 ### Non-Goals
 
-- Replacing `MAX_VALIDATION_RECOVERY_ATTEMPTS` (additive only).
-- Replacing `INTEGRATION_CONFLICT_LIFETIME_MAX` (different loop, different cap).
+- Replacing `MAX_VALIDATION_RECOVERY_ATTEMPTS` (different pipeline; covered
+  by `/revalidate`, not `/judge_resume`).
+- Replacing `MAX_RECOVERY_ATTEMPTS` or `MAX_JUDGE_CYCLES` (B2 is additive —
+  changes resume semantics, not the caps).
+- Replacing `INTEGRATION_CONFLICT_LIFETIME_MAX` (different loop, different
+  cap).
 - Touching the integration-sync resolver loop.
 
 ### Sub-Issues
@@ -180,19 +200,45 @@ escalate to a human comment.
 across N+1 cycles escalates to a human comment instead of dispatching another
 fix-up issue.
 
-#### B2 — `/judge_resume` must preserve `validation_recovery_count`
+#### B2 — `/judge_resume` must preserve the recovery budget by default
 
-**Problem.** Comment dated `2026-04-25T13:22:14Z` on a tracking issue shows
-`Recovery count reset: 3 → 0` on resume. Silently zeroing the budget converts
-"recovery exhausted, human required" into "infinite retries via human pressing
-resume," defeating the purpose of the budget.
+**Scope clarification.** `/judge_resume`
+(`scripts/orchestrate_poll_process.sh:7815-7850`) is gated on *non-validation*
+failures only (it explicitly skips projects carrying
+`ai:validation-failed` / `ai:validate-failed` labels — see README
+§`/judge_resume`). The fields it currently resets to `0` are
+`judge_stall_cycles` (capped by `MAX_JUDGE_CYCLES`) and `recovery_count`
+(capped by `MAX_RECOVERY_ATTEMPTS`, default `3` at line 876). It does **not**
+touch `validation_recovery_count` / `MAX_VALIDATION_RECOVERY_ATTEMPTS` —
+that pipeline has its own resume command (`/revalidate`) and is out of
+scope for B2.
 
-**Fix.** Default `/judge_resume` behavior preserves `validation_recovery_count`.
-Clearing it requires an explicit `--force` (or `--reset-recovery`) flag.
+**Problem.** A tracking-issue comment dated `2026-04-25T13:22:14Z` shows
+`Recovery count reset: 3 → 0`, which is the line printed at
+`scripts/orchestrate_poll_process.sh:7843` from the `recovery_count` field.
+Combined with the README guarantee that "There is no limit on how many times
+`/judge_resume` can be used" (line 1476), silently zeroing the budget on
+every resume converts "recovery exhausted, human required" into "infinite
+retries via human pressing resume," defeating the purpose of
+`MAX_RECOVERY_ATTEMPTS`. The same argument applies to `judge_stall_cycles`
+vs `MAX_JUDGE_CYCLES`.
 
-**Acceptance.** Resuming a project with `validation_recovery_count = 3` and
-`MAX_VALIDATION_RECOVERY_ATTEMPTS = 3` does not dispatch a new judge cycle
-unless `--force` was passed. The reset path remains available with the flag.
+**Fix.** Default `/judge_resume` behavior preserves both `recovery_count`
+and `judge_stall_cycles`. The unblock semantic shifts to "flip status from
+`failed` back to `in_progress` so the poller picks the project up again,"
+without zeroing the budgets. Clearing one or both counters requires an
+explicit comment-flag (e.g. `/judge_resume --reset-recovery`,
+`/judge_resume --reset-stall`, or `/judge_resume --force` for both). The
+existing log line and tracking-comment template should make explicit which
+counters were preserved vs reset on each resume.
+
+**Acceptance.** Resuming a project with `recovery_count = 3` and
+`MAX_RECOVERY_ATTEMPTS = 3` (the default exhaust state) **does not** clear
+`recovery_count`; the project transitions back to `in_progress` but the
+next failure terminates immediately because the budget is still at the
+cap. `/judge_resume --reset-recovery` (or `--force`) restores the existing
+behavior of zeroing the counters. Behavior is unchanged for projects not
+yet at the cap.
 
 ### Dependencies (within Project B)
 
