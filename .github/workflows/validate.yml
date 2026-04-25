@@ -491,7 +491,7 @@ jobs:
         # repo fingerprint and bypass the "changes invalidate" guarantee.
         # See scripts/validate_process.sh Phase 0.
         id: validate_hints_cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .ai/validate-hints-cache
           key: validate-hints-v1-${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', '**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}
@@ -702,7 +702,7 @@ jobs:
 
       - name: Upload validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn

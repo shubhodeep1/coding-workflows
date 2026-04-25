@@ -138,13 +138,13 @@ jobs:
 
       - name: Setup Node.js
         if: steps.find_tracking.outputs.has_work == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Setup Python
         if: steps.find_tracking.outputs.has_work == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 

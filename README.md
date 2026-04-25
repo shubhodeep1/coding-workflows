@@ -1567,7 +1567,7 @@ self-heal patches cannot be merged without explicit human action.
 
 - You can optionally add `.ai/validate.yml` in a consumer repo to guide harness generation and diagnosis.
 - Baseline example: [`examples/ai-validate-hints.yml`](examples/ai-validate-hints.yml).
-- If `.ai/validate.yml` is absent, validation now runs a lightweight discovery phase that generates an ephemeral runtime hints file (not committed).
+- If `.ai/validate.yml` is absent, validation runs a lightweight discovery phase (or reuses a cached hints file) and materializes the result into `.ai/validate.yml` in the runner's working tree so the template renderer can consume it. The materialized file is never pushed back to the consumer repo; commit your own `.ai/validate.yml` for deterministic, no-codex behavior.
 
 ### Validation Harness Lifecycle
 
