@@ -490,6 +490,39 @@ jobs:
     secrets: inherit
 ```
 
+**`.github/workflows/review_rb_judge_dispatch.yml`** — Stall-recovery dispatch wrapper for `ai:review-blocked` PRs. Filename is load-bearing: the orchestrator poller dispatches it by exact name (`gh workflow run review_rb_judge_dispatch.yml`) when an issue stalls past `STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES` with no active autofix run, so the `ai-*` prefix is intentionally omitted. Calls `review_autofix.yml` with `force_rb_judge=true`; the reviewer/editor/commit path is short-circuited and only `scripts/review_rb_judge.sh` runs (decides merge / fix / close-and-reissue). Auto-deployed by `ai-update-workflows.yml`; consumer repos that lack this wrapper will see the poller log `::warning::Could not dispatch review_rb_judge_dispatch.yml` and the `ai:review-blocked` phase will have no autonomous escape path.
+```yaml
+name: AI Review-Blocked Judge Dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to run the review-blocked judge against"
+        required: true
+        type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files (default false for judge-only dispatch)"
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+jobs:
+  judge:
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+    with:
+      pr_number: ${{ github.event.inputs.pr_number }}
+      pr_is_draft: false
+      pr_title: ""
+      pr_body: ""
+      pr_skip_ai: false
+      allow_workflow_edits: ${{ github.event.inputs.allow_workflow_edits == 'true' }}
+      force_rb_judge: true
+    secrets: inherit
+```
+
 **`.github/workflows/ai-memory-maintenance.yml`** — Monthly compaction and archival of AI memory
 ```yaml
 name: AI Memory Maintenance

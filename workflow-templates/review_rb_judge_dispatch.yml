@@ -1,0 +1,56 @@
+# IMPORTANT: This file is managed by coding-workflows and may be overwritten
+# automatically when upstream templates change. To opt out of auto-updates,
+# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+#
+# Thin wrapper around review_autofix.yml that runs only the
+# review-blocked judge step (scripts/review_rb_judge.sh) against a given
+# open PR. Used by the orchestrator poller's standalone stall loop to
+# escape the ai:review-blocked phase once an issue has been stuck past
+# the per-phase stall threshold with no active autofix run. See
+# scripts/orchestrate_poll_process.sh (dispatch_rb_judge action) and
+# orchestrate_lib.py:STALL_RECOVERY_ACTIONS["ai:review-blocked"].
+#
+# Contract:
+#   - Expects an open PR at ${pr_number}.
+#   - Forwards force_rb_judge=true to review_autofix.yml, which makes
+#     retrigger_guard report max_iterations_reached=true immediately so
+#     the reviewer/editor/commit path is skipped and the rb_judge step
+#     fires directly.
+#   - Does NOT allow AI workflow edits (defaults to false) — the judge
+#     only decides merge/fix/close_and_reissue and should not be able to
+#     rewrite workflow YAML.
+#
+# This workflow is workflow_dispatch-only on purpose: it is not a
+# push/PR-event handler. The poller triggers it via `gh workflow run`.
+# The filename `review_rb_judge_dispatch.yml` is load-bearing: the
+# orchestrator poller dispatches by exact filename and there is no
+# override variable.
+name: AI Review-Blocked Judge Dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to run the review-blocked judge against"
+        required: true
+        type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files (default false for judge-only dispatch)"
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+jobs:
+  judge:
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+    with:
+      pr_number: ${{ github.event.inputs.pr_number }}
+      pr_is_draft: false
+      pr_title: ""
+      pr_body: ""
+      pr_skip_ai: false
+      allow_workflow_edits: ${{ github.event.inputs.allow_workflow_edits == 'true' }}
+      force_rb_judge: true
+    secrets: inherit
