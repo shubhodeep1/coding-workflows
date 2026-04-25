@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:520-529 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Python dependencies are installed even when `VALIDATION_USE_TEMPLATES=false`, wasting work before validation exits.\n  WHY: The false-template path already fails fast, so the unconditional install only adds minor wasted work.\n- .github/workflows/validate.yml:298, 311 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The workflow warnings say template mode \"may not be available\" even though template rendering is now required.\n  WHY: When the renderer or schema is missing, validation now fails rather than merely having template mode unavailable, so the wording is misleading.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/validate.yml:525-528 | confidence=4\n  PROBLEM: Python dependencies installed even when `VALIDATION_USE_TEMPLATES=false`, wasting work before validation exits with error\n  WHY: Step runs unconditionally, installing dependencies that won't be used when validate_process.sh exits immediately due to `VALIDATION_USE_TEMPLATES_ENABLED != \"true\"`\n- .github/workflows/validate.yml:298 | confidence=3\n  PROBLEM: Warning message suggests template mode is optional when it's now mandatory\n  WHY: Misleading for users debugging validation failures - template mode is required, not optional\n- scripts/validate_process.sh:2160-2167 | confidence=5\n  PROBLEM: Setting `VALIDATION_USE_TEMPLATES=false` now hard-fails, breaking backward compatibility\n  WHY: Repositories configured with `VALIDATION_USE_TEMPLATES=false` will fail validation; this appears intentional as freehand harness generation has been removed, but it breaks existing deployments.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/validate.yml:525-528 | severity=low\n  PROBLEM: Python dependencies are installed even when `VALIDATION_USE_TEMPLATES=false`, which wastes work before validation exits.\n  WHY: The default is now `true`, the `false` path already fails immediately, and the pip install is only a minor inefficiency.\n- .github/workflows/validate.yml:298,311 | severity=low\n  PROBLEM: The warnings at lines 298 and 311 say template mode \"may not be available\" even though template mode is now required.\n  WHY: Template mode is no longer optional, so the message is inaccurate but does not cause functional problems.\n- scripts/validate_process.sh:2160-2167\n  PROBLEM: `VALIDATION_USE_TEMPLATES=false` now hard-fails with no fallback, breaking repos that rely on that configuration.\n  WHY: NOT A BUG - INTENTIONAL DESIGN CHANGE. This is documented behavior and the PR removes the freehand generation path.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/validate.yml:~298 | confidence=3\n  PROBLEM: The warning says \"template mode may not be available\", which suggests template mode is optional.\n  WHY: Template mode is now the only supported path, so the messaging is misleading for debugging.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/validate.yml:520-529 | severity=low | confidence=4\n  PROBLEM: The workflow still installs Python dependencies before validation exits when `VALIDATION_USE_TEMPLATES=false`.\n  WHY: The script correctly fails with `raw_status=harness_error`, but only after wasted pip install work.\n- .github/workflows/validate.yml:298, 311 | severity=low | confidence=3\n  PROBLEM: The warnings about template availability are misleading now that template mode is required.\n  WHY: If the renderer or schema is missing, validation will fail rather than degrade gracefully.\n- scripts/validate_process.sh:2160-2167\n  PROBLEM: `VALIDATION_USE_TEMPLATES=false` now hard-fails; this is an intentional breaking change.\n  WHY: The code explicitly removes freehand harness generation and the docs were updated to match, so this is working as designed.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6060ccd3c1c116ef2befc75e28c8252490583f6a67fc62924dcc5b826e343f59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24926602962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24926602962",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260425090200_6d0b5cc00b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24926602962"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-25T09:02:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
