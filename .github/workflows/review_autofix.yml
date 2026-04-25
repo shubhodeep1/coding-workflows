@@ -82,6 +82,14 @@ env:
   XPOLL_SUMMARISER_LINES_PER_REVIEWER: ${{ vars.XPOLL_SUMMARISER_LINES_PER_REVIEWER || '160' }}
   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}
   XPOLL_SUMMARISER_MAX_INPUT_LINES: ${{ vars.XPOLL_SUMMARISER_MAX_INPUT_LINES || '3000' }}
+  # CI/lint check-run autofix context: when enabled (default), the workflow
+  # snapshots failing/incomplete check-runs on the PR head SHA into
+  # ${PR_CHECK_RUNS_CONTEXT_FILE} and feeds the file to reviewers + editor so
+  # CI/lint failures are detected and fixed every run. See README and
+  # agents.md for the contract.
+  CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
+  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '600' }}
+  CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
 
 jobs:
   gate:
@@ -650,6 +658,7 @@ jobs:
             echo "PR_REVIEWS_FILE=${RUNTIME_DIR}/pr_reviews.json"
             echo "PR_REVIEW_COMMENTS_FILE=${RUNTIME_DIR}/pr_review_comments.json"
             echo "PR_ALL_COMMENTS_CONTEXT_FILE=${RUNTIME_DIR}/pr_all_comments_context.txt"
+            echo "PR_CHECK_RUNS_CONTEXT_FILE=${RUNTIME_DIR}/pr_check_runs_context.txt"
             echo "LAST_RUN_DIFF_FILE=${RUNTIME_DIR}/last_run_diff.patch"
             echo "LAST_RUN_CHANGED_FILES_FILE=${RUNTIME_DIR}/last_run_changed_files.txt"
             echo "PR_CHANGED_FILES_FILE=${RUNTIME_DIR}/pr_changed_files.txt"
@@ -1079,6 +1088,147 @@ jobs:
             exit 1
           fi
           echo "BASE_BRANCH=${BASE_REF}" >> "$GITHUB_ENV"
+
+      - name: Collect PR check-run failures (CI/lint autofix context)
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          # Always (re)create the context file so reviewers/editor see a
+          # deterministic input. Fail-open: any API issue produces a sentinel
+          # and continues — the autofix pipeline must not be blocked by
+          # check-run collection problems.
+          : > "${PR_CHECK_RUNS_CONTEXT_FILE}"
+
+          if [ "${CHECK_RUNS_AUTOFIX_ENABLED:-true}" = "false" ]; then
+            {
+              echo "PR_CHECK_RUNS_CONTEXT"
+              echo "status: disabled"
+              echo "reason: CHECK_RUNS_AUTOFIX_ENABLED=false"
+              echo ""
+              echo "Check-run autofix context collection is disabled."
+            } > "${PR_CHECK_RUNS_CONTEXT_FILE}"
+            echo "CHECK_RUNS_AUTOFIX disabled via CHECK_RUNS_AUTOFIX_ENABLED=false"
+            exit 0
+          fi
+
+          HEAD_SHA="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"
+          if [ -z "${HEAD_SHA}" ] || [ "${HEAD_SHA}" = "null" ]; then
+            {
+              echo "PR_CHECK_RUNS_CONTEXT"
+              echo "status: unavailable"
+              echo "reason: head_sha_missing"
+              echo ""
+              echo "Unable to determine PR head SHA; no check-run context available."
+            } > "${PR_CHECK_RUNS_CONTEXT_FILE}"
+            echo "::warning::CHECK_RUNS_AUTOFIX head SHA missing from PR payload."
+            exit 0
+          fi
+
+          # Clamp configurable values to safe ranges. Invalid values fall back
+          # to defaults rather than failing the workflow.
+          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-600}"
+          if ! [[ "${_wait_timeout}" =~ ^[0-9]+$ ]] || [ "${_wait_timeout}" -gt 3600 ]; then
+            _wait_timeout=600
+          fi
+          _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-20}"
+          if ! [[ "${_poll_interval}" =~ ^[0-9]+$ ]] || [ "${_poll_interval}" -lt 5 ] || [ "${_poll_interval}" -gt 300 ]; then
+            _poll_interval=20
+          fi
+
+          _raw_file="$(mktemp)"
+          _err_file="$(mktemp)"
+          _final_status="ready"
+          _deadline=$(( $(date +%s) + _wait_timeout ))
+          while :; do
+            if ! gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+                  > "${_raw_file}" 2>"${_err_file}"; then
+              cat "${_err_file}" >&2 || true
+              _final_status="api_error"
+              break
+            fi
+            _in_flight="$(jq '[.check_runs // [] | .[] | select(.status == "in_progress" or .status == "queued")] | length' "${_raw_file}" 2>/dev/null || echo 0)"
+            if [ "${_in_flight}" = "0" ]; then
+              _final_status="ready"
+              break
+            fi
+            _now=$(date +%s)
+            if [ "${_now}" -ge "${_deadline}" ]; then
+              _final_status="timeout"
+              echo "::warning::CHECK_RUNS_WAIT_TIMEOUT reached after ${_wait_timeout}s with ${_in_flight} check-run(s) still queued/in_progress; proceeding with snapshot."
+              break
+            fi
+            echo "Waiting for ${_in_flight} in-progress/queued check-run(s) on ${HEAD_SHA} (sleep ${_poll_interval}s, deadline in $((_deadline - _now))s)…"
+            sleep "${_poll_interval}"
+          done
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - "${_raw_file}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${HEAD_SHA}" "${_final_status}" <<'PYCR'
+          import json, sys
+          raw_path, out_path, head_sha, final_status = sys.argv[1:5]
+          runs = []
+          try:
+              with open(raw_path, "r", encoding="utf-8") as fh:
+                  text = fh.read().strip()
+              if text:
+                  obj = json.loads(text)
+                  if isinstance(obj, dict):
+                      page_runs = obj.get("check_runs", [])
+                      if isinstance(page_runs, list):
+                          runs = [r for r in page_runs if isinstance(r, dict)]
+          except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+              runs = []
+
+          failure_conclusions = {"failure", "timed_out", "action_required", "cancelled", "stale"}
+          incomplete = [r for r in runs if r.get("status") in ("queued", "in_progress")]
+          failed = [
+              r for r in runs
+              if r.get("status") == "completed"
+              and (r.get("conclusion") or "") in failure_conclusions
+          ]
+
+          def short(value, limit=400):
+              s = "" if value is None else str(value)
+              s = s.replace("\r", " ").replace("\n", " | ")
+              return s if len(s) <= limit else s[:limit] + "..."
+
+          with open(out_path, "w", encoding="utf-8") as fh:
+              fh.write("PR_CHECK_RUNS_CONTEXT\n")
+              fh.write(f"head_sha: {head_sha}\n")
+              fh.write(f"collection_status: {final_status}\n")
+              fh.write(f"total_check_runs: {len(runs)}\n")
+              fh.write(f"failed_count: {len(failed)}\n")
+              fh.write(f"incomplete_count: {len(incomplete)}\n")
+              fh.write("\n")
+              if final_status == "api_error":
+                  fh.write("Check-run API call failed; treat absence of failures as unknown rather than confirmed-passing.\n\n")
+              if not failed and not incomplete and final_status not in ("api_error",):
+                  fh.write("No failed or incomplete check-runs detected on the PR head SHA.\n")
+              for i, r in enumerate(failed):
+                  app = (r.get("app") or {}).get("slug") or ""
+                  output = r.get("output") or {}
+                  fh.write(f"failed[{i}].name: {short(r.get('name'))}\n")
+                  fh.write(f"failed[{i}].status: {short(r.get('status'))}\n")
+                  fh.write(f"failed[{i}].conclusion: {short(r.get('conclusion'))}\n")
+                  fh.write(f"failed[{i}].app: {short(app)}\n")
+                  fh.write(f"failed[{i}].html_url: {short(r.get('html_url'))}\n")
+                  fh.write(f"failed[{i}].details_url: {short(r.get('details_url'))}\n")
+                  fh.write(f"failed[{i}].title: {short(output.get('title'))}\n")
+                  fh.write(f"failed[{i}].summary: {short(output.get('summary'), 1200)}\n")
+                  fh.write("\n")
+              for i, r in enumerate(incomplete):
+                  fh.write(f"incomplete[{i}].name: {short(r.get('name'))}\n")
+                  fh.write(f"incomplete[{i}].status: {short(r.get('status'))}\n")
+                  fh.write(f"incomplete[{i}].html_url: {short(r.get('html_url'))}\n")
+                  fh.write("\n")
+          PYCR
+          rm -f "${_raw_file}" "${_err_file}" 2>/dev/null || true
+
+          check_runs_bytes="$(wc -c < "${PR_CHECK_RUNS_CONTEXT_FILE}" | tr -d '[:space:]')"
+          echo "Check-run context bytes: ${check_runs_bytes}"
+          if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE}" ]; then
+            echo "Check-run context sha256: $(sha256sum "${PR_CHECK_RUNS_CONTEXT_FILE}" | awk '{print $1}')"
+          fi
 
       - name: Detect smoke test and tune LLM settings
         env:
@@ -1513,6 +1663,7 @@ jobs:
           check_required_file "${ORIGINAL_PR_DIFF_FILE}"
           check_required_file "${PR_CHANGED_FILES_FILE}"
           check_required_file "${PR_ALL_COMMENTS_CONTEXT_FILE}"
+          check_required_file "${PR_CHECK_RUNS_CONTEXT_FILE}"
           check_required_file "${SYMBOL_DIFF_SUMMARY_FILE}"
           check_required_file "${MEMORY_CONTEXT_FILE}"
           check_required_file "${HOME}/.codex/config.toml"
