@@ -38,9 +38,10 @@ Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable iss
 
 - All orchestrator-generated sub-issues MUST complete entirely within this
   repository. The downstream planner checks out only this repo's working
-  tree; the integration branch and integration PR live here. There is no
-  mechanism for an orchestrator-generated issue to produce commits, runs,
-  or releases in any other repository.
+  tree; the integration branch and integration PR live here. Sub-issues
+  must not require creating commits, opening PRs, publishing releases, or
+  making any other direct changes in other repositories to be considered
+  complete.
 - DO NOT generate sub-issues that require creating new external repositories
   (e.g. "create a `<owner>/<name>` fixture repo and commit X there").
 - DO NOT generate sub-issues whose acceptance criteria require committing
