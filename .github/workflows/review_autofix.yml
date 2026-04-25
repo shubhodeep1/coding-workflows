@@ -1104,10 +1104,13 @@ jobs:
           if [ "${CHECK_RUNS_AUTOFIX_ENABLED:-true}" = "false" ]; then
             {
               echo "PR_CHECK_RUNS_CONTEXT"
-              echo "status: disabled"
-              echo "reason: CHECK_RUNS_AUTOFIX_ENABLED=false"
+              echo "head_sha: "
+              echo "collection_status: disabled"
+              echo "total_check_runs: 0"
+              echo "failed_count: 0"
+              echo "incomplete_count: 0"
               echo ""
-              echo "Check-run autofix context collection is disabled."
+              echo "Check-run autofix context collection is disabled (CHECK_RUNS_AUTOFIX_ENABLED=false)."
             } > "${PR_CHECK_RUNS_CONTEXT_FILE}"
             echo "CHECK_RUNS_AUTOFIX disabled via CHECK_RUNS_AUTOFIX_ENABLED=false"
             exit 0
@@ -1117,8 +1120,11 @@ jobs:
           if [ -z "${HEAD_SHA}" ] || [ "${HEAD_SHA}" = "null" ]; then
             {
               echo "PR_CHECK_RUNS_CONTEXT"
-              echo "status: unavailable"
-              echo "reason: head_sha_missing"
+              echo "head_sha: "
+              echo "collection_status: unavailable"
+              echo "total_check_runs: 0"
+              echo "failed_count: 0"
+              echo "incomplete_count: 0"
               echo ""
               echo "Unable to determine PR head SHA; no check-run context available."
             } > "${PR_CHECK_RUNS_CONTEXT_FILE}"
@@ -1163,7 +1169,13 @@ jobs:
             sleep "${_poll_interval}"
           done
 
-          PYTHONDONTWRITEBYTECODE=1 python3 - "${_raw_file}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${HEAD_SHA}" "${_final_status}" <<'PYCR'
+          # Fail-open guard: if python (or pipefail elsewhere in the writer)
+          # errors, fall back to a deterministic writer_error sentinel rather
+          # than aborting the autofix run. The reviewer/editor prompts treat
+          # any non-`ready` collection_status as "no signal", so this loses
+          # the snapshot for one iteration but keeps the pipeline live.
+          _writer_ok=true
+          PYTHONDONTWRITEBYTECODE=1 python3 - "${_raw_file}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${HEAD_SHA}" "${_final_status}" <<'PYCR' || _writer_ok=false
           import json, sys
           raw_path, out_path, head_sha, final_status = sys.argv[1:5]
           runs = []
@@ -1222,6 +1234,19 @@ jobs:
                   fh.write(f"incomplete[{i}].html_url: {short(r.get('html_url'))}\n")
                   fh.write("\n")
           PYCR
+          if [ "${_writer_ok}" = "false" ] || [ ! -s "${PR_CHECK_RUNS_CONTEXT_FILE}" ]; then
+            {
+              echo "PR_CHECK_RUNS_CONTEXT"
+              echo "head_sha: ${HEAD_SHA:-}"
+              echo "collection_status: writer_error"
+              echo "total_check_runs: 0"
+              echo "failed_count: 0"
+              echo "incomplete_count: 0"
+              echo ""
+              echo "Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing."
+            } > "${PR_CHECK_RUNS_CONTEXT_FILE}"
+            echo "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=${HEAD_SHA:-} writer_ok=${_writer_ok}"
+          fi
           rm -f "${_raw_file}" "${_err_file}" 2>/dev/null || true
 
           check_runs_bytes="$(wc -c < "${PR_CHECK_RUNS_CONTEXT_FILE}" | tr -d '[:space:]')"

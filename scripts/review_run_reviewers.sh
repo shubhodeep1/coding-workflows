@@ -330,8 +330,9 @@ ${PR_ALL_COMMENTS_CONTEXT_FILE}
    failed check-run to a code site in the diff, raise it as a high-confidence
    finding so the editor pass fixes it. If a failed check-run cannot be
    mapped to the diff, still surface it as a finding so the editor can
-   investigate. status: disabled / unavailable / api_error means no signal
-   is available — do not treat absence of failures as confirmed-passing.
+   investigate. collection_status: disabled / unavailable / api_error /
+   writer_error / timeout means no signal is available — do not treat
+   absence of failures as confirmed-passing.
 
 File:
 ${PR_CHECK_RUNS_CONTEXT_FILE}
