@@ -57,7 +57,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -151,7 +151,7 @@ jobs:
           python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}"
 
       - name: Upload workflow log report artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: workflow-log-report
           path: workflow_log_report.json
@@ -175,7 +175,7 @@ jobs:
           token: ${{ secrets.GH_PAT || github.token }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -534,7 +534,7 @@ jobs:
 
       - name: Upload batch state artifact
         if: steps.analyze.outputs.batch_state_file != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: workflow-log-analysis-batch-state
           path: ${{ steps.analyze.outputs.batch_state_file }}
@@ -647,7 +647,7 @@ jobs:
           token: ${{ secrets.GH_PAT || github.token }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -964,7 +964,7 @@ jobs:
           token: ${{ secrets.GH_PAT || github.token }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 

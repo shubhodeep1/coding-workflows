@@ -2127,6 +2127,20 @@ PY
   fi
 fi
 
+# Template mode requires a manifest at .ai/validate.yml. When hints came
+# from cache or codex discovery (not a committed manifest), materialize
+# them into .ai/validate.yml so run_template_validation_harness_renderer
+# can consume them. Never clobber an existing committed manifest.
+if [ "${HINTS_SOURCE:-}" = "discovered" ] || [ "${HINTS_SOURCE:-}" = "cache" ]; then
+  if [ ! -f .ai/validate.yml ] && [ -s "${VALIDATE_HINTS_FILE}" ]; then
+    if mkdir -p .ai 2>/dev/null && cp "${VALIDATE_HINTS_FILE}" .ai/validate.yml; then
+      echo "Materialized ${HINTS_SOURCE} hints into .ai/validate.yml for template renderer."
+    else
+      echo "::warning::Failed to materialize ${HINTS_SOURCE} hints into .ai/validate.yml; template renderer will report manifest as missing." >&2
+    fi
+  fi
+fi
+
 
 # ---------------------------------------------------------------
 # Phase 1: Generate validation harness
