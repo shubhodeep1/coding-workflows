@@ -555,19 +555,20 @@ _bump_merge_deferral_count()
 # GH API calls.
 #
 # Returns:
-#   0 — alignment done (or not needed); caller should proceed
-# Returns:
-#   0 — already aligned, no push happened; caller should proceed
-#   1 — sub-issue rebase produced conflicts; caller should defer + bump
-#       _bump_merge_deferral_count
-#   2 — alignment pushed a new SHA on the integration branch and/or the
-#       sub-issue head; caller should defer the merge for one tick so
-#       the new SHA's CI can re-run before squash-merge fires.  Branch
-#       protection's required-checks gate is server-side and lags the
-#       force-push by seconds, and the non-`--auto` fallback merge
-#       path can otherwise race ahead of the new SHA's checks.  Defer
-#       on rc=2 does NOT consume the _bump_merge_deferral_count budget
-#       — this is expected one-tick latency, not a failure.
+#   0 — already aligned (no push happened, or alignment was a no-op);
+#       caller should proceed with the squash-merge this tick.
+#   1 — sub-issue rebase produced conflicts; caller should defer the
+#       merge AND bump _bump_merge_deferral_count (counts toward the
+#       MAX_MERGE_DEFERRALS budget).
+#   2 — alignment force-pushed a new SHA on the integration branch
+#       and/or the sub-issue head; caller should defer the merge for
+#       one tick so the new SHA's CI can re-run before squash-merge
+#       fires.  Branch protection's required-checks gate is
+#       server-side and lags the force-push by seconds, and the
+#       non-`--auto` fallback merge path can otherwise race ahead of
+#       the new SHA's checks.  Defer on rc=2 does NOT consume the
+#       _bump_merge_deferral_count budget — this is expected one-tick
+#       latency, not a failure.
 #
 # Usage: _sync_integration_and_rebase_subissue <pr_num> <head_ref> <integration_branch>
 _sync_integration_and_rebase_subissue()
