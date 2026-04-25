@@ -34,6 +34,37 @@ Rules:
 - Do not propose issues that duplicate existing functionality.
 - Do not write code. Only produce the decomposition JSON.
 
+Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable issues):
+
+- All orchestrator-generated sub-issues MUST complete entirely within this
+  repository. The downstream planner checks out only this repo's working
+  tree; the integration branch and integration PR live here. There is no
+  mechanism for an orchestrator-generated issue to produce commits, runs,
+  or releases in any other repository.
+- DO NOT generate sub-issues that require creating new external repositories
+  (e.g. "create a `<owner>/<name>` fixture repo and commit X there").
+- DO NOT generate sub-issues whose acceptance criteria require committing
+  files into, opening PRs against, or running CI in repositories other than
+  this one.
+- DO NOT generate sub-issues whose runtime path depends on private cross-
+  repo fetches or `GH_PAT`-authenticated clones of other repos as part of
+  the implementation work itself.
+- Mentions of other repositories for context are fine when the WORK happens
+  in this repo. Examples that ARE in scope: editing
+  `.github/ai/consumer_repos.json` (which lists external dispatch targets),
+  documenting cross-repo behavior in `README.md`/`agents.md`, adjusting a
+  workflow that emits `repository_dispatch` to consumers. Examples that are
+  NOT in scope: pushing commits into one of those consumer repos, seeding
+  a new fixture repo with files, adding a git submodule that points at an
+  external repo.
+- If the source spec implies cross-repo work — new fixture repos, external
+  submodules, "create a separate repo and commit X there" — re-scope to an
+  in-tree alternative (e.g. `tests/fixtures/...`, `examples/...`,
+  `scripts/...`, `workflow-templates/...`) before generating the issue. If
+  no in-tree alternative exists, OMIT the sub-issue and surface the gap as
+  a note in `project_summary` or as a follow-up comment on the tracking
+  issue, rather than filing an unimplementable sub-issue.
+
 File partitioning rules (MANDATORY — prevents merge conflicts between parallel
 sibling issues within the same wave):
 
