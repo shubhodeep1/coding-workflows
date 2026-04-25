@@ -1765,13 +1765,28 @@ jobs:
           # the off chance a PR has accumulated >100 commits (e.g. a
           # long-running orchestrator integration PR) we deepen by a
           # bounded amount once before walking so the counts are not
-          # silently truncated.  No-op when the repo is already a full
-          # clone or the deepen fetch fails (fail-open: counts may be
-          # undercounted but the workflow proceeds).
+          # silently truncated.
+          #
+          # Explicit refspec on TARGET_BRANCH (the PR head ref): without
+          # one, `git fetch ... origin` would defer to the default
+          # `remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`
+          # and pull every remote branch, undoing the whole point of
+          # fetch-depth: 100.  The walks only need HEAD's first-parent
+          # history, which lives on TARGET_BRANCH.
+          #
+          # No-op when the repo is already a full clone, when
+          # TARGET_BRANCH is unset (Checkout PR head branch hit its
+          # validation early-exit), or when the deepen fetch fails
+          # (fail-open: counts may be undercounted but the workflow
+          # proceeds).
           if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
-            echo "Shallow repository detected — deepening once (+200) so autofix/judge-fix walks see PR-unique history beyond the initial fetch-depth boundary."
-            if ! git fetch --no-tags --prune --deepen=200 origin 2>/dev/null; then
-              echo "::warning::git fetch --deepen=200 origin failed before autofix/judge-fix walks; walk counts may be undercounted on PRs with >100 commits."
+            if [ -n "${TARGET_BRANCH:-}" ]; then
+              echo "Shallow repository detected — deepening TARGET_BRANCH=${TARGET_BRANCH} once (+200) so autofix/judge-fix walks see PR-unique history beyond the initial fetch-depth boundary."
+              if ! git fetch --no-tags --prune --deepen=200 origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
+                echo "::warning::git fetch --deepen=200 origin refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH} failed before autofix/judge-fix walks; walk counts may be undercounted on PRs with >100 commits."
+              fi
+            else
+              echo "::warning::TARGET_BRANCH unset (Checkout PR head branch likely early-exited); skipping pre-walk deepen safeguard. Walk counts may be undercounted on PRs with >100 commits."
             fi
           fi
 
@@ -1851,10 +1866,24 @@ jobs:
           # --unshallow as a last resort.  Fail-open: callers that need
           # the merge-base check `git rev-parse --verify origin/<base>`
           # themselves and degrade gracefully.
+          #
+          # Refspec discipline: every `git fetch` here passes explicit
+          # refspecs limited to BASE_BRANCH + (when known) TARGET_BRANCH.
+          # Without them, `git fetch ... origin` defers to the default
+          # `remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`
+          # and would pull every remote branch on each deepen call —
+          # undoing the fetch-depth: 100 budget this PR is trying to
+          # enforce.  Either side of the merge-base reaching its full
+          # ancestor is sufficient for git merge-base to resolve, so
+          # deepening just these two refs is enough.
           _ensure_merge_base_reachable() {
             local _remote_ref="$1"
             local _local_ref="${2:-HEAD}"
             local _iter=0
+            local -a _refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+            if [ -n "${TARGET_BRANCH:-}" ]; then
+              _refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+            fi
             while [ "${_iter}" -lt 4 ]; do
               if [ ! -f "$(git rev-parse --git-dir)/shallow" ]; then
                 return 0
@@ -1863,16 +1892,16 @@ jobs:
                 return 0
               fi
               _iter=$((_iter + 1))
-              echo "merge-base ${_remote_ref}…${_local_ref} unreachable in shallow clone — deepening (attempt ${_iter}/4)."
-              if ! git fetch --no-tags --prune --deepen=200 origin 2>/dev/null; then
-                echo "::warning::git fetch --deepen=200 origin failed during deepen-on-miss; falling back to --unshallow."
-                git fetch --no-tags --prune --unshallow origin 2>/dev/null || true
+              echo "merge-base ${_remote_ref}…${_local_ref} unreachable in shallow clone — deepening (attempt ${_iter}/4) on refs: ${_refspecs[*]}."
+              if ! git fetch --no-tags --prune --deepen=200 origin "${_refspecs[@]}" 2>/dev/null; then
+                echo "::warning::git fetch --deepen=200 origin ${_refspecs[*]} failed during deepen-on-miss; falling back to --unshallow on the same refs."
+                git fetch --no-tags --prune --unshallow origin "${_refspecs[@]}" 2>/dev/null || true
                 return 0
               fi
             done
             if ! git merge-base "${_remote_ref}" "${_local_ref}" >/dev/null 2>&1; then
-              echo "::warning::merge-base ${_remote_ref}…${_local_ref} still unreachable after 4 deepen attempts; trying final --unshallow."
-              git fetch --no-tags --prune --unshallow origin 2>/dev/null || true
+              echo "::warning::merge-base ${_remote_ref}…${_local_ref} still unreachable after 4 deepen attempts; trying final --unshallow on refs: ${_refspecs[*]}."
+              git fetch --no-tags --prune --unshallow origin "${_refspecs[@]}" 2>/dev/null || true
             fi
           }
 
@@ -2920,23 +2949,37 @@ jobs:
           # iteratively, falling back to --unshallow as a last resort.
           # Fail-open: if the deepen path fails, the merge precheck below
           # will still run and its existing error handling will catch it.
+          #
+          # Refspec discipline: every `git fetch` here passes explicit
+          # refspecs limited to BASE_BRANCH + (when known) TARGET_BRANCH.
+          # Without them, `git fetch ... origin` defers to the default
+          # `remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`
+          # and would pull every remote branch on each deepen call —
+          # undoing the fetch-depth: 100 budget this PR is trying to
+          # enforce.  Either side of the merge-base reaching its full
+          # ancestor is sufficient for git merge-base to resolve, so
+          # deepening just these two refs is enough.
           if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
+            _merge_base_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+            if [ -n "${TARGET_BRANCH:-}" ]; then
+              _merge_base_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+            fi
             _merge_base_deepen_iter=0
             while [ "${_merge_base_deepen_iter}" -lt 4 ]; do
               if git merge-base "origin/${BASE_BRANCH}" HEAD >/dev/null 2>&1; then
                 break
               fi
               _merge_base_deepen_iter=$((_merge_base_deepen_iter + 1))
-              echo "merge-base origin/${BASE_BRANCH}…HEAD unreachable in shallow clone — deepening (attempt ${_merge_base_deepen_iter}/4)."
-              if ! git fetch --no-tags --prune --deepen=200 origin 2>/dev/null; then
-                echo "::warning::git fetch --deepen=200 origin failed during merge-base deepen-on-miss; falling back to --unshallow."
-                git fetch --no-tags --prune --unshallow origin 2>/dev/null || true
+              echo "merge-base origin/${BASE_BRANCH}…HEAD unreachable in shallow clone — deepening (attempt ${_merge_base_deepen_iter}/4) on refs: ${_merge_base_refspecs[*]}."
+              if ! git fetch --no-tags --prune --deepen=200 origin "${_merge_base_refspecs[@]}" 2>/dev/null; then
+                echo "::warning::git fetch --deepen=200 origin ${_merge_base_refspecs[*]} failed during merge-base deepen-on-miss; falling back to --unshallow on the same refs."
+                git fetch --no-tags --prune --unshallow origin "${_merge_base_refspecs[@]}" 2>/dev/null || true
                 break
               fi
             done
             if ! git merge-base "origin/${BASE_BRANCH}" HEAD >/dev/null 2>&1; then
-              echo "::warning::merge-base origin/${BASE_BRANCH}…HEAD still unreachable after deepen attempts; trying final --unshallow."
-              git fetch --no-tags --prune --unshallow origin 2>/dev/null || true
+              echo "::warning::merge-base origin/${BASE_BRANCH}…HEAD still unreachable after deepen attempts; trying final --unshallow on refs: ${_merge_base_refspecs[*]}."
+              git fetch --no-tags --prune --unshallow origin "${_merge_base_refspecs[@]}" 2>/dev/null || true
             fi
           fi
 
