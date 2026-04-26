@@ -31,6 +31,13 @@ def _diagnose_prompt_text() -> str:
 	return DIAGNOSE_PROMPT.read_text(encoding="utf-8")
 
 
+JUDGE_PROMPT = REPO_ROOT / "prompts" / "mode-judge.txt"
+
+
+def _judge_prompt_text() -> str:
+	return JUDGE_PROMPT.read_text(encoding="utf-8")
+
+
 def _extract_needs_fixes_branch() -> str:
 	text = _validate_process_text()
 	match = re.search(
@@ -175,6 +182,40 @@ def test_diagnose_prompt_schema_allows_harness_fixes_alongside_fix_issues() -> N
 		"harness_fixes must remain in the schema"
 	)
 
+
+
+
+def test_audit_gate_prompt_contract_forbids_unsatisfiable_wording() -> None:
+	"""Issue #1668: lock the audit-gate carve-out wording in diagnose + judge prompts."""
+	diagnose = _diagnose_prompt_text().lower()
+	judge = _judge_prompt_text().lower()
+	for forbidden in (
+		"make npm audit deterministic",
+		"match the validator's normalization exactly",
+	):
+		assert forbidden in diagnose, (
+			"diagnose prompt must explicitly forbid unsatisfiable audit-gate wording"
+		)
+		assert forbidden in judge, (
+			"judge prompt must explicitly forbid unsatisfiable audit-gate wording"
+		)
+
+
+def test_audit_gate_prompt_contract_requires_concrete_supported_remediation() -> None:
+	"""Issue #1668: audit-gate follow-ups must name the concrete supported path."""
+	diagnose = _diagnose_prompt_text().lower()
+	judge = _judge_prompt_text().lower()
+	for marker in (
+		"npm run audit:ci -- --write",
+		"security/dependency-audit-allowlist.json",
+		"prefer ghsa",
+	):
+		assert marker in diagnose, (
+			"diagnose prompt must require concrete canonical audit remediation markers"
+		)
+		assert marker in judge, (
+			"judge prompt must require concrete canonical audit remediation markers"
+		)
 
 def main() -> int:
 	failed = 0
