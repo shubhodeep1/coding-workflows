@@ -5,13 +5,24 @@
   "entry_id": "processed_command_1660_4321868195_approved",
   "issue_number": 1660,
   "metadata": {
+    "branch": "ai/issue-1660",
+    "changed_files": [
+      "tests/test_audit_gate_identity.py",
+      "tests/test_audit_gate_template_atomicity.py",
+      "workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js"
+    ],
+    "issue_number": 1660,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1660",
+    "pr_number": 1662,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1662",
+    "run_attempt": "1",
+    "run_id": "24954974349",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24954974349"
   },
   "run_attempt": 1,
   "run_id": "24954974349",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-26T11:00:22Z",
+  "status": "completed",
+  "timestamp": "2026-04-26T11:11:37Z",
   "workflow": "implement"
 }
