@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_gate_identity.py:230-267 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: The test does not explicitly assert that the metavulnerability skip path was exercised for the string-only `via` case.\n  WHY: Reviewers disagreed on impact\u2014some treated this as only a cosmetic/test-clarity gap or not a correctness issue, while others raised it as a coverage gap.\n- tests/test_audit_gate_identity.py:230-267 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: There is no test coverage for mixed `via` arrays containing both strings and advisory objects.\n  WHY: Multiple reviewers noted the new `hasStringOnlyVia` branch is untested for mixed payloads, leaving an edge-case coverage gap.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_audit_gate_identity.py:230-267 | confidence=3\n  PROBLEM: Test could be improved with explicit assertion about metavulnerability skip being exercised.\n  WHY: While the test validates the absence of the missing-advisory error, it does not explicitly verify that the skip logic for string-only `via` arrays was triggered.\n- tests/test_audit_gate_identity.py:230-267 | confidence=3\n  PROBLEM: Missing test coverage for mixed `via` arrays containing both strings and advisory objects.\n  WHY: The implementation handles mixed arrays, but there is no test to verify this behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_audit_gate_identity.py:230-267\n  PROBLEM: Test doesn't explicitly assert metavulnerability skip path was exercised.\n  WHY: The test verifies the gate passes and the missing-advisory error is absent, but it does not directly prove the skip branch ran.\n- tests/test_audit_gate_identity.py:230-267\n  PROBLEM: No test case for mixed `via` arrays.\n  WHY: The code handles mixed arrays in principle, but there is no test coverage for that edge case.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_audit_gate_identity.py:230-267 | confidence=3\n  PROBLEM: The test doesn't explicitly assert that the metavulnerability skip path was exercised.\n  WHY: The test proves the gate passes and no missing-advisory error is emitted, but it does not make the skip behavior explicit.\n- tests/test_audit_gate_identity.py:230-267 | confidence=3\n  PROBLEM: No test case covers mixed `via` arrays containing both strings and advisory objects.\n  WHY: The new branch distinguishes pure string-only metavulnerabilities from mixed arrays, but that edge case is untested.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- tests/test_audit_gate_identity.py:230-267 | confidence=4\n  PROBLEM: The new test does not explicitly assert that the metavulnerability skip path was exercised.\n  WHY: It verifies overall success and absence of the missing-advisory error, but not that `ui-lib` was actually skipped.\n- tests/test_audit_gate_identity.py:230-267 | confidence=4\n  PROBLEM: There is no test case for a mixed `via` array containing both strings and advisory objects.\n  WHY: The new `hasStringOnlyVia` logic treats mixed payloads differently, but that condition is not exercised by a test.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_audit_gate_identity.py:230-267\n  PROBLEM: The test could explicitly assert that `ui-lib` was skipped.\n  WHY: The current assertions validate success and absence of the error, but make the skip behavior less explicit.\n- tests/test_audit_gate_identity.py:230-267\n  PROBLEM: There is no test case for a mixed `via` array containing both strings and advisory objects.\n  WHY: The implementation\u2019s mixed-array branch is not covered by a test.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e353ebeae33a01b5ba86b271222a8834193cde7d31e12a595ff7170811b98527",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1662,
+    "run_id": "24956327010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24956327010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426123707_327d6384b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1662,
+    "run_id": "24956327010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T12:37:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
