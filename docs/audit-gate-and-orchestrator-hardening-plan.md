@@ -273,6 +273,18 @@ The runtime validator in `scripts/validate_process.sh` aborts; the
 workflow-templates copy step does not generate a stub. Fixture-repo wiring
 (#1609) does not address this — fixture repos already commit a manifest.
 
+**Status note (post validation-templates rollout).** The runtime now has a
+partial mitigation: `scripts/validate_process.sh` (around lines 2130–2143)
+will materialize a hints file into `.ai/validate.yml` at validate time when
+one is present, so the abort no longer fires for adopters that ship hints.
+The hard-fail at `scripts/validate_process.sh:2250`
+(`Template mode requires ${PWD}/.ai/validate.yml but it is missing.`) still
+fires for a fresh adopter with **no** hints file, which is the case C1 is
+scoped to. The Fix/Acceptance below remain valid; C1 is a template-apply-time
+change, not a runtime change, and is intentionally not subsumed by the
+hint-materialization path because that path hides misconfiguration when
+hints are absent.
+
 **Fix preference.** The template apply step should drop a documented stub
 `.ai/validate.yml` into adopter repos, with a comment pointing to the harness
 docs. A silent fallback to a default in the validator is rejected because it
