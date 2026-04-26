@@ -48,6 +48,17 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert writable_guard in wf
 	assert wf.index('if [ "$filename" = "$SELF_TEMPLATE" ]; then') < wf.index(directory_guard)
 	assert wf.index(directory_guard) < wf.index(writable_guard)
+	assert '- name: Apply canonical audit-gate assets' in wf
+	assert 'python3 "${UPSTREAM_DIR}/../scripts/apply_audit_gate_assets.py"' in wf
+	assert '--contract-root "${CONTRACT_DIR}"' in wf
+	assert '--changed-files-file "${CHANGED_FILES_FILE}"' in wf
+	assert "steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied'" in wf
+	assert 'git add -- "$changed_path"' in wf
+	assert 'if git diff --cached --quiet; then' in wf
+	assert 'if: steps.update.outputs.has_updates == \'true\' || steps.audit_gate.outputs.status == \'applied\'' in wf
+	assert 'Audit-gate assets applied:' in wf
+	assert 'SCRIPTS_DIR="scripts"' in wf
+	assert 'git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"' in wf
 
 
 def test_failure_summary_contract_is_present() -> None:
@@ -76,6 +87,10 @@ def test_success_path_contracts_are_preserved() -> None:
 	assert "printf '%b' \"$CREATED_FILES\" > /tmp/created_files.txt" in wf
 	assert "printf '%b' \"$SKIPPED_FILES\" > /tmp/skipped_files.txt" in wf
 	assert '**Skipped files:**' in wf
+	assert '**Audit gate files:**' in wf
+	assert '- **Audit gate status:** ${AUDIT_GATE_STATUS:-unknown}' in wf
+	assert '- **Audit gate package script action:** ${AUDIT_GATE_SCRIPT_ACTION:-unknown}' in wf
+	assert '- **Audit gate changed files:** ${AUDIT_GATE_CHANGED_COUNT:-0}' in wf
 	assert "if: steps.update.outputs.has_updates == 'true'" in wf
 	assert "ALLOW_WORKFLOW_EDITS repository variable to '\\''false'\\''." in wf
 
