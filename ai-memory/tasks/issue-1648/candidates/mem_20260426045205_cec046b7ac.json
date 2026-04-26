@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context: `7d5ce5f4e6899081de0941dda0c0e48421062197` on `orchestrator/project-1647`. The resolved checkout ref matches the integration-branch metadata, so planning is against the correct branch.\n\nNo clarification is outstanding. The issue description matches the current code: `ValidationRefreshRunner.process_repository()` still hard-skips on missing `.ai/validate.yml`, `validation_selftest_matrix.py` only discovers manifest-bearing fixtures, and `scripts/validate_process.sh` already stays strict via the existing missing-manifest harness-error contract.\n\nRepresentative in-tree pattern to follow:\n- Manifest shape: `examples/validation-fixtures/python-repo-checks.yml` and this repo\u2019s `.ai/validate.yml`\n- Runtime expectation: `workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2` and `workflow-templates/validation-harness/python-repo-checks/tests/40_repo_checks.sh.j2`\n- Apply/self-test orchestration points: `scripts/validation_refresh_runner.py` and `scripts/validation_selftest_matrix.py`\n\nFiles likely to change:\n- `scripts/validation_refresh_runner.py`\n- `scripts/validation_selftest_matrix.py`\n- One checked-in onboarding stub source file under an existing validation-fixtures/examples/templates path\n- One checked-in placeholder repo-check entry-script template for empty adopters\n- `tests/test_validation_refresh_runner.py`\n- `tests/test_validation_selftest_runner.py`\n- `tests/fixtures/selftest/...` for an explicit manifest-less onboarding fixture\n- `tests/test_validate_process_template_mode.py` only if a regression assertion needs to be tightened; `scripts/validate_process.sh` itself should stay unchanged\n\nImplementation plan:\n1. Add a shared bootstrap helper under `scripts/` that performs apply-time onboarding only when `.ai/validate.yml` is absent.\n   - Read the stub manifest from one committed source-of-truth file instead of synthesizing YAML in code.\n   - Seed `.ai/validate.yml` into the target repo.\n   - Seed any referenced placeholder asset in the same step, most likely `scripts/run_validation_repo_checks.sh`, and ensure it is executable.\n   - Make the helper idempotent: never overwrite an existing manifest, and only create the placeholder entry script when bootstrapping a manifest-less repo.\n\n2. Wire that helper into `ValidationRefreshRunner.process_repository()`.\n   - Replace the current early return on `manifest_missing: .ai/validate.yml` with bootstrap-then-continue behavior.\n   - Keep the existing render \u2192 lint \u2192 self-test pipeline in `_run_refresh_pipeline()` unchanged once the stub exists.\n   - Record bootstrap diagnostics in `RefreshResult.diagnostics` so summaries show onboarding happened instead of a silent skip.\n\n3. Extend the nightly self-test fixture discovery to support one explicit manifest-less onboarding scenario.\n   - Update `FixtureSpec` with an explicit bootstrap marker flag/path.\n   - Update `_discover_fixtures()` so ordinary directories without `.ai/validate.yml` are still ignored, but an opt-in fixture marker is accepted.\n   - Update `_stage_clone()` so manifest-less opt-in fixtures are copied first, then passed through the same bootstrap helper before render/lint/runtime.\n\n4. Add an explicit manifest-less self-test fixture.\n   - Keep it intentionally sparse so it models a fresh adopter.\n   - Include only the explicit opt-in marker, not a pre-existing `.ai/validate.yml`.\n   - Let the bootstrap helper create the manifest and placeholder repo-check script during the self-test run.\n\nData structures / interfaces affected:\n- `RefreshResult.diagnostics` will gain bootstrap-related markers instead of `manifest_missing` for the apply path.\n- `FixtureSpec` will need one new field for explicit manifest-less onboarding discovery.\n- No external CLI or workflow interface change is required if the existing nightly workflow continues to point at `tests/fixtures/selftest`.\n\nRisks / edge cases:\n- Do not copy this repo\u2019s current `scripts/run_validation_repo_checks.sh` into adopters as-is; it runs this repository\u2019s own test suite and is not a generic empty-repo placeholder.\n- The seeded placeholder script must exit successfully in the generated `python-repo-checks` container so a truly empty repo passes the first cycle.\n- Existing repos that already have `.ai/validate.yml` must remain byte-for-byte on the old path; no backfill or overwrite.\n- Direct runtime behavior must remain strict. The onboarding helper belongs only in refresh/apply and explicit self-test bootstrap flow, not in `scripts/validate_process.sh`.\n\nTesting considerations:\n- Add a `tests/test_validation_refresh_runner.py` case where the cloned repo starts without `.ai/validate.yml`; assert the runner bootstraps the stub, seeds the placeholder asset, and proceeds into render/lint/self-test instead of returning `skipped`.\n- Extend `tests/test_validation_selftest_runner.py` so the matrix discovers the explicit manifest-less fixture, bootstraps it, and reports a passing clone/render/lint/runtime flow.\n- Keep `tests/test_validate_process_template_mode.py::test_template_mode_missing_manifest_returns_harness_error` green as the regression proof that direct runtime invocation still fails loudly without prior bootstrap.\n- If the stub source file is promoted from an existing example, add a focused assertion that the bootstrap helper reads that checked-in file rather than constructing YAML inline.\n\nOne codebase constraint to note for the implementer: the manifest source-of-truth already exists in-tree, but a generic empty-adopter repo-check entry-script template does not. That asset will need to be introduced alongside the helper so the bootstrapped manifest never points at a missing path.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5a1ecdd0c4da3db356fc799137f841652285d0e2cf45ef9c6ebe6d5953fb38fc",
+  "lineage": {
+    "issue_number": 1648,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24948446067",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24948446067",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1648"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426045205_cec046b7ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1648,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24948446067"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1648",
+  "timestamps": {
+    "created_at": "2026-04-26T04:52:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
