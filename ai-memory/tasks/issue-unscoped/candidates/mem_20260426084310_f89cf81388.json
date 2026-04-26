@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/apply_audit_gate_assets.py:80-157 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Asset files are copied before package.json is updated, so a crash or write failure can leave partially applied vendored files on disk without the matching audit:ci script.\n  WHY: All flagged reviewers confirmed the copy-then-write ordering in scripts/apply_audit_gate_assets.py; reviewers disagreed on impact, with moonshot calling it minor/recoverable, so the highest confirmed concern is recorded as medium.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-12 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The allowlist path is resolved from process.cwd(), so running the script from an unexpected working directory can miss security/dependency-audit-allowlist.json.\n  WHY: Reviewers agreed the path is cwd-based; some treated that as expected npm behavior while others noted it can fail in monorepo or direct-invocation cases, so this remains a low-severity portability issue.\n- .github/workflows/update_workflows.yml:70-102 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The workflow reads RESULT_FILE without an explicit existence check, so a missing file would surface as a cryptic failure when the inline Python runs.\n  WHY: Two reviewers confirmed the read-before-check pattern, while z-ai disputed it because the Python script writes an error payload on exceptions; the issue is therefore low confidence and low severity.\n- scripts/apply_audit_gate_assets.py:24-36 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: _safe_relative_path only rejects absolute paths and raw \"..\" components, leaving unsafe relative forms insufficiently constrained.\n  WHY: Three reviewers flagged incomplete sanitization in the same function, though they disagreed on the exact exploit path (normalization, symlinks, or hidden-file targets), so this is recorded as a medium-severity path-safety issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/apply_audit_gate_assets.py:80-157 | confidence=4\n  PROBLEM: Non-atomic application of audit-gate assets. Assets are copied first, then package.json is updated.\n  WHY: If the script crashes between these operations, the repository is left in an inconsistent state (assets present but no package.json script).\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-12 | confidence=3\n  PROBLEM: Assumes standard repository layout. In a monorepo or non-standard layout, process.cwd() may not be the repository root containing package.json.\n  WHY: The script might fail to find the allowlist file and exit with error code 1 instead of the intended graceful exit with code 0.\n- .github/workflows/update_workflows.yml:70-100 | confidence=2\n  PROBLEM: No existence check for the result file before reading it.\n  WHY: If the Python script crashes before writing the file, the heredocs fail with FileNotFoundError, causing the workflow step to fail with a cryptic error.\n- scripts/apply_audit_gate_assets.py:32-36 | confidence=3\n  PROBLEM: Incomplete path sanitization. Checks for .. but doesn't normalize paths first.\n  WHY: A path like ./../../some/../path could still traverse outside the intended directory when resolved against repo_root.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/apply_audit_gate_assets.py:132-147 | confidence=4\n  PROBLEM: Assets are copied before package.json is updated.\n  WHY: If the _write_json_atomic call fails (or the script crashes) after assets are copied, the repository ends up with vendored assets but no corresponding audit:ci script in package.json.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8 | confidence=3\n  PROBLEM: The path is resolved relative to process.cwd(), assuming the script is run from the repository root.\n  WHY: In a monorepo structure or non-standard layout, the script would fail to find the allowlist file.\n- .github/workflows/update_workflows.yml:70-102 | confidence=2\n  PROBLEM: The workflow reads the result file immediately after the Python script runs without explicitly verifying that the Python script exited successfully and that the result file was actually created.\n  WHY: If the Python script crashes before writing the file, the reads would fail with a cryptic error.\n- scripts/apply_audit_gate_assets.py:25-30 | confidence=3\n  PROBLEM: The function validates only the input string for absolute paths and \"..\" in parts. It does NOT check for symlinks that could point outside the intended directory or validate that the final resolved path stays within repo_root.\n  WHY: A malicious contract with paths like malicious/../../../etc/passwd after symlink resolution could escape the intended directory.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/apply_audit_gate_assets.py:129-140 | confidence=2\n  PROBLEM: The code copies assets before updating package.json, so if the process is killed between those steps the repository can end up with vendored assets but no matching package.json update.\n  WHY: This is a valid edge case and leaves orphaned assets unstaged, even though the package.json write itself is atomic.\n- scripts/apply_audit_gate_assets.py:24-28 | confidence=2\n  PROBLEM: _safe_relative_path does not prevent paths starting with . from targeting hidden files like .git/config.\n  WHY: The sanitizer blocks .. but still allows hidden-path targets, which is a low-risk gap if the contract is compromised.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/apply_audit_gate_assets.py:133-143 | confidence=4\n  PROBLEM: Asset files are copied to the repo working directory before package.json is atomically written.\n  WHY: If _write_json_atomic raises an exception after all files are copied, the repo is left in an inconsistent state with asset files present but no corresponding audit:ci script entry.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-9 | confidence=2\n  PROBLEM: The script uses process.cwd() to locate the allowlist, which only works when invoked from the package.json directory.\n  WHY: In monorepo setups or when run directly from a subdirectory, the allowlist lookup can fail and the script will exit gracefully but confusingly.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cb6315a01d4903041ece2aebd3e40ee0adad25adbd5d4b75e813e9e8f7c5c4d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1658,
+    "run_id": "24952116870",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24952116870",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426084310_f89cf81388",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1658,
+    "run_id": "24952116870"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T08:43:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
