@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context: `04a434f7a01af5a2ae83a7342f6c1376111a312f` on `orchestrator/project-1647`; integration metadata matches.\n\nConflict notes:\n- The issue reads like a key-change on an existing evaluator, but the canonical vendored script in [check-npm-audit.js](workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js) is still a stub that only loads/parses the allowlist and exits successfully. There is no existing finding-identity implementation in this repo yet, so this issue is really \u201cimplement the first real canonical audit evaluator with the new identity rule.\u201d\n- The current smoke in [test_audit_gate_template_atomicity.py](tests/test_audit_gate_template_atomicity.py) assumes `npm run audit:ci` succeeds in an otherwise-empty temp repo. Once the script starts running real audit evaluation, that test will need deterministic stubbing of `npm audit --json` or it will become flaky / fail for the wrong reason.\n- The issue says \u201cstay inside `files_touched`\u201d, but no explicit `files_touched` list was surfaced in the planning context. The minimal scope in this repo is the vendored audit-gate asset plus its tests.\n\n**Files Likely To Change**\n- [check-npm-audit.js](workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js)\n- [test_audit_gate_template_atomicity.py](tests/test_audit_gate_template_atomicity.py)\n- Likely one new focused Python test file for audit-gate behavior, e.g. under `tests/`, to keep identity/matching coverage separate from template-atomicity coverage.\n- Likely unchanged: [contract.json](workflow-templates/audit-gate/contract.json), [apply_audit_gate_assets.py](scripts/apply_audit_gate_assets.py), [dependency-audit-allowlist.json](workflow-templates/audit-gate/assets/security/dependency-audit-allowlist.json).\n\n**Functions / Modules To Implement**\n- In the vendored Node script, split the current top-level stub into small helpers inside the same file:\n- Allowlist loader / validator.\n- `npm audit --json` runner.\n- Advisory-id extractor with GHSA preferred, CVE fallback.\n- Finding normalizer that derives a stable identity key from `severity + package + advisoryId`.\n- Evaluator that compares normalized audit findings against normalized allowlist entries.\n- Failure formatter that keeps `viaPackages` and similar path metadata readable, but informational only.\n- Preserve the existing non-audit branches for:\n- missing allowlist file,\n- malformed allowlist JSON,\n- allowlist-not-array validation.\n- Keep the public entrypoint as `npm run audit:ci`; do not add `--write` in this issue.\n\n**Data Structures Affected**\n- Internal normalized finding shape should carry at least:\n- `package`\n- `severity`\n- `advisoryId`\n- informational metadata such as `viaPackages`\n- Matching/index key should be a deterministic composite like `severity|package|advisoryId`.\n- Allowlist entries must be treated as distinct when only `advisoryId` differs, even if `package` and `severity` are identical.\n- `viaPackages` must not participate in exact-match identity, but can still be emitted in output or preserved on entries.\n- No DB contracts or MongoDB structures are affected.\n\n**API / Interface Changes**\n- Public command stays `audit:ci`; no new flag in this issue.\n- Behavioral change: the vendored script will stop being a \u201cparse-only stub\u201d and will become a real audit gate driven by `npm audit --json`.\n- Output should remain readable:\n- unmatched findings should include advisory id, package, severity,\n- transitive-path data can be shown as extra context,\n- early parse/setup failures should stay human-readable and not regress.\n\n**Risks / Edge Cases**\n- `npm audit --json` payloads vary across environments; keep extraction logic narrow and driven by captured test payloads, not broad undocumented assumptions.\n- Same advisory may appear through multiple transitive paths; normalize/deduplicate by the new identity so path churn does not create duplicate failures.\n- Same package + same severity + different advisory ids must remain separate findings and separate allowlist matches.\n- GHSA-absent payloads need explicit CVE fallback coverage; do not silently collapse to package/severity only.\n- Because the current template smoke invokes `npm run audit:ci`, tests must stub the inner `npm audit` call rather than relying on a live registry or lockfile state.\n\n**Testing Considerations**\n- Add deterministic offline tests using temp repos and stubbed `npm` behavior in `PATH`; do not hit the network.\n- Required coverage:\n- lockfile-path churn: an allowlist entry created with one `viaPackages` chain still matches after the chain changes.\n- same-package/same-severity multi-advisory: allowing one advisory must not allow the other.\n- GHSA preferred / CVE fallback: same logic works when GHSA is absent but CVE exists.\n- Preserve readability: failure output still includes enough context to diagnose which advisory failed.\n- Update the existing atomicity smoke so it remains deterministic after the script becomes a real evaluator; the cleanest path is a wrapper `npm` stub that delegates `npm run audit:ci` to real npm but returns captured JSON for the inner `npm audit --json`.\n\nRepresentative pattern to follow: keep the change confined to the vendored asset and Python coverage around it, leaving the template-application path in [apply_audit_gate_assets.py](scripts/apply_audit_gate_assets.py) unchanged.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4407ccba5c0109fa719dbba1077a4e7ba1bb168f326b5d1ae86fefc6b3e1cf93",
+  "lineage": {
+    "issue_number": 1660,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24954848027",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24954848027",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1660"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426105925_103b5f0671",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1660,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24954848027"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1660",
+  "timestamps": {
+    "created_at": "2026-04-26T10:59:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
