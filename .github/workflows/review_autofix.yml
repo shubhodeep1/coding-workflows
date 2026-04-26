@@ -609,6 +609,34 @@ jobs:
 
     steps:
 
+      # Reclaim ~25–28 GB on ubuntu-latest before any checkout/Serena/LLM
+      # work runs.  The codex-agent job has historically died mid-step on
+      # asset-heavy consumer repos when the parallel reviewer fan-out, the
+      # Serena indexer, and an in-flight git clone all competed for the
+      # runner's default ~14 GB free disk.  Removing the unused
+      # tool-cache + Android/.NET/Haskell SDKs + Docker images + swap
+      # gives every downstream step a wide margin.
+      #
+      # Knobs deliberately left off:
+      #   * large-packages: apt removal is slow (~3–5 min) and not needed
+      #     once the SDK caches above are gone.
+      # Only enabled on codex-agent — the deterministic-skip-merge job
+      # has no checkout, no LLM, and no working tree, so the ~30 s spent
+      # here would be pure waste there.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: true
+
+      - name: Show disk usage (post free-disk-space)
+        run: df -h /
+
       - name: Checkout repo
         uses: actions/checkout@v5
         with:
@@ -631,7 +659,19 @@ jobs:
           # below — see "Generate diff context" and "Detect merge
           # conflicts".
           fetch-depth: 100
+          # Partial clone: skip historical blobs at clone time and lazy-
+          # fetch them only when a step actually reads file contents.  On
+          # asset-heavy consumer repos (large PNGs/binaries with many
+          # rewrites in history) this can drop the working clone by
+          # several GB without affecting the in-job git walks (autofix /
+          # judge-fix / HEAD~1 / recent-commits-20), which only need
+          # commits + trees.  HEAD's blobs are still materialised by the
+          # checkout itself, so reviewers see the working tree as usual.
+          filter: blob:none
           token: ${{ secrets.GH_PAT }}
+
+      - name: Show disk usage (post checkout)
+        run: df -h /
 
       - name: Configure git auth for memory helper clones
         env:
@@ -868,6 +908,9 @@ jobs:
             fi
           fi
 
+      - name: Show disk usage (post support-source staging)
+        run: df -h /
+
       - name: Validate PR number input
         run: |
           set -euo pipefail
@@ -1018,6 +1061,9 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh" --mode editing --context codex
+
+      - name: Show disk usage (post Serena setup)
+        run: df -h /
 
       - name: Pre-assemble static context (cacheable across runs)
         run: |
@@ -2174,6 +2220,10 @@ jobs:
             exit 1
           fi
           echo "Preflight check PASSED: all required files present."
+
+      - name: Show disk usage (pre LLM call)
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        run: df -h /
 
       - name: Run reviewer models
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
