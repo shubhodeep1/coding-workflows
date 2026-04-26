@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/apply_audit_gate_assets.py:78-85 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The temp-file cleanup checks `exists()` before `unlink(missing_ok=True)`, which is redundant and introduces a TOCTOU window.\n  WHY: Reviewers disagree on whether this is a real race or harmless redundancy, but all four called out the same cleanup pattern and the highest reported confidence is 4.\n- scripts/apply_audit_gate_assets.py:126-150 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The manual directory walk for rollback tracking is overly complex and may be redundant.\n  WHY: minimax/moonshot describe it as unnecessary complexity, while deepseek/z-ai say it is needed or not a valid bug; the highest reported confidence is 4.\n- scripts/apply_audit_gate_assets.py:156-158 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: `created_dir.rmdir()` can fail when a rollback directory is not empty.\n  WHY: z-ai treats this as handled best-effort cleanup rather than a crash, so the impact is limited to a warning and leftover directory.\n- scripts/apply_audit_gate_assets.py:165-168 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `created_dir.rmdir()` can fail when a rollback directory is not empty.\n  WHY: The reviewer frames this as an edge case in rollback cleanup that is caught and logged, not a fatal failure.\n- scripts/apply_audit_gate_assets.py:176-181 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: `created_dir.rmdir()` can fail when a rollback directory is not empty.\n  WHY: Both reviewers describe this as a rollback limitation; the exception is caught and warned about, so it is robustness-related rather than a crash.\n- tests/test_audit_gate_template_atomicity.py:218-239 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The test cleanup gap is only a concern if execution reaches the `finally` cleanup path.\n  WHY: deepseek and minimax still describe the early-failure cleanup concern, while moonshot reports the latest diff already fixed it with `try/finally`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/apply_audit_gate_assets.py:78-85\n  PROBLEM: TOCTOU race in `_write_json_atomic` cleanup because `exists()` is checked before `unlink(missing_ok=True)`.\n  WHY: The cleanup path can be made safer by dropping the extra existence check.\n- scripts/apply_audit_gate_assets.py:176-181\n  PROBLEM: Rollback `rmdir()` can fail if directories are not empty.\n  WHY: File rollback runs first, but any leftover files or external writes can leave the directory non-empty and `rmdir()` will raise.\n- tests/test_audit_gate_template_atomicity.py:218-221\n  PROBLEM: Test cleanup gap if an exception occurs before the `try` block.\n  WHY: Cleanup via `sys.modules.pop(...)` only happens inside `finally`, so a pre-`try` failure would bypass it.\n- scripts/apply_audit_gate_assets.py:138-148\n  PROBLEM: Manual directory walking for rollback tracking is not actually redundant.\n  WHY: The reviewer concludes the tracking is needed to know which directories to remove during rollback.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/apply_audit_gate_assets.py:83-85 | confidence=4\n  PROBLEM: Redundant existence check before unlink.\n  WHY: `unlink(missing_ok=True)` already handles the missing-file case, so the extra `exists()` check adds complexity without behavior.\n- scripts/apply_audit_gate_assets.py:176-181 | confidence=4\n  PROBLEM: Rollback uses `rmdir()` which fails on non-empty directories.\n  WHY: If a created directory is not empty at rollback time, `rmdir()` raises `OSError`, leaving the directory behind.\n- scripts/apply_audit_gate_assets.py:138-148 | confidence=4\n  PROBLEM: Redundant manual directory walk before `mkdir`.\n  WHY: `mkdir(parents=True, exist_ok=True)` already creates parent directories, so the manual walk is extra complexity.\n- tests/test_audit_gate_template_atomicity.py:218-221 | confidence=3\n  PROBLEM: Test cleanup may not run on early failures.\n  WHY: If the `assert spec is not None and spec.loader is not None` fails before the `try`, the `finally` cleanup never executes.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/apply_audit_gate_assets.py:78-84 | confidence=4\n  PROBLEM: TOCTOU race in temp file cleanup.\n  WHY: The explicit `tmp_path.exists()` check before `unlink(missing_ok=True)` creates a race window and is redundant.\n- scripts/apply_audit_gate_assets.py:165-168 | confidence=3\n  PROBLEM: Empty-actor handling in rollback.\n  WHY: `rmdir()` only removes empty directories, so rollback can leave created directories behind when they are not empty.\n- tests/test_audit_gate_template_atomicity.py:218-239\n  PROBLEM: Test cleanup ordering is already fixed.\n  WHY: The reviewer says moving `spec.loader.exec_module(module)` inside the `try` block ensures the `finally` cleanup always runs.\n- scripts/apply_audit_gate_assets.py:142-150 | confidence=2\n  PROBLEM: Manual directory walk complexity.\n  WHY: The reviewer says the logic is more complex than necessary and could be simplified by tracking directories differently.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/apply_audit_gate_assets.py:78-85 | confidence=2\n  PROBLEM: Redundant code before `unlink(missing_ok=True)`, not a bug.\n  WHY: The reviewer says the `exists()` check is unnecessary and the TOCTOU concern is only theoretical in this cleanup path.\n- scripts/apply_audit_gate_assets.py:156-158\n  PROBLEM: `rmdir()` failure on non-empty rollback directories.\n  WHY: The reviewer says this is handled correctly as best-effort cleanup with a warning, not a silent failure.\n- tests/test_audit_gate_template_atomicity.py:218-239\n  PROBLEM: Test cleanup ordering is fixed.\n  WHY: The reviewer says the `try/finally` structure now correctly guarantees `sys.modules.pop(spec.name, None)` runs.\n- scripts/apply_audit_gate_assets.py:126-138 | confidence=2\n  PROBLEM: Manual directory walk complexity.\n  WHY: The reviewer says the manual walk is not a bug and is needed to know which directories to remove during rollback.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8f7f0c4308f8278da1e0adb29d61587abf40c14003d032a7ea37c51cc43ccd6a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1658,
+    "run_id": "24953349857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24953349857",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426095719_896ec280f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1658,
+    "run_id": "24953349857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T09:57:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
