@@ -7743,22 +7743,39 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         # the original optimisation noted on the legacy comment below.
         # Fail-open: a transient timeline lookup (exit 2) or label-edit
         # failure leaves FIX_IS_MERGED=false so the next cycle retries.
-        if has_label "${FIX_LABELS}" "ai:ready-to-merge" \
-           && validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
-          echo "Validation fix-up issue #${fix_num}: ai:ready-to-merge with merged PR evidence; proactively backfilling ai:merged."
-          if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
-            echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled (proactive)."
-            FIX_IS_MERGED="true"
-            STALL_HEALING_CHANGED="true"
+        if has_label "${FIX_LABELS}" "ai:ready-to-merge"; then
+          # Capture exit code via if/else (the script runs under
+          # `set -euo pipefail`, so a bare `cmd; status=$?` on a
+          # non-zero return would abort).  This mirrors the
+          # exit-code-aware pattern used by the closed-issue branch
+          # above (~lines 7707-7730): 0=found, 1=no evidence, 2=
+          # transient timeline/API failure.  Surfacing exit 2 as a
+          # warning makes transient lookup failures diagnosable
+          # instead of silently masquerading as "still awaiting".
+          _proactive_evidence_status=0
+          if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+            echo "Validation fix-up issue #${fix_num}: ai:ready-to-merge with merged PR evidence; proactively backfilling ai:merged."
+            if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
+              echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled (proactive)."
+              FIX_IS_MERGED="true"
+              STALL_HEALING_CHANGED="true"
+            else
+              echo "::warning::Validation fix-up issue #${fix_num}: proactive ai:merged backfill failed; will retry next cycle." >&2
+              echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
+            fi
           else
-            echo "::warning::Validation fix-up issue #${fix_num}: proactive ai:merged backfill failed; will retry next cycle." >&2
+            _proactive_evidence_status=$?
+            if [ "${_proactive_evidence_status}" -eq 2 ]; then
+              echo "::warning::Validation fix-up issue #${fix_num}: unable to check merged PR evidence due to a timeline/API lookup failure; will retry next cycle." >&2
+            fi
             echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
           fi
         else
-          # Issue still open and has no ai:closed label — nothing to backfill
-          # this cycle.  Skipping the timeline walk here removes a per-issue
-          # API round-trip (+ pagination) that the original loop made every
-          # poll cycle for issues that were clearly still in progress.
+          # Issue still open at a non-ai:ready-to-merge phase — nothing to
+          # backfill this cycle.  Skipping the timeline walk here removes a
+          # per-issue API round-trip (+ pagination) that the original loop
+          # made every poll cycle for issues that were clearly still in
+          # progress.
           echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
         fi
       fi
