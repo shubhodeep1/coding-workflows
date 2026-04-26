@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validation_refresh_runner.py:432-491 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The test mocks `git status` as empty even though bootstrap creates files, so it asserts the wrong post-bootstrap behavior.\n  WHY: With the empty mock, `_repository_has_changes()` returns false and the test follows the skipped/unchanged path instead of the commit/push/PR path the real code would take.\n- scripts/validation_refresh_runner.py:15-25 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, qwen_qwen3-coder-plus]\n  PROBLEM: The ModuleNotFoundError fallback calls `Path(__file__)` without guarding for contexts where `__file__` is undefined.\n  WHY: The fallback still assumes `__file__` exists, so a non-standard execution context would raise `NameError` before it can add `scripts_dir` to `sys.path`.\n- scripts/validation_selftest_matrix.py:15-25 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, qwen_qwen3-coder-plus]\n  PROBLEM: The ModuleNotFoundError fallback calls `Path(__file__)` without guarding for contexts where `__file__` is undefined.\n  WHY: The fallback still assumes `__file__` exists, so a non-standard execution context would raise `NameError` before it can add `scripts_dir` to `sys.path`.\n- scripts/validation_template_bootstrap.py:46-51 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Moving `chmod` outside the conditional makes it run for pre-existing entry scripts as well as newly created ones.\n  WHY: That unconditional permission change can be unnecessary or error-prone for non-regular paths, even though the change is intended to ensure executability.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validation_refresh_runner.py:432-491 | severity=low | confidence=5\n  PROBLEM: Test mock incorrectly returns empty `git status` when bootstrap creates new files.\n  WHY: The bootstrap function creates `.ai/validate.yml` and `scripts/run_validation_repo_checks.sh`, which should appear in `git status --porcelain`; with an empty mock the test follows the wrong path.\n- scripts/validation_refresh_runner.py:19-25 | severity=low | confidence=2\n  PROBLEM: `Path(__file__)` is unguarded in the import fallback and can raise `NameError` if `__file__` is missing.\n  WHY: If the module is loaded in a non-standard context where `__file__` is undefined, the fallback crashes before it can add `scripts_dir` to `sys.path`.\n- scripts/validation_selftest_matrix.py:19-25 | severity=low | confidence=2\n  PROBLEM: `Path(__file__)` is unguarded in the import fallback and can raise `NameError` if `__file__` is missing.\n  WHY: Same fallback pattern as `validation_refresh_runner.py`, so the same non-standard execution-context crash applies.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validation_template_bootstrap.py:46-51 | severity=low | confidence=2\n  PROBLEM: The `chmod` call was moved outside the conditional, so it now executes even for pre-existing entry scripts.\n  WHY: If `entry_script_path` exists but is not a regular file, the unconditional `chmod` is unnecessary and may behave unexpectedly.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- scripts/validation_refresh_runner.py:15-25 | severity=low | confidence=5\n  PROBLEM: The fallback handler unconditionally accesses `__file__`, which can raise `NameError` when the module is loaded without that global.\n  WHY: In interactive, embedded, or `exec()`-style contexts, the import fallback crashes before it can update `sys.path`.\n- scripts/validation_selftest_matrix.py:15-25 | severity=low | confidence=4\n  PROBLEM: The fallback handler unconditionally accesses `__file__`, which can raise `NameError` when the module is loaded without that global.\n  WHY: Same crash risk as `validation_refresh_runner.py` because the identical fallback path is used.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f2c3548107fafe554f523893136cd13b7422d93b2eeef0493c2b38a82733b275",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1651,
+    "run_id": "24949665075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24949665075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426062425_67259234d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1651,
+    "run_id": "24949665075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T06:24:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
