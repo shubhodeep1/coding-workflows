@@ -7853,35 +7853,71 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
   # ---------------------------------------------------------------
   # When a project is in terminal failed state (status="failed") but
   # NOT from validation (no ai:validation-failed or ai:validate-failed label),
-  # a /judge_resume
-  # comment posted AFTER the latest state comment resets judge stall
-  # cycles and recovery counters, allowing the poller to resume.
+  # a /judge_resume comment posted AFTER the latest state comment resumes
+  # the project. Counters are preserved by default and can be reset
+  # explicitly via flags: --reset-recovery, --reset-stall, or --force.
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && ! has_label "${TRACKING_LABELS}" "ai:validation-failed" \
     && ! has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
-    JUDGE_RESUME_REQUESTED="$(echo "${COMMENTS}" | jq -r '
+    JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r '
       (to_entries | map(select(.value.body | contains("ORCHESTRATOR_STATE_V1"))) | last | .key // -1) as $last_state_idx |
-      [to_entries[] | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))] | length > 0
+      [to_entries[]
+        | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))
+      ]
+      | last
+      | .value.body // ""
     ')"
 
-    if [ "${JUDGE_RESUME_REQUESTED}" = "true" ]; then
-      echo "  /judge_resume requested for project #${TRACKING_NUM}. Resetting judge and recovery counters."
+    if [ -n "${JUDGE_RESUME_BODY}" ]; then
       PREV_JUDGE_STALL="$(jq -r '.judge_stall_cycles // .judge_cycle' "${STATE_FILE}")"
-      PREV_RECOVERY="$(jq -r '.recovery_count // 0' "${STATE_FILE}")"
+      PREV_RECOVERY="$(jq -r '.recovery_count // (if .recovery_attempted == true then 1 else 0 end)' "${STATE_FILE}")"
+
+      RESET_STALL="false"
+      RESET_RECOVERY="false"
+      if echo "${JUDGE_RESUME_BODY}" | grep -Eq '(^|[[:space:]])--force([[:space:]]|$)'; then
+        RESET_STALL="true"
+        RESET_RECOVERY="true"
+      else
+        if echo "${JUDGE_RESUME_BODY}" | grep -Eq '(^|[[:space:]])--reset-stall([[:space:]]|$)'; then
+          RESET_STALL="true"
+        fi
+        if echo "${JUDGE_RESUME_BODY}" | grep -Eq '(^|[[:space:]])--reset-recovery([[:space:]]|$)'; then
+          RESET_RECOVERY="true"
+        fi
+      fi
+
+      NEW_JUDGE_STALL="${PREV_JUDGE_STALL}"
+      STALL_ACTION="preserved (${PREV_JUDGE_STALL})"
+      if [ "${RESET_STALL}" = "true" ]; then
+        NEW_JUDGE_STALL="0"
+        STALL_ACTION="reset (${PREV_JUDGE_STALL} -> 0)"
+      fi
+
+      NEW_RECOVERY="${PREV_RECOVERY}"
+      RECOVERY_ACTION="preserved (${PREV_RECOVERY})"
+      if [ "${RESET_RECOVERY}" = "true" ]; then
+        NEW_RECOVERY="0"
+        RECOVERY_ACTION="reset (${PREV_RECOVERY} -> 0)"
+      fi
+
+      RESUME_SUMMARY="judge_stall_cycles: ${STALL_ACTION}; recovery_count: ${RECOVERY_ACTION}"
+      echo "  /judge_resume requested for project #${TRACKING_NUM}. ${RESUME_SUMMARY}. Status failed -> in_progress."
+
       jq \
+        --argjson new_judge_stall "${NEW_JUDGE_STALL}" \
+        --argjson new_recovery "${NEW_RECOVERY}" \
         '.status = "in_progress" |
-         .judge_stall_cycles = 0 |
-         .recovery_count = 0' \
+         .judge_stall_cycles = $new_judge_stall |
+         .recovery_count = $new_recovery' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       post_tracking_comment "## ▶️ Project resumed via /judge_resume
 
-Judge stall cycles reset: ${PREV_JUDGE_STALL} → 0
-Recovery count reset: ${PREV_RECOVERY} → 0
-Status: failed → in_progress
+Counter handling: ${RESUME_SUMMARY}
+Status: failed -> in_progress
 
 The poller will resume processing on the next cycle."
-      tg_notify "/judge_resume: project #${TRACKING_NUM} resumed from failed state. Judge stall cycles ${PREV_JUDGE_STALL}→0, recovery ${PREV_RECOVERY}→0." "WARNING"
+      tg_notify "/judge_resume: project #${TRACKING_NUM} resumed from failed state. ${RESUME_SUMMARY}." "WARNING"
       # Fall through to normal processing below instead of continuing
       PROJECT_STATUS="in_progress"
     fi

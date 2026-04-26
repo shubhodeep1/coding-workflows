@@ -4321,6 +4321,125 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 	assert result["validation_dispatches"] == []
 
 
+# ---------------------------------------------------------------------------
+# Tests: /judge_resume reset controls for non-validation failed projects
+# ---------------------------------------------------------------------------
+
+
+def test_judge_resume_plain_preserves_counters():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 7
+	state["recovery_count"] = 3
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=["/judge_resume"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 7
+	assert ls["recovery_count"] == 3
+	assert "judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in result["stdout"]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any(
+		"Counter handling: judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in body
+		for body in tracking_comments
+	)
+
+
+def test_judge_resume_reset_recovery_only():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 8
+	state["recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=["/judge_resume --reset-recovery"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 8
+	assert ls["recovery_count"] == 0
+	assert "judge_stall_cycles: preserved (8); recovery_count: reset (2 -> 0)" in result["stdout"]
+
+
+def test_judge_resume_reset_stall_only():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 4
+	state["recovery_count"] = 5
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=["/judge_resume --reset-stall"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 0
+	assert ls["recovery_count"] == 5
+	assert "judge_stall_cycles: reset (4 -> 0); recovery_count: preserved (5)" in result["stdout"]
+
+
+def test_judge_resume_force_resets_both_counters():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 9
+	state["recovery_count"] = 6
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=["/judge_resume --force"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 0
+	assert ls["recovery_count"] == 0
+	assert "judge_stall_cycles: reset (9 -> 0); recovery_count: reset (6 -> 0)" in result["stdout"]
+
+
+def test_judge_resume_unknown_flags_preserve_counters():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 5
+	state["recovery_count"] = 4
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=["/judge_resume --unknown-flag extra words"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 5
+	assert ls["recovery_count"] == 4
+	assert "judge_stall_cycles: preserved (5); recovery_count: preserved (4)" in result["stdout"]
+
+
+def test_judge_resume_ignored_for_validation_failed_project():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 10
+	state["recovery_count"] = 3
+	state["validation_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["/judge_resume --force"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed"
+	assert ls["judge_stall_cycles"] == 10
+	assert ls["recovery_count"] == 3
+	assert ls["validation_recovery_count"] == 2
+
+
 def test_missing_labels_closed_issue_healed_to_terminal_without_retrigger():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status_since_ts"] = 1
