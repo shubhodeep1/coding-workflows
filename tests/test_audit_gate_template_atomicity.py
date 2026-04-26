@@ -57,6 +57,36 @@ def _read_changed_files(path: Path) -> list[str]:
 	return [line for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def _build_npm_wrapper_env(*, repo_root: Path, audit_payload: dict) -> dict[str, str]:
+	real_npm = shutil.which("npm")
+	assert real_npm is not None, "npm is required for audit gate probe"
+
+	payload_path = repo_root / ".tmp" / "npm_audit_payload.json"
+	_write_json(payload_path, audit_payload)
+
+	wrapper_dir = repo_root / ".tmp" / "bin"
+	wrapper_dir.mkdir(parents=True, exist_ok=True)
+	wrapper_path = wrapper_dir / "npm"
+	wrapper_path.write_text(
+		"#!/usr/bin/env bash\n"
+		"set -euo pipefail\n"
+		"if [ \"${1:-}\" = \"audit\" ] && [ \"${2:-}\" = \"--json\" ]; then\n"
+		"\tcat \"${AUDIT_GATE_FAKE_AUDIT_JSON}\"\n"
+		"\texit \"${AUDIT_GATE_FAKE_AUDIT_EXIT_CODE:-0}\"\n"
+		"fi\n"
+		"exec \"${AUDIT_GATE_REAL_NPM}\" \"$@\"\n",
+		encoding="utf-8",
+	)
+	wrapper_path.chmod(0o755)
+
+	env = os.environ.copy()
+	env["PATH"] = f"{wrapper_dir}:{env.get('PATH', '')}"
+	env["AUDIT_GATE_REAL_NPM"] = real_npm
+	env["AUDIT_GATE_FAKE_AUDIT_JSON"] = str(payload_path)
+	env["AUDIT_GATE_FAKE_AUDIT_EXIT_CODE"] = "0"
+	return env
+
+
 def test_fresh_apply_vendors_script_and_package_script_atomically() -> None:
 	with tempfile.TemporaryDirectory(prefix="audit-gate-atomic-") as td:
 		repo_root = Path(td)
@@ -98,9 +128,16 @@ def test_fresh_apply_vendors_script_and_package_script_atomically() -> None:
 			text=True,
 			capture_output=True,
 			check=False,
+			env=_build_npm_wrapper_env(
+				repo_root=repo_root,
+				audit_payload={
+					"auditReportVersion": 2,
+					"vulnerabilities": {},
+				},
+			),
 		)
 		assert npm_probe.returncode == 0, f"stdout:\n{npm_probe.stdout}\n\nstderr:\n{npm_probe.stderr}"
-		assert "Gate script is vendored and runnable." in npm_probe.stdout
+		assert "No vulnerabilities reported by npm audit." in npm_probe.stdout
 
 
 def test_missing_template_asset_does_not_mutate_package_json() -> None:
