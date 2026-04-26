@@ -76,11 +76,11 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
 			suffix=".tmp",
 			delete=False,
 		) as handle:
-			handle.write(rendered)
 			tmp_path = Path(handle.name)
+			handle.write(rendered)
 		tmp_path.replace(path)
 	except Exception:
-		if tmp_path is not None and tmp_path.exists():
+		if tmp_path is not None:
 			try:
 				tmp_path.unlink(missing_ok=True)
 			except Exception:
@@ -156,9 +156,9 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 			target_before = target_path.read_bytes() if target_path.exists() else None
 			source_bytes = source_path.read_bytes()
 			if target_before != source_bytes:
+				asset_rollbacks.append((target_path, target_before))
 				shutil.copy2(source_path, target_path)
 				asset_changed_files.append(target_rel.as_posix())
-				asset_rollbacks.append((target_path, target_before))
 
 		if existing_script_value is None:
 			scripts[script_name] = script_value
