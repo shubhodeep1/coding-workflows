@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -65,17 +66,26 @@ def _load_contract(contract_root: Path) -> dict:
 def _write_json_atomic(path: Path, payload: dict) -> None:
 	rendered = json.dumps(payload, indent=2) + "\n"
 	path.parent.mkdir(parents=True, exist_ok=True)
-	with NamedTemporaryFile(
-		mode="w",
-		encoding="utf-8",
-		dir=str(path.parent),
-		prefix=f".{path.name}.",
-		suffix=".tmp",
-		delete=False,
-	) as handle:
-		handle.write(rendered)
-		tmp_name = handle.name
-	Path(tmp_name).replace(path)
+	tmp_path: Path | None = None
+	try:
+		with NamedTemporaryFile(
+			mode="w",
+			encoding="utf-8",
+			dir=str(path.parent),
+			prefix=f".{path.name}.",
+			suffix=".tmp",
+			delete=False,
+		) as handle:
+			handle.write(rendered)
+			tmp_path = Path(handle.name)
+		tmp_path.replace(path)
+	except Exception:
+		if tmp_path is not None and tmp_path.exists():
+			try:
+				tmp_path.unlink(missing_ok=True)
+			except Exception:
+				pass
+		raise
 
 
 def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResult:
@@ -128,12 +138,21 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 
 	asset_changed_files: list[str] = []
 	asset_rollbacks: list[tuple[Path, bytes | None]] = []
+	created_dirs: set[Path] = set()
 	package_script_action = "unchanged"
 
 	try:
 		for source_path, target_rel in resolved_assets:
 			target_path = repo_root / target_rel
-			target_path.parent.mkdir(parents=True, exist_ok=True)
+			target_dir = target_path.parent
+			missing_dirs: list[Path] = []
+			probe_dir = target_dir
+			while probe_dir != repo_root and not probe_dir.exists():
+				missing_dirs.append(probe_dir)
+				probe_dir = probe_dir.parent
+			for missing_dir in reversed(missing_dirs):
+				created_dirs.add(missing_dir)
+			target_dir.mkdir(parents=True, exist_ok=True)
 			target_before = target_path.read_bytes() if target_path.exists() else None
 			source_bytes = source_path.read_bytes()
 			if target_before != source_bytes:
@@ -146,14 +165,25 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 			_write_json_atomic(package_json_path, package_payload)
 			package_script_action = "added"
 	except Exception:
+		rollback_failures: list[str] = []
 		for target_path, target_before in reversed(asset_rollbacks):
 			try:
 				if target_before is None:
 					target_path.unlink(missing_ok=True)
 				else:
 					target_path.write_bytes(target_before)
-			except Exception:
-				continue
+			except Exception as rollback_exc:
+				rollback_failures.append(f"{target_path.as_posix()}: {rollback_exc}")
+		for created_dir in sorted(created_dirs, key=lambda path: len(path.parts), reverse=True):
+			try:
+				created_dir.rmdir()
+			except Exception as rollback_exc:
+				rollback_failures.append(f"{created_dir.as_posix()}: {rollback_exc}")
+		if rollback_failures:
+			print(
+				"warning: audit-gate rollback encountered errors: " + "; ".join(rollback_failures),
+				file=sys.stderr,
+			)
 		raise
 
 	changed_files = list(asset_changed_files)

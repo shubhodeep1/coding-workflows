@@ -218,22 +218,25 @@ def test_package_write_failure_rolls_back_copied_assets() -> None:
 		assert spec is not None and spec.loader is not None
 		module = importlib.util.module_from_spec(spec)
 		sys.modules[spec.name] = module
-		spec.loader.exec_module(module)
-
-		original_write_json_atomic = module._write_json_atomic
 		try:
-			def _fail_write_json_atomic(path: Path, payload: dict) -> None:
-				raise RuntimeError("simulated package write failure")
+			spec.loader.exec_module(module)
 
-			module._write_json_atomic = _fail_write_json_atomic
+			original_write_json_atomic = module._write_json_atomic
 			try:
-				module._apply_assets(contract_root=CANONICAL_CONTRACT_ROOT, repo_root=repo_root)
-			except RuntimeError as exc:
-				assert str(exc) == "simulated package write failure"
-			else:
-				raise AssertionError("expected simulated package write failure")
+				def _fail_write_json_atomic(path: Path, payload: dict) -> None:
+					raise RuntimeError("simulated package write failure")
+
+				module._write_json_atomic = _fail_write_json_atomic
+				try:
+					module._apply_assets(contract_root=CANONICAL_CONTRACT_ROOT, repo_root=repo_root)
+				except RuntimeError as exc:
+					assert str(exc) == "simulated package write failure"
+				else:
+					raise AssertionError("expected simulated package write failure")
+			finally:
+				module._write_json_atomic = original_write_json_atomic
 		finally:
-			module._write_json_atomic = original_write_json_atomic
+			sys.modules.pop(spec.name, None)
 
 		assert (repo_root / "package.json").read_text(encoding="utf-8") == before_package
 		assert asset_file.read_bytes() == before_asset
