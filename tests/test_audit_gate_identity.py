@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -70,19 +71,34 @@ def _make_repo(*, allowlist: list[dict[str, object]], audit_payload: dict[str, o
 	return repo_root, env
 
 
-def _run_gate(*, repo_root: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_gate(
+	*,
+	repo_root: Path,
+	env: dict[str, str],
+	args: list[str] | None = None,
+	cleanup: bool = True,
+) -> subprocess.CompletedProcess[str]:
+	command = ["npm", "run", "audit:ci"]
+	if args:
+		command.extend(["--", *args])
+
 	result = subprocess.run(
-		["npm", "run", "audit:ci"],
+		command,
 		cwd=str(repo_root),
 		text=True,
 		capture_output=True,
 		check=False,
 		env=env,
 	)
+	if cleanup:
+		_cleanup_repo(env=env)
+	return result
+
+
+def _cleanup_repo(*, env: dict[str, str]) -> None:
 	_temp_dir = env.get("_AUDIT_TEST_TEMP_DIR")
 	if _temp_dir:
 		shutil.rmtree(_temp_dir, ignore_errors=True)
-	return result
 
 
 def test_via_packages_churn_is_informational_only() -> None:
@@ -295,3 +311,173 @@ def test_failure_output_includes_via_packages_context() -> None:
 	assert result.returncode == 1
 	assert "advisoryId=GHSA-HXCC-F52P-WC94" in result.stderr
 	assert "viaPackages=webpack > terser-webpack-plugin" in result.stderr
+
+
+def test_write_regenerates_allowlist_and_followup_validate_passes() -> None:
+	allowlist: list[dict[str, object]] = []
+	audit_payload = {
+		"auditReportVersion": 2,
+		"vulnerabilities": {
+			"axios": {
+				"name": "axios",
+				"severity": "high",
+				"via": [
+					{
+						"source": 1097679,
+						"name": "axios",
+						"title": "SSRF issue in axios (GHSA-aaaa-bbbb-cccc)",
+					},
+				],
+				"nodes": ["node_modules/foo/node_modules/axios"],
+			},
+		},
+	}
+
+	repo_root, env = _make_repo(allowlist=allowlist, audit_payload=audit_payload)
+	write_result = _run_gate(repo_root=repo_root, env=env, args=["--write"], cleanup=False)
+
+	assert write_result.returncode == 0, f"stdout:\n{write_result.stdout}\n\nstderr:\n{write_result.stderr}"
+	allowlist_path = repo_root / "security" / "dependency-audit-allowlist.json"
+	regenerated_allowlist = json.loads(allowlist_path.read_text(encoding="utf-8"))
+	assert regenerated_allowlist == [
+		{
+			"package": "axios",
+			"severity": "high",
+			"advisoryId": "GHSA-AAAA-BBBB-CCCC",
+			"viaPackages": ["foo"],
+		}
+	]
+
+	validate_result = _run_gate(repo_root=repo_root, env=env, cleanup=False)
+	assert validate_result.returncode == 0, f"stdout:\n{validate_result.stdout}\n\nstderr:\n{validate_result.stderr}"
+	assert "matched allowlist entries" in validate_result.stdout
+
+	_cleanup_repo(env=env)
+
+
+def test_write_preserves_curated_fields_for_current_identity_match() -> None:
+	allowlist = [
+		{
+			"package": "axios",
+			"severity": "high",
+			"advisoryId": "GHSA-aaaa-bbbb-cccc",
+			"viaPackages": ["legacy-hop"],
+			"reason": "known vendor dependency",
+			"owner": "security-team",
+			"expiresOn": "2026-12-31",
+		}
+	]
+	audit_payload = {
+		"auditReportVersion": 2,
+		"vulnerabilities": {
+			"axios": {
+				"name": "axios",
+				"severity": "high",
+				"via": [
+					{
+						"source": 1097679,
+						"name": "axios",
+						"title": "SSRF issue in axios (GHSA-aaaa-bbbb-cccc)",
+					},
+				],
+				"nodes": ["node_modules/new-parent/node_modules/axios"],
+			},
+		},
+	}
+
+	repo_root, env = _make_repo(allowlist=allowlist, audit_payload=audit_payload)
+	result = _run_gate(repo_root=repo_root, env=env, args=["--write"], cleanup=False)
+
+	assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+	allowlist_path = repo_root / "security" / "dependency-audit-allowlist.json"
+	rewritten_entry = json.loads(allowlist_path.read_text(encoding="utf-8"))[0]
+	assert rewritten_entry["reason"] == "known vendor dependency"
+	assert rewritten_entry["owner"] == "security-team"
+	assert rewritten_entry["expiresOn"] == "2026-12-31"
+	assert rewritten_entry["viaPackages"] == ["new-parent"]
+
+	_cleanup_repo(env=env)
+
+
+def test_write_uses_legacy_via_packages_key_for_metadata_migration() -> None:
+	allowlist = [
+		{
+			"package": "axios",
+			"severity": "high",
+			"viaPackages": ["legacy-parent"],
+			"reason": "legacy allowlist metadata",
+			"owner": "ops",
+			"expiresOn": "2026-11-01",
+		}
+	]
+	audit_payload = {
+		"auditReportVersion": 2,
+		"vulnerabilities": {
+			"axios": {
+				"name": "axios",
+				"severity": "high",
+				"via": [
+					{
+						"source": 1097679,
+						"name": "axios",
+						"title": "SSRF issue in axios (GHSA-aaaa-bbbb-cccc)",
+					},
+				],
+				"nodes": ["node_modules/legacy-parent/node_modules/axios"],
+			},
+		},
+	}
+
+	repo_root, env = _make_repo(allowlist=allowlist, audit_payload=audit_payload)
+	result = _run_gate(repo_root=repo_root, env=env, args=["--write"], cleanup=False)
+
+	assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+	allowlist_path = repo_root / "security" / "dependency-audit-allowlist.json"
+	rewritten_entry = json.loads(allowlist_path.read_text(encoding="utf-8"))[0]
+	assert rewritten_entry["advisoryId"] == "GHSA-AAAA-BBBB-CCCC"
+	assert rewritten_entry["reason"] == "legacy allowlist metadata"
+	assert rewritten_entry["owner"] == "ops"
+	assert rewritten_entry["expiresOn"] == "2026-11-01"
+
+	_cleanup_repo(env=env)
+
+
+def test_write_is_idempotent_with_unchanged_audit_payload() -> None:
+	allowlist: list[dict[str, object]] = []
+	audit_payload = {
+		"auditReportVersion": 2,
+		"vulnerabilities": {
+			"axios": {
+				"name": "axios",
+				"severity": "high",
+				"via": [
+					{
+						"source": 1097679,
+						"name": "axios",
+						"title": "SSRF issue in axios (GHSA-aaaa-bbbb-cccc)",
+					},
+				],
+				"nodes": ["node_modules/foo/node_modules/axios"],
+			},
+		},
+	}
+
+	repo_root, env = _make_repo(allowlist=allowlist, audit_payload=audit_payload)
+	first_run = _run_gate(repo_root=repo_root, env=env, args=["--write"], cleanup=False)
+	assert first_run.returncode == 0, f"stdout:\n{first_run.stdout}\n\nstderr:\n{first_run.stderr}"
+
+	allowlist_path = repo_root / "security" / "dependency-audit-allowlist.json"
+	before_contents = allowlist_path.read_text(encoding="utf-8")
+	before_stat = allowlist_path.stat()
+	time.sleep(1.1)
+
+	second_run = _run_gate(repo_root=repo_root, env=env, args=["--write"], cleanup=False)
+	assert second_run.returncode == 0, f"stdout:\n{second_run.stdout}\n\nstderr:\n{second_run.stderr}"
+	assert "--write found no allowlist changes" in second_run.stdout
+
+	after_contents = allowlist_path.read_text(encoding="utf-8")
+	after_stat = allowlist_path.stat()
+	assert after_contents == before_contents
+	assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
+
+	_cleanup_repo(env=env)
