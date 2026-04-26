@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context: `af3c6317019cfb91943da2c2d48c5a42b91b821e` on `orchestrator/project-1647`; checkout matches the tracking issue\u2019s integration branch metadata, so planning is not blocked.\n\nRepresentative pattern to follow: mirror the existing additive breaker flow already used for `MAX_FINAL_MERGE_ATTEMPTS` and `INTEGRATION_CONFLICT_LIFETIME_MAX` in `scripts/orchestrate_poll_process.sh` plus the env wiring contract in `.github/workflows/orchestrate_poll.yml` and `tests/test_orchestrate_poll_workflow_contract.py`.\n\n**Files Likely To Change**\n- `scripts/orchestrate_poll_process.sh`\n- `.github/workflows/orchestrate_poll.yml`\n- `tests/test_orchestrate_poll_process.py`\n- `tests/test_orchestrate_poll_workflow_contract.py`\n\n**Implementation Plan**\n1. Add a new poller env knob `JUDGE_REPEAT_FINGERPRINT_MAX` in `scripts/orchestrate_poll_process.sh`, defaulting to `2`, with the same positive-integer validation/fail-open pattern used by nearby retry-budget vars.\n2. Thread that env var through `.github/workflows/orchestrate_poll.yml` so consumer repos can override it, and extend the workflow contract test to assert the default mapping exists.\n3. Extend `ensure_integration_conflict_state_fields()` to seed:\n- `judge_last_fingerprint: \"\"`\n- `judge_fingerprint_repeat_count: 0`\nThis keeps old state blobs compatible without adding a new state migration path.\n4. Add a small local helper in `scripts/orchestrate_poll_process.sh` to normalize judge justifications before hashing.\n- Strip only cosmetic churn: cycle counters, timestamps, and `file:line[:col]` offsets.\n- Preserve meaning-bearing content such as command names, filenames, error classes, and descriptive text.\n- Collapse whitespace after replacements so multi-line formatting drift does not change the fingerprint.\n5. Add a second helper to hash the normalized justification locally (`sha256sum` is already used elsewhere in the poller, so this can stay read-local and API-free).\n6. In the main judge loop, right after `JUDGE_JUSTIFICATION` is parsed, compute the normalized fingerprint and update the two state fields:\n- same fingerprint: increment consecutive repeat count\n- new fingerprint: store new fingerprint and reset count to `1`\n7. Enforce the breaker only on the judge path that would otherwise create more recovery work, i.e. the `failed)` branch before reverts/fix-up issue creation and before incrementing `recovery_count`.\n- If repeat count is within limit, keep existing recovery behavior unchanged.\n- If repeat count exceeds `JUDGE_REPEAT_FINGERPRINT_MAX`, short-circuit recovery: no fix-up issue creation, no additional judge-driven recovery cycle, no duplicate recovery increment.\n8. Terminalize repeated failures through the existing human-intervention pattern rather than inventing a new state model.\n- Reuse the same style as other terminal breakers: persist terminal state, post a clear tracking comment, and notify operators.\n- The cleanest precedent in current code is the `ai:blocked` path used by final-merge terminalization; mirror that rather than silently failing.\n9. Keep the change additive to current budgets.\n- `MAX_RECOVERY_ATTEMPTS` and other caps still work independently.\n- The first breaker to fire wins.\n- No new read-side GitHub API calls should be introduced; reuse `JUDGE_JSON`, `JUDGE_JUSTIFICATION`, existing state, and existing comment/notification flows.\n\n**Data Structures / Interfaces Affected**\n- State comment payload:\n  - `judge_last_fingerprint: string`\n  - `judge_fingerprint_repeat_count: integer`\n- Workflow env surface:\n  - `JUDGE_REPEAT_FINGERPRINT_MAX` with default `2`\n- No DB contracts, collection schemas, or external API interfaces are involved.\n\n**Potential Risks / Edge Cases**\n- Over-normalization could collapse materially different failures into the same fingerprint.\n- Under-normalization could miss repeats caused only by cycle/timestamp/line-number churn.\n- Synthetic non-recovery justifications such as clean-wave skips should not accidentally trigger escalation; keep enforcement scoped to the recovery-producing judge path.\n- Legacy state files without the new fields must continue to run without jq errors.\n- `file:line` stripping must preserve the file path itself so meaning is not lost.\n- The breaker must stop duplicate fix-up creation without adding new per-cycle GitHub reads.\n\n**Testing Considerations**\n- Extend `tests/test_orchestrate_poll_process.py` with a synthetic multi-cycle poller test that feeds the same failed judge justification across `N+1` runs and asserts the final run escalates instead of creating another fix-up issue.\n- Add a deterministic normalization corpus in the same test module for direct helper-level coverage:\n  - same meaning, cosmetic drift only: same fingerprint\n  - materially different justification: different fingerprint / counter reset\n- Add backward-compat coverage that starts from a legacy state without the two new fields and verifies the poller seeds them fail-open.\n- Add an independence test showing existing recovery budgets still behave normally when fingerprints change between cycles.\n- Extend `tests/test_orchestrate_poll_workflow_contract.py` to assert the new env var default is exported by `orchestrate_poll.yml`.\n\nNo factual codebase conflict was found. The only implementation nuance is that the current judge-recovery exhaustion path ends in `status=failed` without using `ai:blocked`, while the clearer human-intervention precedent elsewhere in the poller does use `ai:blocked`; the repeat-breaker should follow that explicit blocked/escalation pattern for operator visibility.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "54f0f1392e2ccbf2667786fec41df4a484e6ce93dc36cd1fb2e442ad0799855d",
+  "lineage": {
+    "issue_number": 1657,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24951409644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24951409644",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1657"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426075422_f89e962b77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1657,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24951409644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1657",
+  "timestamps": {
+    "created_at": "2026-04-26T07:54:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
