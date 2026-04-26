@@ -2236,11 +2236,11 @@ ensure_integration_conflict_state_fields() {
 
 normalize_judge_justification_for_fingerprint() {
   local raw_text="${1-}"
-  _JUDGE_JUSTIFICATION_RAW="${raw_text}" python3 - <<'PY'
-import os
+  printf '%s' "${raw_text}" | python3 /dev/fd/3 3<<'PY'
 import re
+import sys
 
-text = os.environ.get('_JUDGE_JUSTIFICATION_RAW', '')
+text = sys.stdin.read()
 if not text:
     print("")
     raise SystemExit(0)
