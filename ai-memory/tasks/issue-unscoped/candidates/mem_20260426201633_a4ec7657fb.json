@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:2238 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Passing the judge justification through an environment variable can hit ARG_MAX on unusually large inputs.\n  WHY: If the normalization subprocess fails because the input is too large, it can leave an empty or incorrect fingerprint and weaken the repeat-fingerprint breaker.\n- scripts/apply_audit_gate_assets.py:155-156 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Missing explicit `is_file()` check before `read_bytes()` can raise `IsADirectoryError` if the target path is a directory.\n  WHY: A directory at the target path would make the asset application fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:2238 | severity=low | confidence=3\n  PROBLEM: Passing the judge justification through an environment variable can hit ARG_MAX on unusually large inputs.\n  WHY: If the normalization subprocess fails because the input is too large, it can leave an empty or incorrect fingerprint and weaken the repeat-fingerprint breaker.\n- scripts/apply_audit_gate_assets.py:155-156 | severity=low | confidence=2\n  PROBLEM: Missing explicit `is_file()` check before `read_bytes()` can raise `IsADirectoryError` if the target path is a directory.\n  WHY: A directory at the target path would make the asset application fail.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cf085e17d87228f14cad493190e2c69aa3cf41b15ff1b6cf2eff5bb38f07bc14",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1679,
+    "run_id": "24965339146",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24965339146",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426201633_a4ec7657fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1679,
+    "run_id": "24965339146"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-26T20:16:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
