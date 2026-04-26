@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_cross_cycle_escalation.py:187-218 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The audit-gate test uses case-insensitive whole-prompt substring checks instead of scoping assertions to the audit-gate section, so unrelated text can satisfy it.\n  WHY: Deepseek called out `.lower()` matching and missing section scoping; minimax confirmed the same test-design gap.\n- tests/test_validate_process_cross_cycle_escalation.py:187-218 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The marker tuple omits \"fallback cve\", so the test does not enforce the fallback-CVE wording.\n  WHY: Deepseek, minimax, and moonshot all flagged that coverage gap, and the prompts currently include the fallback wording.\n- prompts/mode-judge.txt:54-55 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The judge prompt says \"prefer GHSA, fallback CVE\" while prompts/mode-validate-diagnose.txt:197 says \"prefer GHSA IDs, fallback CVE IDs\".\n  WHY: The reviewers agreed this is a cross-prompt wording inconsistency; z-ai treated it as stylistic, while deepseek and minimax noted the mismatch.\n- tests/test_validate_process_cross_cycle_escalation.py:186-187 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: Excess blank lines separate the two top-level test functions.\n  WHY: z-ai reported 4 blank lines there, which is a PEP 8 style violation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_cross_cycle_escalation.py:187-218 | confidence=4\n  PROBLEM: The test validation is too broad: it uses case-insensitive substring matching on the whole prompt, does not scope to the audit-gate section, and omits \"fallback cve\". (3 related items)\n  WHY: Those gaps can let unrelated text satisfy the assertion and miss removal of the fallback-CVE guidance.\n- prompts/mode-judge.txt:54 | confidence=3\n  PROBLEM: The judge prompt says \"prefer GHSA, fallback CVE\" while the diagnose prompt says \"prefer GHSA IDs, fallback CVE IDs\".\n  WHY: The prompt wording is inconsistent across phases and may produce different LLM behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validate_process_cross_cycle_escalation.py:203-218 | confidence=3\n  PROBLEM: The test `test_audit_gate_prompt_contract_requires_concrete_supported_remediation` checks if markers appear anywhere in the prompts using `marker in diagnose`, rather than verifying they appear specifically within the audit-gate carve-out sections.\n  WHY: If markers appeared in unrelated text (examples, comments elsewhere), the test would pass incorrectly.\n- prompts/mode-judge.txt:54 vs prompts/mode-validate-diagnose.txt:197 | confidence=2\n  PROBLEM: The judge prompt says \"prefer GHSA, fallback CVE\" while the diagnose prompt says \"prefer GHSA IDs, fallback CVE IDs\".\n  WHY: This is a minor wording inconsistency that could confuse LLM implementers, but both prompts convey the same semantic meaning.\n- tests/test_validate_process_cross_cycle_escalation.py:208-213 | confidence=3\n  PROBLEM: The marker tuple does not include \"fallback cve\".\n  WHY: If fallback-CVE guidance were removed in a future edit, the test would not catch it.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validate_process_cross_cycle_escalation.py:210-213 | confidence=2\n  PROBLEM: The marker tuple includes \"prefer ghsa\" but not \"fallback cve\".\n  WHY: If a future edit removed the fallback CVE guidance, the test would not catch it.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_validate_process_cross_cycle_escalation.py:186-187 | confidence=3\n  PROBLEM: Excess blank lines separate the two top-level test functions.\n  WHY: The file has 4 blank lines between the functions, which is a PEP 8 style violation.\n- prompts/mode-judge.txt:55 vs prompts/mode-validate-diagnose.txt:197 | confidence=2\n  PROBLEM: The judge prompt uses \"prefer GHSA, fallback CVE\" while the diagnose prompt uses \"prefer GHSA IDs, fallback CVE IDs\".\n  WHY: The wording is inconsistent across prompts even though the meaning is the same.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a4a313fd47728593375f11d27c41e50bd20ec1b87a16c2e50ee3a4fc7feb4bea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1669,
+    "run_id": "24959565847",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24959565847",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426153317_73e7a86178",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1669,
+    "run_id": "24959565847"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T15:33:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
