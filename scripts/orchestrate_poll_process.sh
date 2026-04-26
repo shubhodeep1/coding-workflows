@@ -7769,19 +7769,30 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           # close_merged_issues_sweep closes the reconciled issue in
           # the same poll, and any follow-on state-tracking on the next
           # cycle observes the post-close state correctly.
-          _proactive_evidence_status=0
+          # Reuse FIX_EVIDENCE_STATUS (already initialised to 0 at the
+          # top of the iteration ~line 7694) so this branch matches the
+          # closed-issue branch's pattern exactly and we don't introduce
+          # a parallel variable name.  `local` is not used because this
+          # block runs at top-level inside the `for ((tidx...))` loop
+          # (not inside a function); see the comment at the proactive-
+          # backfill site for the same reason STALL_HEALING_CHANGED
+          # cannot be set here.
           if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+            FIX_EVIDENCE_STATUS=0
             echo "Validation fix-up issue #${fix_num}: ai:ready-to-merge with merged PR evidence; proactively backfilling ai:merged."
             if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
               echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled (proactive)."
               FIX_IS_MERGED="true"
             else
               echo "::warning::Validation fix-up issue #${fix_num}: proactive ai:merged backfill failed; will retry next cycle." >&2
-              echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
+              # Do not say "awaiting PR merge" here — the PR is already
+              # merged; only the local ai:merged label transition is
+              # pending.  Misleading wording made incident triage harder.
+              echo "Validation fix-up issue #${fix_num}: PR is already merged, but ai:merged reconciliation is still pending; will retry next cycle."
             fi
           else
-            _proactive_evidence_status=$?
-            if [ "${_proactive_evidence_status}" -eq 2 ]; then
+            FIX_EVIDENCE_STATUS=$?
+            if [ "${FIX_EVIDENCE_STATUS}" -eq 2 ]; then
               echo "::warning::Validation fix-up issue #${fix_num}: unable to check merged PR evidence due to a timeline/API lookup failure; will retry next cycle." >&2
             fi
             echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
