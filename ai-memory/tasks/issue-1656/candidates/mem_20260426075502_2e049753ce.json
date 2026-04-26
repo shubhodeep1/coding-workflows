@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef: `af3c6317019cfb91943da2c2d48c5a42b91b821e` on `orchestrator/project-1647`. The checkout matches the integration branch metadata. Clarification: none; the auto-answer only confirmed continuation.\n\n**Observed Constraints**\n- The repo currently does not ship any canonical audit-gate asset. The only local reference is the design note in `docs/audit-gate-and-orchestrator-hardening-plan.md`; there is no in-tree `scripts/security/check-npm-audit.js` or audit-gate template unit yet.\n- `.github/workflows/update_workflows.yml` is workflow-wrapper-only today: it sparse-checks out `workflow-templates`, copies only `*.yml` into `.github/workflows`, and commits only `.github/workflows/`. In its current form it cannot atomically deliver `package.json`, `scripts/security/check-npm-audit.js`, or an allowlist asset.\n- Existing updater coverage is static/guardrail coverage only (`tests/test_update_workflows_guardrails.py`). There is no fresh-workspace apply test for non-workflow assets.\n\n**Implementation Plan**\n1. Introduce a canonical audit-gate template unit in-repo. The smallest safe shape is a dedicated unit under `workflow-templates/...` that contains the exact consumer-path asset(s), especially `scripts/security/check-npm-audit.js`, plus a small manifest/contract declaring the managed files and the managed `package.json` script entry (`audit:ci`). If first-run safety is easier via a baseline allowlist file than via script fallback logic, include that baseline asset in the same unit. Keep this unit delivery-only; do not fold in the separate `viaPackages` identity or `--write` follow-up work.\n2. Add a narrow sync/apply helper under `scripts/...` that reads the canonical unit and applies it atomically to a target repo. The helper should validate that the asset bundle is complete before mutating `package.json`, copy the managed files, and only then write the `audit:ci` script entry. On any missing asset or write failure, it must leave `package.json` unmodified (or roll it back) so the repo never lands in the broken \u201cscript reference without script file\u201d state.\n3. Wire that helper into the existing in-repo apply path instead of assuming wrapper sync already solves it. The likely integration point is `.github/workflows/update_workflows.yml`, but the extension should stay contract-driven and audit-gate-specific rather than turning the workflow into a generic arbitrary-file mirror. Concretely, that means broadening the fetch scope beyond wrapper YAMLs, invoking the helper, widening the commit staging set beyond `.github/workflows/`, and extending summary/failure reporting for this new asset unit.\n4. Preserve backward-safety around consumer repos. If a consumer repo has no `package.json`, the helper should no-op cleanly. If `package.json` already has a non-managed/custom `audit:ci`, the helper should not silently overwrite it; it should either skip or surface a managed/unmanaged mismatch. Managed files should be limited to the explicit contract paths so unrelated `scripts/` content is untouched.\n5. Add deterministic in-tree contract coverage. Use a temp-workspace integration test, modeled on the repo\u2019s existing fresh-workspace harness style (`tests/test_validation_selftest_runner.py`), but scoped to this updater/apply path. The test should start from a fresh repo fixture, run the apply logic, and assert that `package.json` never references `scripts/security/check-npm-audit.js` unless that exact file exists.\n\n**Likely Files To Change**\n- `.github/workflows/update_workflows.yml`\n- `tests/test_update_workflows_guardrails.py`\n- `.github/workflows/ci.yml`\n- New canonical audit-gate unit under `workflow-templates/...`\n- New apply/sync helper under `scripts/...`\n- New focused temp-workspace test under `tests/...`, with small fixtures if needed\n\n**Representative Existing Pattern To Follow**\n- Use the validation-template bootstrap path as the structural model for \u201cexplicit asset inventory + fail-fast bootstrap + contract coverage\u201d: `.github/workflows/validate.yml`, `tests/test_validate_workflow_validate_bootstrap.py`, and `scripts/validation_template_bootstrap.py`. That is the closest existing in-repo example of shipping a canonical asset set and testing it without an external repository.\n\n**Data Structures Affected**\n- A new audit-gate asset contract/manifest describing source paths, consumer destination paths, and the managed `package.json` script entry.\n- Consumer `package.json` `scripts.audit:ci`.\n- Optional baseline allowlist JSON if the implementation chooses asset-based first-run safety instead of script-side absent-file handling.\n\n**Interface / Behavior Changes**\n- Consumer repos can receive managed audit-gate files in addition to workflow wrappers when the audit-gate unit is applied.\n- The apply flow becomes atomic for this unit: either both the `package.json` script and the referenced assets land together, or neither does.\n- No public workflow input change is obviously required; keeping the existing reusable workflow interface stable is preferable.\n\n**Risks / Edge Cases**\n- Broadening `update_workflows.yml` is the main design risk because it currently stages only workflow files. The implementation must stay narrow and explicit so it does not become a generic file-sync channel by accident.\n- A custom consumer-owned `audit:ci` command is a backward-compatibility trap; treat it as unmanaged unless it matches the canonical managed value.\n- The first-run test must be deterministic. It should validate the missing-script / missing-allowlist contract, not depend on live registry or vulnerability-feed state. If needed, use a fixture/stubbed audit response so `npm run audit:ci` proves path correctness rather than external audit results.\n\n**Testing Considerations**\n- Extend static updater guardrail coverage to assert the new asset sync path is validated before commit/stage.\n- Add a temp-repo integration test that proves first apply creates the script file and package mutation together.\n- Add a failure-path test where the canonical asset unit is incomplete and confirm `package.json` remains unchanged.\n- Add an idempotency/re-apply test so a second apply does not churn the same files.\n- Run the new test from `.github/workflows/ci.yml` so the contract is enforced on every PR.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "483fcc6e2ee35667766d62d2b3ec99ca5fbc92d4f112fa8af0874fe31ced0d3f",
+  "lineage": {
+    "issue_number": 1656,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24951409922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24951409922",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1656"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426075502_2e049753ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1656,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24951409922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1656",
+  "timestamps": {
+    "created_at": "2026-04-26T07:55:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
