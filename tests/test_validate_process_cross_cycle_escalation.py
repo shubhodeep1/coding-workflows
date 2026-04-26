@@ -187,8 +187,14 @@ def test_diagnose_prompt_schema_allows_harness_fixes_alongside_fix_issues() -> N
 
 def test_audit_gate_prompt_contract_forbids_unsatisfiable_wording() -> None:
 	"""Issue #1668: lock the audit-gate carve-out wording in diagnose + judge prompts."""
-	diagnose = _diagnose_prompt_text().lower()
-	judge = _judge_prompt_text().lower()
+	diagnose = _diagnose_prompt_text().lower().partition(
+		"audit-gate carve-out (`npm run audit:ci`)"
+	)[2]
+	judge = _judge_prompt_text().lower().partition(
+		"audit-gate carve-out (`npm run audit:ci`)"
+	)[2]
+	assert diagnose, "diagnose prompt must include the audit-gate carve-out heading"
+	assert judge, "judge prompt must include the audit-gate carve-out heading"
 	for forbidden in (
 		"make npm audit deterministic",
 		"match the validator's normalization exactly",
@@ -203,13 +209,20 @@ def test_audit_gate_prompt_contract_forbids_unsatisfiable_wording() -> None:
 
 def test_audit_gate_prompt_contract_requires_concrete_supported_remediation() -> None:
 	"""Issue #1668: audit-gate follow-ups must name the concrete supported path."""
-	diagnose = _diagnose_prompt_text().lower()
-	judge = _judge_prompt_text().lower()
+	diagnose = _diagnose_prompt_text().lower().partition(
+		"audit-gate carve-out (`npm run audit:ci`)"
+	)[2]
+	judge = _judge_prompt_text().lower().partition(
+		"audit-gate carve-out (`npm run audit:ci`)"
+	)[2]
+	assert diagnose, "diagnose prompt must include the audit-gate carve-out heading"
+	assert judge, "judge prompt must include the audit-gate carve-out heading"
 	for marker in (
 		"npm run audit:ci -- --write",
 		"security/dependency-audit-allowlist.json",
 		"scripts/security/check-npm-audit.js",
 		"prefer ghsa",
+		"fallback cve",
 	):
 		assert marker in diagnose, (
 			"diagnose prompt must require concrete canonical audit remediation markers"
