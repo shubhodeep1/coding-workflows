@@ -20,8 +20,12 @@ Hard constraints:
 - Prefer concrete values found in the repo over guesses.
 - If uncertain, omit optional keys instead of inventing values.
 
-Expected YAML shape (subset is allowed):
-- `type`: `http-server` | `telegram-bot` | `worker` | `cli` | `library`
+Expected YAML shape (top-level `type` and `slots` are REQUIRED; everything else is optional):
+- `type` (REQUIRED): one of the renderer-supported template families — `python-mongo-flask` | `python-mongo-repo-checks` | `python-repo-checks` | `node-hardhat-solidity`. Pick the closest match for the repo; do not invent other values (the renderer rejects unknown families with `FamilyResolutionError`).
+- `slots` (REQUIRED, mapping):
+  - `project_name` (REQUIRED, non-empty string): short identifier used by rendered compose/test files (e.g. the repo or service slug).
+  - `canary_tools` (REQUIRED, non-empty list of strings): tools the canary test must verify are runnable inside the harness container (e.g. `["python", "pip"]` for Python repos, `["node", "npx"]` for Node repos).
+  - `tap_plan` (optional, positive integer): expected TAP test count when known.
 - `entry`: entrypoint path or command target
 - `port`: app port number (for network services)
 - `health_check`: health route/path when available
