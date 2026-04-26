@@ -3750,6 +3750,41 @@ mark_validation_failed() {
     val_recovery_count="0"
   fi
 
+  # Deterministic-failure short-circuit: validate_process.sh embeds
+  # a machine-readable marker in the failure comment body when the
+  # cause is environment-deterministic (e.g. exit 17 = python3 < 3.9
+  # on the runner image). Retrying the same workflow will not change
+  # the outcome, so skip the recovery budget and go straight to
+  # terminal failure with a clear note.
+  local _deterministic_class=""
+  if printf '%s' "${reason}" | grep -qE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+'; then
+    _deterministic_class="$(printf '%s' "${reason}" \
+      | grep -oE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+' \
+      | head -n 1 \
+      | sed 's/^AI_VALIDATION_FAILURE_CLASS://')"
+    echo "Validation failed deterministically (class=${_deterministic_class}); skipping recovery budget (current=${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS})."
+    jq --arg reason "${reason}" --arg dclass "${_deterministic_class}" \
+      '.status = "failed" |
+       .validation_failure_reason = $reason |
+       .validation_failure_class = $dclass |
+       .validation_active_fix_issues = [] |
+       .validation_fix_issues_batch_cycles = 0' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+    handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
+    set_tracking_phase_label "ai:validation-failed"
+    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+    post_tracking_comment "## ❌ Runtime validation failed (deterministic)
+
+${reason}
+
+Failure class \`${_deterministic_class}\` is environment-deterministic; retrying this workflow on the same runner image will not help. Skipping the recovery budget. Manual intervention required."
+    tg_notify "Project #${TRACKING_NUM} validation failed deterministically (class=${_deterministic_class}). Manual intervention required." "CRITICAL"
+    tg_cleanup_msgs "${TRACKING_NUM}"
+    return 0
+  fi
+
   if [ "${val_recovery_count}" -lt "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" ]; then
     echo "Validation failed but recovery budget remains ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Transitioning back to judge."
     jq --arg reason "${reason}" --argjson count "$((val_recovery_count + 1))" \
