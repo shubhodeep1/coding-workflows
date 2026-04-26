@@ -193,6 +193,40 @@ def test_cve_fallback_is_used_when_ghsa_is_absent() -> None:
 	assert "matched allowlist entries" in result.stdout
 
 
+def test_cve_fallback_supports_object_shaped_cves_entries() -> None:
+	allowlist = [
+		{
+			"package": "minimist",
+			"severity": "moderate",
+			"advisoryId": "CVE-2020-7598",
+		}
+	]
+	audit_payload = {
+		"auditReportVersion": 2,
+		"vulnerabilities": {
+			"minimist": {
+				"name": "minimist",
+				"severity": "moderate",
+				"via": [
+					{
+						"source": 1096466,
+						"name": "minimist",
+						"title": "Prototype Pollution in minimist",
+						"cves": [{"id": "CVE-2020-7598"}],
+					},
+				],
+				"nodes": ["node_modules/minimist"],
+			},
+		},
+	}
+
+	repo_root, env = _make_repo(allowlist=allowlist, audit_payload=audit_payload)
+	result = _run_gate(repo_root=repo_root, env=env)
+
+	assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+	assert "matched allowlist entries" in result.stdout
+
+
 def test_failure_output_includes_via_packages_context() -> None:
 	allowlist: list[dict[str, object]] = []
 	audit_payload = {

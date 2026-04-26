@@ -96,7 +96,15 @@ function extractAdvisoryId(record)
 		record.name,
 	];
 	if (Array.isArray(record.cves)) {
-		cveCandidates.push(...record.cves);
+		for (const cveEntry of record.cves) {
+			if (typeof cveEntry === 'string') {
+				cveCandidates.push(cveEntry);
+				continue;
+			}
+			if (cveEntry && typeof cveEntry === 'object') {
+				cveCandidates.push(cveEntry.id, cveEntry.cve, cveEntry.name, cveEntry.title, cveEntry.url);
+			}
+		}
 	}
 	for (const candidate of cveCandidates) {
 		const cve = extractPatternValue(candidate, CVE_PATTERN);
