@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:168-171 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The workflow test assumes npm is available without explicit dependency management.\n  WHY: The reviewer flagged a runtime fragility in the test setup; z-ai later characterized the same item as a low-confidence hardening suggestion rather than a blocking bug.\n- scripts/apply_audit_gate_assets.py:145-158 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Rollback failures are silently ignored.\n  WHY: All four reviewers identified the bare `continue` swallowing rollback exceptions; moonshotai_kimi-k2_5 classified the issue as critical while the others reported the same silent-failure root cause.\n- scripts/apply_audit_gate_assets.py:126-164 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Rollback does not remove directories created during asset copy.\n  WHY: Reviewers agreed that rollback restores or deletes files but leaves parent directories created by `mkdir(parents=True, exist_ok=True)` behind.\n- tests/test_audit_gate_template_atomicity.py:213-239 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The test inserts the dynamically loaded module into `sys.modules` and never cleans it up.\n  WHY: Reviewers agreed this can leak a cached patched module into later tests in the same process; moonshotai_kimi-k2_5 treated it as high priority.\n- tests/test_audit_gate_template_atomicity.py:220-232 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The test can pass without actually exercising rollback if the failure occurs before any asset copy.\n  WHY: The reviewer noted the assertion only checks final state, so an earlier failure path could make the test pass without proving rollback behavior.\n- tests/test_audit_gate_template_atomicity.py:250-261 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The test only checks final state.\n  WHY: The reviewer described this as a minor test-design concern because it does not verify that rollback is triggered at the intended point.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/ci.yml:Audit gate template atomicity contract test step | confidence=3\n  PROBLEM: Test assumes npm is available without explicit dependency management\n  WHY: Custom runners or environment changes could break the test\n- scripts/apply_audit_gate_assets.py:145-153 | confidence=4\n  PROBLEM: Rollback failures are silently ignored\n  WHY: Partial rollback leaves repository in inconsistent state without notification\n- scripts/apply_audit_gate_assets.py:126-164 | confidence=3\n  PROBLEM: Rollback doesn't remove directories created during asset copy\n  WHY: Empty directories remain after failed transaction\n- tests/test_audit_gate_template_atomicity.py:213 | confidence=2\n  PROBLEM: Test pollutes sys.modules without cleanup\n  WHY: Can affect other tests in the same test run\n- tests/test_audit_gate_template_atomicity.py:220-232 | confidence=3\n  PROBLEM: Test can pass without actually testing rollback if failure occurs before asset copy\n  WHY: Insufficient test coverage of the rollback scenario\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/apply_audit_gate_assets.py:131-135 (asset copy), 154-158 (rollback) | confidence=4\n  PROBLEM: Rollback leaves behind directories\n  WHY: Newly created parent directories are never cleaned up, leaving empty directories on disk.\n- scripts/apply_audit_gate_assets.py:154-158 | confidence=4\n  PROBLEM: Rollback failures silently ignored\n  WHY: The rollback exception handler swallows all errors, so partial rollback can remain without notification.\n- tests/test_audit_gate_template_atomicity.py:218-225 | confidence=2\n  PROBLEM: Test leaves module cached in sys.modules\n  WHY: The dynamically loaded module is added to sys.modules and never removed, which can affect later tests.\n- tests/test_audit_gate_template_atomicity.py:250-261 | confidence=2\n  PROBLEM: Test only checks final state\n  WHY: The test validates rollback correctness but not rollback necessity.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/apply_audit_gate_assets.py:154-155 | severity=critical | confidence=5\n  PROBLEM: Rollback failures are silently ignored\n  WHY: If restoring a file fails during rollback, the error is swallowed and the repository can remain partially modified without diagnostic information.\n- tests/test_audit_gate_template_atomicity.py:213 | severity=high | confidence=4\n  PROBLEM: Test leaves module cached in sys.modules\n  WHY: The dynamically loaded module is inserted into sys.modules but never cleaned up, so later imports in the same process can reuse the cached patched module.\n- scripts/apply_audit_gate_assets.py:148-155 | severity=medium | confidence=3\n  PROBLEM: Rollback leaves empty directories behind\n  WHY: Rollback restores or deletes files but does not remove directories created during asset copy.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/apply_audit_gate_assets.py:147-155 | confidence=4\n  PROBLEM: Rollback failures are silently ignored\n  WHY: `except Exception: continue` swallows rollback failures and leaves the repository partially modified without any indication.\n- scripts/apply_audit_gate_assets.py:138-140 | confidence=3\n  PROBLEM: Rollback logic leaves empty directories\n  WHY: `target_path.parent.mkdir(parents=True, exist_ok=True)` creates directories that rollback does not remove.\n- tests/test_audit_gate_template_atomicity.py:213-239 | confidence=3\n  PROBLEM: Test leaves module in sys.modules\n  WHY: The test adds the dynamically loaded module to `sys.modules[spec.name]` and never removes it, which can interfere with later tests.\n- .github/workflows/ci.yml:168-171 | confidence=2\n  PROBLEM: CI workflow npm availability\n  WHY: The reviewer classified this as a low-confidence hardening suggestion rather than a runtime correctness bug.\n- tests/test_audit_gate_template_atomicity.py:190-239 | confidence=2\n  PROBLEM: Test only checks final state\n  WHY: The reviewer classified this as by design and not a bug because the test targets the rollback-after-failure contract.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1370b7e9636bea3d1775873875cf617a464f34e374f28ff3f696d6d304a4c6ac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1658,
+    "run_id": "24952878398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24952878398",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426091852_ed7d045627",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1658,
+    "run_id": "24952878398"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T09:18:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
