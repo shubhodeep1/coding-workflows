@@ -7729,11 +7729,82 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           fi
         fi
       else
-        # Issue still open and has no ai:closed label — nothing to backfill
-        # this cycle.  Skipping the timeline walk here removes a per-issue
-        # API round-trip (+ pagination) that the original loop made every
-        # poll cycle for issues that were clearly still in progress.
-        echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
+        # Open fix-up issue.  When the issue is at ai:ready-to-merge,
+        # proactively check the timeline for a merged linked PR and
+        # backfill ai:merged in-cycle.  Without this, the consumer-side
+        # issue_pr_status.yml workflow intentionally skips orchestrator-
+        # managed children (anti-#1469 guard at issue_pr_status.yml:253-
+        # 262) so the ai:ready-to-merge -> ai:merged transition would
+        # otherwise wait for STALL_THRESHOLD_MINUTES (default 120m) to
+        # elapse before _reconcile_merged_pr_issue reaches it via stall
+        # recovery.  Bounded API cost: timeline walk only fires for
+        # fix-up issues already at ai:ready-to-merge — every other open
+        # phase still short-circuits with no API round-trip, preserving
+        # the original optimisation noted on the legacy comment below.
+        # Fail-open: a transient timeline lookup (exit 2) or label-edit
+        # failure leaves FIX_IS_MERGED=false so the next cycle retries.
+        if has_label "${FIX_LABELS}" "ai:ready-to-merge"; then
+          # Capture exit code via if/else (the script runs under
+          # `set -euo pipefail`, so a bare `cmd; status=$?` on a
+          # non-zero return would abort).  This mirrors the
+          # exit-code-aware pattern used by the closed-issue branch
+          # above (~lines 7707-7730): 0=found, 1=no evidence, 2=
+          # transient timeline/API failure.  Surfacing exit 2 as a
+          # warning makes transient lookup failures diagnosable
+          # instead of silently masquerading as "still awaiting".
+          #
+          # We deliberately do NOT set STALL_HEALING_CHANGED here:
+          # that flag is reset to false ~line 10022 (top-level reset
+          # in this same per-tracking-issue iteration, run AFTER this
+          # block) before the post_state_comment / post_healing_summary
+          # readers at lines 10105 and 10108.  The other sites that set
+          # the flag (lines 7012-7203) all live inside
+          # recover_stalled_issue, which is invoked from line 10071 —
+          # i.e. AFTER the reset — so their writes survive.  Re-scoping
+          # the flag to make a write-from-this-block survive is a
+          # cross-cutting refactor that would change the lifetime of
+          # every existing reconcile site, out of scope per CLAUDE.md
+          # §5 (minimal change set) and §12 (PR review mode).  Cross-
+          # cycle visibility is preserved regardless: the tail-of-cycle
+          # close_merged_issues_sweep closes the reconciled issue in
+          # the same poll, and any follow-on state-tracking on the next
+          # cycle observes the post-close state correctly.
+          # Reuse FIX_EVIDENCE_STATUS (already initialised to 0 at the
+          # top of the iteration ~line 7694) so this branch matches the
+          # closed-issue branch's pattern exactly and we don't introduce
+          # a parallel variable name.  `local` is not used because this
+          # block runs at top-level inside the `for ((tidx...))` loop
+          # (not inside a function); see the comment at the proactive-
+          # backfill site for the same reason STALL_HEALING_CHANGED
+          # cannot be set here.
+          if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+            FIX_EVIDENCE_STATUS=0
+            echo "Validation fix-up issue #${fix_num}: ai:ready-to-merge with merged PR evidence; proactively backfilling ai:merged."
+            if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
+              echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled (proactive)."
+              FIX_IS_MERGED="true"
+            else
+              echo "::warning::Validation fix-up issue #${fix_num}: proactive ai:merged backfill failed; will retry next cycle." >&2
+              # Do not say "awaiting PR merge" here — the PR is already
+              # merged; only the local ai:merged label transition is
+              # pending.  Misleading wording made incident triage harder.
+              echo "Validation fix-up issue #${fix_num}: PR is already merged, but ai:merged reconciliation is still pending; will retry next cycle."
+            fi
+          else
+            FIX_EVIDENCE_STATUS=$?
+            if [ "${FIX_EVIDENCE_STATUS}" -eq 2 ]; then
+              echo "::warning::Validation fix-up issue #${fix_num}: unable to check merged PR evidence due to a timeline/API lookup failure; will retry next cycle." >&2
+            fi
+            echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
+          fi
+        else
+          # Issue still open at a non-ai:ready-to-merge phase — nothing to
+          # backfill this cycle.  Skipping the timeline walk here removes a
+          # per-issue API round-trip (+ pagination) that the original loop
+          # made every poll cycle for issues that were clearly still in
+          # progress.
+          echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
+        fi
       fi
 
       if [ "${FIX_THIS_CLOSED_WITHOUT_MERGE}" = "true" ]; then
