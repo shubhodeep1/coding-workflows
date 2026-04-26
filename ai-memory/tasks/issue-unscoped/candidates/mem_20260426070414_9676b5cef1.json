@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validation_refresh_runner.py:456-472 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: The test returns the same untracked `git status` output before and after `git add -A`, so it does not reflect real git state transitions.\n  WHY: After staging, real git would no longer report those files as untracked, and the incorrect mock could hide failures in the add step.\n- tests/test_validation_refresh_runner.py:488-494 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The test verifies bootstrap results by reading generated files directly from disk after the mocked workflow.\n  WHY: That makes the test depend on filesystem side effects rather than only the mocked command flow, reducing isolation and fidelity.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validation_refresh_runner.py:459, 465 | confidence=3\n  PROBLEM: The test reuses untracked `git status` output after `git add -A`, so it does not reflect real staged-state behavior.\n  WHY: After staging, real git would no longer report those files as `??`, which lowers test fidelity.\n- tests/test_validation_refresh_runner.py:488-490 | confidence=2\n  PROBLEM: The test reads bootstrapped files directly from disk after the mocked workflow, making it depend on filesystem side effects.\n  WHY: The assertions verify real file creation rather than only the mocked command sequence, although this may be acceptable for an integration test.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validation_refresh_runner.py:464, 472 | confidence=4\n  PROBLEM: The test returns the same untracked `git status` output before and after `git add -A`, which is not how git behaves.\n  WHY: After staging, the files should appear as staged rather than untracked, so the mock can hide failures in the add step.\n- tests/test_validation_refresh_runner.py:491-494 | confidence=3\n  PROBLEM: The test verifies bootstrap results by reading files from disk, rather than through the mocked executor flow.\n  WHY: This couples the test to real filesystem side effects and weakens isolation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validation_refresh_runner.py:460, 469 | confidence=4\n  PROBLEM: The test mocks `git status` with identical untracked output both before and after `git add -A`.\n  WHY: In real git, added files would transition out of `??` status, so the mock is semantically incorrect and could mask a silent `git add -A` failure.\n- tests/test_validation_refresh_runner.py:488-490, 492-494 | confidence=3\n  PROBLEM: The test reads `bootstrapped_manifest` and `entry_script` directly from disk after the workflow completes.\n  WHY: That relies on actual filesystem side effects instead of verifying the mocked bootstrap flow and command invocation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- tests/test_validation_refresh_runner.py:around 456-470 | confidence=4\n  PROBLEM: The test mocks `git status` with the same untracked output before and after `git add -A`.\n  WHY: Real git would show staged state after adding, so the mock can hide failures in the add step.\n- tests/test_validation_refresh_runner.py:around 488-490 | confidence=3\n  PROBLEM: The test checks bootstrapped files by reading them from disk.\n  WHY: This depends on real filesystem side effects instead of validating the mocked command flow.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_validation_refresh_runner.py:456-470 | confidence=3\n  PROBLEM: The test mocks both `git status` calls with the same untracked output, which does not reflect real git behavior after `git add -A`.\n  WHY: After staging, the files should no longer appear as untracked, so the mock could mask regressions if status handling changes.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "78a927fd9552e0de997ed9b4a411f0cf6bfcdfb52c51872a0c6f8c950df56404",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1651,
+    "run_id": "24950212044",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24950212044",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426070414_9676b5cef1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1651,
+    "run_id": "24950212044"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T07:04:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
