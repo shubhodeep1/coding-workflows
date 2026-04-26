@@ -1,12 +1,12 @@
 {
   "consecutive_green_runs": 0,
   "latest_run": {
-    "generated_at": "unknown",
-    "overall_status": "unknown",
-    "summary_schema_version": "unknown",
+    "generated_at": "2026-04-26T03:21:57Z",
+    "overall_status": "fail",
+    "summary_schema_version": "1",
     "totals": {
-      "failed": 0,
-      "fixtures": 0,
+      "failed": 2,
+      "fixtures": 2,
       "passed": 0
     }
   },
