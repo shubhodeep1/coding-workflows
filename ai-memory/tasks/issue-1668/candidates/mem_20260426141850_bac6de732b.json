@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Planning Ref Context**\n- HEAD: `768500e77cb9de113781bcb9fc8f6a5b8f41d5e3`\n- Branch: `orchestrator/project-1647`\n- Resolved checkout ref matches integration metadata: `orchestrator/project-1647`\n- Clarification mapping: no Q-IDs were asked; `/answer [auto-answered-by-orchestrator]` means proceed on the issue body as written.\n\n**Observed Code Facts**\n- `scripts/validate_process.sh` renders `prompts/mode-validate-diagnose.txt` and then consolidates `fix_issues[]` into the spawned issue body; it does not add audit-specific wording itself.\n- `scripts/orchestrate_poll_process.sh` renders `prompts/mode-judge.txt` and forwards `new_issues[].body` directly into created fix-up issues.\n- `scripts/implement_diagnose_post_codex_failure.sh` also forwards `fix_issues[].body` from `prompts/mode-implement-diagnose.txt`, but this looks like a secondary candidate, not the narrowest proven audit-gate source.\n- The upstream canonical audit-gate path already exists in this branch: `workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js` supports advisory-based matching (GHSA preferred, CVE fallback) and `npm run audit:ci -- --write` against `security/dependency-audit-allowlist.json`.\n- `tests/test_audit_gate_identity.py` is the representative behavior test for that canonical path.\n- `tests/test_audit_gate_template_atomicity.py` shows custom `audit:ci` scripts are intentionally preserved, so prompts must not assume every consumer repo uses the canonical assets.\n- Representative prompt-contract pattern to follow: the existing lockfile-drift carve-out in `prompts/mode-validate-diagnose.txt`, with contract assertions in `tests/test_validate_process_cross_cycle_escalation.py`.\n\n**Implementation Plan**\n1. Update `prompts/mode-validate-diagnose.txt`.\n- Add an explicit audit-gate carve-out near the existing pre-classification exceptions.\n- Override the general \u201cprefer `needs_fixes` when in doubt\u201d rule for `npm run audit:ci` churn caused by validator/normalization semantics.\n- Require two paths:\n  - Unsupported or legacy/custom audit path: escalate instead of emitting a generic unsatisfiable `needs_fixes` issue.\n  - Canonical supported path: allow `needs_fixes`, but require the issue body to name the concrete remediation (`security/dependency-audit-allowlist.json`, advisory-based matching, `npm run audit:ci -- --write`, then rerun `npm run audit:ci`).\n- Explicitly forbid issue-body wording that tells implementers to \u201cmake npm audit deterministic\u201d or to \u201cmatch the validator\u2019s normalization exactly.\u201d\n\n2. Update `prompts/mode-judge.txt`.\n- Add the same audit-gate policy for `new_issues[]`, because judge-created bodies are also passed through verbatim.\n- Tell the judge to escalate instead of spawning a fix-up when the evidence only shows audit-gate churn and does not prove a supported remediation path exists.\n- When the canonical path is present, require the same concrete remediation wording as the validate-diagnose prompt.\n\n3. Keep shell changes out of the first pass.\n- Do not change `scripts/validate_process.sh`, `scripts/orchestrate_poll_process.sh`, or `scripts/implement_diagnose_post_codex_failure.sh` unless a targeted regression proves prompt text alone is insufficient.\n- Current code paths already preserve schema and pass prompt-produced bodies through without adding their own audit wording.\n\n4. Touch `prompts/mode-implement-diagnose.txt` only if needed.\n- This is not the narrowest proven surface for the reported churn.\n- If a focused regression demonstrates it can emit the same forbidden audit-gate body, apply the same carve-out there while preserving the existing JSON schema.\n\n**Files Likely To Change**\n- `prompts/mode-validate-diagnose.txt`\n- `prompts/mode-judge.txt`\n- One prompt-contract test file, likely either a new dedicated test or focused additions to existing prompt tests\n- Conditional only: `prompts/mode-implement-diagnose.txt`\n\n**Files Likely To Stay Unchanged**\n- `scripts/validate_process.sh`\n- `scripts/orchestrate_poll_process.sh`\n- `scripts/implement_diagnose_post_codex_failure.sh`\n- `README.md`\n- `agents.md`\n\n**Data Structures / Interface Impact**\n- No DB contracts, Mongo collections, env vars, or workflow inputs need to change.\n- Preserve validate-diagnose schema: `status`, `diagnosis`, `fix_issues[]`, `harness_fixes`.\n- Preserve judge schema: `status`, `justification`, `assessment`, `ci_status`, `new_issues[]`, `issues_to_revert`.\n- This is a content-policy change for `fix_issues[].body` / `new_issues[].body`, not a schema change.\n\n**Risks / Edge Cases**\n- Canonical assets exist upstream, but some consumer repos may still use preserved custom `audit:ci` scripts; prompts must not prescribe canonical file edits unless the evidence actually points at the canonical path.\n- Real new advisory misses still need a fix-up issue; the carve-out must suppress only normalization/churn wording, not legitimate `npm audit` remediation.\n- The validate-diagnose prompt currently prefers `needs_fixes` in ambiguous cases; the audit-gate carve-out must be explicit enough to override that default only for this narrow failure class.\n- No factual repo/issue conflicts were found. The main codebase nuance is that the \u201csupported remediation\u201d path already exists upstream, so the prompt should treat it as live capability, not future work.\n\n**Testing Considerations**\n- Add prompt-contract tests that fail if touched prompts contain or require:\n  - `make npm audit deterministic`\n  - `match the validator's normalization exactly`\n- Add positive assertions that touched prompts now require concrete remediation markers:\n  - `npm run audit:ci -- --write`\n  - `security/dependency-audit-allowlist.json`\n  - advisory-based matching / advisory id language\n- Preserve existing schema assertions for `fix_issues`, `harness_fixes`, and `new_issues`.\n- Reuse `tests/test_audit_gate_identity.py` as the source of truth for the supported remediation details; no runtime audit-gate logic change should be needed for this issue.\n- If `mode-implement-diagnose.txt` stays untouched, keep the new tests scoped to the changed prompt surfaces so the change set remains minimal.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "19542cd7e7d75817aeea5319158b7dcb3937fd72131cc8965ba245bef5300ca0",
+  "lineage": {
+    "issue_number": 1668,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24958566519",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24958566519",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1668"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426141850_bac6de732b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1668,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24958566519"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1668",
+  "timestamps": {
+    "created_at": "2026-04-26T14:18:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
