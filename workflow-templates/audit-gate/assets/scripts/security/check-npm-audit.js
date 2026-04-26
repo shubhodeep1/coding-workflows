@@ -10,6 +10,8 @@ const repoRoot = process.cwd();
 const allowlistPath = path.join(repoRoot, 'security', 'dependency-audit-allowlist.json');
 const GHSA_PATTERN = /\bGHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}\b/i;
 const CVE_PATTERN = /\bCVE-\d{4}-\d{4,}\b/i;
+const WRITE_FLAG = '--write';
+const CURATED_ALLOWLIST_FIELDS = ['reason', 'owner', 'expiresOn'];
 
 function toUniqueStrings(values)
 {
@@ -121,6 +123,19 @@ function buildIdentityKey(finding)
 	return `${finding.severity}|${finding.package}|${finding.advisoryId}`;
 }
 
+function buildLegacyIdentityKeyWithAdvisory(finding)
+{
+	const viaPackages = [...toUniqueStrings(finding.viaPackages)].sort();
+	const advisoryId = typeof finding.advisoryId === 'string' ? finding.advisoryId.trim().toUpperCase() : '';
+	return `${finding.severity}|${finding.package}|${advisoryId}|${viaPackages.join('>')}`;
+}
+
+function buildLegacyIdentityKeyWithoutAdvisory(finding)
+{
+	const viaPackages = [...toUniqueStrings(finding.viaPackages)].sort();
+	return `${finding.severity}|${finding.package}|${viaPackages.join('>')}`;
+}
+
 function extractPackagesFromNodePath(nodePath)
 {
 	if (typeof nodePath !== 'string') {
@@ -178,7 +193,9 @@ function collectViaPackages(vulnerability)
 function normalizeAllowlistEntries(allowlist)
 {
 	const normalized = [];
+	const legacyCompatible = [];
 	const invalidIndices = [];
+	const missingAdvisoryIndices = [];
 
 	for (let index = 0; index < allowlist.length; index += 1) {
 		const entry = allowlist[index];
@@ -191,22 +208,121 @@ function normalizeAllowlistEntries(allowlist)
 			entry.package || entry.name || entry.dependency || entry.module || entry.moduleName,
 		);
 		const severity = normalizeSeverity(entry.severity);
-		const advisoryId = extractAdvisoryId(entry);
-		if (!packageName || !severity || !advisoryId) {
+		if (!packageName || !severity) {
 			invalidIndices.push(index + 1);
 			continue;
 		}
 
-		normalized.push({
+		const viaPackages = toUniqueStrings(entry.viaPackages);
+		const legacyKeyWithAdvisory = buildLegacyIdentityKeyWithAdvisory({
+			package: packageName,
+			severity,
+			advisoryId: extractAdvisoryId(entry),
+			viaPackages,
+		});
+		const legacyKeyWithoutAdvisory = buildLegacyIdentityKeyWithoutAdvisory({
+			package: packageName,
+			severity,
+			viaPackages,
+		});
+		legacyCompatible.push({
+			package: packageName,
+			severity,
+			viaPackages,
+			legacyKeyWithAdvisory,
+			legacyKeyWithoutAdvisory,
+			source: entry,
+		});
+
+		const advisoryId = extractAdvisoryId(entry);
+		if (!advisoryId) {
+			missingAdvisoryIndices.push(index + 1);
+			continue;
+		}
+
+			normalized.push({
 			package: packageName,
 			severity,
 			advisoryId,
-			viaPackages: toUniqueStrings(entry.viaPackages),
+			viaPackages,
+			legacyKeyWithAdvisory,
+			legacyKeyWithoutAdvisory,
 			key: buildIdentityKey({ package: packageName, severity, advisoryId }),
+			source: entry,
 		});
 	}
 
-	return { normalized, invalidIndices };
+	return {
+		normalized,
+		legacyCompatible,
+		invalidIndices,
+		missingAdvisoryIndices,
+	};
+}
+
+function buildRegeneratedAllowlistEntries(findings, normalizedAllowlist)
+{
+	const allowlistByCurrentKey = new Map();
+	for (const entry of normalizedAllowlist.normalized) {
+		if (!allowlistByCurrentKey.has(entry.key)) {
+			allowlistByCurrentKey.set(entry.key, entry.source);
+		}
+	}
+
+	const allowlistByLegacyKeyWithAdvisory = new Map();
+	const allowlistByLegacyKeyWithoutAdvisory = new Map();
+	for (const entry of normalizedAllowlist.legacyCompatible) {
+		if (!allowlistByLegacyKeyWithAdvisory.has(entry.legacyKeyWithAdvisory)) {
+			allowlistByLegacyKeyWithAdvisory.set(entry.legacyKeyWithAdvisory, entry.source);
+		}
+		if (!allowlistByLegacyKeyWithoutAdvisory.has(entry.legacyKeyWithoutAdvisory)) {
+			allowlistByLegacyKeyWithoutAdvisory.set(entry.legacyKeyWithoutAdvisory, entry.source);
+		}
+	}
+
+	const sortedFindings = [...findings].sort((left, right) => {
+		if (left.key < right.key) {
+			return -1;
+		}
+		if (left.key > right.key) {
+			return 1;
+		}
+		return 0;
+	});
+
+	return sortedFindings.map((finding) => {
+		let matchedEntry = allowlistByCurrentKey.get(finding.key);
+		if (!matchedEntry) {
+			const legacyKeyWithAdvisory = buildLegacyIdentityKeyWithAdvisory(finding);
+			matchedEntry = allowlistByLegacyKeyWithAdvisory.get(legacyKeyWithAdvisory);
+		}
+		if (!matchedEntry) {
+			const legacyKeyWithoutAdvisory = buildLegacyIdentityKeyWithoutAdvisory(finding);
+			matchedEntry = allowlistByLegacyKeyWithoutAdvisory.get(legacyKeyWithoutAdvisory);
+		}
+
+		const regeneratedEntry = {
+			package: finding.package,
+			severity: finding.severity,
+			advisoryId: finding.advisoryId,
+			viaPackages: finding.viaPackages,
+		};
+
+		if (matchedEntry && typeof matchedEntry === 'object') {
+			for (const fieldName of CURATED_ALLOWLIST_FIELDS) {
+				if (Object.prototype.hasOwnProperty.call(matchedEntry, fieldName)) {
+					regeneratedEntry[fieldName] = matchedEntry[fieldName];
+				}
+			}
+		}
+
+		return regeneratedEntry;
+	});
+}
+
+function renderAllowlist(allowlist)
+{
+	return `${JSON.stringify(allowlist, null, 2)}\n`;
 }
 
 function normalizeAuditFindings(payload)
@@ -313,37 +429,49 @@ function runNpmAudit()
 	}
 }
 
+const writeMode = process.argv.slice(2).includes(WRITE_FLAG);
+
+let rawAllowlist = '';
+let parsed = [];
 if (!fs.existsSync(allowlistPath)) {
-	console.log('[audit:ci] Allowlist file not found at security/dependency-audit-allowlist.json.');
-	console.log('[audit:ci] Create it or run the workflow updater that vendors canonical audit-gate assets.');
-	process.exit(0);
-}
+	if (!writeMode) {
+		console.log('[audit:ci] Allowlist file not found at security/dependency-audit-allowlist.json.');
+		console.log('[audit:ci] Create it or run the workflow updater that vendors canonical audit-gate assets.');
+		process.exit(0);
+	}
+	console.log('[audit:ci] Allowlist file not found at security/dependency-audit-allowlist.json; --write will create it.');
+} else {
+	try {
+		rawAllowlist = fs.readFileSync(allowlistPath, 'utf8');
+		parsed = JSON.parse(rawAllowlist);
+	} catch (error) {
+		console.error(`[audit:ci] Failed to parse allowlist: ${error && error.message ? error.message : String(error)}`);
+		process.exit(1);
+	}
 
-let parsed;
-try {
-	const raw = fs.readFileSync(allowlistPath, 'utf8');
-	parsed = JSON.parse(raw);
-} catch (error) {
-	console.error(`[audit:ci] Failed to parse allowlist: ${error && error.message ? error.message : String(error)}`);
-	process.exit(1);
-}
-
-if (!Array.isArray(parsed)) {
-	console.error('[audit:ci] Allowlist must be a JSON array.');
-	process.exit(1);
+	if (!Array.isArray(parsed)) {
+		console.error('[audit:ci] Allowlist must be a JSON array.');
+		process.exit(1);
+	}
 }
 
 const normalizedAllowlist = normalizeAllowlistEntries(parsed);
-if (normalizedAllowlist.invalidIndices.length > 0) {
+if (normalizedAllowlist.invalidIndices.length > 0 || (!writeMode && normalizedAllowlist.missingAdvisoryIndices.length > 0)) {
+	const invalidIndices = [...normalizedAllowlist.invalidIndices, ...normalizedAllowlist.missingAdvisoryIndices]
+		.sort((left, right) => left - right);
 	console.error(
-		`[audit:ci] Allowlist entries at indices ${normalizedAllowlist.invalidIndices.join(', ')} must include severity, package, and advisory id (GHSA preferred, CVE fallback).`,
+		`[audit:ci] Allowlist entries at indices ${invalidIndices.join(', ')} must include severity, package, and advisory id (GHSA preferred, CVE fallback).`,
 	);
 	process.exit(1);
 }
 
-console.log(`[audit:ci] Allowlist loaded (${parsed.length} entries).`);
+if (writeMode && normalizedAllowlist.missingAdvisoryIndices.length > 0) {
+	console.log(
+		`[audit:ci] --write detected legacy allowlist entries without advisory ids at indices ${normalizedAllowlist.missingAdvisoryIndices.join(', ')}; using legacy-key fallback for metadata carry-forward.`,
+	);
+}
 
-const allowlistKeySet = new Set(normalizedAllowlist.normalized.map((entry) => entry.key));
+console.log(`[audit:ci] Allowlist loaded (${parsed.length} entries).`);
 let auditPayload;
 try {
 	auditPayload = runNpmAudit();
@@ -361,11 +489,32 @@ if (normalizedFindings.identityErrors.length > 0) {
 	process.exit(1);
 }
 
+if (writeMode) {
+	const regeneratedAllowlist = buildRegeneratedAllowlistEntries(normalizedFindings.findings, normalizedAllowlist);
+	const renderedAllowlist = renderAllowlist(regeneratedAllowlist);
+	if (renderedAllowlist === rawAllowlist) {
+		console.log(`[audit:ci] --write found no allowlist changes (${regeneratedAllowlist.length} entries).`);
+		process.exit(0);
+	}
+
+	try {
+		fs.mkdirSync(path.dirname(allowlistPath), { recursive: true });
+		fs.writeFileSync(allowlistPath, renderedAllowlist, 'utf8');
+	} catch (error) {
+		console.error(`[audit:ci] Failed to write allowlist: ${error && error.message ? error.message : String(error)}`);
+		process.exit(1);
+	}
+
+	console.log(`[audit:ci] --write regenerated allowlist with ${regeneratedAllowlist.length} entries.`);
+	process.exit(0);
+}
+
 if (normalizedFindings.findings.length === 0) {
 	console.log('[audit:ci] No vulnerabilities reported by npm audit.');
 	process.exit(0);
 }
 
+const allowlistKeySet = new Set(normalizedAllowlist.normalized.map((entry) => entry.key));
 const unmatched = normalizedFindings.findings.filter((finding) => !allowlistKeySet.has(finding.key));
 if (unmatched.length === 0) {
 	console.log(`[audit:ci] All ${normalizedFindings.findings.length} vulnerability finding(s) matched allowlist entries.`);
