@@ -539,6 +539,7 @@ jobs:
 
       - name: Run validation process
         id: validate_run
+        if: always()
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
