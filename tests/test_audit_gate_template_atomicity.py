@@ -188,11 +188,64 @@ def test_reapply_is_idempotent_once_assets_are_present() -> None:
 		assert _read_changed_files(repo_root / ".tmp" / "audit_gate_changed_files.txt") == []
 
 
+def test_package_write_failure_rolls_back_copied_assets() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-gate-write-failure-") as td:
+		repo_root = Path(td)
+		_write_json(
+			repo_root / "package.json",
+			{
+				"name": "fixture",
+				"version": "1.0.0",
+				"scripts": {},
+			},
+		)
+
+		asset_file = repo_root / "scripts" / "security" / "check-npm-audit.js"
+		asset_file.parent.mkdir(parents=True, exist_ok=True)
+		asset_file.write_text("stale-script", encoding="utf-8")
+		allowlist_file = repo_root / "security" / "dependency-audit-allowlist.json"
+		allowlist_file.parent.mkdir(parents=True, exist_ok=True)
+		allowlist_file.write_text("[\"stale\"]\n", encoding="utf-8")
+
+		before_package = (repo_root / "package.json").read_text(encoding="utf-8")
+		before_asset = asset_file.read_bytes()
+		before_allowlist = allowlist_file.read_bytes()
+
+		import importlib.util
+		import sys
+
+		spec = importlib.util.spec_from_file_location("apply_audit_gate_assets", APPLY_SCRIPT)
+		assert spec is not None and spec.loader is not None
+		module = importlib.util.module_from_spec(spec)
+		sys.modules[spec.name] = module
+		spec.loader.exec_module(module)
+
+		original_write_json_atomic = module._write_json_atomic
+		try:
+			def _fail_write_json_atomic(path: Path, payload: dict) -> None:
+				raise RuntimeError("simulated package write failure")
+
+			module._write_json_atomic = _fail_write_json_atomic
+			try:
+				module._apply_assets(contract_root=CANONICAL_CONTRACT_ROOT, repo_root=repo_root)
+			except RuntimeError as exc:
+				assert str(exc) == "simulated package write failure"
+			else:
+				raise AssertionError("expected simulated package write failure")
+		finally:
+			module._write_json_atomic = original_write_json_atomic
+
+		assert (repo_root / "package.json").read_text(encoding="utf-8") == before_package
+		assert asset_file.read_bytes() == before_asset
+		assert allowlist_file.read_bytes() == before_allowlist
+
+
 def main() -> int:
 	test_fresh_apply_vendors_script_and_package_script_atomically()
 	test_missing_template_asset_does_not_mutate_package_json()
 	test_custom_audit_script_is_preserved_without_partial_asset_copy()
 	test_reapply_is_idempotent_once_assets_are_present()
+	test_package_write_failure_rolls_back_copied_assets()
 	return 0
 
 

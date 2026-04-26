@@ -126,22 +126,39 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 			message=f"existing scripts.{script_name} is custom and was preserved",
 		)
 
-	changed_files: list[str] = []
-	for source_path, target_rel in resolved_assets:
-		target_path = repo_root / target_rel
-		target_path.parent.mkdir(parents=True, exist_ok=True)
-		target_before = target_path.read_bytes() if target_path.exists() else None
-		source_bytes = source_path.read_bytes()
-		if target_before != source_bytes:
-			shutil.copy2(source_path, target_path)
-			changed_files.append(target_rel.as_posix())
-
+	asset_changed_files: list[str] = []
+	asset_rollbacks: list[tuple[Path, bytes | None]] = []
 	package_script_action = "unchanged"
-	if existing_script_value is None:
-		scripts[script_name] = script_value
-		_write_json_atomic(package_json_path, package_payload)
+
+	try:
+		for source_path, target_rel in resolved_assets:
+			target_path = repo_root / target_rel
+			target_path.parent.mkdir(parents=True, exist_ok=True)
+			target_before = target_path.read_bytes() if target_path.exists() else None
+			source_bytes = source_path.read_bytes()
+			if target_before != source_bytes:
+				shutil.copy2(source_path, target_path)
+				asset_changed_files.append(target_rel.as_posix())
+				asset_rollbacks.append((target_path, target_before))
+
+		if existing_script_value is None:
+			scripts[script_name] = script_value
+			_write_json_atomic(package_json_path, package_payload)
+			package_script_action = "added"
+	except Exception:
+		for target_path, target_before in reversed(asset_rollbacks):
+			try:
+				if target_before is None:
+					target_path.unlink(missing_ok=True)
+				else:
+					target_path.write_bytes(target_before)
+			except Exception:
+				continue
+		raise
+
+	changed_files = list(asset_changed_files)
+	if package_script_action == "added":
 		changed_files.append("package.json")
-		package_script_action = "added"
 
 	if changed_files:
 		status = "applied"
