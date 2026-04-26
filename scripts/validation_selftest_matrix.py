@@ -18,7 +18,10 @@ from typing import Any, NamedTuple
 try:
 	from validation_template_bootstrap import bootstrap_validation_manifest
 except ModuleNotFoundError:
-	from scripts.validation_template_bootstrap import bootstrap_validation_manifest
+	scripts_dir = Path(__file__).resolve().parent
+	if str(scripts_dir) not in sys.path:
+		sys.path.insert(0, str(scripts_dir))
+	from validation_template_bootstrap import bootstrap_validation_manifest
 
 
 SCHEMA_VERSION = "1"

@@ -46,14 +46,13 @@ def bootstrap_validation_manifest(*, source_root: Path, workspace_root: Path) ->
 	if not entry_script_path.exists():
 		entry_script_path.parent.mkdir(parents=True, exist_ok=True)
 		shutil.copy2(entry_script_source, entry_script_path)
-		entry_script_path.chmod(entry_script_path.stat().st_mode | 0o111)
 		diagnostics.append(f"repo_check_entry_seeded: {STUB_ENTRY_SCRIPT_RELATIVE.as_posix()}")
 	else:
 		diagnostics.append(f"repo_check_entry_preserved_existing: {STUB_ENTRY_SCRIPT_RELATIVE.as_posix()}")
+	entry_script_path.chmod(entry_script_path.stat().st_mode | 0o111)
 
 	return ValidationBootstrapResult(
 		manifest_path=manifest_path,
 		bootstrapped=True,
 		diagnostics=tuple(diagnostics),
 	)
-

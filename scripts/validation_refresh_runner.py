@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -18,7 +19,10 @@ from typing import Any
 try:
 	from validation_template_bootstrap import bootstrap_validation_manifest
 except ModuleNotFoundError:
-	from scripts.validation_template_bootstrap import bootstrap_validation_manifest
+	scripts_dir = Path(__file__).resolve().parent
+	if str(scripts_dir) not in sys.path:
+		sys.path.insert(0, str(scripts_dir))
+	from validation_template_bootstrap import bootstrap_validation_manifest
 
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
