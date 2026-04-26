@@ -32,6 +32,27 @@ _is_gh_rate_limit()
 }
 
 # ---------------------------------------------------------------
+# _gh_actions_escape — escape a string for safe interpolation into
+# a GitHub Actions workflow command (e.g. ::warning::, ::error::).
+#
+# Per the workflow-command format, '%', CR, and LF must be encoded
+# so they cannot terminate the command line, break annotations, or
+# enable workflow-command injection from untrusted stderr.
+#
+#   %  → %25     (must be first to avoid double-encoding)
+#   \r → %0D
+#   \n → %0A
+# ---------------------------------------------------------------
+_gh_actions_escape()
+{
+	local s="$1"
+	s="${s//%/%25}"
+	s="${s//$'\r'/%0D}"
+	s="${s//$'\n'/%0A}"
+	printf '%s' "${s}"
+}
+
+# ---------------------------------------------------------------
 # _is_gh_permanent_failure — detect deterministic, non-retryable
 # failures that no amount of retrying will fix.
 #
@@ -49,7 +70,7 @@ _is_gh_rate_limit()
 # ---------------------------------------------------------------
 _is_gh_permanent_failure()
 {
-	printf '%s' "$1" | grep -qiE "'[^']+' not found|HTTP 404|HTTP 422|Resource not accessible by integration"
+	printf '%s' "$1" | grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 422|Resource not accessible by integration"
 }
 
 # ---------------------------------------------------------------
@@ -384,7 +405,7 @@ gh_retry()
 		if _is_gh_permanent_failure "${stderr_content}"; then
 			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: ${stderr_content}" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
 			rm -f "${stderr_file}"
 			return 1
@@ -401,7 +422,7 @@ gh_retry()
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: ${stderr_content}" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				sleep "${wait_secs}"
@@ -451,7 +472,7 @@ gh_retry_to_file()
 		if _is_gh_permanent_failure "${stderr_content}"; then
 			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: ${stderr_content}" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
 			rm -f "${stderr_file}"
 			return 1
@@ -468,7 +489,7 @@ gh_retry_to_file()
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: ${stderr_content}" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				sleep "${wait_secs}"
@@ -570,7 +591,7 @@ gh_api_json_to_file()
 				local wait_secs=$(( 2 ** (attempt - 1) ))
 				echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 				if [ -n "${stderr_content}" ]; then
-					echo "::warning::  stderr: ${stderr_content}" >&2
+					echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 				fi
 				sleep "${wait_secs}"
 			fi
