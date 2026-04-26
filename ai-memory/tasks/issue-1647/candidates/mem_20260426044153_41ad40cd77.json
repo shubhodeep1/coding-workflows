@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Audit Gate Stability, Orchestrator Loop Hardening, and Template Onboarding Stub\",\"issues\":[{\"id\":\"validation-template-onboarding-stub\",\"title\":\"Generate a stub `.ai/validate.yml` during first apply for manifest-less adopters\",\"priority\":1},{\"id\":\"audit-gate-template-atomicity\",\"title\":\"Make audit-gate application atomic when `package.json` references `audit:ci`\",\"priority\":2},{\"id\":\"audit-gate-identity-key\",\"title\":\"Stabilize npm audit allowlist matching by dropping `viaPackages` from the identity key\",\"priority\":3},{\"id\":\"audit-gate-write-regen\",\"title\":\"Add `audit:ci --write` regeneration mode with legacy-key preservation\",\"priority\":4},{\"id\":\"audit-gate-fixup-diagnosis\",\"title\":\"Harden audit-gate diagnosis so it stops generating unsatisfiable fix-up issues\",\"priority\":5},{\"id\":\"judge-resume-budget-preservation\",\"title\":\"Preserve recovery budgets by default when `/judge_resume` is used\",\"priority\":1},{\"id\":\"judge-repeat-fingerprint-breaker\",\"title\":\"Add a same-failure fingerprint circuit breaker to the judge-fixup loop\",\"priority\":2},{\"id\":\"docs-audit-gate-orchestrator-hardening\",\"title\":\"Document audit-gate hardening, `/judge_resume` semantics, and repeat-fingerprint limits\",\"priority\":6}],\"dependency_edges\":[{\"from\":\"validation-template-onboarding-stub\",\"to\":\"audit-gate-template-atomicity\"},{\"from\":\"audit-gate-template-atomicity\",\"to\":\"audit-gate-identity-key\"},{\"from\":\"audit-gate-identity-key\",\"to\":\"audit-gate-write-regen\"},{\"from\":\"audit-gate-write-regen\",\"to\":\"audit-gate-fixup-diagnosis\"},{\"from\":\"judge-resume-budget-preservation\",\"to\":\"judge-repeat-fingerprint-breaker\"},{\"from\":\"validation-template-onboarding-stub\",\"to\":\"docs-audit-gate-orchestrator-hardening\"},{\"from\":\"audit-gate-template-atomicity\",\"to\":\"docs-audit-gate-orchestrator-hardening\"},{\"from\":\"audit-gate-identity-key\",\"to\":\"docs-audit-gate-orchestrator-hardening\"},{\"from\":\"audit-gate-write-regen\",\"to\":\"docs-audit-gate-orchestrator-hardening\"},{\"from\":\"audit-gate-fixup-diagnosis\",\"to\":\"docs-audit-gate-orchestrator-hardening\"},{\"from\":\"judge-resume-budget-preservation\",\"to\":\"docs-audit-gate-orchestrator-hardening\"},{\"from\":\"judge-repeat-fingerprint-breaker\",\"to\":\"docs-audit-gate-orchestrator-hardening\"}]}",
+  "fingerprint": "9abc5f6f82ea6c237c23f3228e866a93fd6fc8206f756516d38bd032cca0d8a7",
+  "lineage": {
+    "issue_number": 1647,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24947512039",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24947512039",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260426044153_41ad40cd77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1647,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24947512039"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Audit Gate Stability, Orchestrator Loop Hardening, and Template Onboarding Stub' into 8 issues (tracking #1647)",
+  "timestamps": {
+    "created_at": "2026-04-26T04:41:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
