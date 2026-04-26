@@ -176,6 +176,32 @@ the classification tree):
   build context stay `needs_fixes`; defects in `validation/Dockerfile*` or
   `validation/docker-compose.test.yml` are `harness_error`.
 
+Audit-gate carve-out (`npm run audit:ci`) (applies BEFORE the rest of the
+classification tree and overrides the generic "prefer `needs_fixes` when in
+doubt" default for this narrow failure class):
+
+- If the failing command is `npm run audit:ci` and the evidence points to
+  validator-semantics churn (for example normalization/key-order wording
+  drift) rather than a concrete consumer-repo defect, do NOT emit a generic,
+  unsatisfiable `fix_issues[].body`.
+- In this carve-out, issue bodies MUST NOT instruct implementers to:
+    - `make npm audit deterministic`
+    - `match the validator's normalization exactly`
+- If the repository uses the canonical supported audit path
+  (`scripts/security/check-npm-audit.js` plus
+  `security/dependency-audit-allowlist.json`, with advisory-based matching),
+  classify as `needs_fixes` and require a concrete remediation body that
+  includes ALL of:
+    - run `npm run audit:ci -- --write`
+    - update `security/dependency-audit-allowlist.json`
+    - use advisory IDs from evidence (prefer GHSA IDs, fallback CVE IDs)
+    - rerun `npm run audit:ci` to verify clean pass
+- If that canonical path is absent, replaced by legacy/custom audit logic, or
+  the evidence does not prove the supported remediation is applicable,
+  escalate instead of spawning another unsatisfiable `needs_fixes` issue:
+  classify as `harness_error`, keep `fix_issues` empty, and explain the
+  escalation path in `harness_fixes`.
+
 `depends_on` is optional and should be included only when applicable.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}

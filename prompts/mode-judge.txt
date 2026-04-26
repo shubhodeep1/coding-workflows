@@ -40,6 +40,25 @@ Rules:
 - You MUST include a justification field explaining why you are requesting
   another cycle. The operator will be notified after every judge evaluation.
 
+- Audit-gate carve-out (`npm run audit:ci`):
+  - If evidence shows validator semantics/normalization churn rather than a
+    concrete repository defect, do NOT create a generic unsatisfiable fix-up
+    issue.
+  - `new_issues[].body` MUST NOT instruct implementers to:
+    - `make npm audit deterministic`
+    - `match the validator's normalization exactly`
+  - When the canonical supported path is present (`scripts/security/check-npm-audit.js`
+    with `security/dependency-audit-allowlist.json` and advisory-based matching),
+    any audit-gate `new_issues[]` entry MUST include concrete remediation:
+    `npm run audit:ci -- --write`, update `security/dependency-audit-allowlist.json`,
+    use advisory IDs from evidence (prefer GHSA, fallback CVE), then rerun
+    `npm run audit:ci`.
+  - When that canonical path is absent/legacy/custom, or evidence does not
+    prove the supported remediation is applicable, escalate instead of spawning
+    another unsatisfiable fix-up issue: return `status` `failed`, keep
+    `new_issues` empty, and explain the escalation in `justification` and
+    `assessment`.
+
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output contract:
