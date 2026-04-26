@@ -1119,9 +1119,17 @@ run_template_validation_harness_renderer()
 	fi
 
 	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
+	{
+		printf '\n--- python3 environment probe ---\n'
+		printf 'command -v python3: %s\n' "$(command -v python3 2>&1 || echo 'not found')"
+		printf 'python3 -V: %s\n' "$("${python3_bin}" -V 2>&1 || echo 'failed')"
+		"${python3_bin}" -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
+			|| printf '(python3 -c probe failed)\n'
+		printf '--- end python3 environment probe ---\n'
+	} >> "${GENERATE_LOG_FILE}" 2>&1
 	if ! "${python3_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
 		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
-		return 14
+		return 17
 	fi
 
 	if ! renderer_summary="$("${python3_bin}" "${renderer_script}" \
@@ -2279,11 +2287,29 @@ case "${renderer_exit}" in
 		exit 1
 		;;
 	14)
-		local_failure_summary="Template renderer execution failed (exit 14). This indicates either python3 >= 3.9 is unavailable or the renderer script failed; inspect validate_generate.log for the specific error."
-		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+		local_failure_summary="Template renderer subprocess (\`scripts/render_validation_templates.py\`) exited non-zero (exit 14). Common causes: missing renderer dependencies (\`pyyaml\`, \`jsonschema\`, \`jinja2\`), invalid \`.ai/validate.yml\`, schema-validation failure, or template-collection error."
+		_render_log_excerpt="(no renderer log captured at ${GENERATE_LOG_FILE})"
+		if [ -s "${GENERATE_LOG_FILE}" ]; then
+			_render_log_excerpt="$(tail -n 40 "${GENERATE_LOG_FILE}" 2>/dev/null || echo '(failed to read renderer log)')"
+		fi
+		post_tracking_comment "$(printf '## ⚠️ Runtime validation harness generation failed\n\n%s\n\nLast 40 lines of renderer log (`%s`):\n\n~~~\n%s\n~~~\n\nTemplate mode is enabled and does not fall back to freehand generation.' "${local_failure_summary}" "${GENERATE_LOG_FILE}" "${_render_log_excerpt}")"
+		unset _render_log_excerpt
 		set_tracking_phase_label "ai:validation-failed"
 		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
 		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+	17)
+		local_failure_summary="Template renderer requires python3 >= 3.9 but the runner does not provide it (exit 17). This is a deterministic environment failure; retrying with the same runner image will not help."
+		_render_log_excerpt="(no renderer log captured at ${GENERATE_LOG_FILE})"
+		if [ -s "${GENERATE_LOG_FILE}" ]; then
+			_render_log_excerpt="$(tail -n 40 "${GENERATE_LOG_FILE}" 2>/dev/null || echo '(failed to read renderer log)')"
+		fi
+		post_tracking_comment "$(printf '## ⚠️ Runtime validation harness generation failed\n\n%s\n\nPython environment probe (last 40 lines of `%s`):\n\n~~~\n%s\n~~~\n\nFix: install python3 >= 3.9 on the runner image, or pin a setup-python step in the validate workflow.\n\n<!-- AI_VALIDATION_FAILURE_CLASS:deterministic_python_missing -->' "${local_failure_summary}" "${GENERATE_LOG_FILE}" "${_render_log_excerpt}")"
+		unset _render_log_excerpt
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: python3 >= 3.9 missing on runner." "ERROR"
 		exit 1
 		;;
 	15)
