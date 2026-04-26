@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1660,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1660\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1662\",\"pr_number\":1662,\"branch\":\"ai/issue-1660\",\"run_id\":\"24954974349\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24954974349\",\"changed_files\":[\"tests/test_audit_gate_identity.py\",\"tests/test_audit_gate_template_atomicity.py\",\"workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js\"]}",
+  "fingerprint": "91afa1cc0564230a3785654e34ec97fd7b91f8a1961e28fa7178ab0f6500f85f",
+  "lineage": {
+    "issue_number": 1660,
+    "parent_ids": [],
+    "pr_number": 1662,
+    "run_id": "24954974349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24954974349",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1662"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260426111128_deb5bc31df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1660,
+    "level": "run",
+    "pr_number": 1662,
+    "run_id": "24954974349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1660: https://github.com/shubhodeep1/coding-workflows/pull/1662",
+  "timestamps": {
+    "created_at": "2026-04-26T11:11:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
