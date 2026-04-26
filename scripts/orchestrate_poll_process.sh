@@ -7752,13 +7752,29 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           # transient timeline/API failure.  Surfacing exit 2 as a
           # warning makes transient lookup failures diagnosable
           # instead of silently masquerading as "still awaiting".
+          #
+          # We deliberately do NOT set STALL_HEALING_CHANGED here:
+          # that flag is reset to false ~line 10022 (top-level reset
+          # in this same per-tracking-issue iteration, run AFTER this
+          # block) before the post_state_comment / post_healing_summary
+          # readers at lines 10105 and 10108.  The other sites that set
+          # the flag (lines 7012-7203) all live inside
+          # recover_stalled_issue, which is invoked from line 10071 —
+          # i.e. AFTER the reset — so their writes survive.  Re-scoping
+          # the flag to make a write-from-this-block survive is a
+          # cross-cutting refactor that would change the lifetime of
+          # every existing reconcile site, out of scope per CLAUDE.md
+          # §5 (minimal change set) and §12 (PR review mode).  Cross-
+          # cycle visibility is preserved regardless: the tail-of-cycle
+          # close_merged_issues_sweep closes the reconciled issue in
+          # the same poll, and any follow-on state-tracking on the next
+          # cycle observes the post-close state correctly.
           _proactive_evidence_status=0
           if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
             echo "Validation fix-up issue #${fix_num}: ai:ready-to-merge with merged PR evidence; proactively backfilling ai:merged."
             if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
               echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled (proactive)."
               FIX_IS_MERGED="true"
-              STALL_HEALING_CHANGED="true"
             else
               echo "::warning::Validation fix-up issue #${fix_num}: proactive ai:merged backfill failed; will retry next cycle." >&2
               echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
