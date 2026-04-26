@@ -2289,7 +2289,7 @@ case "${renderer_exit}" in
 	14)
 		local_failure_summary="Template renderer subprocess (\`scripts/render_validation_templates.py\`) exited non-zero (exit 14). Common causes: missing renderer dependencies (\`pyyaml\`, \`jsonschema\`, \`jinja2\`), invalid \`.ai/validate.yml\`, schema-validation failure, or template-collection error."
 		_render_log_excerpt="(no renderer log captured at ${GENERATE_LOG_FILE})"
-		if [ -f "${GENERATE_LOG_FILE}" ]; then
+		if [ -s "${GENERATE_LOG_FILE}" ]; then
 			_render_log_excerpt="$(tail -n 40 "${GENERATE_LOG_FILE}" 2>/dev/null || echo '(failed to read renderer log)')"
 		fi
 		post_tracking_comment "$(printf '## ⚠️ Runtime validation harness generation failed\n\n%s\n\nLast 40 lines of renderer log (\`%s\`):\n\n~~~\n%s\n~~~\n\nTemplate mode is enabled and does not fall back to freehand generation.' "${local_failure_summary}" "${GENERATE_LOG_FILE}" "${_render_log_excerpt}")"
@@ -2302,7 +2302,7 @@ case "${renderer_exit}" in
 	17)
 		local_failure_summary="Template renderer requires python3 >= 3.9 but the runner does not provide it (exit 17). This is a deterministic environment failure; retrying with the same runner image will not help."
 		_render_log_excerpt="(no renderer log captured at ${GENERATE_LOG_FILE})"
-		if [ -f "${GENERATE_LOG_FILE}" ]; then
+		if [ -s "${GENERATE_LOG_FILE}" ]; then
 			_render_log_excerpt="$(tail -n 40 "${GENERATE_LOG_FILE}" 2>/dev/null || echo '(failed to read renderer log)')"
 		fi
 		post_tracking_comment "$(printf '## ⚠️ Runtime validation harness generation failed\n\n%s\n\nPython environment probe (last 40 lines of \`%s\`):\n\n~~~\n%s\n~~~\n\nFix: install python3 >= 3.9 on the runner image, or pin a setup-python step in the validate workflow.\n\n<!-- AI_VALIDATION_FAILURE_CLASS:deterministic_python_missing -->' "${local_failure_summary}" "${GENERATE_LOG_FILE}" "${_render_log_excerpt}")"
