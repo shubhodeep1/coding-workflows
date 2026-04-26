@@ -40,18 +40,73 @@ jobs:
           TEMPLATES_REPO="shubhodeep1/coding-workflows"
           TEMPLATES_REF="stable"
           TEMPLATES_DIR="workflow-templates"
+          SCRIPTS_DIR="scripts"
 
-          # Clone only the workflow-templates directory (sparse checkout)
+          # Clone only the workflow-templates and scripts directories (sparse checkout)
           TMPDIR=$(mktemp -d)
           git clone --depth 1 --branch "${TEMPLATES_REF}" \
             --filter=blob:none --sparse \
             "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
             "${TMPDIR}/upstream"
           cd "${TMPDIR}/upstream"
-          git sparse-checkout set "${TEMPLATES_DIR}"
+          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
           cd -
 
           echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Apply canonical audit-gate assets
+        id: audit_gate
+        run: |
+          set -euo pipefail
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          CONTRACT_DIR="${UPSTREAM_DIR}/audit-gate"
+          RESULT_FILE="/tmp/audit_gate_apply_result.json"
+          CHANGED_FILES_FILE="/tmp/audit_gate_changed_files.txt"
+
+          python3 "${UPSTREAM_DIR}/../scripts/apply_audit_gate_assets.py" \
+            --contract-root "${CONTRACT_DIR}" \
+            --repo-root "." \
+            --result-file "${RESULT_FILE}" \
+            --changed-files-file "${CHANGED_FILES_FILE}"
+
+          status="$(python3 - <<'PY' "${RESULT_FILE}"
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          print(payload.get('status', ''))
+          PY
+          )"
+          script_action="$(python3 - <<'PY' "${RESULT_FILE}"
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          print(payload.get('package_script_action', ''))
+          PY
+          )"
+          message="$(python3 - <<'PY' "${RESULT_FILE}"
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          print(payload.get('message', ''))
+          PY
+          )"
+          if [ -s "${CHANGED_FILES_FILE}" ]; then
+            changed_count=$(wc -l < "${CHANGED_FILES_FILE}" | tr -d ' ')
+          else
+            changed_count=0
+          fi
+
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          echo "package_script_action=${script_action}" >> "$GITHUB_OUTPUT"
+          echo "changed_count=${changed_count}" >> "$GITHUB_OUTPUT"
+          echo "message=${message}" >> "$GITHUB_OUTPUT"
 
       - name: Compare and update workflow wrappers
         id: update
@@ -178,7 +233,7 @@ jobs:
           fi
 
       - name: Commit and push updates
-        if: steps.update.outputs.has_updates == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied'
         run: |
           set -euo pipefail
 
@@ -186,15 +241,36 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add .github/workflows/
+          if [ -f /tmp/audit_gate_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              git add -- "$changed_path"
+            done < /tmp/audit_gate_changed_files.txt
+          fi
 
           COMMIT_BODY=""
           UPDATED_LIST=$(cat /tmp/updated_files.txt)
           CREATED_LIST=$(cat /tmp/created_files.txt)
+          AUDIT_CHANGED_LIST=""
+          if [ -f /tmp/audit_gate_changed_files.txt ] && [ -s /tmp/audit_gate_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              AUDIT_CHANGED_LIST="${AUDIT_CHANGED_LIST}• ${changed_path}\n"
+            done < /tmp/audit_gate_changed_files.txt
+          fi
           if [ -n "$UPDATED_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Updated templates:\n${UPDATED_LIST}\n"
           fi
           if [ -n "$CREATED_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}New templates:\n${CREATED_LIST}\n"
+          fi
+          if [ -n "$AUDIT_CHANGED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Audit gate assets:\n${AUDIT_CHANGED_LIST}\n"
+          fi
+
+          if git diff --cached --quiet; then
+            echo "No staged changes detected after update step; skipping commit."
+            exit 0
           fi
 
           git commit -m "$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\n\n%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.' "$COMMIT_BODY")"
@@ -202,7 +278,7 @@ jobs:
           git push
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -242,6 +318,11 @@ jobs:
           CREATED_COUNT="${{ steps.update.outputs.templates_created }}"
           UPDATED_LIST=$(cat /tmp/updated_files.txt)
           CREATED_LIST=$(cat /tmp/created_files.txt)
+          AUDIT_GATE_STATUS="${{ steps.audit_gate.outputs.status }}"
+          AUDIT_GATE_CHANGED_LIST=""
+          if [ -f /tmp/audit_gate_changed_files.txt ] && [ -s /tmp/audit_gate_changed_files.txt ]; then
+            AUDIT_GATE_CHANGED_LIST=$(cat /tmp/audit_gate_changed_files.txt)
+          fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           MSG="Workflow wrappers updated in ${REPO}
@@ -255,6 +336,11 @@ jobs:
             MSG="${MSG}
           ${CREATED_COUNT} new wrapper(s) added:
           ${CREATED_LIST}"
+          fi
+          if [ "${AUDIT_GATE_STATUS}" = "applied" ] && [ -n "$AUDIT_GATE_CHANGED_LIST" ]; then
+            MSG="${MSG}
+          Audit-gate assets applied:
+          ${AUDIT_GATE_CHANGED_LIST}"
           fi
           MSG="${MSG}
           Source: coding-workflows@stable
@@ -280,6 +366,10 @@ jobs:
           TEMPLATES_CHECKED="${{ steps.update.outputs.templates_checked }}"
           TEMPLATES_UPDATED="${{ steps.update.outputs.templates_updated }}"
           TEMPLATES_CREATED="${{ steps.update.outputs.templates_created }}"
+          AUDIT_GATE_STATUS="${{ steps.audit_gate.outputs.status }}"
+          AUDIT_GATE_SCRIPT_ACTION="${{ steps.audit_gate.outputs.package_script_action }}"
+          AUDIT_GATE_CHANGED_COUNT="${{ steps.audit_gate.outputs.changed_count }}"
+          AUDIT_GATE_MESSAGE="${{ steps.audit_gate.outputs.message }}"
           FAILURE_REASON_CODE="${{ steps.update.outputs.failure_reason_code }}"
           FAILURE_REASON_DETAIL="${{ steps.update.outputs.failure_reason_detail }}"
           FAILURE_REASON_FILE="/tmp/update_workflows_failure_reason.txt"
@@ -332,6 +422,12 @@ jobs:
           echo "- **Templates checked:** ${TEMPLATES_CHECKED}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Templates updated:** ${TEMPLATES_UPDATED}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Templates created:** ${TEMPLATES_CREATED}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Audit gate status:** ${AUDIT_GATE_STATUS:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Audit gate package script action:** ${AUDIT_GATE_SCRIPT_ACTION:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Audit gate changed files:** ${AUDIT_GATE_CHANGED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${AUDIT_GATE_MESSAGE:-}" ]; then
+            echo "- **Audit gate message:** ${AUDIT_GATE_MESSAGE}" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${HAS_UPDATES}" = "true" ]; then
@@ -358,4 +454,11 @@ jobs:
             fi
           else
             echo "All wrappers are up to date." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -s /tmp/audit_gate_changed_files.txt ]; then
+            echo "**Audit gate files:**" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/audit_gate_changed_files.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
