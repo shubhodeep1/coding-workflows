@@ -32,6 +32,27 @@ _is_gh_rate_limit()
 }
 
 # ---------------------------------------------------------------
+# _is_gh_permanent_failure — detect deterministic, non-retryable
+# failures that no amount of retrying will fix.
+#
+# Matches:
+#   * label-edit idempotent cases:   'X' not found
+#     (gh prints this when --remove-label targets a label that is
+#     not on the issue; retrying just burns API budget.)
+#   * HTTP 404 Not Found             (resource doesn't exist)
+#   * HTTP 422 Unprocessable Entity  (validation / already-exists)
+#   * "Resource not accessible by integration"  (token scope)
+#
+# Returns 0 (true) if the text indicates such a failure.
+# Conservative on purpose — only matches conditions that retrying
+# cannot resolve.
+# ---------------------------------------------------------------
+_is_gh_permanent_failure()
+{
+	printf '%s' "$1" | grep -qiE "'[^']+' not found|HTTP 404|HTTP 422|Resource not accessible by integration"
+}
+
+# ---------------------------------------------------------------
 # _sleep_until_reset — compute wait from an epoch timestamp.
 #
 # Caps at 600 s, floors at 1 s, falls back to 30 s if the
@@ -360,6 +381,15 @@ gh_retry()
 		local stderr_content
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
+		if _is_gh_permanent_failure "${stderr_content}"; then
+			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
+			if [ -n "${stderr_content}" ]; then
+				echo "::warning::  stderr: ${stderr_content}" >&2
+			fi
+			rm -f "${stderr_file}"
+			return 1
+		fi
+
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
@@ -417,6 +447,15 @@ gh_retry_to_file()
 
 		local stderr_content
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
+
+		if _is_gh_permanent_failure "${stderr_content}"; then
+			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
+			if [ -n "${stderr_content}" ]; then
+				echo "::warning::  stderr: ${stderr_content}" >&2
+			fi
+			rm -f "${stderr_file}"
+			return 1
+		fi
 
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
