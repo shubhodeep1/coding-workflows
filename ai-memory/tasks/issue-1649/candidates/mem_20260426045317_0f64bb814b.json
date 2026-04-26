@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n\n- HEAD: `7d5ce5f4e6899081de0941dda0c0e48421062197`\n- Checked-out branch: `orchestrator/project-1647`\n- Integration branch metadata: `orchestrator/project-1647`\n- Integration branch mismatch: `false`\n\nClarification mapping\n\n- No `Q1/Q2/...` questions were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` means the issue was considered clear enough to plan without additional input.\n\nRepresentative pattern\n\n- Follow the existing manual command gate around `/revalidate` in `scripts/orchestrate_poll_process.sh` and the nearby tests in `tests/test_orchestrate_poll_process.py` as the pattern for \u201ccomment after latest state comment triggers a scoped state transition\u201d.\n- Keep that validation path unchanged; only extend the non-validation `/judge_resume` branch.\n\nImplementation plan\n\n1. Files likely to change\n\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n\n2. Functions / modules to implement\n\n- In `scripts/orchestrate_poll_process.sh`, replace the current boolean-only `/judge_resume` detection with parsing of the matching post-state comment body so the script can distinguish:\n  - plain `/judge_resume`\n  - `/judge_resume --reset-recovery`\n  - `/judge_resume --reset-stall`\n  - `/judge_resume --force`\n- Keep the existing validation guard intact:\n  - `/judge_resume` continues to apply only when the project is `failed` and does not carry `ai:validation-failed` / `ai:validate-failed`\n  - `/revalidate` remains the only recovery path for validation-failed projects\n- Update the `/judge_resume` state mutation so it always sets `status = \"in_progress\"` but only zeroes:\n  - `recovery_count` when `--reset-recovery` or `--force` is present\n  - `judge_stall_cycles` when `--reset-stall` or `--force` is present\n- Build one shared resume summary string and reuse it for:\n  - the stdout `echo` line\n  - the tracking issue comment\n  - the `tg_notify` message\n  so all three surfaces report the same preserved/reset result.\n\n3. Data structures affected\n\n- Orchestrator state fields in `STATE_FILE`:\n  - `status`\n  - `judge_stall_cycles`\n  - `recovery_count`\n- Backward-compat read paths remain relevant:\n  - `judge_stall_cycles // judge_cycle`\n  - `recovery_count // recovery_attempted`\n- No schema additions are needed.\n- Validation-only fields stay untouched:\n  - `validation_recovery_count`\n  - validation labels\n  - `/revalidate` flow\n\n4. API / interface changes\n\n- Supported manual resume commands after the change:\n  - `/judge_resume`\n  - `/judge_resume --reset-recovery`\n  - `/judge_resume --reset-stall`\n  - `/judge_resume --force`\n- Preserve-by-default becomes the new base behavior:\n  - extra trailing text must still allow resume\n  - unknown flags/text must not imply any reset\n- No README / `agents.md` changes in this issue, per the issue boundary.\n\n5. Potential risks / edge cases\n\n- The current regex matches any `/judge_resume ...` comment and resets both counters unconditionally; that is the exact bug to remove.\n- Flag parsing must use exact token matches for `--reset-recovery`, `--reset-stall`, and `--force`; unknown trailing tokens must be ignored for reset purposes.\n- Preserve behavior must not accidentally fabricate zeroes when legacy state omits `judge_stall_cycles` or `recovery_count`.\n- If multiple `/judge_resume` comments exist after the latest `ORCHESTRATOR_STATE_V1` comment before one poll cycle, the implementation should make precedence deterministic; using the latest matching resume comment is the safest approach.\n- Keep message wording synchronized across stdout, tracking comment, and Telegram/debug output so they cannot drift.\n\n6. Testing considerations\n\n- Extend `tests/test_orchestrate_poll_process.py` using the existing `_base_state(...)` + `_run_poller(...)` harness and the nearby `/revalidate` tests as the model.\n- Add coverage for:\n  - plain `/judge_resume` moves `failed -> in_progress` and preserves both `judge_stall_cycles` and `recovery_count`\n  - `/judge_resume --reset-recovery` resets only `recovery_count`\n  - `/judge_resume --reset-stall` resets only `judge_stall_cycles`\n  - `/judge_resume --force` resets both\n  - `/judge_resume` with unknown trailing text/flag preserves both counters\n  - validation-failed project with `/judge_resume` remains ignored\n- Assert on:\n  - `result[\"latest_state\"]`\n  - tracking issue comments under `result[\"issues\"][\"192\"][\"comments\"]`\n  - `result[\"stdout\"]`\n- Keep existing `/revalidate` tests passing to prove the validation-only path stayed isolated.\n\nConflict check\n\n- No factual conflict found between the issue and the codebase.\n- Current code matches the reported problem: the `/judge_resume` block in `scripts/orchestrate_poll_process.sh` currently resets both `judge_stall_cycles` and `recovery_count` for any post-state `/judge_resume...` comment.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "061bebce74c7420a8a12fc36edf69fdd505baf72336b2fb2a1ecf3cafc5210c9",
+  "lineage": {
+    "issue_number": 1649,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24948446551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24948446551",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1649"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426045317_0f64bb814b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1649,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24948446551"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1649",
+  "timestamps": {
+    "created_at": "2026-04-26T04:53:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
