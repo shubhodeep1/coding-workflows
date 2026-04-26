@@ -208,6 +208,7 @@ def test_audit_gate_prompt_contract_requires_concrete_supported_remediation() ->
 	for marker in (
 		"npm run audit:ci -- --write",
 		"security/dependency-audit-allowlist.json",
+		"scripts/security/check-npm-audit.js",
 		"prefer ghsa",
 	):
 		assert marker in diagnose, (
