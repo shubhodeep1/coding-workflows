@@ -15,8 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
+try:
+	from validation_template_bootstrap import bootstrap_validation_manifest
+except ModuleNotFoundError:
+	from scripts.validation_template_bootstrap import bootstrap_validation_manifest
+
 
 SCHEMA_VERSION = "1"
+SELFTEST_BOOTSTRAP_MARKER = ".validation-selftest-bootstrap-marker"
 
 
 class FixtureSpec(NamedTuple):
@@ -24,6 +30,7 @@ class FixtureSpec(NamedTuple):
 	source_path: Path
 	manifest_path: Path
 	legacy_manifest: bool = False
+	bootstrap_on_missing_manifest: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,25 +105,35 @@ def _discover_fixtures(fixtures_root: Path) -> list[FixtureSpec]:
 		return []
 
 	fixtures_root_resolved = fixtures_root.resolve()
-	fixture_dirs = sorted(
-		[
-			child.resolve()
-			for child in fixtures_root.iterdir()
-			if child.is_dir()
-			and not child.name.startswith(".")
-			and (child / ".ai" / "validate.yml").is_file()
-		]
-	)
-	if fixture_dirs:
-		return [
-			FixtureSpec(
-				name=fixture_dir.name,
-				source_path=fixture_dir,
-				manifest_path=fixture_dir / ".ai" / "validate.yml",
-				legacy_manifest=False,
+	fixture_specs: list[FixtureSpec] = []
+	for child in sorted(fixtures_root.iterdir(), key=lambda path: path.name):
+		if not child.is_dir() or child.name.startswith("."):
+			continue
+		fixture_dir = child.resolve()
+		manifest_path = fixture_dir / ".ai" / "validate.yml"
+		if manifest_path.is_file():
+			fixture_specs.append(
+				FixtureSpec(
+					name=fixture_dir.name,
+					source_path=fixture_dir,
+					manifest_path=manifest_path,
+					legacy_manifest=False,
+					bootstrap_on_missing_manifest=False,
+				)
 			)
-			for fixture_dir in fixture_dirs
-		]
+			continue
+		if (fixture_dir / SELFTEST_BOOTSTRAP_MARKER).is_file():
+			fixture_specs.append(
+				FixtureSpec(
+					name=fixture_dir.name,
+					source_path=fixture_dir,
+					manifest_path=manifest_path,
+					legacy_manifest=False,
+					bootstrap_on_missing_manifest=True,
+				)
+			)
+	if fixture_specs:
+		return fixture_specs
 
 	manifest_paths = sorted(fixtures_root.glob("*.yml")) + sorted(fixtures_root.glob("*.yaml"))
 	discovered: list[FixtureSpec] = []
@@ -134,6 +151,7 @@ def _discover_fixtures(fixtures_root: Path) -> list[FixtureSpec]:
 				source_path=resolved.parent,
 				manifest_path=resolved,
 				legacy_manifest=True,
+				bootstrap_on_missing_manifest=False,
 			)
 		)
 	return discovered
@@ -273,6 +291,7 @@ def _stage_clone(
 		}, None, None
 
 	started = time.monotonic()
+	bootstrap_diagnostics: list[str] = []
 	try:
 		if fixture.legacy_manifest:
 			workspace_manifest = workspace_root / ".ai" / "validate.yml"
@@ -281,8 +300,6 @@ def _stage_clone(
 				raise FileNotFoundError(f"Fixture manifest missing: {fixture.manifest_path.as_posix()}")
 			shutil.copy2(fixture.manifest_path, workspace_manifest)
 		else:
-			if not fixture.manifest_path.exists():
-				raise FileNotFoundError(f"Fixture manifest missing: {fixture.manifest_path.as_posix()}")
 			shutil.copytree(
 				fixture.source_path,
 				workspace_root,
@@ -290,9 +307,18 @@ def _stage_clone(
 				ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
 			)
 			workspace_manifest = workspace_root / ".ai" / "validate.yml"
-			if not workspace_manifest.exists():
+			if fixture.manifest_path.exists():
+				if not workspace_manifest.exists():
+					raise FileNotFoundError(
+						f"Prepared workspace is missing .ai/validate.yml: {workspace_manifest.as_posix()}"
+					)
+			elif fixture.bootstrap_on_missing_manifest:
+				bootstrap = bootstrap_validation_manifest(source_root=repo_root, workspace_root=workspace_root)
+				workspace_manifest = bootstrap.manifest_path
+				bootstrap_diagnostics = list(bootstrap.diagnostics)
+			else:
 				raise FileNotFoundError(
-					f"Prepared workspace is missing .ai/validate.yml: {workspace_manifest.as_posix()}"
+					f"Fixture manifest missing: {fixture.manifest_path.as_posix()}"
 				)
 	except (OSError, shutil.Error, FileNotFoundError) as exc:
 		duration = time.monotonic() - started
@@ -306,13 +332,16 @@ def _stage_clone(
 
 	duration = time.monotonic() - started
 	_write_prepare_log(log_path, fixture.source_path, workspace_root, workspace_manifest)
-	return {
+	clone_result: dict[str, Any] = {
 		"status": "pass",
 		"duration_seconds": round(duration, 3),
 		"log_path": _repo_rel(log_path, repo_root),
 		"workspace_path": _repo_rel(workspace_root, repo_root),
 		"workspace_manifest_path": _repo_rel(workspace_manifest, repo_root),
-	}, workspace_root, workspace_manifest
+	}
+	if bootstrap_diagnostics:
+		clone_result["bootstrap_diagnostics"] = bootstrap_diagnostics
+	return clone_result, workspace_root, workspace_manifest
 
 
 def _stage_render(repo_root: Path, manifest_path: Path, output_root: Path, fixture_log_dir: Path) -> dict[str, Any]:
@@ -527,7 +556,8 @@ def main(argv: list[str] | None = None) -> int:
 			"repo_root": _repo_rel(repo_root, repo_root),
 			"error": (
 				"No fixture workspaces or manifests found in "
-				f"{fixtures_root.as_posix()} (expected fixture directories containing .ai/validate.yml)"
+				f"{fixtures_root.as_posix()} (expected fixture directories containing .ai/validate.yml "
+				f"or {SELFTEST_BOOTSTRAP_MARKER})"
 			),
 		}
 		summary_path.parent.mkdir(parents=True, exist_ok=True)

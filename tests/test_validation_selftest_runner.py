@@ -409,6 +409,58 @@ def test_legacy_manifest_layout_still_supported_for_unit_tests() -> None:
 		assert fixture["stages"]["runtime"]["status"] == "pass"
 
 
+def test_runner_bootstraps_manifestless_marked_fixture() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-selftest-runner-") as td:
+		work_root = Path(td)
+		fixtures_root = work_root / "fixtures"
+		summary_path = work_root / "summary" / "selftest.json"
+		logs_root = work_root / "logs"
+
+		bootstrap_fixture = fixtures_root / "python-repo-checks-bootstrap"
+		bootstrap_fixture.mkdir(parents=True, exist_ok=True)
+		(bootstrap_fixture / MATRIX_MODULE.SELFTEST_BOOTSTRAP_MARKER).write_text(
+			"bootstrap_validation_manifest=true\n",
+			encoding="utf-8",
+		)
+
+		result = _run_matrix(
+			work_root,
+			fixtures_root,
+			summary_path,
+			logs_root,
+			runtime_command="python3 -c \"print('runtime ok')\"",
+		)
+		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+		summary = _load_summary(summary_path)
+		assert summary["overall_status"] == "pass"
+		assert summary["totals"] == {"fixtures": 1, "passed": 1, "failed": 0}
+		fixture = summary["fixtures"][0]
+		assert fixture["name"] == "python-repo-checks-bootstrap"
+		assert fixture["status"] == "pass"
+		assert fixture["stages"]["clone"]["status"] == "pass"
+		assert fixture["stages"]["render"]["status"] == "pass"
+		assert fixture["stages"]["lint"]["status"] == "pass"
+		assert fixture["stages"]["runtime"]["status"] == "pass"
+		bootstrap_diagnostics = fixture["stages"]["clone"].get("bootstrap_diagnostics")
+		assert bootstrap_diagnostics is not None
+		assert "manifest_bootstrapped_from: examples/validation-fixtures/python-repo-checks.yml" in bootstrap_diagnostics
+		assert "repo_check_entry_seeded: scripts/run_validation_repo_checks.sh" in bootstrap_diagnostics
+
+		workspace_path = Path(fixture["workspace_path"])
+		if not workspace_path.is_absolute():
+			workspace_path = REPO_ROOT / workspace_path
+		manifest_path = workspace_path / ".ai" / "validate.yml"
+		assert manifest_path.is_file()
+		expected_manifest = (REPO_ROOT / "examples" / "validation-fixtures" / "python-repo-checks.yml").read_text(
+			encoding="utf-8"
+		)
+		assert manifest_path.read_text(encoding="utf-8") == expected_manifest
+		seeded_entry = workspace_path / "scripts" / "run_validation_repo_checks.sh"
+		assert seeded_entry.is_file()
+		assert os.access(seeded_entry, os.X_OK)
+		_assert_stage_logs_exist(fixture)
+
+
 def main() -> int:
 	test_runner_passes_two_supported_family_fixtures()
 	test_runner_ignores_directories_without_manifest()
@@ -417,8 +469,11 @@ def main() -> int:
 	test_runner_surfaces_runtime_failure_in_summary()
 	test_runner_fails_when_no_fixtures_discovered()
 	test_legacy_manifest_layout_still_supported_for_unit_tests()
+	test_runner_bootstraps_manifestless_marked_fixture()
 	return 0
 
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+

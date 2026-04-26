@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+	from validation_template_bootstrap import bootstrap_validation_manifest
+except ModuleNotFoundError:
+	from scripts.validation_template_bootstrap import bootstrap_validation_manifest
+
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PR_NUMBER_RE = re.compile(r"/pull/(?P<number>\d+)(?:/|$|#|\?)")
@@ -158,9 +163,14 @@ class ValidationRefreshRunner:
 
 		manifest_path = repo_dir / ".ai" / "validate.yml"
 		if not manifest_path.is_file():
-			result.outcome = "skipped"
-			result.diagnostics.append("manifest_missing: .ai/validate.yml")
-			return result
+			try:
+				bootstrap = bootstrap_validation_manifest(source_root=self.source_root, workspace_root=repo_dir)
+			except (OSError, FileNotFoundError) as exc:
+				result.outcome = "error"
+				result.diagnostics.append(f"manifest_bootstrap_failed: {exc}")
+				return result
+			manifest_path = bootstrap.manifest_path
+			result.diagnostics.extend(bootstrap.diagnostics)
 
 		pipeline_green, diagnostics = self._run_refresh_pipeline(repo_dir, manifest_path)
 		result.diagnostics.extend(diagnostics)
