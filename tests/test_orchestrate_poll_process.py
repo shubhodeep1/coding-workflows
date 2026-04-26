@@ -382,6 +382,7 @@ def _run_poller(
 	stall_judge_trigger_count: str = "2",
 	enable_stall_human_terminalization: str = "false",
 	enable_clean_wave_judge_skip: str = "true",
+	judge_repeat_fingerprint_max: str = "2",
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1580,6 +1581,7 @@ sys.exit(proc.returncode)
 				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
 				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"ENABLE_CLEAN_WAVE_JUDGE_SKIP": enable_clean_wave_judge_skip,
+				"JUDGE_REPEAT_FINGERPRINT_MAX": judge_repeat_fingerprint_max,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
@@ -3477,6 +3479,132 @@ def test_clean_wave_skip_blocked_when_stuck_wave_forces_judge():
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Judge Evaluation" in body for body in tracking_bodies)
+
+
+def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state.pop("judge_last_fingerprint", None)
+	state.pop("judge_fingerprint_repeat_count", None)
+	judge_json = {
+		"status": "failed",
+		"justification": "npm run audit:ci failed in scripts/lint.sh:123 at 2026-01-01T12:34:56Z cycle 5/10",
+		"assessment": "audit gate still fails",
+		"new_issues": [],
+		"issues_to_revert": [],
+	}
+
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="5",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=judge_json,
+	)
+	first_state = first["latest_state"]
+	assert first_state["recovery_count"] == 1
+	assert first_state["judge_fingerprint_repeat_count"] == 1
+	assert first_state["judge_last_fingerprint"]
+	assert first_state["status"] == "in_progress"
+	assert len(first.get("created_issues", [])) == 0
+
+	second = _run_poller(
+		state=first_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="5",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=judge_json,
+	)
+	second_state = second["latest_state"]
+	assert second_state["recovery_count"] == 2
+	assert second_state["judge_fingerprint_repeat_count"] == 2
+	assert second_state["status"] == "in_progress"
+	assert len(second.get("created_issues", [])) == 0
+
+	third = _run_poller(
+		state=second_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "failed",
+			"justification": "npm run audit:ci failed in scripts/lint.sh:987 at 2026-01-01T12:39:56Z cycle 7/10",
+			"assessment": "same gate failure with cosmetic drift",
+			"new_issues": [{"id": "fixup-1", "title": "Fix-up 1", "body": "Fix gating failure"}],
+			"issues_to_revert": [],
+		},
+	)
+	third_state = third["latest_state"]
+	assert third_state["status"] == "failed"
+	assert third_state["judge_fingerprint_repeat_count"] == 3
+	assert third_state["recovery_count"] == 2
+	assert len(third.get("created_issues", [])) == 0
+	assert "ai:blocked" in third["tracking_labels"]
+	tracking_bodies = [c.get("body", "") for c in third["issues"]["192"]["comments"]]
+	assert any("Judge repeat-fingerprint breaker triggered" in body for body in tracking_bodies)
+	breaker_comment = next(body for body in tracking_bodies if "Judge repeat-fingerprint breaker triggered" in body)
+	assert "scripts/lint.sh" in breaker_comment
+	assert ":987" not in breaker_comment
+	assert "2026-01-01T12:39:56Z" not in breaker_comment
+	assert "cycle 7/10" not in breaker_comment
+
+
+def test_judge_repeat_fingerprint_normalization_resets_on_material_change():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="5",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "failed",
+			"justification": "npm run audit:ci failed in scripts/lint.sh:44 at 2026-01-01T12:34:56Z cycle 1/10",
+			"assessment": "first failure",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="5",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "failed",
+			"justification": "tests failed in scripts/tests.sh:88 at 2026-01-01T12:40:00Z cycle 2/10",
+			"assessment": "materially different failure",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	ls = second["latest_state"]
+	assert ls["judge_fingerprint_repeat_count"] == 1
+	assert ls["recovery_count"] == 2
+	assert ls["status"] == "in_progress"
+	assert len(second.get("created_issues", [])) == 0
+
+
+def test_judge_repeat_fingerprint_empty_justification_fail_open():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state.update({"judge_last_fingerprint": "abc123", "judge_fingerprint_repeat_count": 2})
+	result = _run_poller(state=state, enable_validation="false", max_validate_cycles="3", enable_clean_wave_judge_skip="false", judge_repeat_fingerprint_max="2", issue_labels={10: ["ai:merged"]}, codex_json={"status": "failed", "justification": "", "assessment": "missing details", "new_issues": [], "issues_to_revert": []})
+	ls = result["latest_state"]
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert ls["status"] == "in_progress"
+	assert ls["recovery_count"] == 1
+	assert "ai:blocked" not in result["tracking_labels"]
 
 
 def test_backward_scan_updates_prior_wave_merged_issue():
