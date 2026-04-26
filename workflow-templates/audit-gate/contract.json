@@ -1,0 +1,16 @@
+{
+  "package_script": {
+    "name": "audit:ci",
+    "value": "node scripts/security/check-npm-audit.js"
+  },
+  "managed_files": [
+    {
+      "source": "assets/scripts/security/check-npm-audit.js",
+      "target": "scripts/security/check-npm-audit.js"
+    },
+    {
+      "source": "assets/security/dependency-audit-allowlist.json",
+      "target": "security/dependency-audit-allowlist.json"
+    }
+  ]
+}

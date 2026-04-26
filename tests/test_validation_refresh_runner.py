@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -428,6 +429,74 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 				assert env_overrides.get("GH_TOKEN") == ""
 				assert env_overrides.get("GITHUB_TOKEN") == ""
 				assert env_overrides.get("LOG_DIR") == str(expected_log_dir)
+		executor.assert_consumed()
+
+
+def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-bootstrap-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		stub_manifest = (
+			(REPO_ROOT / "examples" / "validation-fixtures" / "python-repo-checks.yml")
+			.read_text(encoding="utf-8")
+			.strip()
+		)
+		bootstrapped_untracked_status = "?? .ai/validate.yml\n?? scripts/run_validation_repo_checks.sh\n"
+		bootstrapped_staged_status = "A  .ai/validate.yml\nA  scripts/run_validation_repo_checks.sh\n"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			repo_dir.mkdir(parents=True, exist_ok=True)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "ls-remote"), stdout=""),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=bootstrapped_untracked_status),
+				PlannedCall(("git", "config", "user.name")),
+				PlannedCall(("git", "config", "user.email")),
+				PlannedCall(("gh", "auth", "setup-git")),
+				PlannedCall(("git", "add", "-A")),
+				PlannedCall(("git", "status"), stdout=bootstrapped_staged_status),
+				PlannedCall(("git", "commit", "-m")),
+				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
+				PlannedCall(("gh", "pr", "list"), stdout="[]"),
+				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/99\n"),
+				PlannedCall(("gh", "pr", "merge", "99")),
+			]
+		)
+
+		runner = refresh_runner.ValidationRefreshRunner(
+			source_root=REPO_ROOT,
+			branch_name=branch,
+			commit_message="chore(validation): refresh validation assets",
+			pr_title="chore(validation): refresh validation assets",
+			executor=executor,
+		)
+		result = runner.process_repository(repository, workspace)
+
+		assert result.outcome == "green"
+		assert result.changed is True
+		assert result.pr_number == 99
+		assert result.pr_url == "https://github.com/octo/demo-repo/pull/99"
+		assert f"manifest_bootstrapped_from: examples/validation-fixtures/python-repo-checks.yml" in result.diagnostics
+		assert f"repo_check_entry_seeded: scripts/run_validation_repo_checks.sh" in result.diagnostics
+		assert "no_changes_detected" not in result.diagnostics
+
+		bootstrapped_manifest = (repo_dir / ".ai" / "validate.yml").read_text(encoding="utf-8").strip()
+		assert bootstrapped_manifest == stub_manifest
+		entry_script = repo_dir / "scripts" / "run_validation_repo_checks.sh"
+		assert entry_script.is_file()
+		assert os.access(entry_script, os.X_OK)
 		executor.assert_consumed()
 
 
