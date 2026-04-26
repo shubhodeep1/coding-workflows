@@ -2250,7 +2250,7 @@ text = re.sub(r'\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}
 text = re.sub(r'\b\d{4}/\d{2}/\d{2}[ T]\d{2}:\d{2}:\d{2}\b', ' ', text)
 text = re.sub(r'\b(?:judge\s+)?cycle\s*[#:=-]?\s*\d+(?:\s*/\s*\d+)?\b', ' ', text, flags=re.IGNORECASE)
 text = re.sub(
-    r'((?:\./|/)?(?:[^/\s:]+/)*[^/\s:]+)(?::\d+)(?::\d+)?',
+    r'((?:\./|/)?(?:[^/\s:]+/)*[^/\s:]+)(?::\d+(?:-\d+)?)(?::\d+(?:-\d+)?)?',
     lambda match: match.group(1),
     text,
 )

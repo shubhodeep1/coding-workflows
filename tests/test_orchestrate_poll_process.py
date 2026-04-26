@@ -3595,6 +3595,18 @@ def test_judge_repeat_fingerprint_normalization_resets_on_material_change():
 	assert len(second.get("created_issues", [])) == 0
 
 
+def test_judge_repeat_fingerprint_empty_justification_fail_open():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state.update({"judge_last_fingerprint": "abc123", "judge_fingerprint_repeat_count": 2})
+	result = _run_poller(state=state, enable_validation="false", max_validate_cycles="3", enable_clean_wave_judge_skip="false", judge_repeat_fingerprint_max="2", issue_labels={10: ["ai:merged"]}, codex_json={"status": "failed", "justification": "", "assessment": "missing details", "new_issues": [], "issues_to_revert": []})
+	ls = result["latest_state"]
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert ls["status"] == "in_progress"
+	assert ls["recovery_count"] == 1
+	assert "ai:blocked" not in result["tracking_labels"]
+
+
 def test_backward_scan_updates_prior_wave_merged_issue():
 	"""When a prior wave has a non-terminal issue that is now ai:merged,
 	the backward scan should update its status in state."""
