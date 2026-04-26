@@ -10748,7 +10748,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
 
 The judge produced the same normalized failure fingerprint for ${JUDGE_FINGERPRINT_REPEAT_COUNT} consecutive cycle(s), exceeding JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}.
 
-- Fingerprint: \\`${JUDGE_FINGERPRINT}\\`
+- Fingerprint: ${JUDGE_FINGERPRINT}
 - Normalized justification: ${JUDGE_JUSTIFICATION_NORM:-<empty>}
 
 To avoid repeating the same recovery loop, the orchestrator is not creating additional fix-up issues or running another judge-driven auto-recovery cycle. Manual intervention is required."
