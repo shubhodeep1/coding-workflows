@@ -227,6 +227,46 @@ def test_cve_fallback_supports_object_shaped_cves_entries() -> None:
 	assert "matched allowlist entries" in result.stdout
 
 
+def test_metavulnerability_with_string_only_via_is_ignored() -> None:
+	allowlist = [
+		{
+			"package": "lodash",
+			"severity": "high",
+			"advisoryId": "GHSA-1111-2222-3333",
+		}
+	]
+	audit_payload = {
+		"auditReportVersion": 2,
+		"vulnerabilities": {
+			"lodash": {
+				"name": "lodash",
+				"severity": "high",
+				"via": [
+					{
+						"source": 1100001,
+						"name": "lodash",
+						"title": "Prototype pollution GHSA-1111-2222-3333",
+					},
+				],
+				"nodes": ["node_modules/lodash"],
+			},
+			"ui-lib": {
+				"name": "ui-lib",
+				"severity": "high",
+				"via": ["lodash"],
+				"nodes": ["node_modules/ui-lib"],
+			},
+		},
+	}
+
+	repo_root, env = _make_repo(allowlist=allowlist, audit_payload=audit_payload)
+	result = _run_gate(repo_root=repo_root, env=env)
+
+	assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+	assert "matched allowlist entries" in result.stdout
+	assert "missing advisory id" not in result.stderr
+
+
 def test_failure_output_includes_via_packages_context() -> None:
 	allowlist: list[dict[str, object]] = []
 	audit_payload = {

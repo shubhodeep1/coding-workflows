@@ -170,6 +170,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_template_atomicity.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_identity.py
 
       - name: AI label precreation contract test
         run: |

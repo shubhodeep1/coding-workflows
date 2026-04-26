@@ -245,10 +245,16 @@ function normalizeAuditFindings(payload)
 			: [];
 		const candidateRecords = advisoryRecords.length > 0 ? advisoryRecords : [vulnerability];
 		const viaPackages = collectViaPackages(vulnerability).filter((entry) => entry !== packageName);
+		const hasStringOnlyVia = Array.isArray(vulnerability.via)
+			&& vulnerability.via.length > 0
+			&& vulnerability.via.every((entry) => typeof entry === 'string');
 
 		for (const advisoryRecord of candidateRecords) {
 			const advisoryId = extractAdvisoryId(advisoryRecord);
 			if (!advisoryId) {
+				if (advisoryRecords.length === 0 && hasStringOnlyVia) {
+					continue;
+				}
 				identityErrors.push(
 					`missing advisory id for package=${packageName} severity=${severity}`,
 				);
