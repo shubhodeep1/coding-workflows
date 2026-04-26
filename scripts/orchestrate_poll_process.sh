@@ -10529,19 +10529,30 @@ sys.exit(1)
   fi
 
   JUDGE_STATUS="$(echo "${JUDGE_JSON}" | jq -r '.status')"
-  JUDGE_JUSTIFICATION="$(echo "${JUDGE_JSON}" | jq -r '.justification // "no justification provided"')"
+  JUDGE_JUSTIFICATION_RAW="$(echo "${JUDGE_JSON}" | jq -r '.justification // ""')"
+  if [ -n "${JUDGE_JUSTIFICATION_RAW}" ]; then
+    JUDGE_JUSTIFICATION="${JUDGE_JUSTIFICATION_RAW}"
+  else
+    JUDGE_JUSTIFICATION="no justification provided"
+  fi
   JUDGE_ASSESSMENT="$(echo "${JUDGE_JSON}" | jq -r '.assessment // ""')"
   NEW_ISSUES_COUNT="$(echo "${JUDGE_JSON}" | jq '.new_issues | length')"
   REVERT_COUNT="$(echo "${JUDGE_JSON}" | jq '.issues_to_revert | length')"
 
-  JUDGE_JUSTIFICATION_NORM="$(normalize_judge_justification_for_fingerprint "${JUDGE_JUSTIFICATION}")"
-  JUDGE_FINGERPRINT="$(judge_justification_fingerprint "${JUDGE_JUSTIFICATION_NORM}")"
+  JUDGE_JUSTIFICATION_NORM="$(normalize_judge_justification_for_fingerprint "${JUDGE_JUSTIFICATION_RAW}")"
+  if [ -n "${JUDGE_JUSTIFICATION_NORM}" ]; then
+    JUDGE_FINGERPRINT="$(judge_justification_fingerprint "${JUDGE_JUSTIFICATION_NORM}" 2>/dev/null || true)"
+  else
+    JUDGE_FINGERPRINT=""
+  fi
   PREV_JUDGE_FINGERPRINT="$(jq -r '.judge_last_fingerprint // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
   PREV_JUDGE_FINGERPRINT_REPEAT_COUNT="$(jq -r '.judge_fingerprint_repeat_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
   if ! [[ "${PREV_JUDGE_FINGERPRINT_REPEAT_COUNT}" =~ ^[0-9]+$ ]]; then
     PREV_JUDGE_FINGERPRINT_REPEAT_COUNT="0"
   fi
-  if [ -n "${JUDGE_FINGERPRINT}" ] && [ "${JUDGE_FINGERPRINT}" = "${PREV_JUDGE_FINGERPRINT}" ]; then
+  if [ -z "${JUDGE_FINGERPRINT}" ]; then
+    JUDGE_FINGERPRINT_REPEAT_COUNT=0
+  elif [ "${JUDGE_FINGERPRINT}" = "${PREV_JUDGE_FINGERPRINT}" ]; then
     JUDGE_FINGERPRINT_REPEAT_COUNT=$(( PREV_JUDGE_FINGERPRINT_REPEAT_COUNT + 1 ))
   else
     JUDGE_FINGERPRINT_REPEAT_COUNT=1
