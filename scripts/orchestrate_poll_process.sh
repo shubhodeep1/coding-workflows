@@ -2250,7 +2250,7 @@ text = re.sub(r'\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}
 text = re.sub(r'\b\d{4}/\d{2}/\d{2}[ T]\d{2}:\d{2}:\d{2}\b', ' ', text)
 text = re.sub(r'\b(?:judge\s+)?cycle\s*[#:=-]?\s*\d+(?:\s*/\s*\d+)?\b', ' ', text, flags=re.IGNORECASE)
 text = re.sub(
-    r'((?:\./|/)?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+)(?::\d+)(?::\d+)?',
+    r'((?:\./|/)?(?:[^/\s:]+/)*[^/\s:]+)(?::\d+)(?::\d+)?',
     lambda match: match.group(1),
     text,
 )
@@ -2261,7 +2261,15 @@ PY
 
 judge_justification_fingerprint() {
   local normalized_text="${1-}"
-  printf '%s' "${normalized_text}" | sha256sum | awk '{print $1}'
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "${normalized_text}" | sha256sum | awk '{print $1}'
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "${normalized_text}" | shasum -a 256 | awk '{print $1}'
+    return 0
+  fi
+  printf '%s' "${normalized_text}" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 }
 
 # Capture merged-sub-issue intent fingerprints for a sub-issue whose
