@@ -1087,8 +1087,10 @@ def _extract_keywords_plain(title: str, body: str) -> set[str]:
     return {t for t in tokens if t not in _KEYWORD_STOP_WORDS and len(t) > 2}
 
 
-def _parse_keyword_response(raw: str) -> list[str] | None:
+def _parse_keyword_response(raw: str | None) -> list[str] | None:
     """Parse LLM response expecting a JSON array of strings. Returns None on failure."""
+    if not raw:
+        return None
     raw = raw.strip()
     # Handle markdown code fences
     if raw.startswith("```"):
