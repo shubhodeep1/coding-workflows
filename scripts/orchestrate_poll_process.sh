@@ -879,6 +879,12 @@ if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}
   MAX_RECOVERY_ATTEMPTS="3"
 fi
 
+JUDGE_REPEAT_FINGERPRINT_MAX="${JUDGE_REPEAT_FINGERPRINT_MAX:-2}"
+if ! [[ "${JUDGE_REPEAT_FINGERPRINT_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_REPEAT_FINGERPRINT_MAX}" -lt 1 ]; then
+  echo "::warning::JUDGE_REPEAT_FINGERPRINT_MAX must be a positive integer; defaulting to 2"
+  JUDGE_REPEAT_FINGERPRINT_MAX="2"
+fi
+
 MAX_VALIDATION_RECOVERY_ATTEMPTS="${MAX_VALIDATION_RECOVERY_ATTEMPTS:-2}"
 if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" -lt 0 ]; then
   echo "::warning::MAX_VALIDATION_RECOVERY_ATTEMPTS must be a non-negative integer; defaulting to 2"
@@ -2222,8 +2228,40 @@ ensure_integration_conflict_state_fields() {
         integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0),
         integration_conflict_total_dispatches: (.integration_conflict_total_dispatches // 0),
         merged_issue_fingerprints: (.merged_issue_fingerprints // {}),
-        final_merge_attempt_count: (.final_merge_attempt_count // 0)
+        final_merge_attempt_count: (.final_merge_attempt_count // 0),
+        judge_last_fingerprint: (.judge_last_fingerprint // ""),
+        judge_fingerprint_repeat_count: (.judge_fingerprint_repeat_count // 0)
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+normalize_judge_justification_for_fingerprint() {
+  local raw_text="${1-}"
+  _JUDGE_JUSTIFICATION_RAW="${raw_text}" python3 - <<'PY'
+import os
+import re
+
+text = os.environ.get('_JUDGE_JUSTIFICATION_RAW', '')
+if not text:
+    print("")
+    raise SystemExit(0)
+
+text = text.replace("\r\n", "\n").replace("\r", "\n")
+text = re.sub(r'\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b', ' ', text)
+text = re.sub(r'\b\d{4}/\d{2}/\d{2}[ T]\d{2}:\d{2}:\d{2}\b', ' ', text)
+text = re.sub(r'\b(?:judge\s+)?cycle\s*[#:=-]?\s*\d+(?:\s*/\s*\d+)?\b', ' ', text, flags=re.IGNORECASE)
+text = re.sub(
+    r'((?:\./|/)?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+)(?::\d+)(?::\d+)?',
+    lambda match: match.group(1),
+    text,
+)
+text = re.sub(r'\s+', ' ', text).strip()
+print(text)
+PY
+}
+
+judge_justification_fingerprint() {
+  local normalized_text="${1-}"
+  printf '%s' "${normalized_text}" | sha256sum | awk '{print $1}'
 }
 
 # Capture merged-sub-issue intent fingerprints for a sub-issue whose
@@ -10488,6 +10526,22 @@ sys.exit(1)
   NEW_ISSUES_COUNT="$(echo "${JUDGE_JSON}" | jq '.new_issues | length')"
   REVERT_COUNT="$(echo "${JUDGE_JSON}" | jq '.issues_to_revert | length')"
 
+  JUDGE_JUSTIFICATION_NORM="$(normalize_judge_justification_for_fingerprint "${JUDGE_JUSTIFICATION}")"
+  JUDGE_FINGERPRINT="$(judge_justification_fingerprint "${JUDGE_JUSTIFICATION_NORM}")"
+  PREV_JUDGE_FINGERPRINT="$(jq -r '.judge_last_fingerprint // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  PREV_JUDGE_FINGERPRINT_REPEAT_COUNT="$(jq -r '.judge_fingerprint_repeat_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+  if ! [[ "${PREV_JUDGE_FINGERPRINT_REPEAT_COUNT}" =~ ^[0-9]+$ ]]; then
+    PREV_JUDGE_FINGERPRINT_REPEAT_COUNT="0"
+  fi
+  if [ -n "${JUDGE_FINGERPRINT}" ] && [ "${JUDGE_FINGERPRINT}" = "${PREV_JUDGE_FINGERPRINT}" ]; then
+    JUDGE_FINGERPRINT_REPEAT_COUNT=$(( PREV_JUDGE_FINGERPRINT_REPEAT_COUNT + 1 ))
+  else
+    JUDGE_FINGERPRINT_REPEAT_COUNT=1
+  fi
+  jq --arg fp "${JUDGE_FINGERPRINT}" --argjson repeat_count "${JUDGE_FINGERPRINT_REPEAT_COUNT}" \
+    '.judge_last_fingerprint = $fp | .judge_fingerprint_repeat_count = $repeat_count' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
   echo "Judge verdict: ${JUDGE_STATUS}"
   echo "Justification: ${JUDGE_JUSTIFICATION}"
   echo "New issues: ${NEW_ISSUES_COUNT}, Reverts: ${REVERT_COUNT}"
@@ -10591,6 +10645,28 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
 
     failed)
       echo "Judge declared failure."
+
+      if [ "${JUDGE_FINGERPRINT_REPEAT_COUNT}" -gt "${JUDGE_REPEAT_FINGERPRINT_MAX}" ]; then
+        echo "Judge repeat fingerprint cap exceeded (${JUDGE_FINGERPRINT_REPEAT_COUNT}/${JUDGE_REPEAT_FINGERPRINT_MAX}). Escalating to ai:blocked."
+
+        jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+        post_state_comment
+        handle_comprehensive_release_callback_if_needed "failed" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+        set_tracking_phase_label "ai:blocked"
+        post_tracking_comment "## ❌ Judge repeat-fingerprint breaker triggered
+
+The judge produced the same normalized failure fingerprint for ${JUDGE_FINGERPRINT_REPEAT_COUNT} consecutive cycle(s), exceeding JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}.
+
+- Fingerprint: \\`${JUDGE_FINGERPRINT}\\`
+- Normalized justification: ${JUDGE_JUSTIFICATION_NORM:-<empty>}
+
+To avoid repeating the same recovery loop, the orchestrator is not creating additional fix-up issues or running another judge-driven auto-recovery cycle. Manual intervention is required."
+
+        tg_cleanup_msgs "${TRACKING_NUM}"
+        tg_notify "Project #${TRACKING_NUM} blocked: repeated judge failure fingerprint exceeded JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required." "CRITICAL"
+        continue
+      fi
 
       # ---------------------------------------------------------------
       # Auto-recovery: configurable attempts (replaces single-shot boolean)
