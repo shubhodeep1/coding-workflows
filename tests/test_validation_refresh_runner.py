@@ -445,7 +445,8 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 			.read_text(encoding="utf-8")
 			.strip()
 		)
-		bootstrapped_status = "?? .ai/validate.yml\n?? scripts/run_validation_repo_checks.sh\n"
+		bootstrapped_untracked_status = "?? .ai/validate.yml\n?? scripts/run_validation_repo_checks.sh\n"
+		bootstrapped_staged_status = "A  .ai/validate.yml\nA  scripts/run_validation_repo_checks.sh\n"
 
 		def on_clone(_command: list[str], _cwd: Path | None) -> None:
 			repo_dir.mkdir(parents=True, exist_ok=True)
@@ -460,12 +461,12 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
 				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
-				PlannedCall(("git", "status"), stdout=bootstrapped_status),
+				PlannedCall(("git", "status"), stdout=bootstrapped_untracked_status),
 				PlannedCall(("git", "config", "user.name")),
 				PlannedCall(("git", "config", "user.email")),
 				PlannedCall(("gh", "auth", "setup-git")),
 				PlannedCall(("git", "add", "-A")),
-				PlannedCall(("git", "status"), stdout=bootstrapped_status),
+				PlannedCall(("git", "status"), stdout=bootstrapped_staged_status),
 				PlannedCall(("git", "commit", "-m")),
 				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
 				PlannedCall(("gh", "pr", "list"), stdout="[]"),
