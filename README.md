@@ -679,6 +679,26 @@ jobs:
 > to keep your changes, either opt out or maintain your customizations after
 > each update.
 
+> **Canonical audit-gate delivery contract:** `update_workflows.yml` applies
+> `workflow-templates/audit-gate/contract.json` atomically and idempotently.
+> The contract requires `package_script` and `managed_files`. When
+> `package.json` exists and `scripts.audit:ci` is missing (or already
+> canonical), the updater sets `scripts.audit:ci = node
+> scripts/security/check-npm-audit.js` and syncs managed files
+> (`scripts/security/check-npm-audit.js`,
+> `security/dependency-audit-allowlist.json`). Repositories with a custom
+> `scripts.audit:ci` value are preserved unchanged, and repositories without
+> `package.json` are skipped (`no_package_json`).
+
+> **Audit identity and regeneration:**
+> `scripts/security/check-npm-audit.js` matches findings on
+> `severity|package|advisoryId` (`advisoryId` prefers GHSA, then CVE).
+> `viaPackages` is retained for legacy carry-forward/diagnostics but is not
+> part of the current identity key. Use `npm run audit:ci -- --write` to
+> regenerate the allowlist; regeneration preserves curated metadata fields
+> (`reason`, `owner`, `expiresOn`) and exits with no file changes when already
+> aligned.
+
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 >
 > **Note on `@main` vs `@stable` inside this repo.** The `internal-*.yml`
@@ -965,7 +985,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ENABLE_STANDALONE_STALL_RECOVERY` | `true` | Enable standalone AI issue stall recovery in the poller |
 | `ENABLE_STALL_MERGED_PR_GUARD` | `true` | Double-check the issue's linked PR state before firing early-phase stall recovery commands; if the PR is merged, tag `ai:merged` and skip instead of posting `/reclarify` (etc). Batched GraphQL prefetch — 0 extra per-issue calls on successful prefetch; cache misses may fall back to a per-issue REST lookup. |
 | `MAX_RECOVERY_ATTEMPTS` | `3` | Max project-level recovery cycles (judge failure → auto-fix) |
-| `JUDGE_REPEAT_FINGERPRINT_MAX` | `2` | Circuit-breaker cap on consecutive identical normalized judge-failure fingerprints; exceedance escalates to `ai:blocked` and stops additional judge-driven auto-recovery for that project |
+| `JUDGE_REPEAT_FINGERPRINT_MAX` | `2` | Circuit-breaker cap on consecutive identical normalized judge-failure fingerprints (same normalized justification). Exceedance sets `ai:blocked`, posts a breaker comment (fingerprint + normalized justification), emits a CRITICAL alert, and requires manual intervention instead of additional judge-driven auto-recovery |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | `2` | Max validation-failure → judge re-evaluation cycles before terminal failure |
 | `MAX_VALIDATION_FIX_BATCH_CYCLES` | `30` | Max poll cycles a single validation fix-up batch can sit "in progress" before the poller escalates through `mark_validation_failed` |
 | `MAX_IMPL_NOOP_REISSUES` | `2` | Max automatic re-issues for `ai:implementation-failed` before closing as likely already implemented and deferring to judge verification. Enforced by both the state-based counter and the issue-local `count_noop_ancestors` walk of the `Re-issued from #N` chain (belt-and-braces); either signal trips closure |
@@ -1501,12 +1521,12 @@ This is useful after fixing the root cause manually (e.g. correcting a Docker co
 
 When a tracking issue reaches terminal `failed` status due to judge stall cycle exhaustion (`MAX_JUDGE_CYCLES`) or recovery attempt exhaustion (`MAX_RECOVERY_ATTEMPTS`), you can manually resume it by commenting `/judge_resume` on the tracking issue. The next poller cycle will:
 
-1. Reset judge stall cycles (`judge_stall_cycles` → 0).
-2. Reset recovery counter (`recovery_count` → 0).
+1. Preserve `judge_stall_cycles` and `recovery_count` by default.
+2. Reset counters only when explicit flags are present: `--reset-stall` (stall only), `--reset-recovery` (recovery only), or `--force` (both).
 3. Transition the project status from `failed` to `in_progress`.
 4. Resume normal wave processing immediately.
 
-This does **not** reset the total `judge_cycle` counter (which is informational only — it tracks wave-advance/judge-cycle progression, including clean-wave skips where the judge is intentionally not invoked). Only the stall and recovery counters that gate the failure limits are reset.
+This does **not** reset the total `judge_cycle` counter (which is informational only — it tracks wave-advance/judge-cycle progression, including clean-wave skips where the judge is intentionally not invoked).
 
 Use this after manual intervention (e.g. fixing a problematic issue, merging a stuck PR, or adjusting `MAX_JUDGE_CYCLES`/`MAX_RECOVERY_ATTEMPTS` variables). There is no limit on how many times `/judge_resume` can be used.
 
@@ -1648,13 +1668,14 @@ self-heal patches cannot be merged without explicit human action.
 - You can optionally add `.ai/validate.yml` in a consumer repo to guide harness generation and diagnosis.
 - Baseline example: [`examples/ai-validate-hints.yml`](examples/ai-validate-hints.yml).
 - If `.ai/validate.yml` is absent, validation runs a lightweight discovery phase (or reuses a cached hints file) and materializes the result into `.ai/validate.yml` in the runner's working tree so the template renderer can consume it. The materialized file is never pushed back to the consumer repo; commit your own `.ai/validate.yml` for deterministic, no-codex behavior.
+- The validation-refresh onboarding bootstrap (manifest stub + repo-check entry script) is a separate path from this runtime-only hints materialization flow.
 
 ### Validation Harness Lifecycle
 
 - Validation renders a manifest-driven harness under `validation/` from `.ai/validate.yml` via `scripts/render_validation_templates.py` + `workflow-templates/validation-harness/`.
 - `VALIDATION_USE_TEMPLATES` now defaults to `true`; setting `VALIDATION_USE_TEMPLATES=false` is a terminal guard that returns `raw_status=harness_error` because freehand generation/fix paths were removed.
 - Renderer-supported template families are currently `python-mongo-flask`, `node-hardhat-solidity`, `python-repo-checks`, and `python-mongo-repo-checks`.
-- Use `python-repo-checks` for workflow/script repositories that do not expose a long-running app entrypoint; set `entry` to a repo-local command/script (for example `scripts/run_validation_repo_checks.sh`) so validation executes meaningful local checks instead of forcing web-service startup.
+- Use `python-repo-checks` for workflow/script repositories that do not expose a long-running app entrypoint; set `entry` to a repo-local command/script (for example `scripts/run_validation_repo_checks.sh`) so validation executes meaningful local checks instead of forcing web-service startup. If this entry path was auto-seeded by validation refresh onboarding, replace the placeholder script and manifest values with repo-specific checks before relying on the harness as a release gate.
 - Freehand hint examples such as `type: http-server` in `examples/ai-validate-hints.yml` are diagnosis hints, not template-renderer family IDs.
 - `validation/validate.sh` is generated as a thin wrapper that delegates to checked-in `scripts/validate_driver.sh`.
 - Canonical runtime harness behavior now lives in `scripts/validate_driver.sh` (pre-flight, compose startup/logging, health polling, canary gating, TAP-safe counting, result emission/finalization).
@@ -1673,12 +1694,12 @@ self-heal patches cannot be merged without explicit human action.
   - Manual dispatch (`workflow_dispatch`) with optional `repos_file` and `branch_name` inputs
 - Runtime:
   - Reads target repositories from `.github/ai/consumer_repos.json`
-  - For each target repo, clones the repo, checks out/creates `ai/validation-refresh` (or configured branch), renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`), and pushes refresh commits when files changed.
+  - For each target repo, clones the repo, checks out/creates `ai/validation-refresh` (or configured branch), and ensures validation onboarding assets exist. If `.ai/validate.yml` is missing, refresh bootstraps it from `examples/validation-fixtures/python-repo-checks.yml` and ensures executable `scripts/run_validation_repo_checks.sh` exists (diagnostics include `manifest_bootstrapped_from`, `repo_check_entry_seeded`, and `repo_check_entry_preserved_existing`). It then renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`), and pushes refresh commits when files changed.
 - PR behavior:
   - Green path (render/lint/self-test pass): opens/updates a non-draft PR and enables existing repo auto-merge via `gh pr merge --squash --auto`. If auto-merge enablement fails on an existing PR, the workflow preserves the PR's prior draft state instead of forcing it back to draft.
   - Red path (any refresh stage failure with file changes): opens/updates a draft PR including diagnostics in the body.
 - Failure/no-op behavior:
-  - No `.ai/validate.yml`: repo is skipped.
+  - Manifest-less repos are bootstrapped (not skipped), but the seeded `.ai/validate.yml` and `scripts/run_validation_repo_checks.sh` are onboarding stubs. Repo owners still need to replace placeholder checks/values with real repository-specific validation logic.
   - Pipeline failure with no file diff: records error and does not create a no-op PR.
   - Workflow writes machine-readable summary JSON, appends a human summary to `$GITHUB_STEP_SUMMARY`, and sends Telegram failure notification (`TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID`) on workflow failure.
 
