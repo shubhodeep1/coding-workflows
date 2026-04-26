@@ -3791,6 +3791,7 @@ Failure class \`${_deterministic_class}\` is environment-deterministic; retrying
       '.status = "in_progress" |
        .validation_recovery_count = $count |
        .validation_failure_reason = $reason |
+       del(.validation_failure_class) |
        .validation_active_fix_issues = [] |
        .validation_fix_issues_batch_cycles = 0 |
        .validation_cycle = 1 |
@@ -3810,7 +3811,7 @@ Transitioning back to judge for re-evaluation."
   fi
 
   # Recovery budget exhausted — terminal failure
-  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = [] | .validation_fix_issues_batch_cycles = 0' \
+  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | del(.validation_failure_class) | .validation_active_fix_issues = [] | .validation_fix_issues_batch_cycles = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
@@ -7825,7 +7826,8 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
          .validation_fix_issues_batch_cycles = 0 |
          .validation_last_dispatch_cycle = 0 |
          .validation_completed_cycle = null |
-         del(.validation_failure_reason)' \
+         del(.validation_failure_reason) |
+         del(.validation_failure_class)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       gh_retry gh issue edit "${TRACKING_NUM}" \
@@ -10540,6 +10542,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
          .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
          .validation_last_dispatch_cycle = 0 |
          .validation_failure_reason = null |
+         .validation_failure_class = null |
          .validation_completed_cycle = null' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
