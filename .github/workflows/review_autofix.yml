@@ -37,6 +37,33 @@ on:
         required: false
         default: false
         type: boolean
+      # Claude-branch-review mode no-PR inputs (push-without-PR path).
+      # When the caller fires for a push to a claude/** branch that has no
+      # open PR, set force_claude_branch_review=true and pass head/base
+      # overrides so the gate can bypass its PR-API fetch and synthesize
+      # PR_META_FILE without calling /repos/{owner}/{repo}/pulls/{n}.
+      # post_review_comment.sh routes to a commit comment when PR_NUMBER
+      # is empty (see scripts/post_review_comment.sh §"Routing decision").
+      force_claude_branch_review:
+        description: "No-PR claude-branch-review path: bypass gate's PR-number requirement and run review-only mode against the head_ref_override / head_sha_override / base_ref_override inputs."
+        required: false
+        default: false
+        type: boolean
+      head_ref_override:
+        description: "Caller-supplied head branch (e.g. github.ref_name) for the no-PR claude-branch-review path."
+        required: false
+        default: ""
+        type: string
+      head_sha_override:
+        description: "Caller-supplied head SHA (e.g. github.sha) for the no-PR claude-branch-review path."
+        required: false
+        default: ""
+        type: string
+      base_ref_override:
+        description: "Caller-supplied base branch for the no-PR claude-branch-review path (defaults to the repo default branch when empty)."
+        required: false
+        default: ""
+        type: string
     secrets:
       GH_PAT:
         required: true
@@ -136,6 +163,9 @@ jobs:
           AUTOFIX_SKIP_DOC_ONLY: ${{ vars.AUTOFIX_SKIP_DOC_ONLY }}
           AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
           AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
+          # No-PR claude-branch-review path inputs (push-without-PR caller).
+          FORCE_CLAUDE_BRANCH_REVIEW: ${{ inputs.force_claude_branch_review }}
+          HEAD_REF_OVERRIDE: ${{ inputs.head_ref_override }}
         run: |
           set -euo pipefail
 
@@ -149,11 +179,26 @@ jobs:
           pr_labels=""
           pr_additions=""
           pr_deletions=""
-          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            : # fall through to existing PR-API fetch below
+          elif [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] && [ -n "${HEAD_REF_OVERRIDE:-}" ]; then
+            # No-PR claude-branch-review path: caller (push to claude/** with
+            # no open PR — see internal-review.yml resolve job) supplied the
+            # head ref directly.  Treat as an open "PR" for gating purposes;
+            # the claude-branch-review block below picks up pr_head_ref and
+            # flips claude_branch_review=true.  Skip the PR-API fetch — there
+            # is no PR.  PR-numeric-shaped fields (labels/size/state) are
+            # left empty; downstream consumers gated on
+            # CLAUDE_BRANCH_REVIEW_MODE != 'true' never read them.
+            pr_head_ref="${HEAD_REF_OVERRIDE}"
+            pr_state="open"
+            echo "AUTOFIX_GATE_NO_PR_FALLBACK head_ref=${pr_head_ref} reason=force_claude_branch_review_push"
+          else
             SHOULD_RUN="false"
             SKIP_REASON="invalid_pr_number"
             echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
-          else
+          fi
+          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             # CLAUDE.md §15: extend the existing PR fetch to also return
             # labels (force-review override check below) and per-PR
             # additions/deletions totals (deterministic-skip size check).
@@ -637,6 +682,14 @@ jobs:
       # invoking the editor / commit / push / rb_judge / auto-merge tail.
       # Sourced from the gate's claude_branch_review output. See gate.
       CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
+      # No-PR claude-branch-review path overrides (push events on claude/**
+      # without an open PR).  Read by "Collect PR metadata" and
+      # "Checkout PR head branch" to synthesize PR_META_FILE / TARGET_BRANCH
+      # without calling the GitHub PR API.  Empty strings are treated as
+      # "not in no-PR mode" — the standard PR-API path runs instead.
+      HEAD_REF_OVERRIDE_INPUT: ${{ inputs.head_ref_override }}
+      HEAD_SHA_OVERRIDE_INPUT: ${{ inputs.head_sha_override }}
+      BASE_REF_OVERRIDE_INPUT: ${{ inputs.base_ref_override }}
 
     steps:
 
@@ -943,6 +996,10 @@ jobs:
         run: df -h /
 
       - name: Validate PR number input
+        # Skip in the no-PR claude-branch-review path (push event on a
+        # claude/** branch with no open PR — PR_NUMBER is intentionally
+        # empty and post_review_comment.sh routes to a commit comment).
+        if: env.CLAUDE_BRANCH_REVIEW_MODE != 'true' || env.PR_NUMBER != ''
         run: |
           set -euo pipefail
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -951,6 +1008,8 @@ jobs:
           fi
 
       - name: Check PR state (defense-in-depth)
+        # Skip in the no-PR claude-branch-review path (no PR to query).
+        if: env.CLAUDE_BRANCH_REVIEW_MODE != 'true' || env.PR_NUMBER != ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -1196,21 +1255,64 @@ jobs:
             return 1
           }
 
-          gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
-          gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
-          jq -s 'add // []' /tmp/gh_issue_comments_raw.json > "${PR_ISSUE_COMMENTS_FILE}"
-          gh_retry /tmp/gh_reviews_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews
-          jq -s 'add // []' /tmp/gh_reviews_raw.json > "${PR_REVIEWS_FILE}"
-          gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
-          jq -s 'add // []' /tmp/gh_review_comments_raw.json > "${PR_REVIEW_COMMENTS_FILE}"
+          # No-PR claude-branch-review path: synthesize PR_PAYLOAD_FILE +
+          # PR_META_FILE from the caller-supplied head/base overrides
+          # (passed in from internal-review.yml's resolve-claude-branch-pr
+          # job for push events to claude/** with no open PR).  No GitHub
+          # API calls — PR endpoints don't exist for a branch without a
+          # PR.  Comments/reviews/review_comments arrays are empty so
+          # downstream readers (reviewer prompt assembly) see "no prior
+          # discussion".  The base ref defaults to the repository's
+          # default branch when the override is empty.
+          if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; then
+            HEAD_REF_OVERRIDE="${HEAD_REF_OVERRIDE_INPUT:-}"
+            HEAD_SHA_OVERRIDE="${HEAD_SHA_OVERRIDE_INPUT:-}"
+            BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"
+            if [ -z "${BASE_REF_OVERRIDE}" ]; then
+              BASE_REF_OVERRIDE="$(gh api "repos/${{ github.repository }}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+            fi
+            if [ -z "${HEAD_REF_OVERRIDE}" ] || [ -z "${HEAD_SHA_OVERRIDE}" ]; then
+              echo "::error::No-PR claude-branch-review path: head_ref_override and head_sha_override must be supplied by the caller."
+              exit 1
+            fi
+            jq -n \
+              --arg head_ref "${HEAD_REF_OVERRIDE}" \
+              --arg head_sha "${HEAD_SHA_OVERRIDE}" \
+              --arg base_ref "${BASE_REF_OVERRIDE}" \
+              --arg head_repo "${{ github.repository }}" \
+              '{
+                title: "",
+                body: "",
+                head: {ref: $head_ref, sha: $head_sha, repo: {full_name: $head_repo}},
+                base: {ref: $base_ref}
+              }' > "${PR_PAYLOAD_FILE}"
+            printf '[]\n' > "${PR_ISSUE_COMMENTS_FILE}"
+            printf '[]\n' > "${PR_REVIEWS_FILE}"
+            printf '[]\n' > "${PR_REVIEW_COMMENTS_FILE}"
+            jq -n \
+              --arg head_ref "${HEAD_REF_OVERRIDE}" \
+              --arg base_ref "${BASE_REF_OVERRIDE}" \
+              --arg head_repo "${{ github.repository }}" \
+              '{title: "", body: "", baseRefName: $base_ref, headRefName: $head_ref, headRepoFullName: $head_repo}' \
+              > "${PR_META_FILE}"
+            echo "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=${HEAD_REF_OVERRIDE} head_sha=${HEAD_SHA_OVERRIDE} base_ref=${BASE_REF_OVERRIDE}"
+          else
+            gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+            gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
+            jq -s 'add // []' /tmp/gh_issue_comments_raw.json > "${PR_ISSUE_COMMENTS_FILE}"
+            gh_retry /tmp/gh_reviews_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews
+            jq -s 'add // []' /tmp/gh_reviews_raw.json > "${PR_REVIEWS_FILE}"
+            gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
+            jq -s 'add // []' /tmp/gh_review_comments_raw.json > "${PR_REVIEW_COMMENTS_FILE}"
 
-          jq '{
-            title: (.title // ""),
-            body: (.body // ""),
-            baseRefName: (.base.ref // ""),
-            headRefName: (.head.ref // ""),
-            headRepoFullName: (.head.repo.full_name // "")
-          }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+            jq '{
+              title: (.title // ""),
+              body: (.body // ""),
+              baseRefName: (.base.ref // ""),
+              headRefName: (.head.ref // ""),
+              headRepoFullName: (.head.repo.full_name // "")
+            }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+          fi
 
           # Fetch linked issue title+body via GraphQL — single call that also
           # populates LINKED_ISSUES_JSON early so the late-stage "Cache linked
