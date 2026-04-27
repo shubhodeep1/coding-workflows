@@ -63,11 +63,11 @@ on:
 
 env:
   REVIEWER_MODELS: |
-    minimax/minimax-m2.5
-    moonshotai/kimi-k2.5
-    deepseek/deepseek-v3.2
-    z-ai/glm-5
-    qwen/qwen3-coder-plus
+    minimax/minimax-m2.7
+    moonshotai/kimi-k2.6
+    deepseek/deepseek-v4-pro
+    z-ai/glm-5.1
+    qwen/qwen3.6-plus
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
