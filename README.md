@@ -928,11 +928,9 @@ The analyzer is now a context-prep stage only — it loads the collector report,
   - `workflow-log-report` — `workflow_log_report.json` (aggregated metrics + 4 KB per-step `log_excerpts` quick-index).
   - `workflow-log-output` — categorised full-log directory (`summary.json` + `errors/`/`slow/`/`recent/` trees with untruncated step logs).
 - Repository commit: generated markdown report `analysis/workflow-optimization-<date>.md` is committed/pushed to `${{ github.ref_name }}`. The commit step also `git rm`s reports older than `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` (default `30`) in the same commit.
-- No-op behavior: if the report file has no diff after Codex runs, commit/push is skipped (`No report changes to commit.`); purges still apply only when there is a new report to commit alongside them.
+- No-op behavior: if neither the generated report nor any staged purge deletions produce a diff after Codex runs, commit/push is skipped (`No report changes to commit.`). Because old-report purges are staged before the diff check, they may still be committed even when the newly generated report content is unchanged.
 - Telegram summary: when configured, sends a completion message with report URL and workflow run URL, or a CRITICAL failure message when the analysis status is unknown/failed.
-- Structured logs are emitted for batch decisions and lifecycle (`batch_submit`, `batch_poll`, `batch_complete`, `batch_fallback`).
-- `memory_maintenance.yml` remains functionally unchanged (no LLM path in current repo) and now emits structured `batch_noop` compatibility logging with batch env values.
-- Low-data windows are valid: the analyzer still writes a report when input data is sparse.
+- Low-data windows are valid: the analyzer still writes a context payload (and Codex still produces a report) when input data is sparse — `prepare_analysis_context` flags `insufficient_data: true` and supplies `analysis_guidance` so the model frames the response as a collection-gap notice rather than fabricating findings.
 
 ## Required Secrets
 
