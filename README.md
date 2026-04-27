@@ -908,7 +908,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 
 The analyzer is now a context-prep stage only — it loads the collector report, computes aggregates, and writes `analysis_context.json`. The Codex pass that follows reads that JSON plus the `workflow-log-output` artifact directory directly. There is no inference call inside the Python script.
 
-- CLI used by the workflow: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (the `--codex-mode` flag is a no-op alias retained for backward compatibility; output is always `<output-dir>/analysis_context.json` and the path is printed on stdout).
+- CLI used by the workflow: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (the `--codex-mode` flag is a no-op alias retained for backward compatibility; `analysis_context.json` is written alongside the resolved output path, so with `--output <report.md>` it lands at `dirname(<report.md>)/analysis_context.json` — `--output` overrides `--output-dir` for this purpose. The path is printed on stdout).
 - `load_input_data` accepts either:
   - `--input` with a collector report (`runs` list), a combined bundle object (`run_metrics`, `summary_stats`), or a JSON array of run metrics.
   - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json`.

@@ -3,8 +3,11 @@
 
 Reads `workflow_log_report.json` produced by `scripts/collect_workflow_logs.py`,
 computes per-repo / per-workflow-family aggregates plus capped quick-index
-lists of failing/slow/recent runs, and writes the result to
-`<output-dir>/analysis_context.json`. The Codex pass in
+lists of failing/slow/recent runs, and writes `analysis_context.json` beside
+the resolved output markdown path: when `--output <report.md>` is provided,
+the JSON lands at `dirname(<report.md>)/analysis_context.json`; otherwise the
+markdown path is derived from `--output-dir` (default `analysis/`) and the
+JSON sits in that directory. The Codex pass in
 `.github/workflows/workflow-log-analysis.yml` then consumes that JSON as a
 quick index; full untruncated logs are read by Codex directly from the
 `workflow-log-output` artifact (see `--log-output-dir` in the collector).
