@@ -9,18 +9,28 @@ sync/batch pathway has been removed. These tests cover:
     `deep_dive_logs` field intentionally excluded
   * resolve_dated_output_path collision handling
   * main() writes analysis_context.json and prints its path
+
+The file is runnable two ways:
+  * via pytest (for local dev): `python3 -m pytest tests/test_analyze_workflow_logs.py`
+  * as a plain script (for CI's coverage gate at `.github/workflows/ci.yml:199`):
+    `python3 -m coverage run tests/test_analyze_workflow_logs.py`
+
+CI installs `yamllint coverage pyyaml jsonschema jinja2` only — no pytest —
+so the script-mode entry point at the bottom must NOT depend on pytest.
+That's why the test bodies use plain `try/except`/`io.StringIO` instead
+of `pytest.raises`/`capsys` fixtures.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
 from datetime import date
 from pathlib import Path
-
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +48,24 @@ spec.loader.exec_module(analyzer)
 def _write_json(path: Path, payload: object) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@contextlib.contextmanager
+def _capture_std():
+	"""Replacement for pytest's capsys fixture; works without pytest installed."""
+	out = io.StringIO()
+	err = io.StringIO()
+	with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+		yield out, err
+
+
+def _assert_raises(exc_type: type[BaseException], func, *args, **kwargs) -> BaseException:
+	"""Replacement for pytest.raises; returns the raised exception for further checks."""
+	try:
+		func(*args, **kwargs)
+	except exc_type as exc:
+		return exc
+	raise AssertionError(f"expected {exc_type.__name__} but no exception was raised")
 
 
 # ---------- argparse surface ------------------------------------------------
@@ -63,10 +91,11 @@ def test_build_parser_accepts_input_and_output():
 
 def test_build_parser_rejects_legacy_batch_flags():
 	parser = analyzer.build_parser()
-	with pytest.raises(SystemExit):
-		parser.parse_args(["--prompt-token-budget", "24000"])
-	with pytest.raises(SystemExit):
-		parser.parse_args(["--batch-mode", "auto"])
+	# argparse calls sys.exit(2) with stderr noise on unknown args; suppress
+	# the noise so the script-mode test runner output stays clean.
+	with _capture_std():
+		_assert_raises(SystemExit, parser.parse_args, ["--prompt-token-budget", "24000"])
+		_assert_raises(SystemExit, parser.parse_args, ["--batch-mode", "auto"])
 
 
 # ---------- load_input_data ------------------------------------------------
@@ -78,8 +107,7 @@ def test_load_input_data_rejects_malformed_json_input():
 		path = tmp.name
 	try:
 		args = analyzer.build_parser().parse_args(["--input", path])
-		with pytest.raises(ValueError):
-			analyzer.load_input_data(args)
+		_assert_raises(ValueError, analyzer.load_input_data, args)
 	finally:
 		Path(path).unlink(missing_ok=True)
 
@@ -106,8 +134,7 @@ def test_load_input_data_collector_report_round_trips_runs():
 def test_load_input_data_errors_when_no_data_present():
 	with tempfile.TemporaryDirectory(prefix="analyze-empty-") as td:
 		args = analyzer.build_parser().parse_args(["--data-dir", td])
-		with pytest.raises(ValueError):
-			analyzer.load_input_data(args)
+		_assert_raises(ValueError, analyzer.load_input_data, args)
 
 
 # ---------- prepare_analysis_context ---------------------------------------
@@ -219,7 +246,7 @@ def test_resolve_dated_output_path_uses_explicit_output_when_provided():
 # ---------- main() ---------------------------------------------------------
 
 
-def test_main_writes_analysis_context_and_prints_path(capsys):
+def test_main_writes_analysis_context_and_prints_path():
 	report = {
 		"runs": _make_runs(2, conclusion="failure"),
 		"summary": {"total_runs": 2},
@@ -232,18 +259,18 @@ def test_main_writes_analysis_context_and_prints_path(capsys):
 		_write_json(input_path, report)
 		output_md = td_path / "analysis" / "workflow-optimization-2099-12-31.md"
 
-		exit_code = analyzer.main(
-			[
-				"--input",
-				str(input_path),
-				"--output",
-				str(output_md),
-				"--codex-mode",
-			]
-		)
+		with _capture_std() as (out, _err):
+			exit_code = analyzer.main(
+				[
+					"--input",
+					str(input_path),
+					"--output",
+					str(output_md),
+					"--codex-mode",
+				]
+			)
 		assert exit_code == 0
-		captured = capsys.readouterr()
-		printed_path = Path(captured.out.strip())
+		printed_path = Path(out.getvalue().strip())
 		assert printed_path == output_md.parent / "analysis_context.json"
 		assert printed_path.exists()
 		payload = json.loads(printed_path.read_text(encoding="utf-8"))
@@ -251,11 +278,11 @@ def test_main_writes_analysis_context_and_prints_path(capsys):
 		assert len(payload["failing_runs"]) == 2
 
 
-def test_main_returns_2_when_input_missing(capsys):
-	exit_code = analyzer.main(["--input", "/nonexistent/does-not-exist.json"])
+def test_main_returns_2_when_input_missing():
+	with _capture_std() as (_out, err):
+		exit_code = analyzer.main(["--input", "/nonexistent/does-not-exist.json"])
 	assert exit_code == 2
-	captured = capsys.readouterr()
-	assert "ERROR" in captured.err
+	assert "ERROR" in err.getvalue()
 
 
 # ---------- aggregations ---------------------------------------------------
@@ -278,16 +305,32 @@ def test_aggregate_runs_by_key_computes_failure_rate_and_durations():
 # ---------- script-mode entry point ---------------------------------------
 # CI's "Workflow log analyzer coverage gate" invokes this file directly:
 #   python3 -m coverage run tests/test_analyze_workflow_logs.py
-# Several of the tests above rely on pytest fixtures (`capsys`, `pytest.raises`),
-# so a plain `python3 <file>` invocation that walks module-level functions
-# would silently skip those tests and starve the coverage gate. Delegate to
-# `pytest.main()` so the same process runs every test and coverage.py keeps
-# tracking lines through the import.
+# CI does NOT install pytest, so this entry point must run all tests
+# in-process without any pytest dependency. It walks `test_*` callables
+# in module globals and calls each one; assertion failures abort with a
+# non-zero exit so the coverage gate fails loudly on regressions.
 
 
 def main() -> int:
-	exit_code = pytest.main(["-x", "--tb=short", "--no-header", __file__])
-	return int(exit_code)
+	test_funcs = sorted(
+		(name, obj)
+		for name, obj in globals().items()
+		if name.startswith("test_") and callable(obj)
+	)
+	failures: list[tuple[str, BaseException]] = []
+	for name, func in test_funcs:
+		try:
+			func()
+		except BaseException as exc:  # noqa: BLE001 — script runner aggregates everything
+			failures.append((name, exc))
+			print(f"FAIL: {name}: {exc!r}", file=sys.stderr)
+		else:
+			print(f"PASS: {name}")
+	if failures:
+		print(f"\n{len(failures)} of {len(test_funcs)} tests failed.", file=sys.stderr)
+		return 1
+	print(f"\n{len(test_funcs)} tests passed.")
+	return 0
 
 
 if __name__ == "__main__":
