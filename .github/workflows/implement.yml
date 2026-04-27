@@ -386,7 +386,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -803,53 +803,10 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-
-          if [ ! -f codex_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
-            echo "Missing required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md"
-            exit 1
-          fi
-
-          # Split context into static (constant across runs) and dynamic (per-issue)
-          # files. This enables LLM prompt caching: the static prefix is identical
-          # across all runs, so the provider can cache it and charge reduced rates
-          # for subsequent requests.
-          {
-            echo "=== SYSTEM INSTRUCTIONS (implementation-trimmed) ==="
-            # Include Serena + sections 0-6 + code style + FINAL REMINDER.
-            awk '/^## 7\./{exit} {print}' codex_system_instructions.md
-            echo
-            awk '/^## 9\. Code Style/,/^## 10\./{if ($0 ~ /^## 10\./) exit; print}' codex_system_instructions.md
-            echo
-            awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
-            echo
-
-            echo "=== AI PIPELINE (implementation-trimmed) ==="
-            # Keep shared runtime behavior and implementation phase details only.
-            awk '
-              /^## Shared Runtime Behavior/{in_shared=1}
-              /^## Phase 1/{in_shared=0}
-              /^## Phase 3/{in_impl=1}
-              /^## Failure Handling/{in_impl=0}
-              { if (in_shared || in_impl) print }
-            ' ai_pipeline.md
-            echo
-
-            # Include agents.md context: canonical from coding-workflows plus
-            # the caller repo's own agents.md (if present). Both are included
-            # so the model has the full picture.
-            if [ -f "${RUNTIME_DIR}/agents_canonical.md" ] || [ -f agents.md ]; then
-              echo "=== AGENTS.MD ==="
-              if [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; then
-                cat "${RUNTIME_DIR}/agents_canonical.md"
-                echo
-              fi
-              if [ -f agents.md ]; then
-                echo "=== REPO-SPECIFIC AGENTS.MD ==="
-                cat agents.md
-                echo
-              fi
-            fi
-          } > ./pre_assembled_static.txt
+          # See scripts/build_static_context.sh for trimming rationale and
+          # prompt-prefix caching motivation. The implement phase additionally
+          # includes "${RUNTIME_DIR}/agents_canonical.md" if present.
+          bash scripts/build_static_context.sh implement ./pre_assembled_static.txt
 
       - name: Retrieve implementation memory context
         if: env.SKIP_IMPLEMENT != 'true'
