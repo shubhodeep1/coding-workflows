@@ -2236,11 +2236,18 @@ ensure_integration_conflict_state_fields() {
 
 normalize_judge_justification_for_fingerprint() {
   local raw_text="${1-}"
-  printf '%s' "${raw_text}" | python3 /dev/fd/3 3<<'PY'
+  # Pass input via env var, not stdin: the GHA Ubuntu 24.04 runner's
+  # `bash -e {0}` shell closes the heredoc-bound FD 3 before exec'ing
+  # python3, so the previous `python3 /dev/fd/3 3<<'PY'` form failed
+  # with "can't open file '/dev/fd/3': [Errno 2]" and turned every
+  # poller invocation that touched judge fingerprints into a non-zero
+  # exit. Reading the text from RAW_TEXT and the script from stdin
+  # (`python3 -`) sidesteps the FD-3 dance entirely.
+  RAW_TEXT="${raw_text}" python3 - <<'PY'
+import os
 import re
-import sys
 
-text = sys.stdin.read()
+text = os.environ.get("RAW_TEXT", "")
 if not text:
     print("")
     raise SystemExit(0)
