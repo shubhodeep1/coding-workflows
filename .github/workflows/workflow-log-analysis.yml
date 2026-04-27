@@ -14,15 +14,10 @@ on:
         default: "7"
         type: string
       codex_mode:
-        description: Run Codex-first analysis path (set false to use legacy analyzer mode)
+        description: Deprecated no-op input retained for backward compatibility; the workflow always runs the Codex-first analysis path.
         required: false
         default: true
         type: boolean
-      batch_api_disabled:
-        description: Optional true/false override for analyzer batch API behavior in non-codex mode
-        required: false
-        default: ""
-        type: string
       repos_override:
         description: Optional comma-separated repositories (owner/repo)
         required: false
@@ -124,6 +119,7 @@ jobs:
           printf ' - %s\n' "${deduped[@]}"
 
       - name: Collect workflow logs
+        id: collect
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -134,8 +130,14 @@ jobs:
           LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || '7' }}"
           mapfile -t REPOS < /tmp/workflow-analysis-repos.txt
 
+          LOG_OUTPUT_DIR="${RUNNER_TEMP:-/tmp}/workflow-log-output"
+          rm -rf "${LOG_OUTPUT_DIR}"
+          mkdir -p "${LOG_OUTPUT_DIR}"
+          echo "log_output_dir=${LOG_OUTPUT_DIR}" >> "$GITHUB_OUTPUT"
+
           COLLECT_ARGS=(
             --output workflow_log_report.json
+            --log-output-dir "${LOG_OUTPUT_DIR}"
           )
 
           if [ -n "${SINCE_INPUT//[[:space:]]/}" ]; then
@@ -156,6 +158,14 @@ jobs:
           name: workflow-log-report
           path: workflow_log_report.json
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload full workflow log directory artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-log-output
+          path: ${{ steps.collect.outputs.log_output_dir }}
+          if-no-files-found: warn
           retention-days: 7
 
   analyze-commit-notify:
@@ -180,7 +190,6 @@ jobs:
           python-version: "3.12"
 
       - name: Cache Codex CLI
-        if: ${{ inputs.codex_mode }}
         id: cache-codex
         uses: actions/cache@v5
         with:
@@ -188,7 +197,7 @@ jobs:
           key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install Codex CLI
-        if: ${{ inputs.codex_mode && steps.cache-codex.outputs.cache-hit != 'true' }}
+        if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
@@ -198,13 +207,12 @@ jobs:
           cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
 
       - name: Restore Codex CLI from cache
-        if: ${{ inputs.codex_mode && steps.cache-codex.outputs.cache-hit == 'true' }}
+        if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
           npm install -g "${{ runner.tool_cache }}/codex/package" --include=optional --no-audit --no-fund
 
       - name: Create Codex config
-        if: ${{ inputs.codex_mode }}
         env:
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
         run: |
@@ -240,28 +248,31 @@ jobs:
           name: workflow-log-report
           path: .
 
+      - name: Download full workflow log directory artifact
+        id: download_log_output
+        # Fail-open contract: a missing/expired workflow-log-output artifact
+        # must NOT fail the analyze job. The downstream Codex prompt assembly
+        # falls back to analysis_context.json only and emits a ::warning::.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-log-output
+          path: ${{ runner.temp }}/workflow-log-output
+
       - name: Run workflow log analysis
         id: analyze
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
-          THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'xhigh' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
-          BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
-          BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
-          BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
+          RUN_LOGS_DIR: ${{ steps.download_log_output.outputs.download-path }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
 
-          CODEX_MODE_INPUT="${{ inputs.codex_mode && 'true' || 'false' }}"
-          BATCH_API_DISABLED_INPUT="${{ github.event.inputs.batch_api_disabled || '' }}"
-          BATCH_ARTIFACT_NAME="workflow-log-analysis-batch-state"
-          BATCH_STATE_FILE="workflow_log_analysis_batch_state.json"
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
           if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
@@ -357,193 +368,105 @@ jobs:
             exit "${codex_exit}"
           }
 
-          if [ "${CODEX_MODE_INPUT}" != "true" ]; then
-            if ARTIFACTS_JSON="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null)"; then
-              :
-            else
-              ARTIFACTS_JSON=''
-            fi
-            if [ -n "${ARTIFACTS_JSON}" ]; then
-              ARTIFACT_ID="$(printf '%s\n' "${ARTIFACTS_JSON}" | jq -rs --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '[.[].artifacts[]?] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty' 2>/dev/null || true)"
-              if [ -n "${ARTIFACT_ID}" ]; then
-                TMP_DIR="$(mktemp -d)"
-                if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${TMP_DIR}/batch-state.zip" 2>/dev/null; then
-                  if unzip -oq "${TMP_DIR}/batch-state.zip" -d "${TMP_DIR}" >/dev/null 2>&1 && [ -f "${TMP_DIR}/${BATCH_STATE_FILE}" ]; then
-                    cp "${TMP_DIR}/${BATCH_STATE_FILE}" "${BATCH_STATE_FILE}"
-                    echo "INFO: {\"event\":\"batch_poll\",\"status\":\"state_loaded\",\"artifact_id\":${ARTIFACT_ID}}"
-                  fi
-                fi
-                rm -rf "${TMP_DIR}"
-              fi
-            fi
-          fi
-
-          if [ -n "${BATCH_API_DISABLED_INPUT//[[:space:]]/}" ]; then
-            case "${BATCH_API_DISABLED_INPUT,,}" in
-              true|false)
-                BATCH_API_DISABLED="${BATCH_API_DISABLED_INPUT,,}"
-                ;;
-              *)
-                echo "::error::Invalid batch_api_disabled input '${BATCH_API_DISABLED_INPUT}'. Use true or false."
-                exit 1
-                ;;
-            esac
-          fi
-
-          ANALYZE_EXIT=0
-          REPORT_FILE=""
-          if [ "${CODEX_MODE_INPUT}" = "true" ]; then
-            REPORT_DATE="$(date -u +%F)"
-            REPORT_DIR="analysis"
-            REPORT_BASE="${REPORT_DIR}/workflow-optimization-${REPORT_DATE}"
-            REPORT_FILE="${REPORT_BASE}.md"
-            if [ -f "${REPORT_FILE}" ]; then
-              REPORT_SUFFIX=2
-              while [ -f "${REPORT_BASE}-${REPORT_SUFFIX}.md" ]; do
-                REPORT_SUFFIX=$((REPORT_SUFFIX + 1))
-              done
-              REPORT_FILE="${REPORT_BASE}-${REPORT_SUFFIX}.md"
-            fi
-
-            ANALYSIS_CONTEXT_FILE=""
-            set +e
-            ANALYSIS_CONTEXT_FILE="$(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output "${REPORT_FILE}" --codex-mode)"
-            ANALYZE_EXIT=$?
-            set -e
-
-            if [ "${ANALYZE_EXIT}" -ne 0 ]; then
-              failure_summary="Analyzer failed to prepare Codex context with exit code ${ANALYZE_EXIT}."
-              echo "::error::${failure_summary}"
-              handle_log_analysis_codex_failure "analysis_prepare_context" "analyzer_failed" "1" "${ANALYZE_EXIT}" "${failure_summary}"
-            fi
-            if [ -z "${ANALYSIS_CONTEXT_FILE}" ] || [ ! -f "${ANALYSIS_CONTEXT_FILE}" ]; then
-              failure_summary="Analyzer did not produce a valid Codex context file path."
-              echo "::error::${failure_summary}"
-              handle_log_analysis_codex_failure "analysis_prepare_context" "missing_context_artifact" "1" 1 "${failure_summary}"
-            fi
-
-            CODEX_PROMPT_FILE="$(mktemp)"
-            {
-              bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
-              echo
-              echo "=== ANALYSIS CONTEXT ==="
-              cat "${ANALYSIS_CONTEXT_FILE}"
-            } > "${CODEX_PROMPT_FILE}"
-
-            max_attempts="${MAX_CODEX_ATTEMPTS}"
-            if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
-              echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
-              max_attempts="3"
-            fi
-            codex_failure_mode=""
-            analyze_attempts_used=0
-            for attempt in $(seq 1 "${max_attempts}"); do
-              analyze_attempts_used="${attempt}"
-              set +e
-              codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${REPORT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
-              ANALYZE_EXIT=$?
-              set -e
-              if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
-                codex_failure_mode=""
-                break
-              fi
-              if [ "${ANALYZE_EXIT}" -ne 0 ]; then
-                codex_failure_mode="codex_rc_nonzero"
-              else
-                codex_failure_mode="codex_empty_output"
-              fi
-              if [ "${attempt}" -lt "${max_attempts}" ]; then
-                sleep_secs=$((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
-                sleep "${sleep_secs}"
-              else
-                if [ "${codex_failure_mode}" = "codex_empty_output" ]; then
-                  failure_summary="Workflow log analysis Codex pass returned empty output after ${max_attempts} attempts."
-                  echo "::error::${failure_summary}"
-                  handle_log_analysis_codex_failure "analysis_codex_pass" "codex_empty_output" "${analyze_attempts_used}" 0 "${failure_summary}"
-                fi
-                failure_summary="Workflow log analysis Codex pass failed after ${max_attempts} attempts with exit code ${ANALYZE_EXIT}."
-                echo "::error::${failure_summary}"
-                handle_log_analysis_codex_failure "analysis_codex_pass" "codex_rc_nonzero" "${analyze_attempts_used}" "${ANALYZE_EXIT}" "${failure_summary}"
-              fi
+          REPORT_DATE="$(date -u +%F)"
+          REPORT_DIR="analysis"
+          REPORT_BASE="${REPORT_DIR}/workflow-optimization-${REPORT_DATE}"
+          REPORT_FILE="${REPORT_BASE}.md"
+          if [ -f "${REPORT_FILE}" ]; then
+            REPORT_SUFFIX=2
+            while [ -f "${REPORT_BASE}-${REPORT_SUFFIX}.md" ]; do
+              REPORT_SUFFIX=$((REPORT_SUFFIX + 1))
             done
-
-            echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
-            echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
-            exit 0
+            REPORT_FILE="${REPORT_BASE}-${REPORT_SUFFIX}.md"
           fi
 
-          cmd=(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file "${BATCH_STATE_FILE}")
-          if [ -n "${THINKING_LEVEL_ANALYSIS}" ]; then
-            cmd+=(--thinking-level "${THINKING_LEVEL_ANALYSIS}")
-          fi
-          LEGACY_PROMPT_TOKEN_BUDGET="${{ vars.WORKFLOW_LOG_ANALYSIS_LEGACY_PROMPT_TOKEN_BUDGET || '24000' }}"
-          if [[ ! "${LEGACY_PROMPT_TOKEN_BUDGET}" =~ ^[0-9]+$ ]]; then
-            echo "::error::Invalid WORKFLOW_LOG_ANALYSIS_LEGACY_PROMPT_TOKEN_BUDGET='${LEGACY_PROMPT_TOKEN_BUDGET}'. Use a non-negative integer."
-            exit 1
-          fi
-          cmd+=(--prompt-token-budget "${LEGACY_PROMPT_TOKEN_BUDGET}")
-          case "${WORKFLOW_EDITOR_MODEL:-}" in
-            *gemini*) cmd+=(--max-output-tokens 60000) ;;
-          esac
-
+          ANALYSIS_CONTEXT_FILE=""
+          ANALYZE_EXIT=0
           set +e
-          REPORT_FILE="$("${cmd[@]}")"
+          ANALYSIS_CONTEXT_FILE="$(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output "${REPORT_FILE}" --codex-mode)"
           ANALYZE_EXIT=$?
           set -e
 
-          if [ "${ANALYZE_EXIT}" -eq 0 ]; then
-            if [ -z "${REPORT_FILE}" ] || [ ! -f "${REPORT_FILE}" ]; then
-              echo "::error::Analyzer did not produce a valid report file path."
-              exit 1
-            fi
-            echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
-            echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
-            if [ -f "${BATCH_STATE_FILE}" ]; then
-              echo "batch_state_file=${BATCH_STATE_FILE}" >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
+          if [ "${ANALYZE_EXIT}" -ne 0 ]; then
+            failure_summary="Analyzer failed to prepare Codex context with exit code ${ANALYZE_EXIT}."
+            echo "::error::${failure_summary}"
+            handle_log_analysis_codex_failure "analysis_prepare_context" "analyzer_failed" "1" "${ANALYZE_EXIT}" "${failure_summary}"
+          fi
+          if [ -z "${ANALYSIS_CONTEXT_FILE}" ] || [ ! -f "${ANALYSIS_CONTEXT_FILE}" ]; then
+            failure_summary="Analyzer did not produce a valid Codex context file path."
+            echo "::error::${failure_summary}"
+            handle_log_analysis_codex_failure "analysis_prepare_context" "missing_context_artifact" "1" 1 "${failure_summary}"
           fi
 
-          if [ "${ANALYZE_EXIT}" -eq 3 ]; then
-            if [ ! -f "${BATCH_STATE_FILE}" ]; then
-              echo "::error::Analyzer exited pending but did not produce batch state file."
-              exit 1
+          # Verify the full-log directory artifact arrived before assembling
+          # the prompt; without it Codex would fall back to the analysis
+          # context's quick-index views and miss the untruncated step logs
+          # that motivate the workflow-log-output artifact.
+          if [ -z "${RUN_LOGS_DIR:-}" ] || [ ! -d "${RUN_LOGS_DIR}" ]; then
+            echo "::warning::workflow-log-output artifact not present at '${RUN_LOGS_DIR:-<unset>}'; Codex will only see analysis_context.json."
+            RUN_LOGS_DIR=""
+          fi
+
+          CODEX_PROMPT_FILE="$(mktemp)"
+          {
+            bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
+            echo
+            echo "=== ANALYSIS CONTEXT ==="
+            cat "${ANALYSIS_CONTEXT_FILE}"
+            if [ -n "${RUN_LOGS_DIR}" ]; then
+              echo
+              echo "=== FULL RUN LOGS DIRECTORY ==="
+              echo "Run-logs directory: ${RUN_LOGS_DIR}"
+              echo "Layout: summary.json (top-level metrics), errors/ (full logs of failed runs), slow/ (full logs of longest runs by repo+family), recent/ (full logs of most recent runs)."
+              echo "Each run subdirectory contains metadata.json plus untruncated step-NNN-<step>.log files. Read summary.json first, then drill into errors/, slow/, recent/ for evidence."
             fi
-            echo "analysis_status=pending" >> "$GITHUB_OUTPUT"
-            echo "batch_state_file=${BATCH_STATE_FILE}" >> "$GITHUB_OUTPUT"
-            echo "INFO: {\"event\":\"batch_poll\",\"status\":\"pending\"}"
-            exit 0
-          fi
+          } > "${CODEX_PROMPT_FILE}"
 
-          failure_summary="Workflow log analyzer failed with exit code ${ANALYZE_EXIT}."
-          echo "::error::${failure_summary}"
-          if [ -n "${TRACKING_ISSUE_NUM}" ]; then
-            emit_log_analysis_phase_failure "analysis_prepare" "analyzer_failed" "1" "${failure_summary}"
-            gh label create "ai:log-analysis-failed" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --color "e11d48" \
-              --description "Workflow log analysis failed" >/dev/null 2>&1 || true
-            gh issue edit "${TRACKING_ISSUE_NUM}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || \
-              echo "::warning::Failed to apply ai:log-analysis-failed to #${TRACKING_ISSUE_NUM}."
-          else
-            echo "::warning::Workflow log analyzer failed without tracking issue context; skipping ai:log-analysis-failed label and AI_PHASE_FAILURE_V1 marker."
+          max_attempts="${MAX_CODEX_ATTEMPTS}"
+          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+            max_attempts="3"
           fi
-          exit "${ANALYZE_EXIT}"
+          codex_failure_mode=""
+          analyze_attempts_used=0
+          for attempt in $(seq 1 "${max_attempts}"); do
+            analyze_attempts_used="${attempt}"
+            set +e
+            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${REPORT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+            ANALYZE_EXIT=$?
+            set -e
+            if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
+              codex_failure_mode=""
+              break
+            fi
+            if [ "${ANALYZE_EXIT}" -ne 0 ]; then
+              codex_failure_mode="codex_rc_nonzero"
+            else
+              codex_failure_mode="codex_empty_output"
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
+              sleep "${sleep_secs}"
+            else
+              if [ "${codex_failure_mode}" = "codex_empty_output" ]; then
+                failure_summary="Workflow log analysis Codex pass returned empty output after ${max_attempts} attempts."
+                echo "::error::${failure_summary}"
+                handle_log_analysis_codex_failure "analysis_codex_pass" "codex_empty_output" "${analyze_attempts_used}" 0 "${failure_summary}"
+              fi
+              failure_summary="Workflow log analysis Codex pass failed after ${max_attempts} attempts with exit code ${ANALYZE_EXIT}."
+              echo "::error::${failure_summary}"
+              handle_log_analysis_codex_failure "analysis_codex_pass" "codex_rc_nonzero" "${analyze_attempts_used}" "${ANALYZE_EXIT}" "${failure_summary}"
+            fi
+          done
 
-      - name: Upload batch state artifact
-        if: steps.analyze.outputs.batch_state_file != ''
-        uses: actions/upload-artifact@v6
-        with:
-          name: workflow-log-analysis-batch-state
-          path: ${{ steps.analyze.outputs.batch_state_file }}
-          if-no-files-found: error
-          retention-days: 7
+          echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+          echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push report
         id: commit_report
         if: steps.analyze.outputs.analysis_status == 'completed'
+        env:
+          REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
         run: |
           set -euo pipefail
 
@@ -557,6 +480,46 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Age-based purge: delete analysis/workflow-optimization-<date>(-N).md
+          # files whose date stamp in the filename is older than the retention
+          # window. Filename dates are authoritative — mtime would reset on
+          # every checkout. The just-written REPORT_FILE is excluded.
+          retention_raw="${REPORT_RETENTION_DAYS:-30}"
+          if ! [[ "${retention_raw}" =~ ^[0-9]+$ ]] || [ "${retention_raw}" -lt 1 ]; then
+            echo "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS must be a positive integer (got: ${retention_raw}); defaulting to 30."
+            retention_raw=30
+          fi
+          # Fail-open: if cutoff computation fails, skip the purge entirely
+          # rather than fall back to today (which would delete every prior
+          # report). The previous fallback `|| date -u +%Y-%m-%d` was unsafe
+          # for that reason.
+          purged_count=0
+          cutoff_date=""
+          if cutoff_date="$(date -u -d "${retention_raw} days ago" +%Y-%m-%d 2>/dev/null)" && [ -n "${cutoff_date}" ]; then
+            shopt -s nullglob
+            for old_report in analysis/workflow-optimization-*.md; do
+              [ "${old_report}" = "${REPORT_FILE}" ] && continue
+              filename="$(basename "${old_report}")"
+              # Match workflow-optimization-YYYY-MM-DD(-N).md and capture only
+              # the date stamp; greedy parameter expansion (e.g. ${s%%-[0-9]*})
+              # would chop the month/day off the date itself.
+              if [[ ! "${filename}" =~ ^workflow-optimization-([0-9]{4}-[0-9]{2}-[0-9]{2})(-[0-9]+)?\.md$ ]]; then
+                continue
+              fi
+              stamp="${BASH_REMATCH[1]}"
+              if [[ "${stamp}" < "${cutoff_date}" ]]; then
+                git rm -- "${old_report}" >/dev/null
+                purged_count=$((purged_count + 1))
+              fi
+            done
+            shopt -u nullglob
+          else
+            echo "::warning::Unable to compute report purge cutoff date for retention window (${retention_raw} days); skipping age-based purge to avoid accidental deletions."
+          fi
+          if [ "${purged_count}" -gt 0 ]; then
+            echo "INFO: purged ${purged_count} workflow-optimization report(s) older than ${cutoff_date}."
+          fi
+
           git add "${REPORT_FILE}"
           if git diff --cached --quiet; then
             echo "No report changes to commit."
@@ -564,7 +527,12 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: add workflow log analysis report"
+          if [ "${purged_count}" -gt 0 ]; then
+            commit_msg="chore: add workflow log analysis report (purged ${purged_count} older than ${retention_raw}d)"
+          else
+            commit_msg="chore: add workflow log analysis report"
+          fi
+          git commit -m "${commit_msg}"
           git pull --rebase origin "${TARGET_BRANCH}"
           git push origin "HEAD:${TARGET_BRANCH}"
 
@@ -598,14 +566,7 @@ jobs:
             REPORT_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          if [ "${ANALYSIS_STATUS}" = "pending" ]; then
-            MSG="Workflow log analysis submitted async batch for ${{ github.repository }}"
-            MSG+=$'\n'
-            MSG+="Report: pending (rerun this workflow manually to continue polling)"
-            MSG+=$'\n'
-            MSG+="Run: ${RUN_URL}"
-            ALERT_LEVEL="DEBUG"
-          elif [ "${ANALYSIS_STATUS}" = "completed" ]; then
+          if [ "${ANALYSIS_STATUS}" = "completed" ]; then
             SUMMARY_LINE="Analysis report generated."
             if [ -n "${REPORT_FILE}" ] && [ -f "${REPORT_FILE}" ]; then
               SUMMARY_LINE="$(grep -m1 -E '^- |^[0-9]+\. ' "${REPORT_FILE}" || true)"
@@ -632,7 +593,7 @@ jobs:
 
   deep-audit:
     needs: analyze-commit-notify
-    if: success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed' && inputs.codex_mode
+    if: success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -723,7 +684,6 @@ jobs:
         id: audit
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
@@ -949,7 +909,7 @@ jobs:
 
   api-redundancy:
     needs: [analyze-commit-notify, deep-audit]
-    if: success() && needs.deep-audit.outputs.audit_status == 'completed' && inputs.codex_mode
+    if: success() && needs.deep-audit.outputs.audit_status == 'completed'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -1040,7 +1000,6 @@ jobs:
         id: api_redundancy
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}

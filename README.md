@@ -76,7 +76,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `AUTOFIX_CONTINUATION_SETTLE_SECS` | No | `10` | review_autofix | Seconds the continuation path `sleep`s between the push and the `workflow_dispatch` call, to let GitHub's internal indices catch up before the dispatched run checks out the new HEAD SHA. Integer in `1..60`; invalid or out-of-range values clamp to `10`. Not applied to the conflict-resolved dispatch path (that keeps its existing `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` peer-wait). |
 | `ENABLE_REVIEWER_TWO_PASS` | No | `true` | review_autofix | When true, reviewers run two passes per iteration: pass 1 at `medium` reasoning (broad sweep), then pass 2 at the scheduled reasoning level with a cross-pollination summary of pass 1 findings. Set to `false` to use a single pass at the scheduled reasoning level. |
 | `XPOLL_SUMMARISER_MODEL` | No | `openai/gpt-5.4-mini` | review_autofix | Model slug (resolved through codex-cli's OpenRouter provider) used by `scripts/summarize_reviewer_consensus.sh`. After each review pass finishes, this model consolidates every reviewer's output into one ledger: a `=== CONSENSUS FINDINGS ===` block with cross-reviewer dedup (entries carry `flagged_by: [slug, ...]`) followed by per-reviewer sections. The pass-1 ledger feeds pass-2 reviewers; the pass-2 ledger is written to `REVIEWER_CONSENSUS_FILE` and feeds the editor + memory-record step. |
-| `XPOLL_SUMMARISER_REASONING` | No | `xhigh` | review_autofix | Reasoning effort (`xhigh` / `high` / `medium` / `low`) applied to the summariser model via its isolated `CODEX_HOME` config.toml. Default is `xhigh` so the cross-reviewer dedup and consensus synthesis use maximum reasoning depth. Isolated config guarantees the override cannot leak into the editor's codex-cli invocation. |
+| `XPOLL_SUMMARISER_REASONING` | No | `medium` | review_autofix | Reasoning effort (`xhigh` / `high` / `medium` / `low`) applied to the summariser model via its isolated `CODEX_HOME` config.toml. Default is `medium` to keep the consensus synthesis within the per-attempt timeout — higher efforts on `gpt-5.4-mini` have been observed to produce rc=0/empty-stdout responses that exhaust the retry budget and the 180-min job timeout. Isolated config guarantees the override cannot leak into the editor's codex-cli invocation. |
 | `XPOLL_SUMMARISER_LINES_PER_REVIEWER` | No | `160` | review_autofix | Target max per-reviewer section lines; summariser is told to collapse related findings (`(N related items)` suffix) rather than drop them when over-budget. Overall ledger target is this value × reviewer count + 120. |
 | `XPOLL_SUMMARISER_CALL_TIMEOUT_SECS` | No | `2400` | review_autofix | Per-attempt wall-time timeout for a single codex-cli summariser invocation. Raised from `1200` after observing repeat 20-min timeouts on `xhigh`-reasoning pass-1 calls over ~24 KB prompts burning ≥40 min of runner time per run before finally succeeding on attempt 3. On timeout / non-zero exit / empty stdout the summariser retries up to 10 times with exponential backoff (5s, 10s, 20s, 40s, 80s, 160s, 320s, 640s, 1280s between attempts; no cap), then hard-fails the workflow (the job-level "Telegram failure" step surfaces the incident). The PR-closed sentinel is polled every 2s during each backoff so a mid-retry PR close exits cleanly without waiting out the remaining delay. |
 | `XPOLL_SUMMARISER_MAX_INPUT_LINES` | No | `3000` | review_autofix | Pre-truncation ceiling per reviewer output before concatenation into the summariser prompt. Prevents a pathological reviewer output from blowing the summariser's context budget. |
@@ -131,7 +131,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
 | `CONTEXT7_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Context7 MCP server |
 | `GIT_MCP_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Git MCP server setup (preloaded diff artifacts remain the fallback). |
-| `OPENROUTER_PROMPT_CACHE_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, workflow-log-analysis | Kill switch for OpenRouter prompt-cache instrumentation. `false` enables cache-friendly prompt ordering and cache telemetry logging; `true` disables explicit cache breakpoints and related instrumentation. |
+| `OPENROUTER_PROMPT_CACHE_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Kill switch for OpenRouter prompt-cache instrumentation. `false` enables cache-friendly prompt ordering and cache telemetry logging; `true` disables explicit cache breakpoints and related instrumentation. (No longer consumed by `workflow-log-analysis`, which is Codex-only.) |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `30` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` | No | `1200` | _(deprecated — no longer consumed)_ | Formerly controlled the pre-LLM short-circuit. Removed in #1163; every orchestrator run now goes through full decomposition. |
@@ -144,9 +144,10 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_POST_CODEX_REPAIR_ATTEMPTS` | No | `1` | implement | Maximum in-job post-Codex syntax-repair attempts after `Validate syntax of changed files` fails. Must be a non-negative integer (`0` disables in-job repair); invalid values fallback to `1`. The repair loop runs only for syntax-validator failures, enforces an allow-list scope guard, and then falls back to the existing diagnose/fix-up path when attempts are exhausted. |
 | `BULK_DELETE_THRESHOLD` | No | `3` | implement | Maximum number of file deletions allowed in a single AI implementation commit before the destructive-commit guard blocks it. Set higher for legitimate large refactors, or bypass on a per-run basis via `ALLOW_BULK_DELETE=true`. See "Destructive-commit guard" below. |
 | `ALLOW_BULK_DELETE` | No | `false` | implement | When `true`, the destructive-commit guard ignores the `BULK_DELETE_THRESHOLD` rejection path. Canonical workflow-source file deletions are still blocked unless `ALLOW_WORKFLOW_EDITS=true`. Use for legitimate large refactors approved by a human. |
-| `BATCH_API_DISABLED` | No | `false` | workflow-log-analysis, memory_maintenance | Kill switch for async batch mode. When `true`, workflow log analysis always uses synchronous inference. Memory maintenance emits compatibility/no-op batch logs only. |
-| `BATCH_API_PROVIDER` | No | `auto` | workflow-log-analysis, memory_maintenance | Batch provider routing hint for OpenRouter Responses API capability checks/submission (`auto`, `openai`, `anthropic`). Unsupported hints fall back to sync with structured warnings. |
-| `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | workflow-log-analysis, memory_maintenance | Maximum pending batch age before workflow-log-analysis falls back to synchronous generation. |
+| `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` | No | `30` | workflow-log-analysis | Age (in days) above which dated `analysis/workflow-optimization-<date>.md` reports are git-removed in the same commit as a new report. Filename date stamps are authoritative; the just-written report is always preserved. Invalid values fail open to `30` with a warning. |
+| `BATCH_API_DISABLED` | No | `false` | memory_maintenance | Deprecated compatibility variable. The active workflow-log-analysis batch path was removed (the workflow is now Codex-only). `memory_maintenance.yml` still reads this var and echoes it in a single `batch_noop` log line so external log scrapers that grep for `batch_*` events keep working; the value does not change any current behaviour. |
+| `BATCH_API_PROVIDER` | No | `auto` | memory_maintenance | Deprecated compatibility variable. Same status as `BATCH_API_DISABLED` — only surfaced in `memory_maintenance.yml`'s `batch_noop` log line for backward-compatible telemetry. |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | memory_maintenance | Deprecated compatibility variable. Same status as `BATCH_API_DISABLED` — only surfaced in `memory_maintenance.yml`'s `batch_noop` log line for backward-compatible telemetry. |
 
 **Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, all phases force `low` reasoning to keep smoke runs cheap and fast.
 
@@ -156,7 +157,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `xhigh` | clarify | Reasoning effort used only when clarify runs Codex for `ai:orchestrator-managed` issues on forced human `/reclarify` |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
-| `THINKING_LEVEL_ANALYSIS` | `xhigh` | workflow-log-analysis | Reasoning effort for the workflow log analysis report generation. |
+| `THINKING_LEVEL_ANALYSIS` | `xhigh` | workflow-log-analysis | Reasoning effort for the deep-audit and API-redundancy Codex passes (passed via Codex `model_reasoning_effort`). |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `xhigh` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
@@ -840,17 +841,19 @@ Triggers:
 |---|---|---|
 | `since` | `""` | Optional ISO-8601 timestamp. When set, collector runs with `scripts/collect_workflow_logs.py --since <timestamp>`. |
 | `lookback_days` | `"7"` | Days of workflow runs to collect when `since` is empty. Passed to `scripts/collect_workflow_logs.py --lookback-days`. |
-| `codex_mode` | `true` | Codex-first analysis mode. When `true`, workflow runs analyzer preprocessing (`--codex-mode`) and then `codex exec` in the same run. When `false`, workflow uses the legacy analyzer inference/batch path (including deferred polling via batch-state artifact). |
-| `batch_api_disabled` | `""` | Optional `true`/`false` override for analyzer batch API behavior in non-codex mode only. Non-empty values are validated in all runs; invalid values fail the workflow before mode branching. Empty keeps `BATCH_API_DISABLED` env default. |
+| `codex_mode` | `true` | Deprecated no-op input retained for backward compatibility with existing callers. The workflow always runs the Codex-first analysis path; the value is ignored. |
 | `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
 | `tracking_issue` | `"0"` | Optional tracking issue number used for terminal Codex/analyzer failure labeling (`ai:log-analysis-failed`) and `AI_PHASE_FAILURE_V1` marker comments. `0`/empty keeps fail-open warning behavior without issue mutation. |
 
-Mode behavior:
+Pipeline behavior (Codex-only):
 
-- `codex_mode=true` (default): analyzer writes `analysis_context.json` (`--codex-mode`) and Codex generates the markdown report directly. Codex attempts are bounded by `MAX_CODEX_ATTEMPTS` (default `3`) with exponential backoff base `CODEX_RETRY_BACKOFF_BASE_SECS` (default `10`).
-- `codex_mode=false`: workflow restores latest non-expired `workflow-log-analysis-batch-state` artifact when available, runs analyzer in legacy mode, and may return pending (`exit 3`) until a later manual rerun completes polling.
-- `batch_api_disabled` input is validated whenever a non-empty value is provided, but only affects analyzer behavior in `codex_mode=false` runs.
-- Terminal Codex/analyzer failures are issue-context aware: when `tracking_issue` is set to a positive integer the workflow emits `AI_PHASE_FAILURE_V1` and applies `ai:log-analysis-failed`; otherwise it emits a fail-open warning and exits without issue mutation.
+1. **Collector** writes `workflow_log_report.json` (run metrics + 4 KB per-step `log_excerpts`) and a categorised full-log directory under `${RUNNER_TEMP}/workflow-log-output/` (`summary.json` + `errors/`/`slow/`/`recent/` trees with untruncated step logs).
+2. **Artifacts:** `workflow-log-report` and `workflow-log-output` (both retention 7 days).
+3. **Analyzer (`--codex-mode`)** consumes `workflow_log_report.json` and writes `analysis/analysis_context.json` (aggregates + capped quick-index lists). It does NOT call any LLM.
+4. **Codex pass** receives the rendered prompt + `analysis_context.json` + the on-disk path of the downloaded `workflow-log-output` artifact, then writes `analysis/workflow-optimization-<UTC-date>.md`. Codex attempts are bounded by `MAX_CODEX_ATTEMPTS` (default `3`) with exponential backoff base `CODEX_RETRY_BACKOFF_BASE_SECS` (default `10`).
+5. **Commit step** age-purges any sibling `analysis/workflow-optimization-*.md` whose filename date stamp is older than `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` (default `30`) in the same commit as the new report.
+
+Failure surfacing: terminal Codex/analyzer failures are issue-context aware — when `tracking_issue` is set to a positive integer the workflow emits `AI_PHASE_FAILURE_V1` and applies `ai:log-analysis-failed`; otherwise it emits a fail-open warning and exits without issue mutation.
 
 Repository selection behavior:
 
@@ -861,7 +864,7 @@ Repository selection behavior:
 ### Auth and configuration
 
 - `GH_PAT` is preferred for GitHub API/push operations, with `github.token` fallback in workflow steps.
-- `OPENROUTER_API_KEY` is required for `scripts/analyze_workflow_logs.py`.
+- `OPENROUTER_API_KEY` is required for the Codex passes (consumed via Codex CLI's `env_key` setting in `~/.codex/config.toml`).
 - Telegram notification is optional. If either `TG_BOT_SECRET` or `TG_ADMIN_CHAT_ID` is missing, notification is skipped.
 
 ### Collector input/output contract
@@ -906,37 +909,31 @@ Generated JSON report (`workflow_log_report.json`) includes:
 
 Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_logs.py)
 
-- Codex-first workflow path (`codex_mode=true`):
-  1. `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (writes `analysis_context.json` and prints its path)
-  2. `codex exec --model <WORKFLOW_EDITOR_MODEL> --full-auto` with `prompts/mode-workflow-analysis.txt` + generated analysis context, writing the final markdown report file.
-- Legacy workflow path (`codex_mode=false`): `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file workflow_log_analysis_batch_state.json`
-- `--max-output-tokens` default is `100000`. The workflow auto-caps this to `60000` when the resolved `WORKFLOW_EDITOR_MODEL` contains `gemini` (Gemini 2.5 Pro's max output is 65536).
-- Model resolution for this workflow only: the `Run workflow log analysis` step defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.4` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
+The analyzer is now a context-prep stage only — it loads the collector report, computes aggregates, and writes `analysis_context.json`. The Codex pass that follows reads that JSON plus the `workflow-log-output` artifact directory directly. There is no inference call inside the Python script.
+
+- CLI used by the workflow: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (the `--codex-mode` flag is a no-op alias retained for backward compatibility; `analysis_context.json` is written alongside the resolved output path, so with `--output <report.md>` it lands at `dirname(<report.md>)/analysis_context.json` — `--output` overrides `--output-dir` for this purpose. The path is printed on stdout).
 - `load_input_data` accepts either:
-  - `--input` with a collector report (`runs` list; `runs[].log_excerpts` are flattened into `deep_dive_logs` as `{name: <repo>/<run_id>/<step_name>, excerpt}`), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
-  - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json` (optionally `run_logs/`)
+  - `--input` with a collector report (`runs` list), a combined bundle object (`run_metrics`, `summary_stats`), or a JSON array of run metrics.
+  - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json`.
+- `prepare_analysis_context` produces the JSON payload Codex consumes. Quick-index caps:
+  - `failing_runs`, `slow_runs`, `recent_runs`: each capped at `RUN_LIST_CAP = 100` normalized rows.
+  - `errors`: capped at `ERRORS_CAP = 250`.
+  - `deep_dive_logs` is intentionally **NOT** present — full untruncated logs live in the `workflow-log-output` artifact.
 - Output path behavior from `resolve_dated_output_path`:
-  - default: `analysis/workflow-optimization-YYYY-MM-DD.md`
+  - default: `analysis/workflow-optimization-YYYY-MM-DD.md` (used to derive the sibling `analysis_context.json` path).
   - same-day collisions: `analysis/workflow-optimization-YYYY-MM-DD-2.md`, `-3.md`, etc.
-- `main` prints the final report path on stdout and exits non-zero on API/write/input errors.
-- Batch mode uses OpenRouter Responses API with deferred polling and state file support:
-  - `--batch-mode` (`auto|submit|poll|sync`)
-  - `--batch-state-file` path for persisted batch metadata
-  - `--batch-provider` (`auto|openai|anthropic`) provider hint
-  - `--batch-api-disabled` kill switch
-  - `--batch-poll-timeout-hours` timeout before sync fallback
-- Analyzer exits with code `3` when batch remains pending; workflow treats this as success and defers completion to future runs.
+- Model resolution for the Codex passes only: the workflow defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.4` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL`.
+- `main` prints the analysis-context path on stdout and exits non-zero on input/write errors only.
 
 ### Workflow outputs
 
-- Artifact upload: `workflow-log-report` containing `workflow_log_report.json` (retention 7 days).
-- Repository commit: generated markdown report is committed/pushed to `${{ github.ref_name }}`.
-- No-op behavior: if the report file has no diff, commit/push is skipped (`No report changes to commit.`).
-- Telegram summary: when configured, sends either a pending-batch message or a completion message with report URL and workflow run URL.
-- Deferred artifact contract (non-codex mode): pending batch metadata is uploaded as artifact `workflow-log-analysis-batch-state` containing `workflow_log_analysis_batch_state.json`; later manual dispatch runs fetch latest non-expired artifact and continue polling.
-- Structured logs are emitted for batch decisions and lifecycle (`batch_submit`, `batch_poll`, `batch_complete`, `batch_fallback`).
-- `memory_maintenance.yml` remains functionally unchanged (no LLM path in current repo) and now emits structured `batch_noop` compatibility logging with batch env values.
-- Low-data windows are valid: the analyzer still writes a report when input data is sparse.
+- Artifacts (retention 7 days):
+  - `workflow-log-report` — `workflow_log_report.json` (aggregated metrics + 4 KB per-step `log_excerpts` quick-index).
+  - `workflow-log-output` — categorised full-log directory (`summary.json` + `errors/`/`slow/`/`recent/` trees with untruncated step logs).
+- Repository commit: generated markdown report `analysis/workflow-optimization-<date>.md` is committed/pushed to `${{ github.ref_name }}`. The commit step also `git rm`s reports older than `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` (default `30`) in the same commit.
+- No-op behavior: if neither the generated report nor any staged purge deletions produce a diff after Codex runs, commit/push is skipped (`No report changes to commit.`). Because old-report purges are staged before the diff check, they may still be committed even when the newly generated report content is unchanged.
+- Telegram summary: when configured, sends a completion message with report URL and workflow run URL, or a CRITICAL failure message when the analysis status is unknown/failed.
+- Low-data windows are valid: the analyzer still writes a context payload (and Codex still produces a report) when input data is sparse — `prepare_analysis_context` flags `insufficient_data: true` and supplies `analysis_guidance` so the model frames the response as a collection-gap notice rather than fabricating findings.
 
 ## Required Secrets
 
@@ -1030,9 +1027,10 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `EDITOR_MAX_WALL` | `3300` | Max wall-clock seconds per editor attempt; auto-capped to remaining job budget |
 | `EDITOR_MIN_ATTEMPT_SECS` | `300` | Minimum job budget (seconds) required to start an editor attempt |
 | `REVIEW_PR_STATE_POLL_INTERVAL_SECS` | `10` | Sleep interval (seconds) for the reviewer watchdog loop in `scripts/review_run_reviewers.sh`; GitHub PR-state API checks run every 9 polls (default ~90s); must be integer `10..3600`, else warn (`rate_limit_audit_fallback`) and fall back to `10` |
-| `BATCH_API_DISABLED` | `false` | Kill switch for async batch mode in workflow-log-analysis (`true` forces sync fallback) |
-| `BATCH_API_PROVIDER` | `auto` | Batch provider hint (`auto`, `openai`, `anthropic`) for OpenRouter responses routing checks |
-| `BATCH_API_POLL_TIMEOUT_HOURS` | `24` | Maximum pending batch age before synchronous fallback |
+| `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` | `30` | Age (days) above which sibling `analysis/workflow-optimization-<date>.md` reports are git-removed in the same commit as a new report. Filename date is authoritative; the new report is always preserved. |
+| `BATCH_API_DISABLED` | `false` | _(deprecated compat)_ Active batch path removed; only echoed in `memory_maintenance.yml`'s `batch_noop` telemetry line for log-scraper backward compatibility |
+| `BATCH_API_PROVIDER` | `auto` | _(deprecated compat)_ Same status as `BATCH_API_DISABLED` — surfaced only in `memory_maintenance.yml` `batch_noop` log line |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | `24` | _(deprecated compat)_ Same status as `BATCH_API_DISABLED` — surfaced only in `memory_maintenance.yml` `batch_noop` log line |
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |

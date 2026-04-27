@@ -242,7 +242,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -755,42 +755,9 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         run: |
           set -euo pipefail
-
-          if [ ! -f codex_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
-            echo "Missing required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md"
-            exit 1
-          fi
-
-          # Split context into static (constant across runs) and dynamic (per-issue)
-          # files. This enables LLM prompt caching: the static prefix is identical
-          # across all runs, so the provider can cache it and charge reduced rates
-          # for subsequent requests. Bundling everything into one file defeats
-          # prefix caching because the dynamic issue context changes every run.
-          {
-            echo "=== SYSTEM INSTRUCTIONS (planning-trimmed) ==="
-            # Include Serena + sections 0-6 + FINAL REMINDER; skip section 7+.
-            awk '/^## 7\./{exit} {print}' codex_system_instructions.md
-            echo
-            awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
-            echo
-
-            echo "=== AI PIPELINE (planning-trimmed) ==="
-            # Keep shared runtime + clarify/planning context; stop before phase 3.
-            awk '/^## Phase 3/{exit} {print}' ai_pipeline.md
-            echo
-
-            if [ -f agents.md ]; then
-              echo "=== AGENTS.MD ==="
-              cat agents.md
-              echo
-            fi
-            if [ -f README.md ]; then
-              echo "=== README.MD (trimmed) ==="
-              # Keep overview/variables; exclude wrapper/automation docs.
-              awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
-              echo
-            fi
-          } > ./pre_assembled_static.txt
+          # See scripts/build_static_context.sh for trimming rationale and
+          # prompt-prefix caching motivation.
+          bash scripts/build_static_context.sh plan ./pre_assembled_static.txt
 
       - name: Retrieve memory context
         if: env.SKIP_PLAN != 'true'
