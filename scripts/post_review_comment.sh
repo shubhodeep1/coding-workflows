@@ -48,18 +48,34 @@
 
 set -euo pipefail
 
-# ── Required env ────────────────────────────────────────────────────────
-: "${REVIEWER_CONSENSUS_FILE:?REVIEWER_CONSENSUS_FILE must be set}"
-: "${REPOSITORY:?REPOSITORY must be set (e.g. owner/repo)}"
-: "${HEAD_SHA:?HEAD_SHA must be set (the commit the review covers)}"
-: "${SUPPORT_SCRIPTS_DIR:?SUPPORT_SCRIPTS_DIR must be set (gh_helpers.sh source)}"
-
+# ── Env defaults + required-input validation ────────────────────────────
+# Required vars use explicit `if [ -z ]; then exit 2` (instead of bash's
+# `: "${VAR:?...}"`) so missing input matches the documented exit code 2.
+REPOSITORY="${REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 PR_NUMBER="${PR_NUMBER:-}"
 HEAD_REF="${HEAD_REF:-}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
 GITHUB_SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
 COMMENT_BODY_SOFT_LIMIT="${COMMENT_BODY_SOFT_LIMIT:-60000}"
 POST_REVIEW_DRY_RUN="${POST_REVIEW_DRY_RUN:-false}"
+
+if [ -z "${REVIEWER_CONSENSUS_FILE:-}" ]; then
+	echo "::error::post_review_comment: REVIEWER_CONSENSUS_FILE must be set." >&2
+	exit 2
+fi
+if [ -z "${REPOSITORY}" ]; then
+	echo "::error::post_review_comment: REPOSITORY must be set (e.g. owner/repo); GITHUB_REPOSITORY also empty." >&2
+	exit 2
+fi
+if [ -z "${HEAD_SHA:-}" ]; then
+	echo "::error::post_review_comment: HEAD_SHA must be set (the commit the review covers)." >&2
+	exit 2
+fi
+if ! [[ "${COMMENT_BODY_SOFT_LIMIT}" =~ ^[0-9]+$ ]]; then
+	echo "::error::post_review_comment: COMMENT_BODY_SOFT_LIMIT must be a non-negative integer; got '${COMMENT_BODY_SOFT_LIMIT}'." >&2
+	exit 2
+fi
 
 # ── Source gh_helpers (rate-limit-aware retry) ──────────────────────────
 # shellcheck disable=SC1091
@@ -183,13 +199,25 @@ with open(ledger_path, "r", encoding="utf-8", errors="replace") as fh:
 
 def is_safe_split(line: str, prev_line: str) -> bool:
 	# Safe split points (start of the upcoming line creates a new chunk):
-	#  1. New finding bullet inside the CONSENSUS block.
+	#  1. New finding bullet inside the CONSENSUS block. Each finding
+	#     bullet has the canonical form
+	#       "- {file}:{line_range} | severity=... | confidence=..."
+	#     so we additionally require ':' on the line — this rejects
+	#     prose sub-lists like "- this is a nested bullet" that a model
+	#     might emit inside PROBLEM: or WHY: text and which would
+	#     otherwise cause a false split mid-finding.
 	#  2. New per-reviewer section start.
-	#  3. The consensus block's closing sentinel, so the closer can move
-	#     to the next chunk when the block straddles a boundary.
-	if line.startswith("- "):
+	#  3. Per-reviewer section closing sentinel, so the closer can move
+	#     to the next chunk when a reviewer block straddles a boundary
+	#     (otherwise a chunk near the cap could overflow on the bare
+	#     "=== END FINDINGS FROM <slug> ===" line and force a false
+	#     oversize error).
+	#  4. The consensus block's closing sentinel, same reasoning.
+	if line.startswith("- ") and ":" in line:
 		return True
 	if line.startswith("=== FINDINGS FROM "):
+		return True
+	if line.startswith("=== END FINDINGS FROM "):
 		return True
 	if line.startswith("=== END CONSENSUS FINDINGS ==="):
 		return True
@@ -236,7 +264,14 @@ print(f"chunk_count={len(chunks)}")
 PYCHUNK
 
 if [ -f "${CHUNK_DIR}/OVERSIZE" ]; then
-	echo "::error::post_review_comment: at least one finding exceeds COMMENT_BODY_SOFT_LIMIT=${COMMENT_BODY_SOFT_LIMIT}; GitHub will reject the post." >&2
+	# At least one chunk's body still exceeds MAX_BODY after splitting at
+	# every available safe boundary. The most common cause is a single
+	# finding (CONSENSUS bullet or per-reviewer entry) larger than the
+	# per-comment cap, but it can also fire when a non-splittable run of
+	# lines (e.g. a long unbroken section between sentinels) exceeds the
+	# cap. Either way the GitHub /comments POST will return 422; we keep
+	# trying so the operator sees the failure rather than a silent drop.
+	echo "::error::post_review_comment: at least one chunk exceeds COMMENT_BODY_SOFT_LIMIT=${COMMENT_BODY_SOFT_LIMIT} after exhausting safe split points; GitHub will reject the post." >&2
 	cat "${CHUNK_DIR}/OVERSIZE" >&2
 	# Continue posting anyway — operator visibility into the oversized chunk
 	# is more useful than silent dropping. The gh API call will surface the
