@@ -243,7 +243,7 @@
     {
       "slug": "qwen/qwen3.6-plus",
       "display_name": "Qwen 3.6 Plus",
-      "description": "Alibaba Qwen 3.6 Plus - 1M context coding agent specialising in autonomous programming via tool calling and environment interaction; multimodal (text+image+video) but used here for text-only review",
+      "description": "Alibaba Qwen 3.6 Plus - 1M context coding agent specialising in autonomous programming via tool calling and environment interaction; used here for text-only review",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
