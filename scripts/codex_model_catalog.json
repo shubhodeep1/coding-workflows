@@ -422,7 +422,7 @@
       "auto_compact_token_limit": 304000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image", "file"]
+      "input_modalities": ["text", "image"]
     },
     {
       "slug": "deepseek/deepseek-v4-pro",
@@ -482,7 +482,7 @@
       "auto_compact_token_limit": 720000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image", "video"]
+      "input_modalities": ["text", "image"]
     },
     {
       "slug": "x-ai/grok-4.1-fast",
@@ -512,7 +512,7 @@
       "auto_compact_token_limit": 1440000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image", "file"]
+      "input_modalities": ["text", "image"]
     }
   ]
 }
