@@ -383,6 +383,7 @@ def _run_poller(
 	enable_stall_human_terminalization: str = "false",
 	enable_clean_wave_judge_skip: str = "true",
 	judge_repeat_fingerprint_max: str = "2",
+	mock_gh_issue_list_label_filter: bool = False,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -507,6 +508,7 @@ def _run_poller(
 			"actions_runs_workflow_runs": list(actions_runs_workflow_runs),
 			"actions_runs_status": int(actions_runs_status),
 			"actions_runs_status_sequence": list(actions_runs_status_sequence),
+			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -677,6 +679,49 @@ if args[0] == 'python3' and len(args) >= 4 and args[1] == 'scripts/ai_memory.py'
 		sys.exit(0)
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
+	# Minimal `gh issue list` filter for the close_merged_issues_sweep
+	# path. Gated by store['mock_gh_issue_list_label_filter'] so existing
+	# tests that don't exercise the sweep keep their legacy `[]` return
+	# value and unchanged closed_issues / label-call expectations. Only
+	# new sweep regression tests opt in via the kwarg below; everyone
+	# else continues to see no issues from the listing.
+	if store.get('mock_gh_issue_list_label_filter') is True:
+		il_state = None
+		il_label = None
+		il_json = False
+		il_idx = 2
+		while il_idx < len(args):
+			il_arg = args[il_idx]
+			if il_arg == '--state' and il_idx + 1 < len(args):
+				il_state = args[il_idx + 1]
+				il_idx += 2
+				continue
+			if il_arg == '--label' and il_idx + 1 < len(args):
+				il_label = args[il_idx + 1]
+				il_idx += 2
+				continue
+			if il_arg == '--json' and il_idx + 1 < len(args):
+				il_json = True
+				il_idx += 2
+				continue
+			il_idx += 1
+		if il_state == 'open' and il_label is not None and il_json:
+			out = []
+			for inum, idata in store.get('issues', {}).items():
+				if idata.get('closed'):
+					continue
+				labels = idata.get('labels', []) or []
+				if il_label not in labels:
+					continue
+				try:
+					out.append({
+						'number': int(inum),
+						'labels': [{'name': l} for l in labels],
+					})
+				except (TypeError, ValueError):
+					continue
+			print(json.dumps(out))
+			sys.exit(0)
 	print('[]')
 	sys.exit(0)
 
@@ -3780,6 +3825,227 @@ def test_backward_scan_label_batch_error_falls_back_to_rest():
 		gql_mode="error",
 	)
 	assert result["issue_label_calls"].get("35", 0) > 0
+
+
+def test_backward_scan_promotes_ready_to_merge_with_merged_pr_to_merged():
+	"""Backward-scan defensive reconcile (added 2026-04-27): when a prior-wave
+	child issue carries ai:ready-to-merge but its linked PR is already MERGED,
+	the backward-scan must promote the issue to ai:merged (and update wave
+	state to merged) so close_merged_issues_sweep can finalize it. Previously
+	the backward-scan only attempted gh pr merge against open PRs and silently
+	left already-merged prior-wave children stranded.
+
+	Integration branch intentionally unset: the fingerprint-capture branch
+	is gated on .integration_branch being non-empty and the test fixture
+	does not provide a real integration branch, so we keep the assertion
+	surface scoped to the label promotion + wave-state mutation that the
+	defensive reconcile is supposed to guarantee.
+	"""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 2,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "fixup-1", "github_issue": 35, "status": "pending"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": 20, "status": "pending"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10, "fixup-1": 35, "issue-2": 20},
+		"pending_issue_defs": {},
+	}
+	merged_pr = {
+		"number": 935,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-27T12:00:00Z",
+		"baseRefName": "orchestrator/project-192",
+		"headRefName": "ai/issue-35",
+		"headRefFromApi": "ai/issue-35",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={
+			10: ["ai:merged"],
+			35: ["ai:ready-to-merge"],
+			20: ["ai:implementing"],
+		},
+		issue_linked_prs={35: 935},
+		prs=[merged_pr],
+	)
+	# Issue 35 must transition to ai:merged in the live label store and to
+	# status=merged in wave-1 state. The label edit also strips
+	# ai:ready-to-merge so re-runs are idempotent.
+	final_labels = result["issues"]["35"]["labels"]
+	assert "ai:merged" in final_labels, f"Expected ai:merged on #35; got {final_labels}"
+	assert "ai:ready-to-merge" not in final_labels, f"Expected ai:ready-to-merge stripped from #35; got {final_labels}"
+	wave1_issues = {i["id"]: i["status"] for i in result["latest_state"]["waves"][0]["issues"]}
+	assert wave1_issues.get("fixup-1") == "merged", f"Expected fixup-1 status=merged, got {wave1_issues.get('fixup-1')}"
+	# Public log-prefix audit line (renames are breaking per CLAUDE.md §6).
+	assert "[backward-scan] #35 ai:ready-to-merge but linked PR #935 is already merged" in result["stdout"], (
+		"Missing backward-scan promotion log line in poller stdout"
+	)
+
+
+def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr():
+	"""close_merged_issues_sweep defensive backstop (added 2026-04-27):
+	open issues carrying ai:ready-to-merge whose linked PR is verified
+	merged via the issue timeline must be closed AND have ai:merged
+	backfilled before close, so concurrent readers (wave-status resolver,
+	validation fix-up loop) see the same terminal label as the
+	merged_label-origin path always produced.
+	"""
+	# Project is already complete so the wave loop is benign and the only
+	# late side-effect on the orchestrator-managed child issue (#10) is the
+	# sweep's ready_label-origin branch.
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 1,
+		"total_waves": 1,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "complete",
+		"integration_branch": "orchestrator/project-192",
+		"final_merge_pr": 0,
+		"final_merge_status": "merged",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+	merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-27T12:00:00Z",
+		"baseRefName": "orchestrator/project-192",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 901},
+		prs=[merged_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	# Sweep must (a) backfill ai:merged + strip ai:ready-to-merge before
+	# close, (b) close the issue, (c) emit the public log prefix carrying
+	# origin=ready_label so the new ready_label branch is observable.
+	final_labels = result["issues"]["10"]["labels"]
+	assert "ai:merged" in final_labels, f"Expected ai:merged backfilled on #10; got {final_labels}"
+	assert "ai:ready-to-merge" not in final_labels, f"Expected ai:ready-to-merge stripped from #10; got {final_labels}"
+	assert 10 in result.get("closed_issues", []), (
+		f"Expected #10 closed by sweep; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=901 origin=ready_label status=closed" in result["stdout"], (
+		"Missing CLOSE_MERGED_SWEEP ready_label closure log line in poller stdout"
+	)
+
+
+def test_close_merged_issues_sweep_pending_ready_to_merge_does_not_alert():
+	"""When an ai:ready-to-merge issue has NO merged PR yet (the normal
+	pending state for an in-flight auto-merge), the sweep must NOT close
+	the issue and must NOT emit a stale-label Telegram alert. The label is
+	a request to auto-merge, not a contract that a merged PR exists.
+	"""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 1,
+		"total_waves": 1,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "complete",
+		"integration_branch": "orchestrator/project-192",
+		"final_merge_pr": 0,
+		"final_merge_status": "merged",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+	open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "orchestrator/project-192",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 901},
+		prs=[open_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"Issue #10 should remain open while PR is unmerged; closed_issues={result.get('closed_issues')}"
+	)
+	# The pending log prefix carries origin=ready_label so the no-alert
+	# branch is observable; the merged_label-origin alert prefix must NOT
+	# appear for this issue (would indicate a stale-label false positive).
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=ready_label no_merged_pr_found" in result["stdout"], (
+		"Missing pending-state log line for ai:ready-to-merge sweep entry"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label no_merged_pr_found" not in result["stdout"], (
+		"Pending ai:ready-to-merge issue must not trip the merged_label stale-label alert path"
+	)
+	# Labels must remain unchanged (no spurious ai:merged backfill).
+	final_labels = result["issues"]["10"]["labels"]
+	assert "ai:merged" not in final_labels, f"Did not expect ai:merged backfill; got {final_labels}"
+	assert "ai:ready-to-merge" in final_labels, f"Expected ai:ready-to-merge preserved; got {final_labels}"
 
 
 def test_in_progress_judge_recreates_closed_fixup_id_stays_on_current_wave():

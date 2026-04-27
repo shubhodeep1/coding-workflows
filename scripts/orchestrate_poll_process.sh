@@ -1554,21 +1554,44 @@ post_healing_summary_comment() {
 $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 }
 
-# close_merged_issues_sweep — scans all OPEN GitHub issues that carry the
-# ai:merged label and closes any whose linked PR is verified merged via the
-# timeline cross-reference helper (GraphQL-first, fail-open to REST). Runs for both orchestrator-managed child issues and
-# non-orchestrator-managed standalone issues. Tracking issues
-# (label ai:orchestrator-tracking) are intentionally skipped — their
+# close_merged_issues_sweep — scans all OPEN GitHub issues that carry either
+# the ai:merged label OR the ai:ready-to-merge label, and closes any whose
+# linked PR is verified merged via the timeline cross-reference helper
+# (GraphQL-first, fail-open to REST). Runs for both orchestrator-managed
+# child issues and non-orchestrator-managed standalone issues. Tracking
+# issues (label ai:orchestrator-tracking) are intentionally skipped — their
 # close lifecycle is handled by the orchestrator completion path.
 #
-# Verification policy (Q2: A — strict): walks timeline cross-references
-# and only closes if at least one linked PR is verified merged
-# (merged == true or merged_at != null). If no merged PR can be verified
-# (e.g. stale label, missing PR link, transient API failure), the issue is
-# left open and a Telegram alert is sent for operator investigation — this
-# sweep does NOT attempt any other recovery in that case.
+# Two label-origin classes (renames are breaking per CLAUDE.md §6 — public
+# log prefixes embed the origin):
+#   - merged_label: issue carries ai:merged. Existing strict policy applies:
+#       no merged PR found in timeline -> leave open + Telegram WARNING
+#       (the label is a strong signal something is wrong if we cannot
+#       verify it, e.g. stale label, missing PR link, transient API
+#       failure).
+#   - ready_label: issue carries ai:ready-to-merge but NOT ai:merged. This
+#       is the defensive backstop branch (added 2026-04-27) for the case
+#       where reconcile_managed_issue_labels never promoted ai:ready-to-merge
+#       -> ai:merged because the wave moved past the issue and the
+#       backward-scan only observed labels without reconciling against PR
+#       state. Policy: when a merged PR IS verified on timeline, backfill
+#       ai:merged before closing so any concurrent reader (wave-status
+#       resolver, validation fix-up loop) sees consistent state. When no
+#       merged PR is found, this is the normal pending state -> exit
+#       silently with NO Telegram alert (the label is not a contract that
+#       a merged PR exists yet, only that auto-merge is requested).
+#
+# Verification policy (strict for both classes): walks timeline
+# cross-references and only closes if at least one linked PR is verified
+# merged (merged == true or merged_at != null).
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
+#
+# API hygiene (CLAUDE.md §15): up to 2 `gh issue list` calls per sweep
+# (one per label class) regardless of N issues. Per-issue cost is the
+# existing single _issue_timeline_with_cross_refs_json call (GraphQL-first
+# with fail-open REST fallback) plus, in the ready_label-origin merged-PR
+# case, one `gh issue edit` to backfill ai:merged before close.
 close_merged_issues_sweep() {
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
@@ -1580,23 +1603,49 @@ close_merged_issues_sweep() {
   echo "Close merged issues sweep"
   echo "========================================"
 
-  local issues_json
-  issues_json="$(gh_retry gh issue list \
+  local merged_json ready_json
+  merged_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:merged" \
     --json number,labels \
     --limit 200 2>/dev/null || echo "[]")"
+  ready_json="$(gh_retry gh issue list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --label "ai:ready-to-merge" \
+    --json number,labels \
+    --limit 200 2>/dev/null || echo "[]")"
+
+  # Build a single deduplicated list of {number, labels, origin} entries.
+  # When an issue carries BOTH labels (legitimate transition state), prefer
+  # the merged_label origin so the strict alerting policy applies.
+  local issues_json
+  issues_json="$(jq -c -n \
+    --argjson merged "${merged_json:-[]}" \
+    --argjson ready "${ready_json:-[]}" '
+      def normalize($origin):
+        map(
+          select(type == "object" and (.number | type == "number"))
+          | {number: .number, labels: (.labels // []), origin: $origin}
+        );
+      ($merged | normalize("merged_label")) as $m
+      | ($ready | normalize("ready_label")) as $r
+      | ($m + ($r | map(select(.number as $n | ($m | map(.number) | index($n)) == null))))
+    ' 2>/dev/null || echo "[]")"
 
   local count
   count="$(echo "${issues_json}" | jq 'length' 2>/dev/null || echo "0")"
-  echo "Found ${count} open issue(s) with ai:merged label."
+  local merged_count ready_count
+  merged_count="$(echo "${merged_json}" | jq 'length' 2>/dev/null || echo "0")"
+  ready_count="$(echo "${ready_json}" | jq 'length' 2>/dev/null || echo "0")"
+  echo "Found ${merged_count} open issue(s) with ai:merged and ${ready_count} with ai:ready-to-merge (deduped: ${count})."
 
   if [ "${count}" -eq 0 ]; then
     return 0
   fi
 
-  local idx issue_num has_tracking_label timeline_json merged_pr_num
+  local idx issue_num origin has_tracking_label timeline_json merged_pr_num
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -1604,6 +1653,7 @@ close_merged_issues_sweep() {
   for ((idx=0; idx<count; idx++)); do
     issue_num="$(echo "${issues_json}" | jq -r ".[${idx}].number" 2>/dev/null || echo "")"
     [ -n "${issue_num}" ] && [ "${issue_num}" != "null" ] || continue
+    origin="$(echo "${issues_json}" | jq -r ".[${idx}].origin" 2>/dev/null || echo "merged_label")"
 
     # Skip orchestrator tracking issues — handled by the project completion
     # close path (see set_tracking_phase_label "ai:merged" call sites).
@@ -1617,13 +1667,13 @@ close_merged_issues_sweep() {
     # Walk the issue timeline for cross-referenced PR URLs. Reuses the
     # same pattern as validation_fix_issue_has_merged_pr_evidence().
     if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
-      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} timeline_fetch_failed — skipping this cycle."
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} timeline_fetch_failed — skipping this cycle."
       skipped_count=$((skipped_count + 1))
       continue
     fi
 
     if ! echo "${timeline_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} timeline_not_array — skipping this cycle."
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} timeline_not_array — skipping this cycle."
       skipped_count=$((skipped_count + 1))
       continue
     fi
@@ -1638,23 +1688,43 @@ close_merged_issues_sweep() {
     ' 2>/dev/null || echo "")"
 
     if [ -z "${merged_pr_num}" ]; then
-      # Policy: do not close, send Telegram alert for investigation.
-      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} no_merged_pr_found — leaving open and alerting."
+      if [ "${origin}" = "ready_label" ]; then
+        # Normal pending state for ai:ready-to-merge. No alert — the
+        # label is not a contract that a merged PR exists yet.
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — pending, leaving open."
+        skipped_count=$((skipped_count + 1))
+        continue
+      fi
+      # ai:merged origin: stale-label path retained — alert and skip.
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found — leaving open and alerting."
       tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline. The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
       alert_count=$((alert_count + 1))
       continue
     fi
 
-    echo "  Issue #${issue_num}: verified merged PR #${merged_pr_num}. Closing."
+    # Backfill ai:merged for ready_label-origin issues so concurrent
+    # readers (wave-status resolver, validation fix-up loop, lineage
+    # finalizer) see the same terminal label the merged_label-origin
+    # branch has always produced. Idempotent: gh issue edit --add-label
+    # is a no-op if the label is already present (race with the main
+    # poller's reconcile_managed_issue_labels).
+    if [ "${origin}" = "ready_label" ]; then
+      ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
+      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --add-label "ai:merged" --remove-label "ai:ready-to-merge" >/dev/null 2>&1 \
+        || echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} backfill_ai_merged_failed — proceeding to close anyway."
+    fi
+
+    echo "  Issue #${issue_num}: verified merged PR #${merged_pr_num} (origin=${origin}). Closing."
     local _close_err_file
     _close_err_file="$(mktemp)"
     if gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         -c "Closing: linked PR #${merged_pr_num} was merged. Auto-closed by orchestrator poller (close_merged_issues_sweep)." \
         >/dev/null 2>"${_close_err_file}"; then
       closed_count=$((closed_count + 1))
-      echo "CLOSE_MERGED_SWEEP issue=${issue_num} pr=${merged_pr_num} status=closed"
+      echo "CLOSE_MERGED_SWEEP issue=${issue_num} pr=${merged_pr_num} origin=${origin} status=closed"
     else
-      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} close_failed: $(cat "${_close_err_file}" 2>/dev/null)" >&2
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} close_failed: $(cat "${_close_err_file}" 2>/dev/null)" >&2
     fi
     rm -f "${_close_err_file}"
   done
@@ -8135,10 +8205,40 @@ The poller will resume processing on the next cycle."
             _pw_pr_json="$(_fetch_pr_json "${PW_PR}")"
             PW_PR_STATE="$(_jq_field "${_pw_pr_json}" '.state' 'open|closed|merged')"
             PW_PR_MERGEABLE="$(_jq_field "${_pw_pr_json}" '.mergeable' 'true|false')"
+            PW_PR_MERGED="$(_jq_field "${_pw_pr_json}" '.merged_at != null' 'true|false')"
             _pw_head_sha="$(_jq_field "${_pw_pr_json}" '.head.sha')"
-			if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
-			  gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-			    || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+            # Defensive prior-wave reconcile (added 2026-04-27): when the
+            # linked PR is already merged, the wave-current poller's
+            # reconcile_managed_issue_labels never ran for this issue
+            # (it only iterates current-wave ISSUE_NUMS), so the
+            # ai:ready-to-merge -> ai:merged transition that
+            # close_merged_issues_sweep depends on never fired. Promote
+            # the label here, mirror the ai:merged-branch state mutation,
+            # and capture intent fingerprints just like the late-detected
+            # merged path above (lines 8176-8194). Idempotent: gh issue
+            # edit --add-label is a no-op if ai:merged is already on the
+            # issue. Merged-detection uses .merged_at != null because
+            # GitHub's REST API returns .state == "closed" for merged
+            # PRs (not "merged") — same convention as the standalone
+            # stall-recovery merged-PR guard at line ~6463.
+            if [ "${PW_PR_MERGED}" = "true" ]; then
+              echo "  [backward-scan] #${pw_inum} ai:ready-to-merge but linked PR #${PW_PR} is already merged — promoting to ai:merged."
+              ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
+              gh_retry gh issue edit "${pw_inum}" --repo "${GITHUB_REPOSITORY}" \
+                --add-label "ai:merged" --remove-label "ai:ready-to-merge" >/dev/null 2>&1 \
+                || echo "::warning::[backward-scan] #${pw_inum} ai:merged label edit failed; close_merged_issues_sweep will retry next cycle."
+              jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
+                '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "merged"' \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+              PRIOR_WAVE_REMEDIATED="true"
+              _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+              if [ -n "${_bws_integ}" ]; then
+                capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${PW_PR}" || true
+              fi
+              unset _bws_integ
+            elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
+              gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
               gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
                 -X PUT -f expected_head_sha="${_pw_head_sha}" \
