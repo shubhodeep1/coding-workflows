@@ -101,6 +101,7 @@ jobs:
       skip_reason: ${{ steps.evaluate.outputs.skip_reason }}
       deterministic_skip: ${{ steps.evaluate.outputs.deterministic_skip }}
       det_skip_reason: ${{ steps.evaluate.outputs.det_skip_reason }}
+      claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
     steps:
       - name: Evaluate review gate
         id: evaluate
@@ -182,23 +183,28 @@ jobs:
             SKIP_REASON="skip_ai_marker"
           fi
 
-          # Claude-branch skip:
-          # Exclude PRs whose head branch starts with "claude/" (e.g.
-          # claude/investigate-poller-stalled-prs-STfJ5). These are
-          # ad-hoc Claude sessions outside the orchestrator / issue-driven
-          # autofix loop; running the reviewer+editor panel on them spends
-          # LLM budget without the surrounding automation (tracking-issue
-          # ledger, orchestrator stall recovery, validation fan-out) that
-          # the autofix loop is designed to serve. The check applies to
-          # every trigger — including workflow_dispatch — because the
-          # operator escape hatch for these branches is to rename/merge
-          # the branch rather than force a review cycle.
+          # Claude-branch review-only mode:
+          # PRs whose head branch starts with "claude/" (e.g.
+          # claude/investigate-poller-stalled-prs-STfJ5) are ad-hoc Claude
+          # sessions outside the orchestrator / issue-driven autofix loop.
+          # Running the full editor + commit + auto-merge pipeline on them
+          # would push autofix commits onto a branch the operator is
+          # actively working on. Instead, the gate flags claude-branch-review
+          # mode so codex-agent runs the reviewer panel + summariser, posts
+          # the consensus ledger as a PR comment via post_review_comment.sh,
+          # and then exits without invoking the editor / commit / push /
+          # rb_judge / auto-merge / validate-dispatch tail. The
+          # deterministic-skip-merge and post-merge-validate-dispatch jobs
+          # are also gated off in this mode (those would auto-mark the PR
+          # ai:ready-to-merge / dispatch validate, which is wrong for
+          # human-driven claude/* branches). See PR #1688 for the
+          # post_review_comment.sh helper that this path consumes.
+          CLAUDE_BRANCH_REVIEW="false"
           if [ "${SHOULD_RUN}" = "true" ] && [ -n "${pr_head_ref}" ]; then
             case "${pr_head_ref}" in
               claude/*)
-                SHOULD_RUN="false"
-                SKIP_REASON="claude_branch"
-                echo "AUTOFIX_GATE_SKIP reason=claude_branch pr=${PR_NUMBER} head_ref=${pr_head_ref}"
+                CLAUDE_BRANCH_REVIEW="true"
+                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW pr=${PR_NUMBER} head_ref=${pr_head_ref} — running reviewer panel + comment-only path; editor/commit/judge/auto-merge skipped."
                 ;;
             esac
           fi
@@ -381,16 +387,34 @@ jobs:
             fi
           fi
 
+          # Claude-branch-review and the deterministic doc-only / small-diff
+          # skip path are mutually exclusive: doc-only / tiny PRs on a
+          # claude/* branch should NOT auto-mark ai:ready-to-merge or enable
+          # auto-merge (those are operator-driven branches). Suppress the
+          # deterministic-skip-merge dispatch when the claude-branch-review
+          # flag is on so the reviewer-comment path is the sole automated
+          # output.
+          if [ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then
+            echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_branch_review pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
+            DETERMINISTIC_SKIP="false"
+            DET_SKIP_REASON=""
+          fi
+
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
           echo "skip_reason=${SKIP_REASON}" >> "${GITHUB_OUTPUT}"
           echo "deterministic_skip=${DETERMINISTIC_SKIP}" >> "${GITHUB_OUTPUT}"
           echo "det_skip_reason=${DET_SKIP_REASON}" >> "${GITHUB_OUTPUT}"
+          echo "claude_branch_review=${CLAUDE_BRANCH_REVIEW}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
     runs-on: ubuntu-latest
-    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' }}
+    # claude_branch_review-mode skip: claude/* branches are operator-driven
+    # and never carry orchestrator-managed sub-issues, so the validate
+    # dispatch is unnecessary. Belt-and-braces — the label-scoped iteration
+    # inside the job already no-ops on claude/* PRs.
+    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       REPOSITORY: ${{ github.repository }}
@@ -607,6 +631,12 @@ jobs:
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
+      # Claude-branch-review mode: when true, the codex-agent job runs the
+      # reviewer panel + summariser, posts the consensus ledger as a PR
+      # comment via scripts/post_review_comment.sh, and exits without
+      # invoking the editor / commit / push / rb_judge / auto-merge tail.
+      # Sourced from the gate's claude_branch_review output. See gate.
+      CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
 
     steps:
 
@@ -767,7 +797,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -2294,13 +2324,38 @@ jobs:
 
           true
 
+      # Claude-branch-review mode terminal step: post the reviewer-consensus
+      # ledger as a PR comment (or commit comment when no PR exists for the
+      # head SHA) via scripts/post_review_comment.sh. The script handles
+      # routing (PR comment vs commit comment), chunking on safe finding
+      # boundaries, and the empty-ledger sentinel. Subsequent editor /
+      # commit / push / rb_judge / auto-merge / telegram-success steps are
+      # all gated on CLAUDE_BRANCH_REVIEW_MODE != 'true', so this is the
+      # last codex-agent action in claude-branch-review mode.
+      - name: Post claude-branch-review consensus comment
+        if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ ! -s "${REVIEWER_CONSENSUS_FILE:-}" ]; then
+            echo "::warning::claude-branch-review: REVIEWER_CONSENSUS_FILE missing/empty (${REVIEWER_CONSENSUS_FILE:-<unset>}); nothing to post."
+            exit 0
+          fi
+          bash "${SUPPORT_SCRIPTS_DIR}/post_review_comment.sh"
+
       - name: Pre-editor stale-base gate
         # Skip the expensive editor LLM call when the PR branch advanced
         # with a non-autofix commit during the reviewer pass.  See
         # agents.md §20.2.  The gate is fail-open: detection failures
         # (fetch errors, API blips) fall through to the editor so a
         # GitHub API glitch never silently drops a review.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        # Claude-branch-review mode never runs the editor, so this
+        # check (and the API calls it makes) is unnecessary.
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -2336,7 +2391,7 @@ jobs:
           esac
 
       - name: Install project dependencies (best-effort)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
           set -euo pipefail
           # Install project dependencies so the editor can validate fixes
@@ -2368,7 +2423,7 @@ jobs:
           fi
 
       - name: Switch reasoning effort for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
           set -euo pipefail
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
@@ -2385,7 +2440,7 @@ jobs:
       # fail-open: the ledger script treats an absent prior ledger as
       # iteration-1 state and proceeds normally.
       - name: Restore review-issue ledger
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -2397,7 +2452,7 @@ jobs:
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
 
       - name: Apply fixes with editor model
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2454,7 +2509,7 @@ jobs:
       # persisting what's on disk keeps issue lifecycle accurate across
       # iterations even when the editor phase aborted.
       - name: Save review-issue ledger
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -2523,7 +2578,7 @@ jobs:
             }
 
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         id: commit_changes
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -2532,7 +2587,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2643,7 +2698,7 @@ jobs:
         # ledger, which is a bookkeeping write — not a productive edit — so
         # this safety check must still run to validate the editor's no-op
         # claim before downstream clean-review gates fire. See PR #1472.
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         run: |
           set -euo pipefail
 
@@ -2855,7 +2910,7 @@ jobs:
         # here: the ledger is bookkeeping and does not count as a productive
         # editor change, so the no-op disposition still needs validation
         # before downstream clean-review gates fire. See PR #1472.
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         run: |
           set -euo pipefail
 
@@ -2932,7 +2987,7 @@ jobs:
         # deferred), and HEAD is up to date, so the merge-base check is valid.
         # Actual
         # resolution is gated separately below.
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3199,7 +3254,7 @@ jobs:
         # resolution is not an autofix iteration and should not be blocked by
         # the iteration cap.  Also runs when did_commit is true since the push
         # is deferred — both autofix and conflict resolution are pushed together.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3222,7 +3277,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         timeout-minutes: 60
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -3231,7 +3286,11 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
 
       - name: Cache linked issues references
-        if: always() && env.PR_CLOSED != 'true'
+        # Claude-branch-review mode skips all the downstream label-mutating
+        # steps (Mark linked issues ready to merge, Mark linked issues
+        # review-blocked, etc.) so refreshing LINKED_ISSUES_JSON would be
+        # wasted API calls.
+        if: always() && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3274,7 +3333,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3298,7 +3357,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3374,7 +3433,7 @@ jobs:
 
       - name: Review-blocked judge decision
         id: rb_judge
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3400,7 +3459,7 @@ jobs:
             exit "${_judge_exit}"
           fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3481,7 +3540,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
@@ -3511,7 +3570,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -3538,7 +3597,7 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -3679,7 +3738,7 @@ jobs:
         #      added workflow_dispatch to their caller workflow template).
         #   2. Caller workflow parsed from github.workflow_ref — fallback for
         #      consumer repos whose caller workflow has workflow_dispatch.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
@@ -3855,7 +3914,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3888,7 +3947,7 @@ jobs:
         # carry the original pull_request event payload.
         # Re-dispatched workflow_dispatch runs do not include
         # github.event.pull_request and therefore cannot re-enter this path.
-        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && github.event.pull_request.number"
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && github.event.pull_request.number"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
@@ -3956,7 +4015,7 @@ jobs:
           echo "CHANGES_LOST_REDISPATCHED=${dispatched}" >> "$GITHUB_ENV"
 
       - name: Telegram editor-changes-lost warning
-        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4012,7 +4071,7 @@ jobs:
           fi
 
       - name: Telegram editor-noop-suspicious warning
-        if: "success() && env.EDITOR_NOOP_SUSPICIOUS == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
+        if: "success() && env.EDITOR_NOOP_SUSPICIOUS == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4043,7 +4102,7 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram review-blocked judge decision
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4108,7 +4167,7 @@ jobs:
           fi
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -4166,7 +4225,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
