@@ -81,10 +81,15 @@ case "${phase}" in
 			fi
 			if [ -f README.md ]; then
 				echo "=== README.MD (trimmed) ==="
-				# Include app descriptions and conventions but exclude CI/workflow
-				# automation docs, PR autofix details, and switchover runbooks that
-				# are irrelevant to clarification.
-				awk '/^### GitHub AI Automation/{exit} /^### Decimal128 switchover/{exit} {print}' README.md
+				# Include the overview/setup/conventions section but exclude
+				# the wrapper-workflow + automation runbooks that follow, which
+				# are irrelevant to clarification. The previous anchors
+				# (`### GitHub AI Automation` / `### Decimal128 switchover`) do
+				# not exist in the current README, so the awk ran to EOF and
+				# the trim was a no-op — the entire 1748-line README was
+				# bundled into the clarify static context. Switch to the same
+				# anchor the plan phase already uses.
+				awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
 				echo
 			fi
 		} > "${output}"

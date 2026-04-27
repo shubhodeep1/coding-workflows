@@ -2236,7 +2236,16 @@ ensure_integration_conflict_state_fields() {
 
 normalize_judge_justification_for_fingerprint() {
   local raw_text="${1-}"
-  printf '%s' "${raw_text}" | python3 /dev/fd/3 3<<'PY'
+  # Write the python normalizer to a tempfile and invoke it as a script.
+  # The previous form `python3 /dev/fd/3 3<<'PY'` relied on the python3
+  # child inheriting bash's fd 3 from the heredoc, but that fd is not
+  # always accessible to the child on the GitHub-hosted Python 3.12
+  # runner under `subprocess.Popen(start_new_session=True)` — python3
+  # then errors with "can't open file '/dev/fd/3': No such file" and the
+  # poller exits non-zero, breaking every judge-fingerprint test.
+  local _norm_script
+  _norm_script="$(mktemp)"
+  cat > "${_norm_script}" <<'PY'
 import re
 import sys
 
@@ -2257,6 +2266,10 @@ text = re.sub(
 text = re.sub(r'\s+', ' ', text).strip()
 print(text)
 PY
+  printf '%s' "${raw_text}" | python3 "${_norm_script}"
+  local _rc=$?
+  rm -f "${_norm_script}"
+  return ${_rc}
 }
 
 judge_justification_fingerprint() {
