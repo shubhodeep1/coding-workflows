@@ -132,10 +132,13 @@ case "${phase}" in
 
 			# Include agents.md context: canonical from coding-workflows plus
 			# the caller repo's own agents.md (if present). Both are included
-			# so the model has the full picture.
-			if [ -f "${RUNTIME_DIR:-}/agents_canonical.md" ] || [ -f agents.md ]; then
+			# so the model has the full picture. Guard RUNTIME_DIR explicitly:
+			# a bare "${RUNTIME_DIR:-}/agents_canonical.md" would test
+			# "/agents_canonical.md" at filesystem root when unset, and the
+			# subsequent cat would trip set -u without a default.
+			if { [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; } || [ -f agents.md ]; then
 				echo "=== AGENTS.MD ==="
-				if [ -f "${RUNTIME_DIR:-}/agents_canonical.md" ]; then
+				if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; then
 					cat "${RUNTIME_DIR}/agents_canonical.md"
 					echo
 				fi
