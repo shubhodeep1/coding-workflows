@@ -57,6 +57,10 @@ jobs:
             exit 1
           fi
 
+          # Wire git to use the gh credential helper so raw `git fetch`/`ls-remote`
+          # calls inside cloned consumer repos authenticate with GH_TOKEN.
+          gh auth setup-git
+
           RUNTIME_DIR="${RUNNER_TEMP}/validation-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUNTIME_DIR}"
           SUMMARY_JSON="${RUNTIME_DIR}/summary.json"

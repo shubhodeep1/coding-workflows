@@ -2236,20 +2236,18 @@ ensure_integration_conflict_state_fields() {
 
 normalize_judge_justification_for_fingerprint() {
   local raw_text="${1-}"
-  # Write the python normalizer to a tempfile and invoke it as a script.
-  # The previous form `python3 /dev/fd/3 3<<'PY'` relied on the python3
-  # child inheriting bash's fd 3 from the heredoc, but that fd is not
-  # always accessible to the child on the GitHub-hosted Python 3.12
-  # runner under `subprocess.Popen(start_new_session=True)` — python3
-  # then errors with "can't open file '/dev/fd/3': No such file" and the
-  # poller exits non-zero, breaking every judge-fingerprint test.
-  local _norm_script
-  _norm_script="$(mktemp)"
-  cat > "${_norm_script}" <<'PY'
+  # Pass input via env var, not stdin: the GHA Ubuntu 24.04 runner's
+  # `bash -e {0}` shell closes the heredoc-bound FD 3 before exec'ing
+  # python3, so the previous `python3 /dev/fd/3 3<<'PY'` form failed
+  # with "can't open file '/dev/fd/3': [Errno 2]" and turned every
+  # poller invocation that touched judge fingerprints into a non-zero
+  # exit. Reading the text from RAW_TEXT and the script from stdin
+  # (`python3 -`) sidesteps the FD-3 dance entirely.
+  RAW_TEXT="${raw_text}" python3 - <<'PY'
+import os
 import re
-import sys
 
-text = sys.stdin.read()
+text = os.environ.get("RAW_TEXT", "")
 if not text:
     print("")
     raise SystemExit(0)
@@ -2266,16 +2264,6 @@ text = re.sub(
 text = re.sub(r'\s+', ' ', text).strip()
 print(text)
 PY
-  # Capture the pipeline exit code without tripping `set -e`. A bare
-  # `printf | python3 ...` followed by `local _rc=$?` would let `set -e`
-  # exit the surrounding script before the cleanup line runs, leaking the
-  # tempfile. The `|| _rc=$?` form keeps the failure on the conditional
-  # side of `||`, which `set -e` does not abort on, and `$?` inside the
-  # right-hand side is the failing pipeline's exit code.
-  local _rc=0
-  printf '%s' "${raw_text}" | python3 "${_norm_script}" || _rc=$?
-  rm -f "${_norm_script}"
-  return ${_rc}
 }
 
 judge_justification_fingerprint() {
