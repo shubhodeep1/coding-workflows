@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""Tests for scripts/analyze_workflow_logs.py."""
+"""Tests for scripts/analyze_workflow_logs.py.
+
+The analyzer now does context preparation only — the legacy OpenRouter
+sync/batch pathway has been removed. These tests cover:
+  * argparse surface (including the deprecated --codex-mode no-op alias)
+  * load_input_data validation
+  * prepare_analysis_context: caps lifted to 100/250 and the
+    `deep_dive_logs` field intentionally excluded
+  * resolve_dated_output_path collision handling
+  * main() writes analysis_context.json and prints its path
+"""
 
 from __future__ import annotations
 
 import importlib.util
-import io
 import json
-import os
-import tempfile
-import urllib.error
-import contextlib
-from datetime import date, datetime, timezone
-from pathlib import Path
 import sys
+import tempfile
+from datetime import date
+from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +40,160 @@ def _write_json(path: Path, payload: object) -> None:
 	path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+# ---------- argparse surface ------------------------------------------------
+
+
+def test_build_parser_codex_mode_default_false():
+	args = analyzer.build_parser().parse_args([])
+	assert args.codex_mode is False
+
+
+def test_build_parser_accepts_codex_mode_flag():
+	args = analyzer.build_parser().parse_args(["--codex-mode"])
+	assert args.codex_mode is True
+
+
+def test_build_parser_accepts_input_and_output():
+	args = analyzer.build_parser().parse_args(
+		["--input", "in.json", "--output", "out.md"]
+	)
+	assert args.input == "in.json"
+	assert args.output == "out.md"
+
+
+def test_build_parser_rejects_legacy_batch_flags():
+	parser = analyzer.build_parser()
+	with pytest.raises(SystemExit):
+		parser.parse_args(["--prompt-token-budget", "24000"])
+	with pytest.raises(SystemExit):
+		parser.parse_args(["--batch-mode", "auto"])
+
+
+# ---------- load_input_data ------------------------------------------------
+
+
+def test_load_input_data_rejects_malformed_json_input():
+	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
+		tmp.write("{not-json")
+		path = tmp.name
+	try:
+		args = analyzer.build_parser().parse_args(["--input", path])
+		with pytest.raises(ValueError):
+			analyzer.load_input_data(args)
+	finally:
+		Path(path).unlink(missing_ok=True)
+
+
+def test_load_input_data_collector_report_round_trips_runs():
+	report = {
+		"runs": [
+			{"repository": "o/r", "run_id": 1, "conclusion": "failure", "duration_seconds": 90},
+			{"repository": "o/r", "run_id": 2, "conclusion": "success", "duration_seconds": 30},
+		],
+		"summary": {"total_runs": 2},
+		"errors": [],
+		"scope": {"repositories": ["o/r"]},
+	}
+	with tempfile.TemporaryDirectory(prefix="analyze-input-") as td:
+		path = Path(td) / "workflow_log_report.json"
+		_write_json(path, report)
+		args = analyzer.build_parser().parse_args(["--input", str(path)])
+		loaded = analyzer.load_input_data(args)
+	assert loaded["collector_report"] == report
+	assert "deep_dive_logs" not in loaded
+
+
+def test_load_input_data_errors_when_no_data_present():
+	with tempfile.TemporaryDirectory(prefix="analyze-empty-") as td:
+		args = analyzer.build_parser().parse_args(["--data-dir", td])
+		with pytest.raises(ValueError):
+			analyzer.load_input_data(args)
+
+
+# ---------- prepare_analysis_context ---------------------------------------
+
+
+def _make_runs(count: int, *, conclusion: str, base_id: int = 0) -> list[dict]:
+	return [
+		{
+			"repository": "o/r",
+			"run_id": base_id + i,
+			"workflow_name": "ci",
+			"workflow_family": "ci",
+			"conclusion": conclusion,
+			"duration_seconds": 10 * (i + 1),
+			"run_attempt": 1,
+			"retries": 0,
+			"created_at": f"2026-04-{(i % 28) + 1:02d}T00:00:00Z",
+		}
+		for i in range(count)
+	]
+
+
+def test_prepare_analysis_context_lifts_caps_to_100_and_drops_deep_dive_logs():
+	# 150 failing + 200 successful, plus excerpts attached to inputs to confirm
+	# they are NOT propagated into the output context (Q8: B).
+	failing = _make_runs(150, conclusion="failure", base_id=0)
+	for run in failing:
+		run["log_excerpts"] = [{"step_name": "step1", "excerpt": "boom"}]
+	successful = _make_runs(200, conclusion="success", base_id=1000)
+	report = {
+		"runs": failing + successful,
+		"errors": [{"repository": "o/r", "scope": "logs", "message": f"err-{i}"} for i in range(400)],
+	}
+	input_data = {
+		"source_files": ["x.json"],
+		"collector_report": report,
+		"run_metrics": None,
+		"summary_stats": None,
+	}
+
+	ctx = analyzer.prepare_analysis_context(input_data)
+
+	assert "deep_dive_logs" not in ctx
+	assert len(ctx["failing_runs"]) == analyzer.RUN_LIST_CAP == 100
+	assert len(ctx["slow_runs"]) == analyzer.RUN_LIST_CAP == 100
+	assert len(ctx["recent_runs"]) == analyzer.RUN_LIST_CAP == 100
+	assert len(ctx["errors"]) == analyzer.ERRORS_CAP == 250
+	# Each row in the lists is a normalized view, never the raw row, so
+	# log_excerpts must not have leaked through.
+	assert all("log_excerpts" not in run for run in ctx["failing_runs"])
+
+
+def test_prepare_analysis_context_marks_insufficient_data_when_empty():
+	ctx = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": {"runs": [], "summary": {"total_runs": 0}, "errors": []},
+			"run_metrics": None,
+			"summary_stats": None,
+		}
+	)
+	assert ctx["insufficient_data"] is True
+	assert "insufficient" in ctx["analysis_guidance"].lower()
+
+
+def test_prepare_analysis_context_failing_runs_sorted_by_duration():
+	runs = [
+		{"repository": "o/r", "run_id": 1, "conclusion": "failure", "duration_seconds": 10},
+		{"repository": "o/r", "run_id": 2, "conclusion": "failure", "duration_seconds": 500},
+		{"repository": "o/r", "run_id": 3, "conclusion": "success", "duration_seconds": 600},
+	]
+	ctx = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": {"runs": runs, "summary": {}, "errors": []},
+			"run_metrics": None,
+			"summary_stats": None,
+		}
+	)
+	assert [r["run_id"] for r in ctx["failing_runs"]] == [2, 1]
+	assert [r["run_id"] for r in ctx["slow_runs"][:1]] == [3]
+
+
+# ---------- resolve_dated_output_path --------------------------------------
+
+
 def test_resolve_dated_output_path_with_suffix_collision():
 	with tempfile.TemporaryDirectory(prefix="analyze-output-") as td:
 		output_dir = Path(td)
@@ -45,1073 +207,69 @@ def test_resolve_dated_output_path_with_suffix_collision():
 		assert resolved == output_dir / "workflow-optimization-2026-04-11-3.md"
 
 
-def test_truncate_to_budget_drops_deep_dive_before_recent_runs():
-	context = {
-		"summary": {"total_runs": 10},
-		"deep_dive_logs": [{"name": "a.log", "excerpt": "x" * 4000} for _ in range(2)],
-		"recent_runs": [{"run_id": i, "detail": "y" * 2000} for i in range(2)],
-		"slow_runs": [{"run_id": 1}],
-		"failing_runs": [{"run_id": 2}],
-		"errors": [{"message": "z"}],
-		"per_repo": {"owner/repo": {"total_runs": 10}},
-		"per_workflow_family": {"plan": {"total_runs": 5}},
-	}
-	budget = analyzer._estimate_tokens({
-		"summary": context["summary"],
-		"recent_runs": context["recent_runs"],
-		"slow_runs": context["slow_runs"],
-		"failing_runs": context["failing_runs"],
-		"errors": context["errors"],
-		"per_repo": context["per_repo"],
-		"per_workflow_family": context["per_workflow_family"],
-	}) + 64
-	trimmed = analyzer.truncate_to_budget(context, budget)
-	assert trimmed["deep_dive_logs"] == []
-	assert trimmed["recent_runs"] == context["recent_runs"]
-	assert trimmed["truncation"]["removed"]["deep_dive_logs"] == 2
-	assert trimmed["truncation"]["removed"]["recent_runs"] == 0
+def test_resolve_dated_output_path_uses_explicit_output_when_provided():
+	resolved = analyzer.resolve_dated_output_path(
+		"/tmp/explicit.md",
+		"/ignored",
+		today=date(2026, 4, 11),
+	)
+	assert resolved == Path("/tmp/explicit.md")
 
 
-def test_truncate_to_budget_zero_budget_preserves_fields():
-	context = {
+# ---------- main() ---------------------------------------------------------
+
+
+def test_main_writes_analysis_context_and_prints_path(capsys):
+	report = {
+		"runs": _make_runs(2, conclusion="failure"),
 		"summary": {"total_runs": 2},
-		"deep_dive_logs": [{"name": "a.log", "excerpt": "x" * 1000}],
-		"recent_runs": [{"run_id": 1, "detail": "y" * 200}],
-		"slow_runs": [{"run_id": 2}],
-		"failing_runs": [],
 		"errors": [],
-		"per_repo": {"owner/repo": {"total_runs": 2}},
-		"per_workflow_family": {"plan": {"total_runs": 2}},
+		"scope": {"repositories": ["o/r"]},
 	}
-	trimmed = analyzer.truncate_to_budget(context, 0)
-	assert trimmed["deep_dive_logs"] == context["deep_dive_logs"]
-	assert trimmed["recent_runs"] == context["recent_runs"]
-	assert trimmed["truncation"]["prompt_token_budget"] == 0
-	assert trimmed["truncation"]["removed"]["deep_dive_logs"] == 0
-	assert "truncation" not in context
-
-
-def test_build_parser_thinking_level_defaults_to_xhigh():
-	args = analyzer.build_parser().parse_args([])
-	assert args.thinking_level == "xhigh"
-	assert args.prompt_token_budget == 0
-	assert args.codex_mode is False
-
-
-def test_build_parser_accepts_zero_prompt_token_budget():
-	args = analyzer.build_parser().parse_args(["--prompt-token-budget", "0"])
-	assert args.prompt_token_budget == 0
-
-
-def test_build_parser_accepts_explicit_thinking_level():
-	args = analyzer.build_parser().parse_args(["--thinking-level", "high"])
-	assert args.thinking_level == "high"
-
-
-def test_build_parser_batch_defaults_from_env():
-	original_provider = os.environ.get("BATCH_API_PROVIDER")
-	original_disabled = os.environ.get("BATCH_API_DISABLED")
-	original_timeout = os.environ.get("BATCH_API_POLL_TIMEOUT_HOURS")
-	try:
-		os.environ["BATCH_API_PROVIDER"] = "anthropic"
-		os.environ["BATCH_API_DISABLED"] = "true"
-		os.environ["BATCH_API_POLL_TIMEOUT_HOURS"] = "36"
-		args = analyzer.build_parser().parse_args([])
-	finally:
-		if original_provider is None:
-			os.environ.pop("BATCH_API_PROVIDER", None)
-		else:
-			os.environ["BATCH_API_PROVIDER"] = original_provider
-		if original_disabled is None:
-			os.environ.pop("BATCH_API_DISABLED", None)
-		else:
-			os.environ["BATCH_API_DISABLED"] = original_disabled
-		if original_timeout is None:
-			os.environ.pop("BATCH_API_POLL_TIMEOUT_HOURS", None)
-		else:
-			os.environ["BATCH_API_POLL_TIMEOUT_HOURS"] = original_timeout
-
-	assert args.batch_provider == "anthropic"
-	assert args.batch_api_disabled == "true"
-	assert args.batch_poll_timeout_hours == 36
-
-
-def test_call_openrouter_builds_payload_and_parses_response():
-	captured = {"url": "", "payload": {}, "headers": []}
-	orig_urlopen = analyzer.urllib.request.urlopen
-	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
-	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
-
-	class FakeResponse:
-		def __init__(self, body: str):
-			self._body = body
-
-		def __enter__(self):
-			return self
-
-		def __exit__(self, exc_type, exc, tb):
-			return False
-
-		def read(self) -> bytes:
-			return self._body.encode("utf-8")
-
-	def fake_urlopen(request, timeout=0):
-		captured["url"] = request.full_url
-		captured["payload"] = json.loads(request.data.decode("utf-8"))
-		captured["headers"] = request.header_items()
-		assert timeout == 17
-		return FakeResponse(
-			json.dumps(
-				{
-					"choices": [{"message": {"content": "# report"}}],
-					"usage": {
-						"prompt_tokens": 11,
-						"completion_tokens": 22,
-						"total_tokens": 33,
-						"prompt_tokens_details": {"cache_write_tokens": 7, "cached_tokens": 5},
-					},
-				}
-			)
-		)
-
-	analyzer.urllib.request.urlopen = fake_urlopen
-	try:
-		content, usage = analyzer.call_openrouter(
-			api_key="test-key",
-			model="openai/gpt-5.3-codex",
-			messages=[{"role": "user", "content": "hello"}],
-			temperature=0.0,
-			max_tokens=123,
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=17,
-			thinking_level="high",
-		)
-	finally:
-		analyzer.urllib.request.urlopen = orig_urlopen
-		if old_cache_disabled is None:
-			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
-		else:
-			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
-
-	assert content == "# report\n"
-	assert usage == {
-		"prompt_tokens": 11,
-		"completion_tokens": 22,
-		"total_tokens": 33,
-		"cache_creation_input_tokens": 7,
-		"cache_read_input_tokens": 5,
-		"cache_breakpoint_enabled": True,
-		"cache_breakpoint_fallback_retry": False,
-	}
-	assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
-	assert captured["payload"]["model"] == "openai/gpt-5.3-codex"
-	assert captured["payload"]["max_tokens"] == 123
-	assert captured["payload"]["reasoning"] == "high"
-	assert captured["payload"]["messages"][0]["cache_control"] == {"type": "ephemeral"}
-	assert any(k.lower() == "authorization" and v == "Bearer test-key" for k, v in captured["headers"])
-
-def test_call_openrouter_omits_reasoning_when_thinking_level_empty_or_none():
-	orig_urlopen = analyzer.urllib.request.urlopen
-	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
-	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
-
-	class FakeResponse:
-		def __init__(self, body: str):
-			self._body = body
-
-		def __enter__(self):
-			return self
-
-		def __exit__(self, exc_type, exc, tb):
-			return False
-
-		def read(self) -> bytes:
-			return self._body.encode("utf-8")
-
-	def run_case(thinking_level):
-		captured_payload: dict[str, object] = {}
-
-		def fake_urlopen(request, timeout=0):
-			del timeout
-			captured_payload.clear()
-			captured_payload.update(json.loads(request.data.decode("utf-8")))
-			return FakeResponse(json.dumps({"choices": [{"message": {"content": "# ok"}}]}))
-
-		analyzer.urllib.request.urlopen = fake_urlopen
-		content, usage = analyzer.call_openrouter(
-			api_key="test-key",
-			model="openai/gpt-5.3-codex",
-			messages=[{"role": "user", "content": "hello"}],
-			temperature=0.0,
-			max_tokens=123,
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=17,
-			thinking_level=thinking_level,
-		)
-		assert content == "# ok\n"
-		assert usage is None
-		assert "reasoning" not in captured_payload
-		assert captured_payload["messages"][0]["cache_control"] == {"type": "ephemeral"}
-
-	try:
-		run_case("")
-		run_case("   ")
-		run_case(None)
-	finally:
-		analyzer.urllib.request.urlopen = orig_urlopen
-		if old_cache_disabled is None:
-			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
-		else:
-			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
-
-def test_call_openrouter_http_error_is_reported():
-	orig_urlopen = analyzer.urllib.request.urlopen
-
-	def fake_urlopen(request, timeout=0):
-		raise urllib.error.HTTPError(
-			url=request.full_url,
-			code=429,
-			msg="Too Many Requests",
-			hdrs=None,
-			fp=io.BytesIO(b'{"error":"rate_limited"}'),
-		)
-
-	analyzer.urllib.request.urlopen = fake_urlopen
-	try:
-		try:
-			analyzer.call_openrouter(
-				api_key="test-key",
-				model="model",
-				messages=[{"role": "user", "content": "hello"}],
-				temperature=0.0,
-				max_tokens=64,
-				base_url="https://openrouter.ai/api/v1",
-				request_timeout_seconds=10,
-			)
-			raise AssertionError("expected RuntimeError")
-		except RuntimeError as exc:
-			assert "HTTP 429" in str(exc)
-	finally:
-		analyzer.urllib.request.urlopen = orig_urlopen
-
-
-def test_call_openrouter_skips_breakpoint_for_gemini_models():
-	captured_payload: dict[str, object] = {}
-	orig_urlopen = analyzer.urllib.request.urlopen
-	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
-	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
-
-	class FakeResponse:
-		def __init__(self, body: str):
-			self._body = body
-
-		def __enter__(self):
-			return self
-
-		def __exit__(self, exc_type, exc, tb):
-			return False
-
-		def read(self) -> bytes:
-			return self._body.encode("utf-8")
-
-	def fake_urlopen(request, timeout=0):
-		del timeout
-		captured_payload.clear()
-		captured_payload.update(json.loads(request.data.decode("utf-8")))
-		return FakeResponse(json.dumps({"choices": [{"message": {"content": "# ok"}}]}))
-
-	analyzer.urllib.request.urlopen = fake_urlopen
-	try:
-		content, usage = analyzer.call_openrouter(
-			api_key="test-key",
-			model="google/gemini-2.5-pro",
-			messages=[{"role": "user", "content": "hello"}],
-			temperature=0.0,
-			max_tokens=123,
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=17,
-		)
-	finally:
-		analyzer.urllib.request.urlopen = orig_urlopen
-		if old_cache_disabled is None:
-			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
-		else:
-			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
-
-	assert content == "# ok\n"
-	assert usage is None
-	assert "cache_control" not in captured_payload["messages"][0]
-
-
-def test_call_openrouter_disables_breakpoint_when_cache_switch_enabled():
-	captured_payload: dict[str, object] = {}
-	orig_urlopen = analyzer.urllib.request.urlopen
-	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
-	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "true"
-
-	class FakeResponse:
-		def __init__(self, body: str):
-			self._body = body
-
-		def __enter__(self):
-			return self
-
-		def __exit__(self, exc_type, exc, tb):
-			return False
-
-		def read(self) -> bytes:
-			return self._body.encode("utf-8")
-
-	def fake_urlopen(request, timeout=0):
-		del timeout
-		captured_payload.clear()
-		captured_payload.update(json.loads(request.data.decode("utf-8")))
-		return FakeResponse(json.dumps({"choices": [{"message": {"content": "# ok"}}], "usage": {"prompt_tokens": 3}}))
-
-	analyzer.urllib.request.urlopen = fake_urlopen
-	try:
-		content, usage = analyzer.call_openrouter(
-			api_key="test-key",
-			model="openai/gpt-5.3-codex",
-			messages=[{"role": "user", "content": "hello"}],
-			temperature=0.0,
-			max_tokens=123,
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=17,
-		)
-	finally:
-		analyzer.urllib.request.urlopen = orig_urlopen
-		if old_cache_disabled is None:
-			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
-		else:
-			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
-
-	assert content == "# ok\n"
-	assert usage is not None
-	assert usage["cache_breakpoint_enabled"] is False
-	assert "cache_control" not in captured_payload["messages"][0]
-
-
-def test_call_openrouter_retries_without_breakpoint_on_cache_control_error():
-	payloads: list[dict[str, object]] = []
-	orig_urlopen = analyzer.urllib.request.urlopen
-	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
-	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
-
-	class FakeResponse:
-		def __init__(self, body: str):
-			self._body = body
-
-		def __enter__(self):
-			return self
-
-		def __exit__(self, exc_type, exc, tb):
-			return False
-
-		def read(self) -> bytes:
-			return self._body.encode("utf-8")
-
-	def fake_urlopen(request, timeout=0):
-		del timeout
-		payload = json.loads(request.data.decode("utf-8"))
-		payloads.append(payload)
-		if len(payloads) == 1:
-			raise urllib.error.HTTPError(
-				url=request.full_url,
-				code=422,
-				msg="Unprocessable Entity",
-				hdrs=None,
-				fp=io.BytesIO(b'{"error":"cache_control is not supported"}'),
-			)
-		return FakeResponse(
-			json.dumps(
-				{
-					"choices": [{"message": {"content": "# ok"}}],
-					"usage": {
-						"prompt_tokens": 8,
-						"completion_tokens": 4,
-						"total_tokens": 12,
-						"cache_creation_input_tokens": 2,
-						"cache_read_input_tokens": 1,
-					},
-				}
-			)
-		)
-
-	analyzer.urllib.request.urlopen = fake_urlopen
-	try:
-		content, usage = analyzer.call_openrouter(
-			api_key="test-key",
-			model="openai/gpt-5.3-codex",
-			messages=[{"role": "user", "content": "hello"}],
-			temperature=0.0,
-			max_tokens=64,
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=10,
-		)
-	finally:
-		analyzer.urllib.request.urlopen = orig_urlopen
-		if old_cache_disabled is None:
-			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
-		else:
-			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
-
-	assert content == "# ok\n"
-	assert len(payloads) == 2
-	assert payloads[0]["messages"][0]["cache_control"] == {"type": "ephemeral"}
-	assert "cache_control" not in payloads[1]["messages"][0]
-	assert usage is not None
-	assert usage["cache_creation_input_tokens"] == 2
-	assert usage["cache_read_input_tokens"] == 1
-	assert usage["cache_breakpoint_enabled"] is True
-	assert usage["cache_breakpoint_fallback_retry"] is True
-
-
-def test_batch_capability_decision_supported_with_provider_hint():
-	orig_request_json = analyzer._openrouter_request_json
-
-	def fake_request_json(**kwargs):
-		del kwargs
-		return {
-			"data": [
-				{
-					"endpoint": "/api/v1/responses",
-					"supported_parameters": ["background"],
-					"supported_providers": ["openai", "anthropic"],
-				}
-			]
-		}
-
-	analyzer._openrouter_request_json = fake_request_json
-	try:
-		status, reason = analyzer._batch_capability_decision(
-			api_key="k",
-			model="openai/gpt-5.3-codex",
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=10,
-			provider_hint="anthropic",
-		)
-	finally:
-		analyzer._openrouter_request_json = orig_request_json
-
-	assert status == "supported"
-	assert reason == "batch_supported"
-
-
-def test_batch_capability_decision_unsupported_provider():
-	orig_request_json = analyzer._openrouter_request_json
-
-	def fake_request_json(**kwargs):
-		del kwargs
-		return {
-			"data": [
-				{
-					"endpoint": "/api/v1/responses",
-					"supported_parameters": ["background"],
-					"supported_providers": ["openai"],
-				}
-			]
-		}
-
-	analyzer._openrouter_request_json = fake_request_json
-	try:
-		status, reason = analyzer._batch_capability_decision(
-			api_key="k",
-			model="openai/gpt-5.3-codex",
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=10,
-			provider_hint="anthropic",
-		)
-	finally:
-		analyzer._openrouter_request_json = orig_request_json
-
-	assert status == "unsupported"
-	assert reason == "provider_not_supported"
-
-
-def test_submit_openrouter_batch_builds_background_payload():
-	captured: dict[str, object] = {}
-	orig_request_json = analyzer._openrouter_request_json
-
-	def fake_request_json(**kwargs):
-		captured.update(kwargs)
-		return {"id": "resp_123", "status": "queued"}
-
-	analyzer._openrouter_request_json = fake_request_json
-	try:
-		batch_id, status = analyzer.submit_openrouter_batch(
-			api_key="test-key",
-			model="openai/gpt-5.3-codex",
-			messages=[{"role": "user", "content": "hello"}],
-			temperature=0.0,
-			max_tokens=128,
-			base_url="https://openrouter.ai/api/v1",
-			request_timeout_seconds=30,
-			thinking_level="high",
-			provider_hint="openai",
-		)
-	finally:
-		analyzer._openrouter_request_json = orig_request_json
-
-	payload = captured.get("payload")
-	assert isinstance(payload, dict)
-	assert payload["background"] is True
-	assert payload["provider"]["order"] == ["openai"]
-	assert payload["reasoning"] == "high"
-	assert batch_id == "resp_123"
-	assert status == "queued"
-
-
-def test_poll_openrouter_batch_reports_pending_status():
-	orig_request_json = analyzer._openrouter_request_json
-
-	def fake_request_json(**kwargs):
-		del kwargs
-		return {"id": "resp_123", "status": "in_progress"}
-
-	analyzer._openrouter_request_json = fake_request_json
-	try:
-		status, batch_status, payload, content, usage = analyzer.poll_openrouter_batch(
-			api_key="test-key",
-			base_url="https://openrouter.ai/api/v1",
-			batch_id="resp_123",
-			request_timeout_seconds=30,
-		)
-	finally:
-		analyzer._openrouter_request_json = orig_request_json
-
-	assert status == "in_progress"
-	assert batch_status == "in_progress"
-	assert isinstance(payload, dict)
-	assert content == ""
-	assert usage is None
-
-
-def test_main_batch_submit_writes_state_and_returns_pending():
-	with tempfile.TemporaryDirectory(prefix="analyze-main-batch-submit-") as td:
-		tmp = Path(td)
-		data_dir = tmp / "data"
-		state_file = tmp / "batch-state.json"
-		prompt_file = tmp / "prompt.txt"
-		_write_json(
-			data_dir / "workflow_log_report.json",
-			{
-				"schema_version": "workflow_log_collector.v1",
-				"scope": {"repositories": ["owner/repo"], "workflow_families": ["plan"]},
-				"runs": [
-					{
-						"repository": "owner/repo",
-						"run_id": 101,
-						"workflow_name": "AI Plan",
-						"workflow_family": "plan",
-						"conclusion": "success",
-						"duration_seconds": 42,
-						"created_at": "2026-04-11T10:00:00Z",
-					}
-				],
-				"summary": {"total_runs": 1},
-				"errors": [],
-			},
-		)
-		prompt_file.write_text("You are a test analyzer.", encoding="utf-8")
-
-		orig_submit = analyzer.submit_openrouter_batch
-		orig_capability = analyzer._batch_capability_decision
-
-		def fake_submit(**kwargs):
-			del kwargs
-			return "resp_pending", "queued"
-
-		def fake_capability(**kwargs):
-			del kwargs
-			return "supported", "batch_supported"
-
-		analyzer.submit_openrouter_batch = fake_submit
-		analyzer._batch_capability_decision = fake_capability
-
-		original_key = os.environ.get("OPENROUTER_API_KEY")
-		try:
-			os.environ["OPENROUTER_API_KEY"] = "k"
-			exit_code = analyzer.main(
-				[
-					"--data-dir",
-					str(data_dir),
-					"--prompt-file",
-					str(prompt_file),
-					"--batch-mode",
-					"submit",
-					"--batch-state-file",
-					str(state_file),
-				]
-			)
-		finally:
-			if original_key is None:
-				os.environ.pop("OPENROUTER_API_KEY", None)
-			else:
-				os.environ["OPENROUTER_API_KEY"] = original_key
-			analyzer.submit_openrouter_batch = orig_submit
-			analyzer._batch_capability_decision = orig_capability
-
-		assert exit_code == 3
-		state_payload = json.loads(state_file.read_text(encoding="utf-8"))
-		assert state_payload["batch_id"] == "resp_pending"
-		assert state_payload["status"] == "queued"
-
-
-def test_main_batch_poll_completes_and_writes_report():
-	with tempfile.TemporaryDirectory(prefix="analyze-main-batch-poll-") as td:
-		tmp = Path(td)
-		data_dir = tmp / "data"
-		output_dir = tmp / "analysis"
-		state_file = tmp / "batch-state.json"
-		prompt_file = tmp / "prompt.txt"
-		_write_json(
-			data_dir / "workflow_log_report.json",
-			{
-				"schema_version": "workflow_log_collector.v1",
-				"scope": {"repositories": ["owner/repo"], "workflow_families": ["plan"]},
-				"runs": [
-					{
-						"repository": "owner/repo",
-						"run_id": 101,
-						"workflow_name": "AI Plan",
-						"workflow_family": "plan",
-						"conclusion": "success",
-						"duration_seconds": 42,
-						"created_at": "2026-04-11T10:00:00Z",
-					}
-				],
-				"summary": {"total_runs": 1},
-				"errors": [],
-			},
-		)
-		prompt_file.write_text("You are a test analyzer.", encoding="utf-8")
-		state_file.write_text(
-			json.dumps(
-				{
-					"schema_version": analyzer.DEFAULT_BATCH_STATE_SCHEMA_VERSION,
-					"batch_id": "resp_pending",
-					"status": "queued",
-					"submitted_at": datetime.now(timezone.utc).isoformat(),
-					"provider_hint": "auto",
-					"model": "openai/gpt-5.3-codex",
-					"poll_timeout_hours": 24,
-					"source_workflow": "Workflow Log Analysis",
-					"source_run_id": "1",
-				}
-			),
-			encoding="utf-8",
-		)
-
-		orig_poll = analyzer.poll_openrouter_batch
-		orig_resolve_dated_output_path = analyzer.resolve_dated_output_path
-
-		def fake_poll(**kwargs):
-			del kwargs
-			return (
-				"completed",
-				"completed",
-				{"id": "resp_pending", "status": "completed"},
-				"## Executive Summary\n- async-ok\n",
-				{"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-			)
-
-		def fake_resolve(output_path, out_dir, *, today=None):
-			del output_path, today
-			assert out_dir == str(output_dir)
-			return output_dir / "workflow-optimization-2026-04-11.md"
-
-		analyzer.poll_openrouter_batch = fake_poll
-		analyzer.resolve_dated_output_path = fake_resolve
-
-		original_key = os.environ.get("OPENROUTER_API_KEY")
-		try:
-			os.environ["OPENROUTER_API_KEY"] = "k"
-			exit_code = analyzer.main(
-				[
-					"--data-dir",
-					str(data_dir),
-					"--output-dir",
-					str(output_dir),
-					"--prompt-file",
-					str(prompt_file),
-					"--batch-mode",
-					"poll",
-					"--batch-state-file",
-					str(state_file),
-				]
-			)
-		finally:
-			if original_key is None:
-				os.environ.pop("OPENROUTER_API_KEY", None)
-			else:
-				os.environ["OPENROUTER_API_KEY"] = original_key
-			analyzer.poll_openrouter_batch = orig_poll
-			analyzer.resolve_dated_output_path = orig_resolve_dated_output_path
-
-		assert exit_code == 0
-		report_path = output_dir / "workflow-optimization-2026-04-11.md"
-		assert report_path.exists()
-		assert "async-ok" in report_path.read_text(encoding="utf-8")
-
-
-def test_main_batch_poll_timeout_falls_back_to_sync():
-	with tempfile.TemporaryDirectory(prefix="analyze-main-batch-timeout-") as td:
-		tmp = Path(td)
-		data_dir = tmp / "data"
-		output_dir = tmp / "analysis"
-		state_file = tmp / "batch-state.json"
-		prompt_file = tmp / "prompt.txt"
-		_write_json(
-			data_dir / "workflow_log_report.json",
-			{
-				"schema_version": "workflow_log_collector.v1",
-				"scope": {"repositories": ["owner/repo"], "workflow_families": ["plan"]},
-				"runs": [
-					{
-						"repository": "owner/repo",
-						"run_id": 101,
-						"workflow_name": "AI Plan",
-						"workflow_family": "plan",
-						"conclusion": "success",
-						"duration_seconds": 42,
-						"created_at": "2026-04-11T10:00:00Z",
-					}
-				],
-				"summary": {"total_runs": 1},
-				"errors": [],
-			},
-		)
-		prompt_file.write_text("You are a test analyzer.", encoding="utf-8")
-		state_file.write_text(
-			json.dumps(
-				{
-					"schema_version": analyzer.DEFAULT_BATCH_STATE_SCHEMA_VERSION,
-					"batch_id": "resp_pending",
-					"status": "queued",
-					"submitted_at": "2000-01-01T00:00:00+00:00",
-					"provider_hint": "auto",
-					"model": "openai/gpt-5.3-codex",
-					"poll_timeout_hours": 24,
-					"source_workflow": "Workflow Log Analysis",
-					"source_run_id": "1",
-				}
-			),
-			encoding="utf-8",
-		)
-
-		orig_call_openrouter = analyzer.call_openrouter
-		orig_resolve_dated_output_path = analyzer.resolve_dated_output_path
-		orig_poll = analyzer.poll_openrouter_batch
-
-		def fake_call_openrouter(**kwargs):
-			del kwargs
-			return "## Executive Summary\n- sync-fallback\n", None
-
-		def fake_resolve(output_path, out_dir, *, today=None):
-			del output_path, today
-			assert out_dir == str(output_dir)
-			return output_dir / "workflow-optimization-2026-04-11.md"
-
-		def fake_poll(**kwargs):
-			raise AssertionError("poll should not be called when timeout already exceeded")
-
-		analyzer.call_openrouter = fake_call_openrouter
-		analyzer.resolve_dated_output_path = fake_resolve
-		analyzer.poll_openrouter_batch = fake_poll
-
-		original_key = os.environ.get("OPENROUTER_API_KEY")
-		try:
-			os.environ["OPENROUTER_API_KEY"] = "k"
-			exit_code = analyzer.main(
-				[
-					"--data-dir",
-					str(data_dir),
-					"--output-dir",
-					str(output_dir),
-					"--prompt-file",
-					str(prompt_file),
-					"--batch-mode",
-					"poll",
-					"--batch-state-file",
-					str(state_file),
-				]
-			)
-		finally:
-			if original_key is None:
-				os.environ.pop("OPENROUTER_API_KEY", None)
-			else:
-				os.environ["OPENROUTER_API_KEY"] = original_key
-			analyzer.call_openrouter = orig_call_openrouter
-			analyzer.resolve_dated_output_path = orig_resolve_dated_output_path
-			analyzer.poll_openrouter_batch = orig_poll
-
-		assert exit_code == 0
-		report_path = output_dir / "workflow-optimization-2026-04-11.md"
-		assert report_path.exists()
-		assert "sync-fallback" in report_path.read_text(encoding="utf-8")
-		updated_state = json.loads(state_file.read_text(encoding="utf-8"))
-		assert updated_state["status"] == "fallback_sync"
-		assert updated_state["fallback_reason"] == "batch_poll_timeout"
-
-
-def test_load_input_data_rejects_malformed_json_input():
-	with tempfile.TemporaryDirectory(prefix="analyze-input-") as td:
-		input_file = Path(td) / "bad.json"
-		input_file.write_text("{bad", encoding="utf-8")
-		args = analyzer.build_parser().parse_args(["--input", str(input_file)])
-		try:
-			analyzer.load_input_data(args)
-			raise AssertionError("expected ValueError")
-		except ValueError as exc:
-			assert "invalid JSON" in str(exc)
-
-
-def test_load_input_data_collects_deep_dive_logs_from_collector_runs():
-	with tempfile.TemporaryDirectory(prefix="analyze-input-runs-") as td:
-		input_file = Path(td) / "collector.json"
-		_write_json(
-			input_file,
-			{
-				"schema_version": "workflow_log_collector.v1",
-				"runs": [
-					{
-						"repository": "owner/repo",
-						"run_id": 55,
-						"log_excerpts": [
-							{"step_name": "build", "excerpt": "line1"},
-							{"step_name": "test", "excerpt": "line2"},
-						],
-					}
-				],
-			},
-		)
-		args = analyzer.build_parser().parse_args(["--input", str(input_file)])
-		loaded = analyzer.load_input_data(args)
-		assert loaded["deep_dive_logs"] == [
-			{"name": "owner/repo/55/build", "excerpt": "line1"},
-			{"name": "owner/repo/55/test", "excerpt": "line2"},
-		]
-
-
-def test_build_parser_max_output_tokens_default_100000():
-	args = analyzer.build_parser().parse_args([])
-	assert args.max_output_tokens == 100000
-
-
-def test_load_prompt_template_returns_content_without_placeholders():
-	with tempfile.TemporaryDirectory(prefix="analyze-prompt-raw-") as td:
-		prompt_file = Path(td) / "prompt.txt"
-		prompt_file.write_text("You are a test analyzer.", encoding="utf-8")
-		rendered = analyzer.load_prompt_template(prompt_file)
-		assert rendered == "You are a test analyzer."
-
-
-def test_load_prompt_template_renders_serena_placeholder():
-	with tempfile.TemporaryDirectory(prefix="analyze-prompt-render-") as td:
-		prompt_file = Path(td) / "prompt.txt"
-		prompt_file.write_text("Before\n{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}\nAfter\n", encoding="utf-8")
-		rendered = analyzer.load_prompt_template(prompt_file)
-		assert "SERENA MCP EFFICIENCY (MANDATORY):" in rendered
-		assert "{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}" not in rendered
-
-
-def test_load_prompt_template_errors_on_unresolved_placeholder():
-	with tempfile.TemporaryDirectory(prefix="analyze-prompt-error-") as td:
-		prompt_file = Path(td) / "prompt.txt"
-		prompt_file.write_text("{{SERENA_EFFICIENCY_BLOCK_UNKNOWN}}\n", encoding="utf-8")
-		try:
-			analyzer.load_prompt_template(prompt_file)
-			raise AssertionError("expected RuntimeError")
-		except RuntimeError as exc:
-			assert "unable to render prompt file" in str(exc)
-
-
-def test_main_missing_openrouter_api_key_returns_2():
-	original = os.environ.get("OPENROUTER_API_KEY")
-	try:
-		if "OPENROUTER_API_KEY" in os.environ:
-			del os.environ["OPENROUTER_API_KEY"]
-		exit_code = analyzer.main([])
-	finally:
-		if original is None:
-			os.environ.pop("OPENROUTER_API_KEY", None)
-		else:
-			os.environ["OPENROUTER_API_KEY"] = original
-	assert exit_code == 2
-
-
-def test_main_codex_mode_writes_context_and_skips_inference_calls():
-	with tempfile.TemporaryDirectory(prefix="analyze-main-codex-") as td:
-		tmp = Path(td)
-		data_dir = tmp / "data"
-		output_dir = tmp / "analysis"
-		_write_json(
-			data_dir / "workflow_log_report.json",
-			{
-				"schema_version": "workflow_log_collector.v1",
-				"scope": {"repositories": ["owner/repo"], "workflow_families": ["plan"]},
-				"runs": [
-					{
-						"repository": "owner/repo",
-						"run_id": 101,
-						"workflow_name": "AI Plan",
-						"workflow_family": "plan",
-						"conclusion": "success",
-						"duration_seconds": 42,
-						"created_at": "2026-04-11T10:00:00Z",
-					}
-				],
-				"summary": {"total_runs": 1},
-				"errors": [],
-			},
-		)
-
-		orig_call_openrouter = analyzer.call_openrouter
-		orig_submit_openrouter_batch = analyzer.submit_openrouter_batch
-		orig_poll_openrouter_batch = analyzer.poll_openrouter_batch
-		orig_batch_capability_decision = analyzer._batch_capability_decision
-
-		def fail_if_called(**kwargs):
-			del kwargs
-			raise AssertionError("inference path should not run in codex mode")
-
-		analyzer.call_openrouter = fail_if_called
-		analyzer.submit_openrouter_batch = fail_if_called
-		analyzer.poll_openrouter_batch = fail_if_called
-		analyzer._batch_capability_decision = fail_if_called
-
-		stdout = io.StringIO()
-		original_key = os.environ.get("OPENROUTER_API_KEY")
-		try:
-			if "OPENROUTER_API_KEY" in os.environ:
-				del os.environ["OPENROUTER_API_KEY"]
-			with contextlib.redirect_stdout(stdout):
-				exit_code = analyzer.main(
-					[
-						"--data-dir",
-						str(data_dir),
-						"--output",
-						str(output_dir / "report.md"),
-						"--codex-mode",
-					]
-				)
-		finally:
-			if original_key is None:
-				os.environ.pop("OPENROUTER_API_KEY", None)
-			else:
-				os.environ["OPENROUTER_API_KEY"] = original_key
-			analyzer.call_openrouter = orig_call_openrouter
-			analyzer.submit_openrouter_batch = orig_submit_openrouter_batch
-			analyzer.poll_openrouter_batch = orig_poll_openrouter_batch
-			analyzer._batch_capability_decision = orig_batch_capability_decision
-
-		assert exit_code == 0
-		context_path = output_dir / "analysis_context.json"
-		assert stdout.getvalue().strip() == str(context_path)
-		assert context_path.exists()
-		payload = json.loads(context_path.read_text(encoding="utf-8"))
-		assert payload["summary"]["total_runs"] == 1
-		assert "truncation" not in payload
-
-
-def test_main_generates_dated_report_using_stubs():
 	with tempfile.TemporaryDirectory(prefix="analyze-main-") as td:
-		tmp = Path(td)
-		data_dir = tmp / "data"
-		output_dir = tmp / "analysis"
-		prompt_file = tmp / "prompt.txt"
-		_write_json(
-			data_dir / "workflow_log_report.json",
-			{
-				"schema_version": "workflow_log_collector.v1",
-				"scope": {"repositories": ["owner/repo"], "workflow_families": ["plan"]},
-				"runs": [
-					{
-						"repository": "owner/repo",
-						"run_id": 101,
-						"workflow_name": "AI Plan",
-						"workflow_family": "plan",
-						"conclusion": "success",
-						"duration_seconds": 42,
-						"created_at": "2026-04-11T10:00:00Z",
-					}
-				],
-				"summary": {"total_runs": 1},
-				"errors": [],
-			},
+		td_path = Path(td)
+		input_path = td_path / "workflow_log_report.json"
+		_write_json(input_path, report)
+		output_md = td_path / "analysis" / "workflow-optimization-2099-12-31.md"
+
+		exit_code = analyzer.main(
+			[
+				"--input",
+				str(input_path),
+				"--output",
+				str(output_md),
+				"--codex-mode",
+			]
 		)
-		prompt_file.write_text("You are a test analyzer.", encoding="utf-8")
-
-		orig_call_openrouter = analyzer.call_openrouter
-		orig_resolve_dated_output_path = analyzer.resolve_dated_output_path
-
-		def fake_call_openrouter(**kwargs):
-			assert kwargs["model"] == "unit-test-model"
-			assert kwargs["max_tokens"] == 200
-			return "## Executive Summary\n- ok\n", {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
-
-		def fake_resolve_dated_output_path(output_path, out_dir, *, today=None):
-			assert output_path is None
-			assert out_dir == str(output_dir)
-			return output_dir / "workflow-optimization-2026-04-11.md"
-
-		analyzer.call_openrouter = fake_call_openrouter
-		analyzer.resolve_dated_output_path = fake_resolve_dated_output_path
-
-		original_key = os.environ.get("OPENROUTER_API_KEY")
-		try:
-			os.environ["OPENROUTER_API_KEY"] = "k"
-			exit_code = analyzer.main(
-				[
-					"--data-dir",
-					str(data_dir),
-					"--output-dir",
-					str(output_dir),
-					"--prompt-file",
-					str(prompt_file),
-					"--model",
-					"unit-test-model",
-					"--max-output-tokens",
-					"200",
-				]
-			)
-		finally:
-			if original_key is None:
-				os.environ.pop("OPENROUTER_API_KEY", None)
-			else:
-				os.environ["OPENROUTER_API_KEY"] = original_key
-			analyzer.call_openrouter = orig_call_openrouter
-			analyzer.resolve_dated_output_path = orig_resolve_dated_output_path
-
 		assert exit_code == 0
-		report_path = output_dir / "workflow-optimization-2026-04-11.md"
-		assert report_path.exists()
-		assert "## Executive Summary" in report_path.read_text(encoding="utf-8")
+		captured = capsys.readouterr()
+		printed_path = Path(captured.out.strip())
+		assert printed_path == output_md.parent / "analysis_context.json"
+		assert printed_path.exists()
+		payload = json.loads(printed_path.read_text(encoding="utf-8"))
+		assert "deep_dive_logs" not in payload
+		assert len(payload["failing_runs"]) == 2
 
 
-# ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
+def test_main_returns_2_when_input_missing(capsys):
+	exit_code = analyzer.main(["--input", "/nonexistent/does-not-exist.json"])
+	assert exit_code == 2
+	captured = capsys.readouterr()
+	assert "ERROR" in captured.err
 
 
-def main() -> int:
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-	passed = 0
-	failed = 0
-	for func in test_funcs:
-		name = func.__name__
-		try:
-			func()
-			print(f"  PASS  {name}")
-			passed += 1
-		except Exception as exc:  # noqa: BLE001
-			print(f"  FAIL  {name}: {exc}")
-			failed += 1
-
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
-	return 1 if failed > 0 else 0
+# ---------- aggregations ---------------------------------------------------
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
+def test_aggregate_runs_by_key_computes_failure_rate_and_durations():
+	runs = [
+		{"repository": "a", "conclusion": "failure", "duration_seconds": 100},
+		{"repository": "a", "conclusion": "success", "duration_seconds": 50},
+		{"repository": "b", "conclusion": "failure", "duration_seconds": 200},
+	]
+	out = analyzer._aggregate_runs_by_key(runs, "repository")
+	assert out["a"]["total_runs"] == 2
+	assert out["a"]["failure_count"] == 1
+	assert abs(out["a"]["failure_rate"] - 0.5) < 1e-9
+	assert out["a"]["avg_duration_seconds"] == 75.0
+	assert out["b"]["failure_rate"] == 1.0

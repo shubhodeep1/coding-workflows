@@ -156,7 +156,7 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
      existing bullets here cause merge conflicts. -->
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
-- Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
+- Batch controls in this repo: removed. The legacy `BATCH_API_DISABLED` / `BATCH_API_PROVIDER` / `BATCH_API_POLL_TIMEOUT_HOURS` repo vars and the `workflow_log_analysis_batch_state.json` artifact contract were dropped when the workflow-log-analysis pipeline was simplified to Codex-only. No replacement is needed; `memory_maintenance.yml` no longer relies on these knobs either.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 - Integration-sync conflict knobs (see also section 18 below):
   - `INTEGRATION_CONFLICT_MAX_RETRIES` (default `3`) — global resolver-retry budget for non-orchestrator integration branches.
@@ -319,17 +319,17 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
-## 13. Workflow Log Analysis Batch Operations
+## 13. Workflow Log Analysis Operations
 
-- `workflow-log-analysis.yml` uses artifact-backed deferred polling with `workflow-log-analysis-batch-state` (`workflow_log_analysis_batch_state.json`).
-- Pending batch analyzer exits with code `3` to signal deferred completion; workflow must treat this as non-failure.
-- On unsupported provider/model, capability probe errors, poll timeout, or batch terminal errors, analyzer must emit structured `batch_fallback` warnings and run synchronous analysis.
-- `memory_maintenance.yml` currently has no LLM path; keep compaction behavior unchanged and emit `batch_noop` compatibility logging only.
+- `workflow-log-analysis.yml` runs a Codex-only analysis pipeline. The legacy OpenRouter sync/batch path, the `workflow-log-analysis-batch-state` artifact, the `BATCH_API_DISABLED` / `BATCH_API_PROVIDER` / `BATCH_API_POLL_TIMEOUT_HOURS` repo vars, the `WORKFLOW_LOG_ANALYSIS_LEGACY_PROMPT_TOKEN_BUDGET` repo var, and the `batch_api_disabled` workflow input have all been removed. The `codex_mode` workflow input and the analyzer `--codex-mode` CLI flag remain accepted for backward compatibility but are no-ops — the workflow always runs the Codex path.
+- `memory_maintenance.yml` currently has no LLM path; keep compaction behavior unchanged.
 - The collector (`scripts/collect_workflow_logs.py`) collects **all** workflow families (no static filter). `workflow_families` in the report is derived from observed runs.
 - The collector randomly samples ~7% of successful runs for log analysis (`--success-sample-rate`, default `0.07`) using a deterministic seed. Sampled runs are tagged with `_success_sampled: true`.
+- The collector also writes a categorised full-log directory under `--log-output-dir` (set to `${RUNNER_TEMP}/workflow-log-output` by the workflow). Layout: `summary.json` plus `errors/`, `slow/`, `recent/` subtrees, each `<repo>/<family>/<run_id>/{metadata.json, step-NNN-<step>.log}`. Step logs are untruncated (the 4 KB `LOG_EXCERPT_MAX_CHARS` cap only applies to the inline `log_excerpts` quick-index in `workflow_log_report.json`).
+- The full-log directory is uploaded as a separate artifact `workflow-log-output` (retention 7 days). The analyze job downloads it and splices its path into the Codex prompt next to `=== ANALYSIS CONTEXT ===` so Codex can read untruncated logs directly. Missing artifact is treated as fail-open (`::warning::` plus quick-index-only analysis).
+- `analysis_context.json` is the quick-index Codex receives alongside the run-logs directory. It contains aggregates, per-repo / per-workflow-family breakdowns, and capped lists `failing_runs` / `slow_runs` / `recent_runs` (each up to `RUN_LIST_CAP=100` normalized rows) plus `errors` (up to `ERRORS_CAP=250`). It intentionally does **not** include `deep_dive_logs` — Codex pulls that detail from the `workflow-log-output` artifact.
 - AI memory operations emit `AI_MEMORY_TELEMETRY: {JSON}` lines (stderr from `ai_memory.py`; `memory_helpers.sh` uses stdout unless stdout must remain machine-readable, then telemetry is sent to stderr). The analysis prompt instructs the LLM to produce an **AI Memory Health** section from these lines.
-- `workflow-log-analysis.yml` remains `workflow_dispatch`-only and has dual execution paths: `codex_mode=true` (default) runs analyzer preprocessing (`--codex-mode`) plus `codex exec`, while `codex_mode=false` uses the legacy analyzer/batch path.
-- `batch_api_disabled` input is validated whenever a non-empty value is provided, but only overrides analyzer batch behavior for `codex_mode=false`; codex-mode runs do not use the batch path.
+- Dated optimization reports are committed to the trigger branch as `analysis/workflow-optimization-<UTC-date>.md`. The commit step purges any `analysis/workflow-optimization-*.md` whose filename date stamp is older than `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` (default `30`). Filename dates are authoritative — `mtime` is not consulted because checkouts reset it. The just-written report is always preserved. Invalid retention values fail open to `30` with a `::warning::`.
 
 ## 13a. Workflow Log Analysis And Improvement Workflow
 
