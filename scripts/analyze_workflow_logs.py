@@ -35,7 +35,7 @@ except ModuleNotFoundError:
 		should_retry_without_breakpoint,
 	)
 
-DEFAULT_MODEL = "openai/gpt-5.3-codex"
+DEFAULT_MODEL = "openai/gpt-5.4"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_PROMPT_FILE = "prompts/mode-workflow-analysis.txt"
 DEFAULT_OUTPUT_DIR = "analysis"
