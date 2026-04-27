@@ -145,6 +145,9 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `BULK_DELETE_THRESHOLD` | No | `3` | implement | Maximum number of file deletions allowed in a single AI implementation commit before the destructive-commit guard blocks it. Set higher for legitimate large refactors, or bypass on a per-run basis via `ALLOW_BULK_DELETE=true`. See "Destructive-commit guard" below. |
 | `ALLOW_BULK_DELETE` | No | `false` | implement | When `true`, the destructive-commit guard ignores the `BULK_DELETE_THRESHOLD` rejection path. Canonical workflow-source file deletions are still blocked unless `ALLOW_WORKFLOW_EDITS=true`. Use for legitimate large refactors approved by a human. |
 | `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` | No | `30` | workflow-log-analysis | Age (in days) above which dated `analysis/workflow-optimization-<date>.md` reports are git-removed in the same commit as a new report. Filename date stamps are authoritative; the just-written report is always preserved. Invalid values fail open to `30` with a warning. |
+| `BATCH_API_DISABLED` | No | `false` | memory_maintenance | Deprecated compatibility variable. The active workflow-log-analysis batch path was removed (the workflow is now Codex-only). `memory_maintenance.yml` still reads this var and echoes it in a single `batch_noop` log line so external log scrapers that grep for `batch_*` events keep working; the value does not change any current behaviour. |
+| `BATCH_API_PROVIDER` | No | `auto` | memory_maintenance | Deprecated compatibility variable. Same status as `BATCH_API_DISABLED` — only surfaced in `memory_maintenance.yml`'s `batch_noop` log line for backward-compatible telemetry. |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | memory_maintenance | Deprecated compatibility variable. Same status as `BATCH_API_DISABLED` — only surfaced in `memory_maintenance.yml`'s `batch_noop` log line for backward-compatible telemetry. |
 
 **Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, all phases force `low` reasoning to keep smoke runs cheap and fast.
 
@@ -1025,6 +1028,9 @@ The analyzer is now a context-prep stage only — it loads the collector report,
 | `EDITOR_MIN_ATTEMPT_SECS` | `300` | Minimum job budget (seconds) required to start an editor attempt |
 | `REVIEW_PR_STATE_POLL_INTERVAL_SECS` | `10` | Sleep interval (seconds) for the reviewer watchdog loop in `scripts/review_run_reviewers.sh`; GitHub PR-state API checks run every 9 polls (default ~90s); must be integer `10..3600`, else warn (`rate_limit_audit_fallback`) and fall back to `10` |
 | `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` | `30` | Age (days) above which sibling `analysis/workflow-optimization-<date>.md` reports are git-removed in the same commit as a new report. Filename date is authoritative; the new report is always preserved. |
+| `BATCH_API_DISABLED` | `false` | _(deprecated compat)_ Active batch path removed; only echoed in `memory_maintenance.yml`'s `batch_noop` telemetry line for log-scraper backward compatibility |
+| `BATCH_API_PROVIDER` | `auto` | _(deprecated compat)_ Same status as `BATCH_API_DISABLED` — surfaced only in `memory_maintenance.yml` `batch_noop` log line |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | `24` | _(deprecated compat)_ Same status as `BATCH_API_DISABLED` — surfaced only in `memory_maintenance.yml` `batch_noop` log line |
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |

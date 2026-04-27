@@ -156,7 +156,7 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
      existing bullets here cause merge conflicts. -->
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
-- Batch controls in this repo: removed. The legacy `BATCH_API_DISABLED` / `BATCH_API_PROVIDER` / `BATCH_API_POLL_TIMEOUT_HOURS` repo vars and the `workflow_log_analysis_batch_state.json` artifact contract were dropped when the workflow-log-analysis pipeline was simplified to Codex-only. No replacement is needed; `memory_maintenance.yml` no longer relies on these knobs either.
+- Batch controls in this repo: removed as functional controls. The legacy `BATCH_API_DISABLED` / `BATCH_API_PROVIDER` / `BATCH_API_POLL_TIMEOUT_HOURS` repo vars and the `workflow_log_analysis_batch_state.json` artifact contract were dropped when the workflow-log-analysis pipeline was simplified to Codex-only. `memory_maintenance.yml` still reads the three vars and echoes them in a single `batch_noop` log line — this is compatibility-only telemetry so log scrapers that grep for `batch_*` events keep working; the values do not influence any actual batch behaviour and there is no replacement to set.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 - Integration-sync conflict knobs (see also section 18 below):
   - `INTEGRATION_CONFLICT_MAX_RETRIES` (default `3`) — global resolver-retry budget for non-orchestrator integration branches.
