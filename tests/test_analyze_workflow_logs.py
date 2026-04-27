@@ -273,3 +273,22 @@ def test_aggregate_runs_by_key_computes_failure_rate_and_durations():
 	assert abs(out["a"]["failure_rate"] - 0.5) < 1e-9
 	assert out["a"]["avg_duration_seconds"] == 75.0
 	assert out["b"]["failure_rate"] == 1.0
+
+
+# ---------- script-mode entry point ---------------------------------------
+# CI's "Workflow log analyzer coverage gate" invokes this file directly:
+#   python3 -m coverage run tests/test_analyze_workflow_logs.py
+# Several of the tests above rely on pytest fixtures (`capsys`, `pytest.raises`),
+# so a plain `python3 <file>` invocation that walks module-level functions
+# would silently skip those tests and starve the coverage gate. Delegate to
+# `pytest.main()` so the same process runs every test and coverage.py keeps
+# tracking lines through the import.
+
+
+def main() -> int:
+	exit_code = pytest.main(["-x", "--tb=short", "--no-header", __file__])
+	return int(exit_code)
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
