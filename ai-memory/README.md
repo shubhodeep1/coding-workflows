@@ -49,7 +49,7 @@ Fail policy:
 - keyword overlap (issue title/body matched against record summary/details)
 
 When `OPENROUTER_API_KEY` is available, retrieval uses an LLM (`AI_MEMORY_KEYWORD_MODEL`,
-default `openai/gpt-5-mini`) to extract semantic keywords from the issue before scoring.
+default `openai/gpt-5.4-nano`) to extract semantic keywords from the issue before scoring.
 If the LLM call fails or returns an unparseable response after 3 retries, it falls back
 to plain tokenisation-based keyword extraction.
 
@@ -83,6 +83,6 @@ Processed command CLI:
 - `AI_MEMORY_ROOT` (default `ai-memory`)
 - `AI_MEMORY_RETRIEVAL_PROFILES` (default `ai-memory/config/retrieval_profiles.v1.json`)
 - `AI_MEMORY_PUSH_RETRIES` (default `5`)
-- `AI_MEMORY_KEYWORD_MODEL` (default `openai/gpt-5-mini`) — model for semantic keyword extraction
+- `AI_MEMORY_KEYWORD_MODEL` (default `openai/gpt-5.4-nano`) — model for semantic keyword extraction
 - `AI_MEMORY_KEYWORD_BASE_URL` (default `https://openrouter.ai/api/v1`) — API base URL for keyword model
 - `AI_MEMORY_TOKEN_BUDGET_<ROLE>` — per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`)
