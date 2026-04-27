@@ -457,7 +457,7 @@
     {
       "slug": "qwen/qwen3.6-plus",
       "display_name": "Qwen 3.6 Plus",
-      "description": "Alibaba Qwen 3.6 Plus - 1M context, multimodal (text/image/video), tool calling, ~half the price of qwen3-coder-plus ($0.325/$1.95 per M)",
+      "description": "Alibaba Qwen 3.6 Plus - 1M context, multimodal (text/image), tool calling, ~half the price of qwen3-coder-plus ($0.325/$1.95 per M)",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
@@ -487,7 +487,7 @@
     {
       "slug": "x-ai/grok-4.1-fast",
       "display_name": "Grok 4.1 Fast",
-      "description": "xAI Grok 4.1 Fast - 2M context, multimodal (text/image/file), tool calling, very low cost ($0.20/$0.50 per M)",
+      "description": "xAI Grok 4.1 Fast - 2M context, multimodal (text/image), tool calling, very low cost ($0.20/$0.50 per M)",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
