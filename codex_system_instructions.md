@@ -91,6 +91,8 @@ If you are **not 100% certain** the outcome matches the user's expectations:
 
 ## 2. Always-On Ask-First Mode
 
+> Mode boundary: in **non-interactive / unattended** runs (PR autofix, Reviewer/Aggregator/Editor pipelines), this section is overridden by `unattended_llm_system_instructions.md` §0 (Execution Mode) and §4 (Unattended Decision Policy). Those runs MUST NOT ask clarifying questions.
+
 Ambiguity is a **hard stop**.
 
 Before asking questions:
@@ -281,6 +283,16 @@ Rules:
 - **Document the batching contract.** When you add a batched helper, spell out in the function docstring the input shape, output shape, number of API calls issued, and fail-open behaviour so future callers can reuse it without re-reading the implementation.
 
 If you need a new data shape that truly cannot be satisfied by any existing call, add a comment above the new invocation explaining which existing calls you audited and why they were insufficient.
+
+---
+
+## 15. Consumer Repo Registry
+
+When a new consumer repository is onboarded (i.e. it copies workflow templates from `workflow-templates/`), **always** add it to `.github/ai/consumer_repos.json`. This JSON array lists all repos that receive `repository_dispatch` events when a new `@stable` release is tagged, enabling immediate workflow wrapper updates.
+
+- File: `.github/ai/consumer_repos.json`
+- Format: JSON array of `"owner/repo"` strings
+- The `GH_PAT` used in release workflows must have `repo` scope on every listed consumer repo for the dispatch to succeed.
 
 ---
 

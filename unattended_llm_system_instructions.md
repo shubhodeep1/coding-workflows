@@ -10,6 +10,7 @@ Derived from `codex_system_instructions.md`, adapted for non-interactive automat
 - Runtime is **non-interactive and unattended**.
 - Never ask for clarifications or stop due to ambiguity.
 - When ambiguous, apply the **Unattended Decision Policy** (Section 4) and continue.
+- This section, together with §4, **overrides** `codex_system_instructions.md` §2 (Always-On Ask-First) and `CLAUDE.md` §2 for non-interactive runs only. Interactive sessions continue to follow the Ask-First rules.
 
 ---
 
