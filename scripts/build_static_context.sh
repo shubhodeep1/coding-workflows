@@ -11,8 +11,12 @@
 # via a tool call) to avoid wasting a tool call round-trip and the token
 # overhead of a tool response envelope.
 #
-# Phase-specific trimming (preserved byte-for-byte from the previous inline
-# implementations in clarify.yml / plan.yml / implement.yml):
+# Phase-specific trimming (extracted from the previous inline implementations
+# in clarify.yml / plan.yml / implement.yml). plan and implement outputs are
+# byte-identical to their inline predecessors. clarify trims one fewer
+# section after a pre-existing inline-awk bug was fixed in this extraction
+# (the `^# Phase 2` anchor never matched the level-2 `## Phase 2` heading);
+# the rest of the clarify pipeline is unchanged from the inline form.
 #
 #   clarify   — codex sections 0-2 (through Ask-First) + FINAL REMINDER;
 #               ai_pipeline.md Phase 1 only;
