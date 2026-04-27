@@ -20,7 +20,7 @@
 #
 #   clarify   — codex sections 0-2 (through Ask-First) + FINAL REMINDER;
 #               ai_pipeline.md Phase 1 only;
-#               README.md trimmed before GitHub AI Automation / Decimal128.
+#               README.md trimmed before "### 2. Create wrapper workflows".
 #   plan      — codex sections 0-6 + FINAL REMINDER;
 #               ai_pipeline.md trimmed before Phase 3;
 #               README.md trimmed before "### 2. Create wrapper workflows".

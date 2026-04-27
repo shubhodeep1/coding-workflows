@@ -2266,8 +2266,14 @@ text = re.sub(
 text = re.sub(r'\s+', ' ', text).strip()
 print(text)
 PY
-  printf '%s' "${raw_text}" | python3 "${_norm_script}"
-  local _rc=$?
+  # Capture the pipeline exit code without tripping `set -e`. A bare
+  # `printf | python3 ...` followed by `local _rc=$?` would let `set -e`
+  # exit the surrounding script before the cleanup line runs, leaking the
+  # tempfile. The `|| _rc=$?` form keeps the failure on the conditional
+  # side of `||`, which `set -e` does not abort on, and `$?` inside the
+  # right-hand side is the failing pipeline's exit code.
+  local _rc=0
+  printf '%s' "${raw_text}" | python3 "${_norm_script}" || _rc=$?
   rm -f "${_norm_script}"
   return ${_rc}
 }
