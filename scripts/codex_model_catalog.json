@@ -482,7 +482,7 @@
       "auto_compact_token_limit": 720000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"]
+      "input_modalities": ["text", "image", "video"]
     },
     {
       "slug": "x-ai/grok-4.1-fast",
@@ -512,7 +512,7 @@
       "auto_compact_token_limit": 1440000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"]
+      "input_modalities": ["text", "image", "file"]
     }
   ]
 }
