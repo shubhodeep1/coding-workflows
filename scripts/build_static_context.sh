@@ -63,8 +63,12 @@ case "${phase}" in
 			echo
 			echo "=== AI PIPELINE (Phase 1 — Clarification) ==="
 			# Extract only the relevant sections: Overview, Commands, Phase 1,
-			# and Shared Runtime Behavior. Stop before Phase 2.
-			awk '/^# Phase 2/{exit} {print}' ai_pipeline.md
+			# and Shared Runtime Behavior. Stop before the level-2 Phase 2
+			# heading. ai_pipeline.md uses "## Phase 2 — Planning"; the
+			# previous pattern `^# Phase 2` never matched the level-2
+			# heading, so this trim was a no-op and the clarify static
+			# context silently included Phase 2/3 content.
+			awk '/^## Phase 2/{exit} {print}' ai_pipeline.md
 			echo
 			if [ -f agents.md ]; then
 				echo "=== AGENTS.MD ==="
