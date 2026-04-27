@@ -1103,6 +1103,17 @@ jobs:
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
               fi
             else
+              # Watchdog kill (wall-time/idle) or other non-zero exit. Salvage
+              # any file changes Codex managed to write before being killed —
+              # otherwise long attempts that produce real partial work get
+              # discarded and the loop wastes its remaining budget restarting
+              # from scratch (see analyze-log run 24989488561).
+              codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+              if [ -n "${codex_delta}" ]; then
+                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} but produced file changes; salvaging partial work."
+                implement_succeeded=true
+                break
+              fi
               echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
