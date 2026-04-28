@@ -23,6 +23,25 @@ Rules:
   implementable within a single PR touching at most ~10 files.
 - If a feature naturally spans many files or modules, split it into sequential
   issues (foundation first, then layers that depend on it).
+- Per-issue implementation-time budget: each issue MUST be scoped so the
+  downstream `implement.yml` editor (`codex exec`, `xhigh` reasoning) can
+  finish it within ONE 60-minute attempt. The implement watchdog's
+  per-attempt wall-time is 110 minutes (`EDITOR_MAX_WALL=6600`), and the
+  3-hour job budget allows at most ~2 full attempts before the budget
+  guard skips the rest, so a 60-minute target leaves headroom for retry.
+  For each issue, internally estimate the wall-clock implementation
+  time the editor would need; populating `implementation_minutes_estimate`
+  (integer minutes) is optional but STRONGLY RECOMMENDED — when emitted
+  it MUST be ≤ 60. If the estimate exceeds 60, do NOT emit the issue as-is
+  regardless of whether you populate the field — split it into smaller
+  sequential sub-issues whose individual estimates are each ≤ 60 minutes
+  and wire them with `dependency_edges` in foundation-first order.
+  Practical signals that a task exceeds 60 minutes: >10 files touched,
+  multiple new MongoDB collections + their contracts + their indexes,
+  broad cross-cutting refactors, or a feature that requires both a new
+  write path AND a new read path AND a new background worker. Bias
+  toward smaller issues — the splitter cost is cheap; a wasted 3-hour
+  implement run is not.
 - Use dependency edges to encode ordering constraints. An issue should only
   depend on another if it literally cannot be implemented without the other
   being merged first (shared types, API contracts, schema changes, etc.).
@@ -130,7 +149,7 @@ Schema reference:
 - schema_version: "orchestrate_decomposition.v1" (constant)
 - project_title: short title for the tracking issue (max 200 chars)
 - project_summary: high-level scope summary (max 5000 chars)
-- issues[]: array of {id, title, body, priority, files_touched?}
+- issues[]: array of {id, title, body, priority, files_touched?, implementation_minutes_estimate?}
   - id: stable local ID (lowercase alphanumeric + hyphens/underscores)
   - title: GitHub issue title
   - body: full issue body (enough context for the AI pipeline)
@@ -139,6 +158,11 @@ Schema reference:
     relative file paths the issue intends to edit/create/delete. Used by the
     partition guard to prevent sibling merge conflicts. Omit or leave empty
     only when the scope is genuinely undetermined.
+  - implementation_minutes_estimate (optional but STRONGLY RECOMMENDED):
+    integer estimate of wall-clock minutes the implement editor will need
+    for this issue. MUST be ≤ 60. If you can only produce a >60 estimate,
+    split the issue per the per-issue implementation-time budget rule
+    above instead of emitting a too-large issue.
 - dependency_edges[]: array of {from, to}
   - from: issue ID that must be merged first
   - to: issue ID that depends on from

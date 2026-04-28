@@ -17,12 +17,20 @@ Generate a structured implementation plan covering:
 4. API/interface changes
 5. Risks and edge cases
 6. Testing considerations
+7. Implementation-time estimate (in minutes) for the downstream editor.
+   The implement watchdog kills attempts at 110 minutes wall-clock and
+   the 3-hour job budget allows at most ~2 full attempts. Issues that
+   the editor cannot finish inside ONE 60-minute attempt waste a full
+   run, so the planner MUST surface this estimate explicitly. State the
+   estimate on its own line as: `Implementation-time estimate: <N> minutes`
+   where `<N>` is an integer.
 
 Rules:
 - Read and interpret clarification answers from the provided planning context first.
 - Accept flexible answer formats/casing; interpret intent, then map back to Q<ID> questions.
 - If any answer is missing, contradictory, or unclear: return clarification questions in mandatory Q<ID>/Choices format.
 - If a required input is external and non-synthesizable by the auto-answerer (for example branch name, commit SHA, credential, or external URL), do not emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
+- Scope-too-large gate: if the honest implementation-time estimate exceeds 60 minutes, do NOT emit a plan; emit exactly `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues` so the orchestrator can re-decompose the work. Practical >60-minute signals: >10 files touched, multiple new MongoDB collections + contracts + indexes, broad cross-cutting refactors, or a feature that needs a new write path AND a new read path AND a new background worker in one issue.
 - Surface the planning ref context from the provided planning context (`git rev-parse HEAD` and symbolic branch) and do not assume `main`.
 - If checked-out ref mismatches Integration branch metadata, emit exactly `BLOCKED: integration branch mismatch`.
 - Use repo documentation only; no external web searches.
