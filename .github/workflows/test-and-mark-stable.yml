@@ -2733,7 +2733,7 @@ jobs:
             HAS_CLARIFICATION=0
             HAS_PLANNING=0
             echo ",${LABELS}," | grep -qE ',ai:clarification,' && HAS_CLARIFICATION=1
-            echo "${LABELS}" | grep -qE 'ai:planning|ai:awaiting-approval' && HAS_PLANNING=1
+            echo ",${LABELS}," | grep -qE ',(ai:planning|ai:awaiting-approval),' && HAS_PLANNING=1
             # `ai:clarification` only counts as rejection if it persists
             # ≥CLARIFY_PERSIST_REQUIRED_SECS without a planning/approval
             # label appearing. If planning ever shows up the timer is
