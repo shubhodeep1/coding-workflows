@@ -1766,10 +1766,20 @@ jobs:
             IS_SMOKE=true
           fi
 
-          # Check linked issue title (PR body often contains "issue #N" or issue URL)
+          # Check linked issue title. Only honour GitHub's closing-keyword
+          # pattern (Closes/Fixes/Resolves + #N or issue URL, case-insensitive)
+          # to avoid false-matching loose "issue #N" mentions inside log
+          # citations or backticked fragments quoted in the PR body — which
+          # would otherwise trigger phantom `gh api issues/<N>` 404s. The
+          # implement and orchestrator workflows both emit closing keywords
+          # when they create PRs, so this still resolves the linked issue
+          # for every auto-generated smoke-test PR.
+          # The URL alternative is restricted to the current repository so a
+          # cross-repo "Closes <other-repo>/issues/N" reference cannot route
+          # an unrelated number into this repo's issues lookup.
           if [ "$IS_SMOKE" = "false" ]; then
-            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oP '(?:issues/|issue\s*#)(\d+)' | head -1 | grep -oP '\d+' || true)
-            if [ -n "$ISSUE_NUM" ]; then
+            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
+            if [ -n "${ISSUE_NUM:-}" ]; then
               ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
               if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
                 IS_SMOKE=true
