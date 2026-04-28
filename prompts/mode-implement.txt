@@ -77,6 +77,16 @@ Rules:
   lockfiles as an unrelated side effect — that violates the minimal-change
   rule.
 
+Data-file output discipline (MANDATORY when writing YAML or JSON):
+
+- When writing files under `db/contracts/` or any other YAML/JSON path,
+  emit raw YAML or raw JSON only. Never wrap the file body in markdown
+  code fences (` ``` ` or ` ```yaml ` / ` ```json `), and never include
+  language tags, fence markers, or surrounding prose in the file. The
+  file's first byte must be valid YAML/JSON, and its last byte must be
+  valid YAML/JSON — anything else is a syntax error that breaks the
+  post-Codex validation step.
+
 If clarification context is incomplete, apply the safest minimal interpretation and explicitly record assumptions in your output/log summary without asking interactive questions.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}

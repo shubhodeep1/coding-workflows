@@ -121,21 +121,34 @@ ensure_implement_fixup_labels() {
   fi
 }
 
-FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
-if [ -z "${FAILED_STEP_JOBS_JSON}" ]; then
-  FAILED_STEP_JOBS_JSON='{"jobs":[]}'
-fi
-FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
-  [.jobs[].steps[]
-    | select(
-        .conclusion == "failure"
-        or .conclusion == "cancelled"
-        or .conclusion == "timed_out"
-        or .conclusion == "action_required"
-      )
-  ]
-  | first
-  | .name // ""' 2>/dev/null || true)"
+# Race window: GitHub's jobs API may briefly return valid JSON whose
+# step conclusions are still null/in_progress immediately after a
+# failure. In that case retry up to 3× so diagnose gets a real step
+# name. Empty/invalid responses are treated as terminal — they will
+# not become parseable on retry, so we let the unknown-step fallback
+# handle them rather than burning extra API calls.
+FAILED_STEP_JOBS_JSON=""
+FAILED_STEP_NAME=""
+for _attempt in 1 2 3; do
+  FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+  if ! printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1; then
+    FAILED_STEP_JOBS_JSON='{"jobs":[]}'
+    break
+  fi
+  FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
+    [.jobs[].steps[]
+      | select(
+          .conclusion == "failure"
+          or .conclusion == "cancelled"
+          or .conclusion == "timed_out"
+          or .conclusion == "action_required"
+        )
+    ]
+    | first
+    | .name // ""' 2>/dev/null || true)"
+  [ -n "${FAILED_STEP_NAME}" ] && break
+  [ "${_attempt}" -lt 3 ] && sleep 4 || true
+done
 if [ -z "${FAILED_STEP_NAME}" ]; then
   FAILED_STEP_NAME="unknown-step"
 fi

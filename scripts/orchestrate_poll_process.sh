@@ -7023,6 +7023,16 @@ if ! [[ "${MAX_IMPL_NOOP_REISSUES}" =~ ^[1-9][0-9]*$ ]]; then
   MAX_IMPL_NOOP_REISSUES=2
 fi
 
+# Cap on consecutive poll cycles a post-Codex implementation-failed
+# reissue may stay deferred with the same blocker status before being
+# escalated to ai:needs-human. Prevents fallback-id-only blocker
+# issues (which carry no actionable contract) from indefinitely
+# parking the source issue while spamming WARNING notifications.
+MAX_IMPL_FAILED_DEFER_CYCLES="${MAX_IMPL_FAILED_DEFER_CYCLES:-5}"
+if ! [[ "${MAX_IMPL_FAILED_DEFER_CYCLES}" =~ ^[1-9][0-9]*$ ]]; then
+  MAX_IMPL_FAILED_DEFER_CYCLES=5
+fi
+
 # ---------------------------------------------------------------
 # Helper: extract (RECOMMENDED) answers from clarification comments
 # ---------------------------------------------------------------
@@ -10014,14 +10024,101 @@ ${RB_FIX_DESC}
 
       if [ "${IF_DEFER_REISSUE}" = "true" ]; then
         IF_BLOCKERS_CSV="$(echo "${IF_BLOCKERS_JSON}" | jq -r 'map("#" + tostring) | join(", ")')"
-        echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; blockers=${IF_BLOCKERS_CSV}; statuses=${IF_BLOCKER_STATUS_SUMMARY}; reason=${IF_DEFER_REASON}."
-        tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Blockers: ${IF_BLOCKERS_CSV}"$'\n'"Statuses: ${IF_BLOCKER_STATUS_SUMMARY}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+        IF_DEFER_SIGNATURE="${IF_BLOCKER_STATUS_SUMMARY}|${IF_DEFER_REASON}"
+        IF_PREV_SIGNATURE="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+        IF_PREV_COUNT="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+        IF_PREV_ESCALATED="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].escalated // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+        [[ "${IF_PREV_COUNT}" =~ ^[0-9]+$ ]] || IF_PREV_COUNT=0
+        if [ "${IF_DEFER_SIGNATURE}" = "${IF_PREV_SIGNATURE}" ]; then
+          IF_DEFER_COUNT=$((IF_PREV_COUNT + 1))
+          IF_ESCALATED_FLAG="${IF_PREV_ESCALATED}"
+        else
+          IF_DEFER_COUNT=1
+          # Signature changed — fresh defer window, reset the escalation flag.
+          IF_ESCALATED_FLAG="false"
+        fi
+        IF_SHOULD_ESCALATE="false"
+        if [ "${IF_DEFER_COUNT}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ] && [ "${IF_ESCALATED_FLAG}" != "true" ]; then
+          IF_SHOULD_ESCALATE="true"
+          IF_ESCALATED_FLAG="true"
+        fi
+        if jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
+          .implementation_failed_defer_state //= {}
+          | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count, escalated: $escalated}
+        ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+          mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          IMPL_FAILED_STATE_CHANGED=true
+        else
+          rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+        fi
+
+        echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; blockers=${IF_BLOCKERS_CSV}; statuses=${IF_BLOCKER_STATUS_SUMMARY}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${IF_ESCALATED_FLAG}."
+        if [ "${IF_SHOULD_ESCALATE}" = "true" ]; then
+          ensure_label_exists "ai:needs-human"
+          gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments" \
+            -f body="$(printf '## Post-Codex implementation-failed deferral escalated\n\nThis source issue has been deferred for %s consecutive poll cycles with the same blocker status (%s). Blocker fix-ups [%s] are not advancing on their own — escalating to `ai:needs-human` for manual review. Reason: %s.' "${IF_DEFER_COUNT}" "${IF_BLOCKER_STATUS_SUMMARY}" "${IF_BLOCKERS_CSV}" "${IF_DEFER_REASON}")" >/dev/null 2>&1 || true
+          tg_notify "Implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}) escalated to ai:needs-human after ${IF_DEFER_COUNT} deferred cycles."$'\n'"Mode: ${IF_MODE}"$'\n'"Blockers: ${IF_BLOCKERS_CSV}"$'\n'"Statuses: ${IF_BLOCKER_STATUS_SUMMARY}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "CRITICAL"
+        elif [ "${IF_DEFER_SIGNATURE}" != "${IF_PREV_SIGNATURE}" ]; then
+          tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Blockers: ${IF_BLOCKERS_CSV}"$'\n'"Statuses: ${IF_BLOCKER_STATUS_SUMMARY}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Cycle: ${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+        fi
         continue
       fi
     elif [ "${IF_MODE}" = "post-codex-validation" ] && [ "${IF_DEFER_REISSUE}" = "true" ]; then
-      echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; reason=${IF_DEFER_REASON}."
-      tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+      IF_DEFER_SIGNATURE="|${IF_DEFER_REASON}"
+      IF_PREV_SIGNATURE="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      IF_PREV_COUNT="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      IF_PREV_ESCALATED="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].escalated // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+      [[ "${IF_PREV_COUNT}" =~ ^[0-9]+$ ]] || IF_PREV_COUNT=0
+      if [ "${IF_DEFER_SIGNATURE}" = "${IF_PREV_SIGNATURE}" ]; then
+        IF_DEFER_COUNT=$((IF_PREV_COUNT + 1))
+        IF_ESCALATED_FLAG="${IF_PREV_ESCALATED}"
+      else
+        IF_DEFER_COUNT=1
+        IF_ESCALATED_FLAG="false"
+      fi
+      IF_SHOULD_ESCALATE="false"
+      if [ "${IF_DEFER_COUNT}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ] && [ "${IF_ESCALATED_FLAG}" != "true" ]; then
+        IF_SHOULD_ESCALATE="true"
+        IF_ESCALATED_FLAG="true"
+      fi
+      if jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
+        .implementation_failed_defer_state //= {}
+        | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count, escalated: $escalated}
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+        mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        IMPL_FAILED_STATE_CHANGED=true
+      else
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      fi
+
+      echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${IF_ESCALATED_FLAG}."
+      if [ "${IF_SHOULD_ESCALATE}" = "true" ]; then
+        ensure_label_exists "ai:needs-human"
+        gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments" \
+          -f body="$(printf '## Post-Codex implementation-failed deferral escalated\n\nThis source issue has been deferred for %s consecutive poll cycles with the same reason (%s). Escalating to `ai:needs-human` for manual review.' "${IF_DEFER_COUNT}" "${IF_DEFER_REASON}")" >/dev/null 2>&1 || true
+        tg_notify "Implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}) escalated to ai:needs-human after ${IF_DEFER_COUNT} deferred cycles."$'\n'"Mode: ${IF_MODE}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "CRITICAL"
+      elif [ "${IF_DEFER_SIGNATURE}" != "${IF_PREV_SIGNATURE}" ]; then
+        tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Cycle: ${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+      fi
       continue
+    fi
+
+    # Reissue path reached: clear any stale defer-state entry so a
+    # later failure starts a fresh dedup/escalation window.
+    if jq -e --arg key "${if_issue}" '(.implementation_failed_defer_state // {}) | has($key)' "${STATE_FILE}" >/dev/null 2>&1; then
+      if jq --arg key "${if_issue}" '
+        if (.implementation_failed_defer_state | type) == "object"
+          then .implementation_failed_defer_state |= del(.[$key])
+          else .
+        end
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+        mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        IMPL_FAILED_STATE_CHANGED=true
+      else
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      fi
     fi
 
     if [ "${IF_MODE}" = "no-op-implementation" ]; then
