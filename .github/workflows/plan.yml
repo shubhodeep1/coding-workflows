@@ -43,7 +43,7 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.125.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       PROCESSED_ANSWER_CLAIMED: "false"
       PROCESSED_ANSWER_COMPLETED: "false"
 
@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.125.0' }}
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'

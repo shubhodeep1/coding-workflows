@@ -5,7 +5,7 @@ inputs:
   codex_version:
     description: Pinned Codex CLI version.
     required: false
-    default: v0.125.0
+    default: v0.114.0
   node_version:
     description: Node.js version used for Codex CLI.
     required: false

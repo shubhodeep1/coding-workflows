@@ -2460,6 +2460,11 @@ jobs:
           PROJECT_DESC+="Issue 2 (depends on Issue 1): append the file with exactly this line 'decompose-run: ${GITHUB_RUN_ID}'. "
           PROJECT_DESC+="Constraints: both changes target the same file; Issue 2 must declare dependency on Issue 1 in the orchestrator DAG; this is fully specified — no clarification is needed."
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          # Capture the dispatch start time before dispatching so the
+          # post-run lookup can use it as a lower-bound created_at filter
+          # and restrict matches to issues opened by THIS orchestrate run
+          # rather than scanning the whole open-issue list.
+          DISPATCH_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
             --field project_description="${PROJECT_DESC}"
           DEADLINE=$(( $(date +%s) + 3000 ))
@@ -2492,14 +2497,22 @@ jobs:
             exit 1
           fi
 
-          # Locate the tracking issue (created by the orchestrator) by the
-          # smoke-test title prefix and capture the child issue numbers it
-          # references. The orchestrator's tracking-issue body lists child
-          # issues with `- [ ] #N` or `Issue #N` markers.
-          TRACKING_NUMBER=$(gh api "repos/${TEST_REPO}/issues?state=open&per_page=50" \
-            --jq "[.[] | select(.title | startswith(\"[E2E Orchestrate Smoke ${GITHUB_RUN_ID}]\"))] | sort_by(.created_at) | last | .number // empty" 2>/dev/null || echo "")
+          # Locate the tracking issue (created by the orchestrator).
+          # The orchestrator titles it `[Orchestrator] <project_title>`
+          # where project_title is LLM-derived from project_description
+          # and the smoke-test prefix is not guaranteed to survive that
+          # rewrite. Filter instead by the canonical
+          # `ai:orchestrator-tracking` label, restrict to issues
+          # updated since this dispatch began, and confirm the body
+          # references this run's GITHUB_RUN_ID (the project_description
+          # we sent embeds it, and the body includes project_summary
+          # which typically carries it through).
+          TRACKING_NUMBER=$(gh api \
+            "repos/${TEST_REPO}/issues?state=open&labels=ai:orchestrator-tracking&since=${DISPATCH_START_ISO}&per_page=50" \
+            --jq "[.[] | select(.body // \"\" | contains(\"${GITHUB_RUN_ID}\"))] | sort_by(.created_at) | last | .number // empty" \
+            2>/dev/null || echo "")
           if [ -z "${TRACKING_NUMBER}" ]; then
-            echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID}"
+            echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
             exit 1
           fi
           echo "tracking_issue=${TRACKING_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -2558,8 +2571,12 @@ jobs:
           # orchestrator created from it.
           MARKER="E2E Orchestrate Smoke ${RUN_ID}"
           MARKER_Q=$(printf '%s' "${MARKER}" | jq -sRr @uri)
+          # `is:issue` is required by the search API; without it the
+          # call returns 422 "Query must include 'is:issue' or
+          # 'is:pull-request'", and the JSON error body would otherwise
+          # word-split into bogus issue numbers in the loop below.
           STRAGGLERS=$(gh api \
-            "search/issues?q=repo:${TEST_REPO}+state:open+in:title+${MARKER_Q}" \
+            "search/issues?q=repo:${TEST_REPO}+is:issue+state:open+in:title+${MARKER_Q}" \
             --jq '[.items[].number] | join(" ")' 2>/dev/null || echo "")
           for n in ${STRAGGLERS}; do
             close_with_retry "${n}"
@@ -2679,12 +2696,28 @@ jobs:
           # not regress to planning, so single observation is sufficient.
           PLANNING_FIRST_SEEN=0
           PLANNING_PERSIST_REQUIRED_SECS=45
+          # `ai:clarification` is applied at the start of every clarify
+          # run (see clarify.yml:399) and removed when the workflow
+          # transitions to ai:planning ("no questions needed" path,
+          # clarify.yml:416 / 1042). Treating a single observation as
+          # terminal would falsely pass when clarify swaps to planning
+          # within seconds, so require the label to persist
+          # CLARIFY_PERSIST_REQUIRED_SECS while no planning/approval
+          # label has appeared. Dedicated terminal labels
+          # (ai:awaiting-clarification, ai:clarify-failed, ai:rejected,
+          # ai:clarification-needed) and the bot question comment marker
+          # remain immediate-terminal — they are not part of the
+          # in-flight transient state machine.
+          CLARIFY_FIRST_SEEN=0
+          CLARIFY_PERSIST_REQUIRED_SECS=60
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
             echo "  labels: ${LABELS:-none}"
-            # Terminal rejection labels — any one is sufficient.
-            if echo "${LABELS}" | grep -qE 'ai:awaiting-clarification|ai:clarify-failed|ai:rejected|ai:clarification-needed'; then
+            # Definitively-terminal rejection labels — single observation
+            # suffices. Anchored against the comma-separated label list
+            # so they don't accidentally substring-match `ai:clarification`.
+            if echo ",${LABELS}," | grep -qE ',(ai:awaiting-clarification|ai:clarify-failed|ai:rejected|ai:clarification-needed),'; then
               OUTCOME="rejected"
               break
             fi
@@ -2697,9 +2730,31 @@ jobs:
               OUTCOME="rejected"
               break
             fi
+            HAS_CLARIFICATION=0
+            HAS_PLANNING=0
+            echo ",${LABELS}," | grep -qE ',ai:clarification,' && HAS_CLARIFICATION=1
+            echo ",${LABELS}," | grep -qE ',(ai:planning|ai:awaiting-approval),' && HAS_PLANNING=1
+            # `ai:clarification` only counts as rejection if it persists
+            # ≥CLARIFY_PERSIST_REQUIRED_SECS without a planning/approval
+            # label appearing. If planning ever shows up the timer is
+            # reset and the planning-persistence check below takes over.
+            if [ "${HAS_CLARIFICATION}" = "1" ] && [ "${HAS_PLANNING}" = "0" ]; then
+              if [ "${CLARIFY_FIRST_SEEN}" = "0" ]; then
+                CLARIFY_FIRST_SEEN=$(date +%s)
+                echo "  ⏳ saw ai:clarification — waiting ${CLARIFY_PERSIST_REQUIRED_SECS}s to confirm it persists without ai:planning"
+              elif [ $(( $(date +%s) - CLARIFY_FIRST_SEEN )) -ge "${CLARIFY_PERSIST_REQUIRED_SECS}" ]; then
+                OUTCOME="rejected"
+                break
+              fi
+            else
+              if [ "${CLARIFY_FIRST_SEEN}" != "0" ]; then
+                echo "  ↻ ai:clarification cleared (or planning appeared) — resetting clarification timer"
+                CLARIFY_FIRST_SEEN=0
+              fi
+            fi
             # Tentative false-positive: only commit to this verdict if
             # the planning label persists across ≥45s of polling.
-            if echo "${LABELS}" | grep -qE 'ai:planning|ai:awaiting-approval'; then
+            if [ "${HAS_PLANNING}" = "1" ]; then
               if [ "${PLANNING_FIRST_SEEN}" = "0" ]; then
                 PLANNING_FIRST_SEEN=$(date +%s)
                 echo "  ⚠ saw planning/approval label — waiting ${PLANNING_PERSIST_REQUIRED_SECS}s to confirm it persists"
