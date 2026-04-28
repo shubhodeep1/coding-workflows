@@ -121,21 +121,31 @@ ensure_implement_fixup_labels() {
   fi
 }
 
-FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
-if [ -z "${FAILED_STEP_JOBS_JSON}" ]; then
-  FAILED_STEP_JOBS_JSON='{"jobs":[]}'
-fi
-FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
-  [.jobs[].steps[]
-    | select(
-        .conclusion == "failure"
-        or .conclusion == "cancelled"
-        or .conclusion == "timed_out"
-        or .conclusion == "action_required"
-      )
-  ]
-  | first
-  | .name // ""' 2>/dev/null || true)"
+# Race window: GitHub's jobs API may not yet have populated step
+# conclusions when this script runs immediately after a failure.
+# Retry a few times before falling back to "unknown-step" so the
+# diagnose prompt gets a real step name.
+FAILED_STEP_JOBS_JSON=""
+FAILED_STEP_NAME=""
+for _attempt in 1 2 3; do
+  FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+  if [ -z "${FAILED_STEP_JOBS_JSON}" ]; then
+    FAILED_STEP_JOBS_JSON='{"jobs":[]}'
+  fi
+  FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
+    [.jobs[].steps[]
+      | select(
+          .conclusion == "failure"
+          or .conclusion == "cancelled"
+          or .conclusion == "timed_out"
+          or .conclusion == "action_required"
+        )
+    ]
+    | first
+    | .name // ""' 2>/dev/null || true)"
+  [ -n "${FAILED_STEP_NAME}" ] && break
+  [ "${_attempt}" -lt 3 ] && sleep 4 || true
+done
 if [ -z "${FAILED_STEP_NAME}" ]; then
   FAILED_STEP_NAME="unknown-step"
 fi
