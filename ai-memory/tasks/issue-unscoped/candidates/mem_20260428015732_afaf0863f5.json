@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:~333 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The README still describes the pr-autofix concurrency group as always using cancel-in-progress: false.\n  WHY: The workflow now makes cancel-in-progress conditional on claude_branch_review, so the documentation no longer matches the implementation; z-ai_glm-5 frames this as a documentation gap rather than a bug, but all reviewers agree it is stale.\n- scripts/gh_helpers.sh:~1129-1130 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The helper comment still says the pr-autofix concurrency group always uses cancel-in-progress: false.\n  WHY: The workflow now sets cancel-in-progress conditionally, so the comment is outdated; z-ai_glm-5 disagrees and says the comment is accurate for the code path where it is used.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- README.md:~333 | severity=low | confidence=3\n  PROBLEM: The README still describes the pr-autofix concurrency group as always using cancel-in-progress: false.\n  WHY: The workflow now makes cancel-in-progress conditional on claude_branch_review, so the docs no longer match the implementation.\n- scripts/gh_helpers.sh:~1129-1130 | severity=low | confidence=3\n  PROBLEM: The helper comment still says the pr-autofix concurrency group always uses cancel-in-progress: false.\n  WHY: The workflow now sets cancel-in-progress conditionally, so the comment is stale.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- README.md:~333 | severity=low | confidence=3\n  PROBLEM: The README says cancel-in-progress is always false for the pr-autofix concurrency group.\n  WHY: The implementation now switches cancel-in-progress based on claude_branch_review, so the documentation is outdated.\n- scripts/gh_helpers.sh:~1129-1130 | severity=low | confidence=3\n  PROBLEM: The helper comment says cancel-in-progress is always false for the pr-autofix concurrency group.\n  WHY: The implementation now switches cancel-in-progress based on claude_branch_review, so the comment is outdated.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- README.md:~333 | severity=low | confidence=3\n  PROBLEM: The README does not mention the new branch-dependent cancel-in-progress behavior for claude/* branches.\n  WHY: The workflow now uses claude_branch_review to switch cancellation behavior, so the documentation is incomplete.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f252da1870ae3a0e641fe261daa2ebdc6006e7a459bb798659e545af57c5ce78",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25028955549",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25028955549",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428015732_afaf0863f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25028955549"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T01:57:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
