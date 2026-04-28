@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-validate-*.txt, .codex-workflow-src/prompts/mode-validate-*.txt, .codex-workflow-src-main/prompts/mode-validate-*.txt:2-2 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: These prompt files still say \"You are Codex v0.114.0 running in unattended CI mode.\" even though the PR bumps CODEX_VERSION to v0.125.0.\n  WHY: The reviewer noted the version text is inconsistent with the workflow version bump and could confuse the agent, though they also marked the runtime impact as uncertain.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- prompts/mode-validate-*.txt, .codex-workflow-src/prompts/mode-validate-*.txt, .codex-workflow-src-main/prompts/mode-validate-*.txt:2-2 | severity=low | confidence=3\n  PROBLEM: These prompt files still say \"You are Codex v0.114.0 running in unattended CI mode.\" even though the PR bumps CODEX_VERSION to v0.125.0.\n  WHY: The reviewer noted the version text is inconsistent with the workflow version bump and could confuse the agent, though they also marked the runtime impact as uncertain.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f509fe721c4bf0875a984acec39a48cea887d0af9978b4d5479666fff2fcb123",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1704,
+    "run_id": "25029660421",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25029660421",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428021813_8c0de4c21f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1704,
+    "run_id": "25029660421"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-28T02:18:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
