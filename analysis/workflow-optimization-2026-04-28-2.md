@@ -441,3 +441,101 @@ Ordered by end-to-end impact.
 | Serena / MCP traces | Not observed | No tool trace payloads supplied |
 
 If you want, I can turn this into a shorter “top 10 fixes” version or a backlog-ready table with owner, priority, effort, and acceptance criteria.
+
+## Deep Audit — Workflows & Scripts (2026-04-28)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path**: `.github/workflows/orchestrate.yml:3479-3498; scripts/gh_helpers.sh:2937-2949`
+- **Severity**: High
+- **Category**: `bug`
+- **Description**: Integration-branch creation is a TOCTOU sequence: the workflow reads the default branch, checks whether `orchestrator/project-${TRACKING_ISSUE_NUMBER}` exists, and only then posts the new ref. If two orchestrator runs race on the same tracking issue, both can observe “missing” and one create call will fail with 422. Because `gh_retry` treats 422-class failures as permanent/non-retryable, the losing run does not converge on the branch that now exists. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/orchestrate.yml))
+- **Recommended fix**: Make branch creation idempotent: POST the ref optimistically and treat `already exists`/422 as success, or re-read the ref after a failed create and continue if it now exists. The cleanest form is a shared helper such as `ensure_integration_branch <repo> <branch> <base_sha>` that normalizes the 422 path instead of leaving the check-then-create race inline. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/orchestrate.yml))
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001
+- **File path**: `scripts/review_run_reviewers.sh:2294-2297,3641-3755; .github/workflows/review_autofix.yml:2400-2411`
+- **Severity**: High
+- **Category**: `api-batching`
+- **Description**: The review job fans out six reviewer models, performs one preflight `pulls/{pr}` state read, and then each reviewer starts its own watchdog that polls the same PR-state endpoint roughly every nine watchdog ticks (`~90s` per the inline comment). That yields a current call pattern of `1 + 6×ceil(runtime/90s)` to the same endpoint for one boolean decision; a 30-minute run is about `1 + 6×20 = 121` REST calls. This is exactly the kind of per-iteration API loop CLAUDE.md §15 warns against. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_run_reviewers.sh))
+- **Recommended fix**: Replace per-reviewer polling with one shared job-level PR-state poller that updates the existing `/tmp/pr_closed_sentinel_${PR_NUMBER}` file for all reviewers. That drops the pattern to `1 + ceil(runtime/90s)` calls and matches the repo’s existing “single loader, many consumers” cache style already used in `scripts/orchestrate_poll_process.sh`. **Current call count:** `1 + 6×ceil(runtime/90s)`. **Proposed call count:** `1 + ceil(runtime/90s)`. **Pattern to extend:** the cycle-local cached loader approach used by `scripts/orchestrate_poll_process.sh::_load_actions_runs_cached`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_run_reviewers.sh))
+
+#### API-001
+- **File path**: `.github/workflows/review_autofix.yml:3100-3113,3319-3328`
+- **Severity**: Medium
+- **Category**: `api-redundancy`
+- **Description**: In the deterministic-skip path, `review_autofix.yml` queries `pullRequest.closingIssuesReferences` twice in the same execution path: first to fetch issue numbers plus labels for validate dispatch, then again to fetch issue numbers only for `ai:ready-to-merge` labeling. That is two GraphQL fetches for one logical dataset that is already in memory after the first call. **Current call count:** 2. **Proposed call count:** 1. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+- **Recommended fix**: Keep the first `issue_nodes_json` payload, derive both `issue_numbers` and label presence from that one JSON blob with `jq`, and feed both downstream consumers from the derived variables. **Pattern to extend:** the repo’s existing fetch-once/reuse-many file-variable pattern used for issue metadata and cached Actions payloads. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+
+#### API-002
+- **File path**: `scripts/gh_helpers.sh:3303-3405`
+- **Severity**: Medium
+- **Category**: `api-redundancy`
+- **Description**: `curl_gh_api` only distinguishes rate limits from “everything else,” so deterministic failures such as 401/403/404/422 fall into the generic exponential-retry branch and can consume up to five identical calls before surfacing. That is inconsistent with `gh_retry`/`gh_retry_to_file`, which already short-circuit known permanent failures. **Current call count on deterministic 4xx:** up to 5. **Proposed call count:** 1. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/gh_helpers.sh))
+- **Recommended fix**: Add the same permanent-failure gate to `curl_gh_api` that the `gh`-based helpers use—either via direct HTTP-status classification or a shared helper that maps deterministic 4xx to “do not retry.” **Pattern to extend:** `_is_gh_permanent_failure` / `gh_retry`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/gh_helpers.sh))
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path**: `.github/workflows/plan.yml:2798-2806,2857-2857; .github/workflows/implement.yml:3138-3146,3209-3221; scripts/gh_helpers.sh:3019-3116`
+- **Severity**: Medium
+- **Category**: `duplication`
+- **Description**: Plan and implement both hand-build the same issue-context bootstrap: fetch issue metadata to a file, parse title/body/number/url out of that JSON, then fetch paginated issue comments. The two copies have already started to drift—`plan.yml` uses the shared helper stack, while `implement.yml` adds its own retry loop—which is a classic duplication smell. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/plan.yml))
+- **Recommended fix**: Move this into a shared helper owned by `scripts/gh_helpers.sh` or a new `scripts/issue_context_helpers.sh`, with a signature such as `fetch_issue_context <repo> <issue_number> <meta_out> <comments_out>`. Update callers in `plan.yml` and `implement.yml` to consume that one function so parsing, pagination, retry, and JSON validation stay synchronized. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/plan.yml))
+
+#### DUP-002
+- **File path**: `.github/workflows/review_autofix.yml:3277-3285,3331-3341; scripts/label_helpers.sh:806-875`
+- **Severity**: Low
+- **Category**: `duplication`
+- **Description**: The deterministic-skip branch in `review_autofix.yml` carries inline label-definition/helper behavior, and the workflow comments explicitly say those inline definitions must “stay in lockstep with the catalog.” That duplicates ownership that is already centralized in `scripts/label_helpers.sh`, increasing drift risk for label creation semantics, descriptions, and future label additions. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+- **Recommended fix**: Make `scripts/label_helpers.sh` the single owner of label mutation and creation, with `ensure_label_exists <label> <repo>` and `set_issue_phase_label_resilient <issue> <label> <repo>` as the public interface. Update the review-skip path to call the shared helper instead of carrying its own parallel label logic. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/label_helpers.sh))
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path**: `.github/workflows/review_autofix.yml:3086-3349`
+- **Severity**: Medium
+- **Category**: `expression-limit`
+- **Description**: `review_autofix.yml` is still the largest rendered workflow inspected at 252 KB, and this deterministic-skip / linked-issue post-processing step remains a large inline `run:` block in the same workflow that previously hit GitHub’s 21,000-character expression ceiling. Based on the block length and continued `${{ }}`-fed env interpolation around the step, this remains the likeliest regression surface. **Estimated current expanded size:** ~16–19 KB. **Estimated headroom:** ~2–5 KB. `[NEEDS VERIFICATION]` ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+- **Recommended fix**: Extract the entire block to `scripts/` and pass only environment inputs, following the same mitigation pattern already used when `scripts/orchestrate_poll_process.sh` was split out to relieve expression-length pressure. ([github.com](https://github.com/shubhodeep1/coding-workflows/raw/refs/heads/main/scripts/orchestrate_poll_process.sh))
+
+No rendered workflow inspected here crossed the 800 KB workflow-file threshold; the largest rendered workflow reviewed was `review_autofix.yml` at 252 KB. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001
+- **File path**: `.github/workflows/implement.yml:3209-3215; .github/workflows/plan.yml:2857-2857; scripts/gh_helpers.sh:3019-3116`
+- **Severity**: Medium
+- **Category**: `consistency`
+- **Description**: `implement.yml` fetches issue comments with a bespoke five-attempt loop and linear sleep, while `plan.yml` already uses the shared helper stack for the same paginated comments endpoint. That leaves the repo with two retry policies for one API surface, and the implement path skips helper-provided JSON validation and rate-limit-reset handling. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/implement.yml))
+- **Recommended fix**: Replace the ad-hoc implement loop with `gh_api_json_to_file "${ISSUE_COMMENTS_FILE}" gh api --paginate ...` (or `gh_retry_to_file`) so plan and implement share one retry/backoff/validation contract. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/gh_helpers.sh))
+
+#### SHELL-001
+- **File path**: `.github/workflows/plan.yml:3220-3224; .github/workflows/review_autofix.yml:3333-3347`
+- **Severity**: Low
+- **Category**: `shellcheck`
+- **Description**: Plan deletes clarification comments with `for cid in ${CLARIFY_IDS}; do`, which depends on unquoted shell word-splitting. The repo already uses the safer `while IFS= read -r ...` pattern in `review_autofix.yml` for similar newline-delimited iteration, so this is an avoidable SC2086-style inconsistency. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/plan.yml))
+- **Recommended fix**: Rewrite the loop as `while IFS= read -r cid; do ... done <<< "${CLARIFY_IDS}"` so iteration is newline-safe and consistent with the safer pattern already present elsewhere in the repo. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/plan.yml))
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, BATCH-001 |
+| Medium | 5 | API-001, API-002, DUP-001, EXPR-001, CONSIST-001 |
+| Low | 2 | DUP-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 4 | Medium |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 3 | Small |
