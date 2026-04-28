@@ -25,12 +25,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Per-run cap on the *filtered* log payload sent to the analyser. With ~5 runs
-# this puts us comfortably under a 200K-token window for gpt-5.4-mini even in
-# the worst case (3 chars/token estimate). Conservative on purpose: prompt
-# overhead, system message, and model-specific tokenization variance can each
-# eat ~10–15% of the nominal budget.
-PER_RUN_CHAR_BUDGET = 60000
+# Per-run cap on the *filtered* log payload sent to the analyser. With ~6
+# phase runs (clarify, plan, implement, review_autofix, orchestrate_poll,
+# cancel_on_pr_close) this caps the user-message body at ≤240K chars
+# (≈80K tokens at 3 chars/token), leaving the system prompt, per-run
+# framing, and model-specific tokenization slack a large headroom inside
+# gpt-5.4-mini's 200K-token window. Lowered from the initial 60000 after
+# review feedback to keep total prompt size firmly under the model's
+# context limit even when reviewer/codex log lines balloon under
+# rate-limit retries.
+PER_RUN_CHAR_BUDGET = 40000
 
 # Patterns that mark soft-error candidates worth surfacing. Matched
 # case-insensitively. Everything else gets dropped from the per-run payload to

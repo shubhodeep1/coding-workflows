@@ -25,7 +25,15 @@ name: Test & Mark Stable Release
         type: boolean
         default: false
       dry_run:
-        description: Validate only — do not push tags or create release
+        description: >
+          Validate only — do not push tags or create release. Also skips every
+          live-dispatch e2e job (smoke, orphan-workflows, orchestrate-decompose,
+          validate-standalone, clarify-rejects-unsolvable, alt-model) so a
+          dry run never mutates the test repo. Static checks (validate-scripts)
+          still run so the gate can verify scripts/lint/yaml health without
+          burning live test resources or polluting GitHub state. Use
+          skip_e2e=true if you want the live tests skipped while still tagging
+          a release (manual emergency tag scenario).
         required: false
         type: boolean
         default: false
@@ -177,7 +185,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   e2e-smoke-test:
     needs: [resolve-version]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -745,6 +753,25 @@ jobs:
           BRANCH="ai/issue-${ISSUE_NUMBER}"
           BAIT_MARKER="E2E_EDITOR_BAIT_${GITHUB_RUN_ID}"
           CANARY_PATH="tests/e2e_smoke_canary.txt"
+
+          # Race protection: wait-implement reports the impl run completed
+          # but `gh api repos/.../contents/...?ref=BRANCH` reads can briefly
+          # return the pre-impl blob if the API hasn't indexed the
+          # implement push yet. Verify the PR head SHA is stable across
+          # two reads ≥3s apart before we PUT the bait commit; otherwise
+          # we'd race the implement push and inject the bait against a
+          # stale parent SHA, getting a 409 conflict from the contents
+          # PUT and skipping the editor exercise.
+          for stability_attempt in 1 2 3 4 5; do
+            HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+            sleep 3
+            HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+            if [ -n "${HEAD_A}" ] && [ "${HEAD_A}" = "${HEAD_B}" ]; then
+              echo "  ✓ PR head SHA stable at ${HEAD_A:0:7} (attempt ${stability_attempt})"
+              break
+            fi
+            echo "  … PR head SHA still moving (${HEAD_A:0:7} -> ${HEAD_B:0:7}); attempt ${stability_attempt}/5"
+          done
 
           echo "Fetching current canary blob on branch ${BRANCH}..."
           # The implementer should have set the canary to exactly 3 lines.
@@ -1725,7 +1752,14 @@ jobs:
           echo "✓ Closed PR #${PR_NUMBER}"
 
           # Wait for a new cancel-on-close run to register and complete.
+          # Internal-cancel-on-pr-close fires near-immediately on the
+          # pull_request[closed] webhook but the API can take a few
+          # seconds to index the new run. Poll fast for the first 30s
+          # to catch quick runs (the cancel job is short — it only
+          # cancels other workflows), then back off to a slower cadence
+          # to ride out longer execution. Total budget unchanged at 600s.
           DEADLINE=$(( $(date +%s) + 600 ))
+          POLL_START=$(date +%s)
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
@@ -1741,7 +1775,12 @@ jobs:
                 break
               fi
             fi
-            sleep 10
+            ELAPSED=$(( $(date +%s) - POLL_START ))
+            if [ "${ELAPSED}" -lt 30 ]; then
+              sleep 3
+            else
+              sleep 10
+            fi
           done
 
           if [ -z "${NEW_RUN_ID}" ]; then
@@ -2153,7 +2192,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   orphan-workflows-test:
     needs: [resolve-version]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -2172,6 +2211,15 @@ jobs:
       # and capture the resulting run id, then wait for completion. Each
       # invocation runs in its own step so failures attribute to the
       # specific workflow.
+      #
+      # Rate-limit shaping: each dispatch step opens with a brief 4s
+      # sleep so concurrent gate jobs (e2e-smoke-test, alt-model,
+      # orchestrate-decompose, etc.) don't all hit the
+      # `actions/workflows/.../runs` and `actions/runs/...` endpoints in
+      # the same instant when they happen to start within seconds of
+      # each other. The PR-review concern was that simultaneous
+      # dispatches collide; this stagger plus the existing 5–15 s polling
+      # intervals keep total API spend well below GH_PAT's 5000/hr budget.
       - name: Dispatch & watch — workflow-log-analysis
         id: dispatch_log_analysis
         env:
@@ -2179,6 +2227,7 @@ jobs:
           INPUTS: '{"lookback_days":"1","repos_override":"${{ inputs.test_repo || github.repository }}"}'
         run: |
           set -euo pipefail
+          sleep 4
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
             --field lookback_days=1 \
@@ -2218,6 +2267,7 @@ jobs:
         id: dispatch_validation_refresh
         run: |
           set -euo pipefail
+          sleep 4
           WF_FILE="validation-refresh.yml"
           BRANCH_NAME="ai/validation-refresh-smoke-${GITHUB_RUN_ID}"
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
@@ -2260,6 +2310,7 @@ jobs:
         id: dispatch_update_workflows
         run: |
           set -euo pipefail
+          sleep 4
           # Run with allow_workflow_edits=false so the smoke gate exercises
           # workflow start-up + secret resolution + checkout, but leaves the
           # actual edit-and-commit branch behind a feature flag. Running
@@ -2309,6 +2360,7 @@ jobs:
         id: dispatch_memory_maintenance
         run: |
           set -euo pipefail
+          sleep 4
           WF_FILE="internal-memory-maintenance.yml"
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           gh workflow run "${WF_FILE}" --repo "${TEST_REPO}"
@@ -2350,7 +2402,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   orchestrate-decompose-test:
     needs: [resolve-version]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -2494,7 +2546,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   validate-standalone-test:
     needs: [resolve-version]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -2563,7 +2615,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   clarify-rejects-unsolvable-test:
     needs: [resolve-version]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -2651,9 +2703,22 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
         run: |
-          gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-            -X PATCH -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
-            || echo "Warning: could not close issue #${ISSUE_NUMBER}"
+          # Best-effort close with retry/backoff. A transient 5xx from the
+          # close call previously left the issue open; the retry loop
+          # makes the cleanup self-healing and stops orphaning issues
+          # under API flakiness.
+          set +e
+          for attempt in 1 2 3; do
+            if gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+                -X PATCH -f state=closed -f state_reason=not_planned \
+                >/dev/null 2>&1; then
+              echo "  closed #${ISSUE_NUMBER}"
+              exit 0
+            fi
+            sleep $(( attempt * 2 ))
+          done
+          echo "::warning::Could not close issue #${ISSUE_NUMBER} after 3 attempts (manual cleanup may be required)"
+          exit 0
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1g: Alternate-model happy-path run
@@ -2663,7 +2728,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   e2e-alt-model-test:
     needs: [resolve-version]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -2677,6 +2742,28 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${GH_TOKEN}" ] || { echo "::error::GH_PAT required"; exit 1; }
+
+          # Validate ALT_EDITOR_MODEL format before dispatch. A typo
+          # (missing `provider/`, trailing whitespace, smart-quote chars)
+          # would otherwise only surface deep inside the implement run as
+          # an opaque OpenRouter error. Pattern matches the same shape
+          # consumed by openai/openrouter SDKs: `<provider>/<model-id>`
+          # where provider/id are alnum-with-dot/underscore/dash and the
+          # full string is at most 128 chars. If `scripts/codex_model_catalog.json`
+          # is present, the model must also appear in it; otherwise we
+          # only enforce the shape (catalog file is optional, per CLAUDE.md
+          # §4 – env vars get sane defaults).
+          if ! [[ "${ALT_EDITOR_MODEL}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+             || [ "${#ALT_EDITOR_MODEL}" -gt 128 ]; then
+            echo "::error::ALT_EDITOR_MODEL='${ALT_EDITOR_MODEL}' does not match expected '<provider>/<model-id>' shape"
+            exit 1
+          fi
+          if [ -f scripts/codex_model_catalog.json ]; then
+            if ! jq -e --arg m "${ALT_EDITOR_MODEL}" '.[$m] // .models[$m] // (.. | strings | select(. == $m)) | length > 0' scripts/codex_model_catalog.json >/dev/null 2>&1; then
+              echo "::warning::ALT_EDITOR_MODEL='${ALT_EDITOR_MODEL}' is not in scripts/codex_model_catalog.json — proceeding anyway (catalog is informational)"
+            fi
+          fi
+          echo "Using ALT_EDITOR_MODEL=${ALT_EDITOR_MODEL}"
 
       - name: Create alt-model smoke issue
         id: create
@@ -2737,19 +2824,42 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
         run: |
-          set -euo pipefail
-          gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-            -X PATCH -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
-            || echo "Warning: could not close issue #${ISSUE_NUMBER}"
+          # Defence in depth — never abort on single failure; retry each
+          # close 3× with backoff. Same pattern as orchestrate-decompose-test
+          # cleanup so all e2e jobs leak resources at the same (low) rate
+          # under API flakiness.
+          set +e
+          close_with_retry() {
+            local kind="$1" num="$2" attempt
+            [ -n "${num}" ] || return 0
+            for attempt in 1 2 3; do
+              if gh api "repos/${TEST_REPO}/${kind}/${num}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned \
+                  >/dev/null 2>&1; then
+                echo "  closed ${kind%s}/#${num}"
+                return 0
+              fi
+              sleep $(( attempt * 2 ))
+            done
+            echo "::warning::Could not close ${kind%s}/#${num} after 3 attempts"
+            return 1
+          }
+
+          close_with_retry "issues" "${ISSUE_NUMBER}"
           # Best-effort PR + branch cleanup
           PR_NUMBER=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/timeline?per_page=20" \
             --jq '[.[] | select(.event == "cross-referenced") | .source.issue.number] | first // empty' 2>/dev/null || echo "")
           if [ -n "${PR_NUMBER}" ]; then
-            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-              -X PATCH -f state=closed >/dev/null 2>&1 || true
+            close_with_retry "pulls" "${PR_NUMBER}"
           fi
-          gh api "repos/${TEST_REPO}/git/refs/heads/ai/issue-${ISSUE_NUMBER}" \
-            -X DELETE >/dev/null 2>&1 || true
+          for attempt in 1 2 3; do
+            if gh api "repos/${TEST_REPO}/git/refs/heads/ai/issue-${ISSUE_NUMBER}" \
+                -X DELETE >/dev/null 2>&1; then
+              break
+            fi
+            sleep $(( attempt * 2 ))
+          done
+          true  # ensure step exits 0 even on failed branch delete
 
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
