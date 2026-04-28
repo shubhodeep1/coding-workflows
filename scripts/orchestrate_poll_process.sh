@@ -5296,6 +5296,14 @@ REISSUE_EOF
           _skip_lookback_hours=24
         fi
         local _skip_since_iso
+        # Try GNU `date -d` (Linux) first, then BSD `date -v` (macOS).
+        # If both fail (e.g. an exotic runner image without either flag),
+        # fall back to an empty cutoff — the jq filter below treats an
+        # empty `$since` as "match any committer date", which is the
+        # intentional fail-open: we'd rather route a still-active PR to
+        # `dispatch_rb_judge` (recoverable) than hard-close it via skip
+        # because we couldn't compute a 24h window.  In practice both
+        # date variants are present on every Actions-supported runner.
         _skip_since_iso="$(date -u -d "${_skip_lookback_hours} hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
           || date -u -v-"${_skip_lookback_hours}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
           || echo "")"

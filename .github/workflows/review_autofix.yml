@@ -2644,15 +2644,30 @@ jobs:
           # gated to the first-iteration case only.
           #
           # Skipped when AUTOFIX_INSTEP_RETRY_ENABLED=false so consumers
-          # can opt out without redeploying the workflow.
+          # can opt out without redeploying the workflow.  Tune the
+          # cooldown via AUTOFIX_INSTEP_RETRY_SLEEP_SECS (default 30) so
+          # slower runner environments can give the editor more time to
+          # recover from transient crashes/timeouts without holding the
+          # job for an excessive fixed window.
           _instep_retry_enabled="${AUTOFIX_INSTEP_RETRY_ENABLED:-true}"
+          _instep_retry_sleep="${AUTOFIX_INSTEP_RETRY_SLEEP_SECS:-30}"
+          if ! [[ "${_instep_retry_sleep}" =~ ^[0-9]+$ ]] || [ "${_instep_retry_sleep}" -lt 1 ] || [ "${_instep_retry_sleep}" -gt 600 ]; then
+            echo "::warning::AUTOFIX_INSTEP_RETRY_SLEEP_SECS must be an integer in [1, 600]; defaulting to 30."
+            _instep_retry_sleep=30
+          fi
           if [ "${_instep_retry_enabled}" = "true" ] \
               && [ ! -s "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
+            # `git log` here intentionally walks HEAD on the already-
+            # checked-out PR branch (the surrounding workflow checks
+            # out the PR head before this step runs, see "Checkout PR
+            # head branch" earlier in the job).  If this block is ever
+            # extracted to a standalone script, the caller must ensure
+            # the PR branch is current.
             _prior_autofix_count="$(git log --format='%s' -n 5 2>/dev/null \
               | grep -cE '^\[ai-autofix\]|^\[judge-fix\]' || echo 0)"
             if [ "${_prior_autofix_count}" = "0" ]; then
-              echo "::warning::Editor produced no summary on first iteration — retrying once after 30s before falling through to noop-comment path."
-              sleep 30
+              echo "::warning::Editor produced no summary on first iteration — retrying once after ${_instep_retry_sleep}s before falling through to noop-comment path."
+              sleep "${_instep_retry_sleep}"
               bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
