@@ -818,11 +818,12 @@ fi
 # legitimate stall reason for ai:done is "PR not merging" — escalate via
 # the ladder (retrigger_review → escalate_human) rather than terminating
 # with skip.  Set MAX_STALL_RECOVERIES_DONE to a small value (e.g. 2) to
-# reach escalate_human quickly, or leave at the high default to let the
-# ladder run indefinitely until the PR resolves.
+# reach escalate_human quickly, or leave at the high default to effectively
+# avoid skip for typical runs (the cap is still finite — skip will fire
+# after MAX_STALL_RECOVERIES_DONE attempts unless the value is raised).
 MAX_STALL_RECOVERIES_DONE="${MAX_STALL_RECOVERIES_DONE:-99}"
 if ! [[ "${MAX_STALL_RECOVERIES_DONE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_RECOVERIES_DONE}" -lt 1 ]; then
-  echo "::warning::MAX_STALL_RECOVERIES_DONE must be a positive integer; defaulting to 99 (skip-disabled for ai:done)"
+  echo "::warning::MAX_STALL_RECOVERIES_DONE must be a positive integer; defaulting to 99 (effectively avoids skip for typical ai:done runs)"
   MAX_STALL_RECOVERIES_DONE="99"
 fi
 

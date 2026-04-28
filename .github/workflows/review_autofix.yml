@@ -1623,12 +1623,19 @@ jobs:
             # the codex-agent job's own in_progress check-run does not keep
             # the count perpetually above zero. Sibling workflow runs on the
             # same SHA (e.g. the implement run's `Agent` job) are still waited
-            # on. Fail-open to count=0 on jq error.  Input is the slurped
-            # `--paginate --slurp` array of page objects, each with
-            # `.check_runs[]`; flatten across pages before filtering.
+            # on. Fail-open to count=0 on jq error.  Robust to both shapes:
+            # `gh api --paginate --slurp` returns an array of page objects,
+            # while plain `gh api` (legacy / fallback) returns a single page
+            # object directly.  Without the `if type == "array"` guard, the
+            # latter shape would iterate the object's *values* — yielding
+            # numbers like `total_count` — and `.check_runs` on a number
+            # errors out, silently returning 0 (which the wait loop would
+            # mistake for "no in-flight checks").
             _in_flight="$(jq --arg run_id "${SELF_RUN_ID:-}" '
               [
-                ( . // [] | .[]? | .check_runs // [] | .[] )
+                ( if type == "array" then .[]? else . end )
+                | (.check_runs // [])
+                | .[]
                 | select(.status == "in_progress" or .status == "queued")
                 | select(
                     ($run_id == "")

@@ -291,10 +291,14 @@ def main() -> None:
             "Suppress the in-report adoption-warning footer and the "
             "::warning:: stdout annotation when total tool ops is below "
             "this count (default: 5).  Adoption rate is denominator-driven "
-            "and tiny-iteration noise should not be flagged."
+            "and tiny-iteration noise should not be flagged.  Values <= 0 "
+            "are clamped to the default; otherwise the suppression branch "
+            "would never trigger."
         ),
     )
     args = parser.parse_args()
+    if args.min_ops_for_warning <= 0:
+        args.min_ops_for_warning = 5
 
     serena_counts, file_ops = scan_directory(args.scan_dir)
     for fpath in args.extra_files:
@@ -320,7 +324,14 @@ def main() -> None:
 
     # Also print to stdout for workflow logs
     print(report)
-    if total_ops >= max(args.min_ops_for_warning, 5) and efficiency < args.warn_threshold:
+    # Use the same `min_ops_for_warning` threshold as the in-report footer
+    # so the stdout `::warning::` annotation and the markdown adoption
+    # footer fire together (or are suppressed together).  The earlier
+    # `max(..., 5)` defensive floor diverged from `format_report` and
+    # could leave the footer visible while the stdout warning was
+    # suppressed (or vice versa) when an operator passed
+    # `--min-ops-for-warning < 5`.
+    if total_ops >= args.min_ops_for_warning and efficiency < args.warn_threshold:
         print(
             "::warning::Serena MCP adoption is below threshold "
             f"({file_ops} file-based fallback ops vs {total_serena} Serena tool calls; "
