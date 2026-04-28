@@ -248,6 +248,7 @@ jobs:
             prompts/mode-clarify-respond.txt
             prompts/mode-validate-generate.txt
             prompts/mode-validate-diagnose.txt
+            prompts/mode-validate-self-heal.txt
           )
 
           for pf in "${target_prompts[@]}"; do
@@ -261,7 +262,7 @@ jobs:
             fi
             rendered_file="$(mktemp)"
             bash scripts/render_prompt.sh "${pf}" > "${rendered_file}"
-            if grep -q '{{SERENA_EFFICIENCY_BLOCK_[A-Z_][A-Z_]*}}' "${rendered_file}"; then
+            if grep -qE '^\{\{SERENA_EFFICIENCY_BLOCK_[A-Z_]+\}\}$' "${rendered_file}"; then
               echo "FAIL: unresolved Serena placeholders remain after rendering ${pf}"
               rm -f "${rendered_file}"
               exit 1

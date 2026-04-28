@@ -387,7 +387,19 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
       "${RESOLVER_FP_VIOLATIONS_FILE}"
     _effective_prompt_file="${RESOLVER_RETRY_PROMPT_FILE}"
-    echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]'), prev fingerprint_violations=$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]'))."
+    if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
+      _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+      _prev_marker_count="${_prev_marker_count:-0}"
+    else
+      _prev_marker_count=0
+    fi
+    if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
+      _prev_fp_violation_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+      _prev_fp_violation_count="${_prev_fp_violation_count:-0}"
+    else
+      _prev_fp_violation_count=0
+    fi
+    echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=${_prev_marker_count}, prev fingerprint_violations=${_prev_fp_violation_count})."
   else
     _effective_prompt_file="${CONFLICT_RESOLVER_PROMPT_FILE}"
   fi
