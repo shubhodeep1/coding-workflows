@@ -14,6 +14,16 @@ name: Update Workflow Wrappers
         required: true
       TG_BOT_SECRET:
         required: false
+  # workflow_dispatch is additive — required by the release gate to live-test
+  # the update-wrappers path before tagging stable. Consumer repos still call
+  # this workflow via workflow_call from ai-update-workflows.yml.
+  workflow_dispatch:
+    inputs:
+      allow_workflow_edits:
+        description: "Allow automatic workflow wrapper updates"
+        required: false
+        default: true
+        type: boolean
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

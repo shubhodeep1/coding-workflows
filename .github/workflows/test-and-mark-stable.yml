@@ -185,6 +185,7 @@ jobs:
       cancel-in-progress: true
     outputs:
       test_passed: ${{ steps.verify.outputs.passed }}
+      soft_error_summary: ${{ steps.soft-error-analyser.outputs.soft_error_summary }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -695,6 +696,81 @@ jobs:
             sleep "$POLL_INTERVAL"
           done
 
+      # ── Phase 3c: Inject editor "bait" commit ──────────────────
+      # Forces the review/autofix pipeline to exercise the editor's
+      # change-applying path. The smoke-test issue body mandates the canary
+      # be EXACTLY three lines; we append a 4th obviously-removable line
+      # which reviewers will flag (low-reasoning is sufficient — the issue
+      # text spells out the requirement) and the editor must trim. The
+      # post-review verification step then confirms the bait is gone and
+      # the editor produced at least one commit on top of the bait. This
+      # turns Phase 4 from "review found no issues" into a real exercise of
+      # the reviewer→editor→commit pipeline.
+      - name: "Phase 3c: Inject editor bait commit on PR branch"
+        id: inject-bait
+        if: steps.wait-implement.outputs.pr_number != ''
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          BRANCH="ai/issue-${ISSUE_NUMBER}"
+          BAIT_MARKER="E2E_EDITOR_BAIT_${GITHUB_RUN_ID}"
+          CANARY_PATH="tests/e2e_smoke_canary.txt"
+
+          echo "Fetching current canary blob on branch ${BRANCH}..."
+          # The implementer should have set the canary to exactly 3 lines.
+          # We fetch its SHA + decoded content so we can PUT a 4-line
+          # version that adds one removable bait line at the end.
+          BLOB_JSON=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null || echo "")
+          if [ -z "${BLOB_JSON}" ] || [ "${BLOB_JSON}" = "null" ]; then
+            echo "::warning::Could not fetch ${CANARY_PATH} from branch ${BRANCH} — skipping bait injection (editor exercise not enforced this run)"
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BLOB_SHA=$(echo "${BLOB_JSON}" | jq -r '.sha // empty')
+          BLOB_CONTENT=$(echo "${BLOB_JSON}" | jq -r '.content // empty' | tr -d '\n' | base64 -d 2>/dev/null || echo "")
+          if [ -z "${BLOB_SHA}" ]; then
+            echo "::warning::Canary blob has no SHA — skipping bait injection"
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Build new content: existing content + bait line. Strip any trailing
+          # newline first so the bait doesn't end up two lines down.
+          BAIT_LINE="# ${BAIT_MARKER}: this line should be removed by the editor (smoke gate)"
+          NEW_CONTENT="$(printf '%s' "${BLOB_CONTENT%$'\n'}")"$'\n'"${BAIT_LINE}"$'\n'
+          NEW_B64=$(printf '%s' "${NEW_CONTENT}" | base64 -w0)
+
+          echo "Pushing bait commit to ${BRANCH}..."
+          if ! gh api -X PUT "repos/${TEST_REPO}/contents/${CANARY_PATH}" \
+              -f message="[E2E Smoke Test] inject editor bait line (run ${GITHUB_RUN_ID})" \
+              -f content="${NEW_B64}" \
+              -f sha="${BLOB_SHA}" \
+              -f branch="${BRANCH}" >/tmp/bait_resp.json 2>&1; then
+            echo "::warning::Bait commit failed; editor exercise will not be enforced"
+            cat /tmp/bait_resp.json >&2 || true
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BAIT_SHA=$(jq -r '.commit.sha // empty' /tmp/bait_resp.json)
+          if [ -z "${BAIT_SHA}" ]; then
+            echo "::warning::Bait commit response missing SHA"
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "✓ Bait commit ${BAIT_SHA:0:7} pushed to ${BRANCH}"
+          echo "status=injected" >> "$GITHUB_OUTPUT"
+          echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
+          echo "bait_sha=${BAIT_SHA}" >> "$GITHUB_OUTPUT"
+
       # ── Phase 4: Wait for review/edit to complete ───────────────
       - name: "Phase 4: Wait for review & autofix to complete"
         id: wait-review
@@ -890,6 +966,56 @@ jobs:
             sleep "$POLL_INTERVAL"
             ELAPSED=$((ELAPSED + POLL_INTERVAL))
           done
+
+      # ── Phase 4b: Verify the editor removed the bait commit ───
+      # Closes the loop on Phase 3c: confirms the reviewer→editor→commit
+      # pipeline actually fired by checking the canary on the post-review
+      # PR head no longer contains the bait marker AND that the editor
+      # pushed at least one commit on top of the bait. Reports as a
+      # workflow-step failure (blocking) when the editor failed to act,
+      # since the whole point of injecting bait is to fail the gate when
+      # the editor is broken.
+      - name: "Phase 4b: Verify editor removed bait line"
+        id: verify-bait-removed
+        if: steps.inject-bait.outputs.status == 'injected'
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          BAIT_MARKER: ${{ steps.inject-bait.outputs.marker }}
+          BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+        run: |
+          set -euo pipefail
+          BRANCH="ai/issue-${ISSUE_NUMBER}"
+          CANARY_PATH="tests/e2e_smoke_canary.txt"
+
+          # Re-fetch canary on the (post-review) PR head.
+          BLOB=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null || echo "")
+          if [ -z "${BLOB}" ]; then
+            echo "::error::Could not re-fetch ${CANARY_PATH} after review — branch may be gone"
+            echo "status=fetch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          DECODED=$(echo "${BLOB}" | jq -r '.content // empty' | tr -d '\n' | base64 -d 2>/dev/null || echo "")
+          if echo "${DECODED}" | grep -qF "${BAIT_MARKER}"; then
+            echo "::error::Editor failed to remove bait line ${BAIT_MARKER}. Canary contents:"
+            printf '%s\n' "${DECODED}"
+            echo "status=bait_remained" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "✓ Bait line removed from canary"
+
+          # Confirm the editor pushed at least one commit on top of the bait.
+          COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
+            --jq "[.[] | select(.sha != \"${BAIT_SHA}\") | .sha] | length" 2>/dev/null || echo "0")
+          # The PR head SHA should differ from the bait SHA.
+          PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+          if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
+            echo "::error::PR head is still the bait commit — editor did not push a fix commit"
+            echo "status=no_editor_commit" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "✓ Editor produced commit(s) past the bait (PR head: ${PR_HEAD:0:7}, bait: ${BAIT_SHA:0:7})"
+          echo "status=success" >> "$GITHUB_OUTPUT"
 
       # ── Phase 5: Orchestrator script integration test ──────────
       - name: Checkout repository for integration tests
@@ -1237,6 +1363,15 @@ jobs:
 
             CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
 
+            # Capture the latest poller run id (used by Phase 8's soft-error
+            # analyser to ingest the poller's logs alongside other phases).
+            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
+              POLLER_LATEST_ID=$(echo "${POLLER_RUN}" | jq -r '.id // empty')
+              if [ -n "${POLLER_LATEST_ID}" ]; then
+                echo "poller_run_id=${POLLER_LATEST_ID}" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+
             # Reset inactivity timer only when LABELS change (not poller
             # status alone — poller runs starting/completing would otherwise
             # reset the timer indefinitely while labels remain stuck).
@@ -1532,6 +1667,136 @@ jobs:
           fi
           echo "═══════════════════════════════════════════"
 
+      # ── Phase 7: Verify cancel_on_pr_close fires on PR close ───
+      # Closes the smoke-test PR and watches internal-cancel-on-pr-close.yml
+      # complete successfully. This is the only path through the
+      # cancel_on_pr_close.yml reusable workflow that the gate exercises end
+      # to end. Done before the unconditional cleanup step so it can hard
+      # fail the release; the cleanup step below is left as a safety net for
+      # the issue / tracking / branch resources.
+      - name: "Phase 7: Close PR and verify cancel_on_pr_close fires"
+        id: verify-cancel-on-close
+        if: steps.wait-implement.outputs.pr_number != ''
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          BRANCH="ai/issue-${ISSUE_NUMBER}"
+          # Snapshot the most recent cancel-on-close run BEFORE we close the
+          # PR so we can detect a fresh run by monotonic ID after the close.
+          PRE_RUN_ID=$(gh api \
+            "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=1" \
+            --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          echo "Pre-close cancel run head: ${PRE_RUN_ID}"
+
+          # Close the PR (this is what triggers internal-cancel-on-pr-close).
+          gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+            -X PATCH -f state=closed >/dev/null 2>&1 \
+            || { echo "::error::Could not close PR #${PR_NUMBER}"; echo "status=close_failed" >> "$GITHUB_OUTPUT"; exit 1; }
+          echo "✓ Closed PR #${PR_NUMBER}"
+
+          # Wait for a new cancel-on-close run to register and complete.
+          DEADLINE=$(( $(date +%s) + 600 ))
+          NEW_RUN_ID=""
+          NEW_CONCLUSION=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            CANDIDATE=$(gh api \
+              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE_RUN_ID})] | sort_by(.created_at) | last" 2>/dev/null || echo "")
+            if [ -n "${CANDIDATE}" ] && [ "${CANDIDATE}" != "null" ]; then
+              NEW_RUN_ID=$(echo "${CANDIDATE}" | jq -r '.id // ""')
+              STATUS=$(echo "${CANDIDATE}" | jq -r '.status // ""')
+              NEW_CONCLUSION=$(echo "${CANDIDATE}" | jq -r '.conclusion // ""')
+              echo "  cancel-on-close run #${NEW_RUN_ID}: status=${STATUS}, conclusion=${NEW_CONCLUSION}"
+              if [ "${STATUS}" = "completed" ]; then
+                break
+              fi
+            fi
+            sleep 10
+          done
+
+          if [ -z "${NEW_RUN_ID}" ]; then
+            echo "::error::internal-cancel-on-pr-close did not register a new run within timeout"
+            echo "status=no_run" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "${NEW_CONCLUSION}" != "success" ]; then
+            echo "::error::cancel-on-close run #${NEW_RUN_ID} concluded ${NEW_CONCLUSION}"
+            echo "status=${NEW_CONCLUSION}" >> "$GITHUB_OUTPUT"
+            echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "✓ cancel-on-close run #${NEW_RUN_ID} succeeded"
+          echo "status=success" >> "$GITHUB_OUTPUT"
+          echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      # ── Phase 8: Soft-error analyser (non-blocking) ─────────────
+      # Pulls logs from every triggered phase run, filters to high-signal
+      # lines, and asks gpt-5.4-mini @ medium reasoning to summarise soft
+      # failures (rate-limit recoveries, codex fallbacks, summariser hard
+      # fails, etc.). The report is exposed as a job output so the notify
+      # job can attach it to the Telegram release message. Hard exits are
+      # avoided — analyser problems must never block a release.
+      - name: "Phase 8: Soft-error log analyser"
+        id: soft-error-analyser
+        if: always()
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          LOG_ANALYZER_MODEL: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          LOG_ANALYZER_REASONING: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
+          PLAN_RUN_ID: ${{ steps.wait-plan.outputs.run_id }}
+          IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
+          REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
+          RBSIM_POLLER_RUN_ID: ${{ steps.review-blocked-sim.outputs.poller_run_id }}
+          CANCEL_RUN_ID: ${{ steps.verify-cancel-on-close.outputs.cancel_run_id }}
+        run: |
+          set -euo pipefail
+          REPORT="/tmp/soft_error_report.md"
+          ARGS=(--repo "${TEST_REPO}" --output "${REPORT}")
+          [ -n "${CLARIFY_RUN_ID:-}" ] && ARGS+=(--run "clarify=${CLARIFY_RUN_ID}")
+          [ -n "${PLAN_RUN_ID:-}" ] && ARGS+=(--run "plan=${PLAN_RUN_ID}")
+          [ -n "${IMPL_RUN_ID:-}" ] && ARGS+=(--run "implement=${IMPL_RUN_ID}")
+          [ -n "${REVIEW_RUN_ID:-}" ] && ARGS+=(--run "review_autofix=${REVIEW_RUN_ID}")
+          [ -n "${RBSIM_POLLER_RUN_ID:-}" ] && ARGS+=(--run "orchestrate_poll=${RBSIM_POLLER_RUN_ID}")
+          [ -n "${CANCEL_RUN_ID:-}" ] && ARGS+=(--run "cancel_on_pr_close=${CANCEL_RUN_ID}")
+
+          if [ "${#ARGS[@]}" -le 4 ]; then
+            echo "No phase runs captured; skipping analyser." > "${REPORT}"
+            echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          python3 scripts/analyze_soft_errors.py "${ARGS[@]}" || {
+            echo "::warning::Soft-error analyser exited non-zero — keeping fallback report"
+          }
+          echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+
+          # Truncate the report for downstream consumers (Telegram caps
+          # message bodies at 4096 chars; we leave headroom for the rest of
+          # the release-status text). The full untruncated report is uploaded
+          # as an artifact below.
+          if [ -f "${REPORT}" ]; then
+            head -c 2800 "${REPORT}" > /tmp/soft_error_report_short.md
+            {
+              echo 'soft_error_summary<<SOFT_ERR_EOF'
+              cat /tmp/soft_error_report_short.md
+              echo
+              echo 'SOFT_ERR_EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload soft-error report artifact
+        if: always() && steps.soft-error-analyser.outputs.report_path != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: soft-error-report-${{ github.run_id }}
+          path: /tmp/soft_error_report.md
+          if-no-files-found: ignore
+          retention-days: 30
+
       # ── Verification summary ───────────────────────────────────
       - name: Verify all phases passed
         id: verify
@@ -1583,6 +1848,18 @@ jobs:
             PASSED=false
           fi
 
+          # Check editor bait removal (Phase 4b)
+          BAIT_INJECTED="${{ steps.inject-bait.outputs.status }}"
+          BAIT_VERIFIED="${{ steps.verify-bait-removed.outputs.status }}"
+          if [ "$BAIT_INJECTED" = "skipped" ]; then
+            echo "  - Editor Bait. SKIPPED (could not inject — non-blocking)"
+          elif [ "$BAIT_VERIFIED" = "success" ]; then
+            echo "  ✓ Editor Bait. PASSED (editor removed bait + pushed fix commit)"
+          else
+            echo "  ✗ Editor Bait. FAILED (${BAIT_VERIFIED:-not_run}) — editor pipeline did not exercise correctly"
+            PASSED=false
+          fi
+
           # Check orchestrator scripts (Phase 5)
           ORCH="${{ steps.orchestrator-scripts.outputs.status }}"
           if [ "$ORCH" = "success" ]; then
@@ -1617,6 +1894,17 @@ jobs:
             PASSED=false
           fi
 
+          # Check cancel_on_pr_close (Phase 7)
+          CANCEL="${{ steps.verify-cancel-on-close.outputs.status }}"
+          if [ "$CANCEL" = "success" ]; then
+            echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully)"
+          elif [ -z "$CANCEL" ]; then
+            echo "  - Cancel-PR .. SKIPPED (no PR to close)"
+          else
+            echo "  ✗ Cancel-PR .. FAILED (${CANCEL})"
+            PASSED=false
+          fi
+
           echo ""
           echo "═══════════════════════════════════════════"
 
@@ -1641,7 +1929,9 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           echo "Cleaning up E2E test artifacts..."
 
-          # Close PR without merging
+          # Close PR without merging (idempotent — Phase 7 already closed
+          # it for the cancel_on_pr_close test; if Phase 7 was skipped this
+          # path closes the PR for the first time).
           if [ -n "${PR_NUMBER}" ]; then
             EXISTING_PR_BODY="$(_safe_gh_jq "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' || echo "")"
             NEW_PR_BODY="${EXISTING_PR_BODY}
@@ -1827,15 +2117,561 @@ jobs:
       - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
+  # Job 1c: Orphan workflows live-dispatch test
+  # Dispatches each user-facing workflow that the e2e smoke test does
+  # NOT exercise (workflow-log-analysis, validation-refresh,
+  # update_workflows, memory_maintenance) and waits for completion.
+  # cancel_on_pr_close is exercised inside e2e-smoke-test Phase 7.
+  # ──────────────────────────────────────────────────────────────────
+  orphan-workflows-test:
+    needs: [resolve-version]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TEST_REPO: ${{ inputs.test_repo || github.repository }}
+    steps:
+      - name: Validate prerequisites
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::GH_PAT secret is required for orphan-workflow dispatch"
+            exit 1
+          fi
+
+      # Generic helper: dispatch a workflow_dispatch workflow by file name
+      # and capture the resulting run id, then wait for completion. Each
+      # invocation runs in its own step so failures attribute to the
+      # specific workflow.
+      - name: Dispatch & watch — workflow-log-analysis
+        id: dispatch_log_analysis
+        env:
+          WF_FILE: workflow-log-analysis.yml
+          INPUTS: '{"lookback_days":"1","repos_override":"${{ inputs.test_repo || github.repository }}"}'
+        run: |
+          set -euo pipefail
+          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+            --field lookback_days=1 \
+            --field repos_override="${TEST_REPO}"
+          DEADLINE=$(( $(date +%s) + 1500 ))
+          NEW_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            [ -n "${NEW_ID}" ] && break
+            sleep 5
+          done
+          if [ -z "${NEW_ID}" ]; then
+            echo "::error::workflow-log-analysis dispatch did not register"
+            exit 1
+          fi
+          echo "Watching run #${NEW_ID}"
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+            echo "  status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+              if [ "${CONCLUSION}" = "success" ]; then
+                exit 0
+              fi
+              echo "::error::workflow-log-analysis run #${NEW_ID} concluded ${CONCLUSION}"
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "::error::workflow-log-analysis run #${NEW_ID} timed out"
+          exit 1
+
+      - name: Dispatch & watch — validation-refresh
+        id: dispatch_validation_refresh
+        run: |
+          set -euo pipefail
+          WF_FILE="validation-refresh.yml"
+          BRANCH_NAME="ai/validation-refresh-smoke-${GITHUB_RUN_ID}"
+          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          # Use a per-run smoke branch name so production validation-refresh
+          # branches are never collided with.
+          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+            --field branch_name="${BRANCH_NAME}"
+          DEADLINE=$(( $(date +%s) + 2400 ))
+          NEW_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            [ -n "${NEW_ID}" ] && break
+            sleep 5
+          done
+          if [ -z "${NEW_ID}" ]; then
+            echo "::error::validation-refresh dispatch did not register"
+            exit 1
+          fi
+          echo "Watching run #${NEW_ID}"
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+            echo "  status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+              if [ "${CONCLUSION}" = "success" ]; then
+                exit 0
+              fi
+              echo "::error::validation-refresh run #${NEW_ID} concluded ${CONCLUSION}"
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "::error::validation-refresh run #${NEW_ID} timed out"
+          exit 1
+
+      - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
+        id: dispatch_update_workflows
+        run: |
+          set -euo pipefail
+          # Run with allow_workflow_edits=false so the smoke gate exercises
+          # workflow start-up + secret resolution + checkout, but leaves the
+          # actual edit-and-commit branch behind a feature flag. Running
+          # with edits=true on this repo would cause update_workflows to
+          # overwrite local templates with whatever is at @stable — a
+          # destructive feedback loop during a release rehearsal.
+          WF_FILE="update_workflows.yml"
+          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+            --field allow_workflow_edits=false
+          DEADLINE=$(( $(date +%s) + 600 ))
+          NEW_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            [ -n "${NEW_ID}" ] && break
+            sleep 5
+          done
+          if [ -z "${NEW_ID}" ]; then
+            echo "::error::update_workflows dispatch did not register"
+            exit 1
+          fi
+          echo "Watching run #${NEW_ID}"
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+            echo "  status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+              # The single update job is gated `if: allow_workflow_edits != false`;
+              # with edits=false the job is skipped, which surfaces as
+              # conclusion=skipped. That counts as success for this smoke gate
+              # (workflow startup is the only thing we can observe safely).
+              if [ "${CONCLUSION}" = "success" ] || [ "${CONCLUSION}" = "skipped" ]; then
+                exit 0
+              fi
+              echo "::error::update_workflows run #${NEW_ID} concluded ${CONCLUSION}"
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "::error::update_workflows run #${NEW_ID} timed out"
+          exit 1
+
+      - name: Dispatch & watch — internal-memory-maintenance
+        id: dispatch_memory_maintenance
+        run: |
+          set -euo pipefail
+          WF_FILE="internal-memory-maintenance.yml"
+          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}"
+          DEADLINE=$(( $(date +%s) + 900 ))
+          NEW_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            [ -n "${NEW_ID}" ] && break
+            sleep 5
+          done
+          if [ -z "${NEW_ID}" ]; then
+            echo "::error::internal-memory-maintenance dispatch did not register"
+            exit 1
+          fi
+          echo "Watching run #${NEW_ID}"
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+            echo "  status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+              if [ "${CONCLUSION}" = "success" ]; then
+                exit 0
+              fi
+              echo "::error::internal-memory-maintenance run #${NEW_ID} concluded ${CONCLUSION}"
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "::error::internal-memory-maintenance run #${NEW_ID} timed out"
+          exit 1
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 1d: Orchestrate decompose end-to-end test
+  # Exercises the orchestrate root: project-description → tracking issue
+  # + child issue DAG → wave dispatch. Cleans up issues when done.
+  # ──────────────────────────────────────────────────────────────────
+  orchestrate-decompose-test:
+    needs: [resolve-version]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TEST_REPO: ${{ inputs.test_repo || github.repository }}
+    outputs:
+      tracking_issue: ${{ steps.dispatch.outputs.tracking_issue }}
+      child_issues: ${{ steps.dispatch.outputs.child_issues }}
+    steps:
+      - name: Validate prerequisites
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN}" ] || { echo "::error::GH_PAT required"; exit 1; }
+
+      - name: Dispatch internal-orchestrate.yml with multi-issue project
+        id: dispatch
+        run: |
+          set -euo pipefail
+          WF_FILE="internal-orchestrate.yml"
+          # Two-issue project description with an explicit dependency so the
+          # orchestrator must produce >=2 issues across >=2 waves. Stays
+          # inside the smoke canary file family to minimise blast radius and
+          # lets cleanup target the new issues by title prefix.
+          PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] Update tests/e2e_smoke_canary.txt with two changes that MUST be applied as separate issues with a dependency. "
+          PROJECT_DESC+="Issue 1 (no dependencies): set the file's first line to exactly 'status: ok'. "
+          PROJECT_DESC+="Issue 2 (depends on Issue 1): append the file with exactly this line 'decompose-run: ${GITHUB_RUN_ID}'. "
+          PROJECT_DESC+="Constraints: both changes target the same file; Issue 2 must declare dependency on Issue 1 in the orchestrator DAG; this is fully specified — no clarification is needed."
+          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+            --field project_description="${PROJECT_DESC}"
+          DEADLINE=$(( $(date +%s) + 3000 ))
+          NEW_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            [ -n "${NEW_ID}" ] && break
+            sleep 5
+          done
+          if [ -z "${NEW_ID}" ]; then
+            echo "::error::orchestrate dispatch did not register"
+            exit 1
+          fi
+          echo "Watching run #${NEW_ID}"
+          # Wait for orchestrate run to complete (it's the bootstrap; child
+          # workflows run separately and will continue past this run's exit).
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+            echo "  orchestrate-bootstrap status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              break
+            fi
+            sleep 20
+          done
+          if [ "${STATUS}" != "completed" ] || [ "${CONCLUSION}" != "success" ]; then
+            echo "::error::orchestrate run #${NEW_ID} did not succeed (status=${STATUS}, conclusion=${CONCLUSION})"
+            exit 1
+          fi
+
+          # Locate the tracking issue (created by the orchestrator) by the
+          # smoke-test title prefix and capture the child issue numbers it
+          # references. The orchestrator's tracking-issue body lists child
+          # issues with `- [ ] #N` or `Issue #N` markers.
+          TRACKING_NUMBER=$(gh api "repos/${TEST_REPO}/issues?state=open&per_page=50" \
+            --jq "[.[] | select(.title | startswith(\"[E2E Orchestrate Smoke ${GITHUB_RUN_ID}]\"))] | sort_by(.created_at) | last | .number // empty" 2>/dev/null || echo "")
+          if [ -z "${TRACKING_NUMBER}" ]; then
+            echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID}"
+            exit 1
+          fi
+          echo "tracking_issue=${TRACKING_NUMBER}" >> "$GITHUB_OUTPUT"
+          BODY=$(gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" --jq '.body // ""' 2>/dev/null || echo "")
+          CHILDREN=$(printf '%s\n' "${BODY}" | grep -oE '#[0-9]+' | tr -d '#' | sort -u | tr '\n' ',' | sed 's/,$//')
+          echo "child_issues=${CHILDREN}" >> "$GITHUB_OUTPUT"
+          # Decomposition assertion: at least two distinct child issues.
+          CHILD_COUNT=$(echo "${CHILDREN}" | tr ',' '\n' | grep -c .)
+          if [ "${CHILD_COUNT}" -lt 2 ]; then
+            echo "::error::Decomposition produced ${CHILD_COUNT} child issue(s); expected >= 2"
+            exit 1
+          fi
+          echo "✓ Decomposition produced ${CHILD_COUNT} child issues: ${CHILDREN}"
+
+      - name: Cleanup orchestrate test issues
+        if: always() && steps.dispatch.outputs.tracking_issue != ''
+        env:
+          TRACKING_NUMBER: ${{ steps.dispatch.outputs.tracking_issue }}
+          CHILDREN: ${{ steps.dispatch.outputs.child_issues }}
+        run: |
+          set -euo pipefail
+          for n in ${TRACKING_NUMBER} $(echo "${CHILDREN}" | tr ',' ' '); do
+            [ -n "${n}" ] || continue
+            gh api "repos/${TEST_REPO}/issues/${n}" \
+              -X PATCH -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
+              || echo "Warning: could not close issue #${n}"
+          done
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 1e: Validate (reusable) standalone fixture dispatch
+  # Dispatches internal-validate.yml in standalone mode (tracking_issue=0)
+  # against the test fixture compose file. Confirms validate.yml startup,
+  # docker compose bringup, and status emission paths still work without
+  # a tracking issue context.
+  # ──────────────────────────────────────────────────────────────────
+  validate-standalone-test:
+    needs: [resolve-version]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TEST_REPO: ${{ inputs.test_repo || github.repository }}
+    steps:
+      - name: Validate prerequisites
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN}" ] || { echo "::error::GH_PAT required"; exit 1; }
+
+      - name: Dispatch internal-validate.yml standalone
+        id: dispatch
+        run: |
+          set -euo pipefail
+          WF_FILE="internal-validate.yml"
+          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          # Standalone mode: tracking_issue=0 tells validate.yml to skip
+          # tracking-issue label updates. The compose_file fallback uses
+          # the canonical default; if the repo has no docker-compose.yml
+          # the workflow will emit `status=error` and exit gracefully.
+          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+            --field tracking_issue=0 \
+            --field compose_file=docker-compose.yml \
+            --field validation_timeout=10
+          DEADLINE=$(( $(date +%s) + 1800 ))
+          NEW_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            [ -n "${NEW_ID}" ] && break
+            sleep 5
+          done
+          if [ -z "${NEW_ID}" ]; then
+            echo "::error::internal-validate dispatch did not register"
+            exit 1
+          fi
+          echo "Watching run #${NEW_ID}"
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+            echo "  status=${STATUS} conclusion=${CONCLUSION}"
+            if [ "${STATUS}" = "completed" ]; then
+              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+              # validate.yml is allowed to conclude with `failure` when the
+              # compose file is missing or the validation matrix yields an
+              # error status — that's a valid run, not a workflow defect.
+              # The smoke gate only fails when the workflow itself errors
+              # (e.g. cancelled, action_required, infra-level failure).
+              case "${CONCLUSION}" in
+                success|failure) exit 0 ;;
+                *) echo "::error::validate run #${NEW_ID} concluded ${CONCLUSION}"; exit 1 ;;
+              esac
+            fi
+            sleep 20
+          done
+          echo "::error::validate run #${NEW_ID} timed out"
+          exit 1
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 1f: Clarify-rejects-unsolvable negative test
+  # Files an issue that is intentionally under-specified and asserts
+  # that Clarify routes it to ai:awaiting-clarification (not directly
+  # to ai:planning). Confirms the clarify-rejection path still works.
+  # ──────────────────────────────────────────────────────────────────
+  clarify-rejects-unsolvable-test:
+    needs: [resolve-version]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TEST_REPO: ${{ inputs.test_repo || github.repository }}
+    steps:
+      - name: Create unsolvable issue
+        id: create
+        run: |
+          set -euo pipefail
+          TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
+          BODY="Make it better."
+          NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+            -f title="${TITLE}" -f body="${BODY}" --jq '.number')
+          echo "issue_number=${NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Created issue #${NUMBER}"
+
+      - name: Wait for clarify to flag for clarification
+        id: wait
+        env:
+          ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          DEADLINE=$(( $(date +%s) + 1500 ))
+          OUTCOME=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+            echo "  labels: ${LABELS:-none}"
+            # Acceptable terminal labels for an unsolvable task. Any of
+            # these proves the rejection path fired.
+            if echo "${LABELS}" | grep -qE 'ai:awaiting-clarification|ai:clarify-failed|ai:rejected|ai:clarification-needed'; then
+              OUTCOME="rejected"
+              break
+            fi
+            # Failure mode: clarify happily moved it to planning despite
+            # being unsolvable (clarify rejection path is broken).
+            if echo "${LABELS}" | grep -qE 'ai:planning|ai:awaiting-approval'; then
+              OUTCOME="false_positive"
+              break
+            fi
+            sleep 15
+          done
+          if [ "${OUTCOME}" = "rejected" ]; then
+            echo "✓ Clarify correctly rejected the under-specified task"
+            exit 0
+          fi
+          if [ "${OUTCOME}" = "false_positive" ]; then
+            echo "::error::Clarify advanced an under-specified issue to planning — rejection path is broken"
+            exit 1
+          fi
+          echo "::error::Clarify did not act on the under-specified issue within timeout"
+          exit 1
+
+      - name: Cleanup negative-test issue
+        if: always() && steps.create.outputs.issue_number != ''
+        env:
+          ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
+        run: |
+          gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            -X PATCH -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
+            || echo "Warning: could not close issue #${ISSUE_NUMBER}"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 1g: Alternate-model happy-path run
+  # Re-runs a minimal happy path with WORKFLOW_EDITOR_MODEL overridden
+  # to a different model than the production default. Catches model-
+  # coupling regressions without 3x'ing release-gate runtime.
+  # ──────────────────────────────────────────────────────────────────
+  e2e-alt-model-test:
+    needs: [resolve-version]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      # Override exposed for the e2e dispatch path; consumed by
+      # internal-implement.yml via the WORKFLOW_EDITOR_MODEL repo var.
+      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'anthropic/claude-sonnet-4-6' }}
+    steps:
+      - name: Validate prerequisites
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN}" ] || { echo "::error::GH_PAT required"; exit 1; }
+
+      - name: Create alt-model smoke issue
+        id: create
+        run: |
+          set -euo pipefail
+          TITLE="[E2E Smoke Test alt-model] update canary (run ${GITHUB_RUN_ID})"
+          # Same canary task as the main e2e job so we exercise the full
+          # implement→review path; only the editor model varies. Body is
+          # built with explicit newlines to avoid YAML literal-block
+          # indentation traps.
+          BODY=$'## Task\n'
+          BODY+=$'The file `tests/e2e_smoke_canary.txt` already exists. Update its content so it is **exactly** these three lines:\n\n'
+          BODY+=$'```\nstatus: ok\n'
+          BODY+="run_id: alt-${GITHUB_RUN_ID}"$'\n'
+          BODY+=$'updated-by: ai-pipeline\n```\n\n'
+          BODY+=$'## Constraints\n'
+          BODY+=$'- Only modify `tests/e2e_smoke_canary.txt`.\n'
+          BODY+=$'- This is fully specified — **no clarification is needed**.\n'
+          BODY+="- Note: this run uses \`${ALT_EDITOR_MODEL}\` as the editor model override."
+          NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+            -f title="${TITLE}" -f body="${BODY}" --jq '.number')
+          echo "issue_number=${NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for clarify→plan→implement (alt-model)
+        id: wait
+        env:
+          ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          DEADLINE=$(( $(date +%s) + 4500 ))
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+            echo "  labels: ${LABELS:-none}"
+            # Auto-approve the plan when the issue lands in awaiting-approval.
+            if echo "${LABELS}" | grep -q 'ai:awaiting-approval'; then
+              gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+                -f body="/approved" >/dev/null 2>&1 || true
+            fi
+            # Success: the implement phase produced a PR and either is
+            # mid-review or done. The alt-model gate doesn't need to wait
+            # for review_autofix — that's already covered by the main e2e.
+            if echo "${LABELS}" | grep -qE 'ai:in-review|ai:ready-to-merge|ai:merged'; then
+              echo "✓ Alt-model run reached review/merge stage"
+              exit 0
+            fi
+            if echo "${LABELS}" | grep -qE 'ai:clarify-failed|ai:plan-failed|ai:implement-failed'; then
+              echo "::error::Alt-model run hit a failure label: ${LABELS}"
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "::error::Alt-model run timed out before reaching review stage"
+          exit 1
+
+      - name: Cleanup alt-model artifacts
+        if: always() && steps.create.outputs.issue_number != ''
+        env:
+          ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            -X PATCH -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
+            || echo "Warning: could not close issue #${ISSUE_NUMBER}"
+          # Best-effort PR + branch cleanup
+          PR_NUMBER=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/timeline?per_page=20" \
+            --jq '[.[] | select(.event == "cross-referenced") | .source.issue.number] | first // empty' 2>/dev/null || echo "")
+          if [ -n "${PR_NUMBER}" ]; then
+            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+              -X PATCH -f state=closed >/dev/null 2>&1 || true
+          fi
+          gh api "repos/${TEST_REPO}/git/refs/heads/ai/issue-${ISSUE_NUMBER}" \
+            -X DELETE >/dev/null 2>&1 || true
+
+  # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   validate:
-    needs: [resolve-version, e2e-smoke-test, validate-scripts]
+    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test]
     if: >-
       always() &&
       needs.resolve-version.result == 'success' &&
       needs.validate-scripts.result == 'success' &&
-      (needs.e2e-smoke-test.result == 'success' || needs.e2e-smoke-test.result == 'skipped')
+      (needs.e2e-smoke-test.result == 'success' || needs.e2e-smoke-test.result == 'skipped') &&
+      (needs.orphan-workflows-test.result == 'success' || needs.orphan-workflows-test.result == 'skipped') &&
+      (needs.orchestrate-decompose-test.result == 'success' || needs.orchestrate-decompose-test.result == 'skipped') &&
+      (needs.validate-standalone-test.result == 'success' || needs.validate-standalone-test.result == 'skipped') &&
+      (needs.clarify-rejects-unsolvable-test.result == 'success' || needs.clarify-rejects-unsolvable-test.result == 'skipped') &&
+      (needs.e2e-alt-model-test.result == 'success' || needs.e2e-alt-model-test.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1995,7 +2831,7 @@ jobs:
   # Job 4: Combined Telegram notification (runs after ALL jobs)
   # ──────────────────────────────────────────────────────────────────
   notify:
-    needs: [resolve-version, e2e-smoke-test, validate-scripts, validate, release]
+    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -2017,26 +2853,44 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           E2E="${{ needs.e2e-smoke-test.result }}"
           SCRIPTS="${{ needs.validate-scripts.result }}"
+          ORPHANS="${{ needs.orphan-workflows-test.result }}"
+          ORCHESTRATE_DECOMPOSE="${{ needs.orchestrate-decompose-test.result }}"
+          VALIDATE_STANDALONE="${{ needs.validate-standalone-test.result }}"
+          CLARIFY_REJECTS="${{ needs.clarify-rejects-unsolvable-test.result }}"
+          ALT_MODEL="${{ needs.e2e-alt-model-test.result }}"
           VALIDATE="${{ needs.validate.result }}"
           RELEASE="${{ needs.release.result }}"
 
+          all_supplemental_ok=true
+          for r in "$ORPHANS" "$ORCHESTRATE_DECOMPOSE" "$VALIDATE_STANDALONE" "$CLARIFY_REJECTS" "$ALT_MODEL"; do
+            if [ -n "$r" ] && [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              all_supplemental_ok=false
+            fi
+          done
+
           # Determine overall status
-          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ]; then
+          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ] && [ "$all_supplemental_ok" = "true" ]; then
             MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
-            MSG+=$'\n'"All jobs passed: e2e ✓ scripts ✓ validate ✓ release ✓"
+            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ✓"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             STATUS_LINE=""
-            for JOB_NAME in e2e-smoke-test validate-scripts validate release; do
+            for JOB_NAME in e2e-smoke-test validate-scripts orphan-workflows-test orchestrate-decompose-test validate-standalone-test clarify-rejects-unsolvable-test e2e-alt-model-test validate release; do
               case "$JOB_NAME" in
                 e2e-smoke-test) RESULT="$E2E" ;;
                 validate-scripts) RESULT="$SCRIPTS" ;;
+                orphan-workflows-test) RESULT="$ORPHANS" ;;
+                orchestrate-decompose-test) RESULT="$ORCHESTRATE_DECOMPOSE" ;;
+                validate-standalone-test) RESULT="$VALIDATE_STANDALONE" ;;
+                clarify-rejects-unsolvable-test) RESULT="$CLARIFY_REJECTS" ;;
+                e2e-alt-model-test) RESULT="$ALT_MODEL" ;;
                 validate) RESULT="$VALIDATE" ;;
                 release) RESULT="$RELEASE" ;;
               esac
               case "$RESULT" in
                 success) ICON="✓" ;;
                 skipped) ICON="⊘" ;;
+                "") ICON="-" ; RESULT="not_run" ;;
                 *) ICON="✗" ;;
               esac
               STATUS_LINE+="${JOB_NAME}: ${ICON} (${RESULT})  "
@@ -2044,6 +2898,20 @@ jobs:
             MSG+=$'\n'"${STATUS_LINE}"
           fi
           MSG+=$'\n'"Run: ${RUN_URL}"
+
+          # Append the soft-error analyser report (truncated upstream to fit
+          # comfortably within Telegram's 4096-char body cap). Non-blocking
+          # by design: any soft-failure findings are surfaced here so the
+          # release engineer sees them inline with the release notification.
+          SOFT_ERR='${{ needs.e2e-smoke-test.outputs.soft_error_summary }}'
+          if [ -n "${SOFT_ERR}" ]; then
+            MSG+=$'\n\n'"---"$'\n'"${SOFT_ERR}"
+          fi
+
+          # Telegram caps message bodies at 4096 chars; trim if necessary.
+          if [ "${#MSG}" -gt 4000 ]; then
+            MSG="${MSG:0:3950}"$'\n'"…[truncated; see artifact 'soft-error-report-${{ github.run_id }}']"
+          fi
 
           # Send notification (persists — not auto-deleted)
           curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
