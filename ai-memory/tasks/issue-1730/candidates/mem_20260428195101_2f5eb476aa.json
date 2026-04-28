@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What is the primary target of \"better\"? Choose one primary target.**\nChoices:\n- **A** \u2014 One specific workflow, script, or file that you will name in the same reply (RECOMMENDED)\n- **B** \u2014 Clarify / plan / implement flow (`clarify.yml`, `plan.yml`, `implement.yml`)\n- **C** \u2014 Review / autofix / PR handling (`review_autofix.yml`, `scripts/review_*`)\n- **D** \u2014 Orchestrator / poller / stall recovery (`orchestrate*.yml`, `scripts/orchestrate_poll_process.sh`)\n- **E** \u2014 Validation / harness generation (`validate.yml`, `scripts/validate_process.sh`)\n- **F** \u2014 Docs / templates / wrapper workflows (`README.md`, `agents.md`, `workflow-templates/*`)\nReply: `Q1: A`\n**Q2: What kind of improvement do you want in that target? Choose one.**\nChoices:\n- **A** \u2014 Fix a concrete bug, failed run, or incorrect behavior (RECOMMENDED)\n- **B** \u2014 Reduce noise, cost, or duplicate workflow activity without changing behavior\n- **C** \u2014 Intentionally change or add behavior\n- **D** \u2014 Documentation or wording improvement only\nReply: `Q2: A`\n**Q3: What concrete reference should implementation use as the acceptance check? Choose one and include the reference in the same reply.**\nChoices:\n- **A** \u2014 A specific issue, PR, workflow run, or log snippet (RECOMMENDED)\n- **B** \u2014 A specific file/path plus the exact before/after behavior\n- **C** \u2014 A short acceptance statement with the exact expected result\nReply: `Q3: A`",
+  "fingerprint": "96ea623bf3da2b5da44d884decabc8f5ce1722d65e4058f1b275b2f650967b6a",
+  "lineage": {
+    "issue_number": 1730,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25074116524",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25074116524",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260428195101_2f5eb476aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1730,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25074116524"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1730 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-28T19:51:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
