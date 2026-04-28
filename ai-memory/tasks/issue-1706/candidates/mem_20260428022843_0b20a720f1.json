@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which mitigation should this issue implement on the current branch?**\nChoices:\n- **A** \u2014 Implement mitigation 1: add MCP preflight/probe logic in `setup_serena.sh` and omit failed optional MCP servers from `~/.codex/config.toml`, behind a config knob that defaults to enabled. (RECOMMENDED)\n- **B** \u2014 Implement mitigation 2: add OpenRouter provider-routing constraints to avoid Azure for Codex calls, which requires introducing a wrapper/new request path because the current Codex config does not expose provider body params.\n- **C** \u2014 Implement both mitigation 1 and mitigation 2 in this issue.\nReply: `Q1: A`\n**Q2: The issue says #1705 already pinned Context7 to `2.1.8`, but the current repo still has `@upstash/context7-mcp@latest` in `scripts/setup_serena.sh`. How should this task handle that mismatch?**\nChoices:\n- **A** \u2014 Include the Context7 pin in this change so the defense-in-depth baseline exists on the current branch, instead of assuming #1705 lands first. (RECOMMENDED)\n- **B** \u2014 Assume #1705 will land separately; do not change the current `@latest` reference in this issue.\n- **C** \u2014 Broaden this issue to pin all workflow-managed MCP binaries touched by `setup_serena.sh`, not just Context7.\nReply: `Q2: A`",
+  "fingerprint": "935b8a76d4753d8eebb3b6045477908acd59a6425fb075360a846816073e878e",
+  "lineage": {
+    "issue_number": 1706,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25030420671",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25030420671",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260428022843_0b20a720f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1706,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25030420671"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1706 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-28T02:28:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
