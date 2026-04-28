@@ -28,12 +28,15 @@ docker compose -f "${COMPOSE_FILE}" exec -T \
 	-e RPC_URL="${RPC_URL}" \
 	-e RPC_PAYLOAD="${RPC_PAYLOAD}" \
 	"${APP_SERVICE}" /bin/sh -c '
-		set -eu
+		set -u
+		set +e
 		curl -fsS --max-time 10 \
 			-H "Content-Type: application/json" \
 			--data "${RPC_PAYLOAD}" \
 			"${RPC_URL}"
-		printf "\n##CURL_EXIT=%s\n" "$?"
+		curl_rc=$?
+		printf "\n##CURL_EXIT=%s\n" "${curl_rc}"
+		exit 0
 	' >"${PROBE_OUT}" 2>"${PROBE_ERR}"
 DOCKER_EXEC_RC=$?
 set -e
@@ -49,7 +52,9 @@ emit_failure_diagnostics() {
 		echo "# curl exit: ${CURL_EXIT}"
 	fi
 	if [ -n "${PROBE_ERR_TEXT}" ]; then
-		printf '# stderr: %s\n' "${PROBE_ERR_TEXT}"
+		printf '%s\n' "${PROBE_ERR_TEXT}" | while IFS= read -r line || [ -n "${line}" ]; do
+			printf '# stderr: %s\n' "${line}"
+		done
 	fi
 }
 
