@@ -178,6 +178,7 @@ def format_report(
     file_ops: int,
     scan_dir: str = ".",
     warn_threshold: float = 50,
+    min_ops_for_warning: int = 5,
 ) -> str:
     """Return a markdown-formatted efficiency report."""
     total_serena = sum(serena_counts.values())
@@ -229,7 +230,15 @@ def format_report(
         )
         lines.append("")
 
-    if efficiency == 0:
+    if total_ops < min_ops_for_warning:
+        # Adoption rate is denominator-driven; on no-op or tiny iterations
+        # (e.g. single-line follow-ups in a converged autofix loop) the
+        # ratio is noise and the red-flag footer is misleading.  Skip
+        # both the "not used" and "below threshold" footers — the metrics
+        # table above is still emitted so downstream consumers can audit
+        # the raw counts.
+        pass
+    elif efficiency == 0:
         lines.append(
             "> Serena was not used this run. The LLM fell back to "
             "file-based operations (or Serena was unavailable)."
@@ -274,6 +283,17 @@ def main() -> None:
         default=50,
         help="Warn when Serena efficiency falls below this percentage (default: 50).",
     )
+    parser.add_argument(
+        "--min-ops-for-warning",
+        type=int,
+        default=5,
+        help=(
+            "Suppress the in-report adoption-warning footer and the "
+            "::warning:: stdout annotation when total tool ops is below "
+            "this count (default: 5).  Adoption rate is denominator-driven "
+            "and tiny-iteration noise should not be flagged."
+        ),
+    )
     args = parser.parse_args()
 
     serena_counts, file_ops = scan_directory(args.scan_dir)
@@ -288,6 +308,7 @@ def main() -> None:
         file_ops,
         scan_dir=args.scan_dir,
         warn_threshold=args.warn_threshold,
+        min_ops_for_warning=args.min_ops_for_warning,
     )
     total_serena = sum(serena_counts.values())
     total_ops = total_serena + file_ops
@@ -299,7 +320,7 @@ def main() -> None:
 
     # Also print to stdout for workflow logs
     print(report)
-    if total_ops >= 5 and efficiency < args.warn_threshold:
+    if total_ops >= max(args.min_ops_for_warning, 5) and efficiency < args.warn_threshold:
         print(
             "::warning::Serena MCP adoption is below threshold "
             f"({file_ops} file-based fallback ops vs {total_serena} Serena tool calls; "

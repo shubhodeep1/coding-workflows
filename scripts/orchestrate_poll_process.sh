@@ -810,6 +810,22 @@ if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_REC
   MAX_STALL_RECOVERIES_PER_ISSUE="5"
 fi
 
+# Phase-specific stall recovery cap for ai:done.
+#
+# Each ai:done "recovery" dispatches a fresh review-autofix run that itself
+# takes ≥10 min, so the global 5× cap can hard-close a PR after ~25 minutes
+# of cron ticks even when the autofix loop is making real progress.  The
+# legitimate stall reason for ai:done is "PR not merging" — escalate via
+# the ladder (retrigger_review → escalate_human) rather than terminating
+# with skip.  Set MAX_STALL_RECOVERIES_DONE to a small value (e.g. 2) to
+# reach escalate_human quickly, or leave at the high default to let the
+# ladder run indefinitely until the PR resolves.
+MAX_STALL_RECOVERIES_DONE="${MAX_STALL_RECOVERIES_DONE:-99}"
+if ! [[ "${MAX_STALL_RECOVERIES_DONE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_RECOVERIES_DONE}" -lt 1 ]; then
+  echo "::warning::MAX_STALL_RECOVERIES_DONE must be a positive integer; defaulting to 99 (skip-disabled for ai:done)"
+  MAX_STALL_RECOVERIES_DONE="99"
+fi
+
 # Stall judge trigger configuration
 STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-2}"
 if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 1 ]; then
@@ -4795,7 +4811,7 @@ recovery_action_for_phase() {
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_stall_recovery_action
@@ -4804,11 +4820,13 @@ phase = sys.argv[1]
 recovery_count = int(sys.argv[2])
 max_recoveries = int(sys.argv[3])
 enable_human_terminalization = sys.argv[4].lower() == "true"
+max_done = int(sys.argv[5])
 print(resolve_stall_recovery_action(
     phase,
     recovery_count,
     max_recoveries=max_recoveries,
     enable_stall_human_terminalization=enable_human_terminalization,
+    max_recoveries_by_phase={"ai:done": max_done},
 ))
 PY
 )" || true
@@ -4825,7 +4843,7 @@ normalize_stall_recovery_action() {
   local candidate_action="${3:-}"
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_effective_stall_recovery_action
@@ -4835,12 +4853,14 @@ recovery_count = int(sys.argv[2])
 candidate_action = sys.argv[3]
 max_recoveries = int(sys.argv[4])
 enable_human_terminalization = sys.argv[5].lower() == "true"
+max_done = int(sys.argv[6])
 print(resolve_effective_stall_recovery_action(
     phase,
     recovery_count,
     candidate_action,
     max_recoveries=max_recoveries,
     enable_stall_human_terminalization=enable_human_terminalization,
+    max_recoveries_by_phase={"ai:done": max_done},
 ))
 PY
 )" || true
@@ -5247,6 +5267,65 @@ REISSUE_EOF
       ;;
 
     skip)
+      # Healthy-PR guard.  Before hard-closing the linked PR (which is
+      # destructive — once closed, the autofix loop cannot recover and
+      # the issue is permanently terminated), check whether the linked
+      # PR has produced productive autofix activity recently.  If yes,
+      # the stall is almost certainly downstream of the linked PR (e.g.
+      # one rb_judge LLM call failed) rather than the PR itself being
+      # stuck, so route to dispatch_rb_judge — which is already a
+      # defined ladder rung — instead of skip.
+      #
+      # "Productive activity" = at least one `[ai-autofix]` or
+      # `[judge-fix]` commit on the PR head within the last
+      # SKIP_HEALTHY_PR_LOOKBACK_HOURS (default 24h).  Disable by
+      # setting SKIP_HEALTHY_PR_GUARD_ENABLED=false.
+      local _skip_pr_num=""
+      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
+        _skip_pr_num="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" \
+          | jq -r --arg n "${issue_num}" '.[$n].number // empty' 2>/dev/null || echo "")"
+      fi
+      if ! [[ "${_skip_pr_num}" =~ ^[0-9]+$ ]]; then
+        _skip_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      fi
+      if [ "${SKIP_HEALTHY_PR_GUARD_ENABLED:-true}" = "true" ] \
+          && [[ "${_skip_pr_num}" =~ ^[0-9]+$ ]]; then
+        local _skip_lookback_hours="${SKIP_HEALTHY_PR_LOOKBACK_HOURS:-24}"
+        if ! [[ "${_skip_lookback_hours}" =~ ^[0-9]+$ ]] || [ "${_skip_lookback_hours}" -lt 1 ]; then
+          _skip_lookback_hours=24
+        fi
+        local _skip_since_iso
+        _skip_since_iso="$(date -u -d "${_skip_lookback_hours} hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+          || date -u -v-"${_skip_lookback_hours}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+          || echo "")"
+        local _skip_commits_json
+        _skip_commits_json="$(gh_retry gh api --paginate \
+          "repos/${GITHUB_REPOSITORY}/pulls/${_skip_pr_num}/commits?per_page=100" \
+          2>/dev/null | jq -s 'add // []' 2>/dev/null || echo '[]')"
+        local _skip_recent_autofix
+        _skip_recent_autofix="$(printf '%s' "${_skip_commits_json}" | jq --arg since "${_skip_since_iso}" '
+          [ .[]?
+            | select(($since == "") or ((.commit.committer.date // "") >= $since))
+            | (.commit.message // "")
+            | select(test("^\\[ai-autofix\\]|^\\[judge-fix\\]"))
+          ] | length
+        ' 2>/dev/null || echo 0)"
+        if [[ "${_skip_recent_autofix}" =~ ^[0-9]+$ ]] && [ "${_skip_recent_autofix}" -gt 0 ]; then
+          echo "  skip→dispatch_rb_judge: PR #${_skip_pr_num} has ${_skip_recent_autofix} productive autofix commit(s) in the last ${_skip_lookback_hours}h; routing to dispatch_rb_judge instead of hard-closing."
+          tg_notify "Stall recovery: deferring skip for issue #${issue_num} — linked PR #${_skip_pr_num} has ${_skip_recent_autofix} productive autofix commit(s) in last ${_skip_lookback_hours}h; routing to dispatch_rb_judge."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_skip_pr_num}")" "WARNING"
+          local _skip_redirect_rc=0
+          _dispatch_rb_judge_for_pr "${_skip_pr_num}" || _skip_redirect_rc=$?
+          if [ "${_skip_redirect_rc}" -eq 1 ]; then
+            return 1
+          fi
+          if [ "${_skip_redirect_rc}" -eq 2 ]; then
+            return 0
+          fi
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          return 0
+        fi
+      fi
+
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
       close_linked_pr "${issue_num}" \
         "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
