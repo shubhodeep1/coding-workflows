@@ -102,7 +102,7 @@ trailing_nl = "\n" if raw.endswith("\n") else ""
 with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(stripped))
     if stripped:
-        handle.write(trailing_nl or "\n")
+        handle.write(trailing_nl)
 PY
 }
 

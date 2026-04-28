@@ -10027,20 +10027,29 @@ ${RB_FIX_DESC}
         IF_DEFER_SIGNATURE="${IF_BLOCKER_STATUS_SUMMARY}|${IF_DEFER_REASON}"
         IF_PREV_SIGNATURE="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
         IF_PREV_COUNT="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+        IF_PREV_ESCALATED="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].escalated // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
         [[ "${IF_PREV_COUNT}" =~ ^[0-9]+$ ]] || IF_PREV_COUNT=0
         if [ "${IF_DEFER_SIGNATURE}" = "${IF_PREV_SIGNATURE}" ]; then
           IF_DEFER_COUNT=$((IF_PREV_COUNT + 1))
+          IF_ESCALATED_FLAG="${IF_PREV_ESCALATED}"
         else
           IF_DEFER_COUNT=1
+          # Signature changed — fresh defer window, reset the escalation flag.
+          IF_ESCALATED_FLAG="false"
         fi
-        jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" '
+        IF_SHOULD_ESCALATE="false"
+        if [ "${IF_DEFER_COUNT}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ] && [ "${IF_ESCALATED_FLAG}" != "true" ]; then
+          IF_SHOULD_ESCALATE="true"
+          IF_ESCALATED_FLAG="true"
+        fi
+        jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
           .implementation_failed_defer_state //= {}
-          | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count}
+          | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count, escalated: $escalated}
         ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         IMPL_FAILED_STATE_CHANGED=true
 
-        echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; blockers=${IF_BLOCKERS_CSV}; statuses=${IF_BLOCKER_STATUS_SUMMARY}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}."
-        if [ "${IF_DEFER_COUNT}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ]; then
+        echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; blockers=${IF_BLOCKERS_CSV}; statuses=${IF_BLOCKER_STATUS_SUMMARY}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${IF_ESCALATED_FLAG}."
+        if [ "${IF_SHOULD_ESCALATE}" = "true" ]; then
           ensure_label_exists "ai:needs-human"
           gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments" \
@@ -10055,20 +10064,28 @@ ${RB_FIX_DESC}
       IF_DEFER_SIGNATURE="|${IF_DEFER_REASON}"
       IF_PREV_SIGNATURE="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
       IF_PREV_COUNT="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      IF_PREV_ESCALATED="$(jq -r --arg key "${if_issue}" '.implementation_failed_defer_state[$key].escalated // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
       [[ "${IF_PREV_COUNT}" =~ ^[0-9]+$ ]] || IF_PREV_COUNT=0
       if [ "${IF_DEFER_SIGNATURE}" = "${IF_PREV_SIGNATURE}" ]; then
         IF_DEFER_COUNT=$((IF_PREV_COUNT + 1))
+        IF_ESCALATED_FLAG="${IF_PREV_ESCALATED}"
       else
         IF_DEFER_COUNT=1
+        IF_ESCALATED_FLAG="false"
       fi
-      jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" '
+      IF_SHOULD_ESCALATE="false"
+      if [ "${IF_DEFER_COUNT}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ] && [ "${IF_ESCALATED_FLAG}" != "true" ]; then
+        IF_SHOULD_ESCALATE="true"
+        IF_ESCALATED_FLAG="true"
+      fi
+      jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
         .implementation_failed_defer_state //= {}
-        | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count}
+        | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count, escalated: $escalated}
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       IMPL_FAILED_STATE_CHANGED=true
 
-      echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}."
-      if [ "${IF_DEFER_COUNT}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ]; then
+      echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${IF_ESCALATED_FLAG}."
+      if [ "${IF_SHOULD_ESCALATE}" = "true" ]; then
         ensure_label_exists "ai:needs-human"
         gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments" \
