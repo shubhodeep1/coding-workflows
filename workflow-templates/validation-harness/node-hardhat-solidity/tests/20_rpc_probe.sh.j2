@@ -11,6 +11,19 @@ echo "1..1"
 echo "ok 1 - rpc probe eth_blockNumber returns non-empty string .result # SKIP manifest selects in-process Hardhat network (HARDHAT_NETWORK=hardhat)"
 exit 0
 {%- else -%}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Surface manifest-level env_overrides (APP_SERVICE, RPC_URL, ...) in the
+# harness host shell so service selection and diagnostics use the manifest
+# values instead of stale host-shell defaults.
+if [ -f "${ROOT_DIR}/validate.env" ]; then
+	set -a
+	# shellcheck disable=SC1091
+	. "${ROOT_DIR}/validate.env"
+	set +a
+fi
+
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
 RPC_URL="${RPC_URL:-http://anvil:${ANVIL_PORT:-8545}}"
@@ -24,8 +37,11 @@ PROBE_OUT="${PROBE_TMP_DIR}/out"
 PROBE_ERR="${PROBE_TMP_DIR}/err"
 
 set +e
+# The container env (compose env_file + environment) already carries the
+# manifest-provided RPC_URL; do not re-export it from the harness host shell
+# with `docker compose exec -e RPC_URL=...`, because that would silently
+# clobber the manifest override with the host-shell fallback.
 docker compose -f "${COMPOSE_FILE}" exec -T \
-	-e RPC_URL="${RPC_URL}" \
 	-e RPC_PAYLOAD="${RPC_PAYLOAD}" \
 	"${APP_SERVICE}" /bin/sh -c '
 		set -u

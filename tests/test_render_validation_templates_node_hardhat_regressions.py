@@ -455,6 +455,32 @@ def test_rpc_probe_stderr_diagnostics_prefix_every_line() -> None:
         assert "printf '# stderr: %s\\n' \"${line}\"" in rpc_probe, rpc_probe
 
 
+def test_rpc_probe_does_not_clobber_container_env_with_host_shell_values() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        non_comment_lines = "\n".join(
+            line for line in rpc_probe.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        # `docker compose exec -T -e RPC_URL=...` re-exports the harness host
+        # shell value (which falls back to a default) into the container and
+        # silently overrides the manifest-provided container env. The probe
+        # must rely on the container env (set via env_file + compose
+        # environment) for RPC_URL instead.
+        assert "-e RPC_URL" not in non_comment_lines, non_comment_lines
+        # The probe must source validate.env so APP_SERVICE / RPC_URL service
+        # selection and diagnostics reflect the manifest-provided values.
+        assert '"${ROOT_DIR}/validate.env"' in rpc_probe, rpc_probe
+
+
 def main() -> int:
     tests = [func for name, func in sorted(globals().items()) if name.startswith("test_")]
     failures = 0
