@@ -121,16 +121,19 @@ ensure_implement_fixup_labels() {
   fi
 }
 
-# Race window: GitHub's jobs API may not yet have populated step
-# conclusions when this script runs immediately after a failure.
-# Retry a few times before falling back to "unknown-step" so the
-# diagnose prompt gets a real step name.
+# Race window: GitHub's jobs API may briefly return valid JSON whose
+# step conclusions are still null/in_progress immediately after a
+# failure. In that case retry up to 3× so diagnose gets a real step
+# name. Empty/invalid responses are treated as terminal — they will
+# not become parseable on retry, so we let the unknown-step fallback
+# handle them rather than burning extra API calls.
 FAILED_STEP_JOBS_JSON=""
 FAILED_STEP_NAME=""
 for _attempt in 1 2 3; do
   FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
-  if [ -z "${FAILED_STEP_JOBS_JSON}" ]; then
+  if ! printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1; then
     FAILED_STEP_JOBS_JSON='{"jobs":[]}'
+    break
   fi
   FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
     [.jobs[].steps[]

@@ -2554,19 +2554,24 @@ jobs:
           fi
 
           # Race window: when this step runs, the GitHub jobs API can
-          # briefly return all step conclusions as null/in_progress
-          # before the failing step is finalised. Retry a few times so
-          # diagnose downstream gets a real step name instead of
-          # falling through to "unknown-step".
+          # briefly return valid JSON whose step conclusions are still
+          # null/in_progress before the failing step is finalised. In
+          # that case retry up to 3× so diagnose downstream gets a real
+          # step name instead of falling through to "unknown-step".
+          # Empty/invalid responses are treated as terminal — the API
+          # is not going to start returning valid JSON on retry, so we
+          # avoid burning extra calls and let the unknown-step
+          # fallback handle them.
           FAILED_STEP_NAME=""
           RUN_JOBS_JSON=""
           for _attempt in 1 2 3; do
             RUN_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" || true)"
-            if [ -n "${RUN_JOBS_JSON}" ]; then
-              FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
-              if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
-                FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' 2>/dev/null || true)"
-              fi
+            if ! printf '%s' "${RUN_JOBS_JSON}" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1; then
+              break
+            fi
+            FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
+            if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
+              FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' 2>/dev/null || true)"
             fi
             [ -n "${FAILED_STEP_NAME}" ] && break
             [ "${_attempt}" -lt 3 ] && sleep 4 || true
