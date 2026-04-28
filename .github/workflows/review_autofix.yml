@@ -660,15 +660,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
-      # cancel-in-progress: false → new runs queue behind the running peer
-      # instead of cancelling it. If another run is already pending in this
-      # group, GitHub replaces that older pending run with the newest one.
-      # This keeps bursts near "current run + newest queued run" while
-      # avoiding the long trail of cancelled in-progress runs that
-      # cancel-in-progress: true caused. Hung runs are still bounded by the
-      # timeout-minutes above.
-      group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
-      cancel-in-progress: false
+      # Two cancellation regimes, keyed off needs.gate.outputs.claude_branch_review:
+      #
+      #   * Non-claude branches (regular PR autofix): cancel-in-progress=false.
+      #     New runs queue behind the running peer instead of cancelling it.
+      #     If another run is already pending in this group, GitHub replaces
+      #     that older pending run with the newest one. This keeps bursts
+      #     near "current run + newest queued run" while avoiding the long
+      #     trail of cancelled in-progress runs that cancel-in-progress=true
+      #     used to cause. Hung runs are bounded by the timeout-minutes above.
+      #
+      #   * claude/** branches (claude_branch_review mode): cancel-in-progress=true.
+      #     A claude/** branch is being actively edited by an operator, so a
+      #     new commit means the in-flight reviewer panel is reviewing stale
+      #     code and its consensus comment will land on a superseded SHA.
+      #     Cancel the prior run on every new push so the latest commit gets
+      #     a fresh review instead of waiting through a queued run that's
+      #     about to be redone anyway.
+      #
+      # Group key fallback to inputs.head_ref_override covers the no-PR
+      # claude-branch push path (review-claude-branch-push in
+      # internal-review.yml): PR_NUMBER is empty and inputs.pr_number is "",
+      # so without the head_ref_override fallback the group would collapse
+      # to github.run_id (unique per run) and cancel-in-progress could never
+      # match a prior run on the same branch. Using the branch name keeps
+      # the group stable across commits to the same claude/** branch.
+      group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || inputs.head_ref_override || github.run_id }}
+      cancel-in-progress: ${{ needs.gate.outputs.claude_branch_review == 'true' }}
     if: ${{ needs.gate.outputs.should_run == 'true' }}
 
     env:
