@@ -469,3 +469,95 @@ Ordered by end-to-end impact across `clarify -> plan -> implement -> review/auto
 | shubhodeep1/coding-workflows | 25051822983 | logs | `gh: Not Found (HTTP 404)` |
 
 If you want, I can turn this into a **ranked remediation checklist** with owner/team suggestions and a **1-week implementation plan**.
+
+## Deep Audit — Workflows & Scripts (2026-04-28)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — BUG-001  
+  **File path** — `.github/workflows/review_autofix.yml:2600-2626`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))  
+  **Severity** — High  
+  **Category tag** — `bug`  
+  **Description** — The review gate does a direct `gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"` lookup, but if that call yields no data, `pr_state` stays empty and the gate sets `SHOULD_RUN="false"` with `SKIP_REASON="pr_state_unknown"`. Because this fetch is not wrapped in `gh_retry` and the failure path is “skip the workflow” rather than “run without deterministic metadata,” a transient GitHub API failure can suppress the entire review/autofix pass for a valid PR. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))  
+  **Recommended fix** — Route the PR metadata fetch through `gh_retry` / `_safe_gh_jq` from `scripts/gh_helpers.sh`, and on exhausted failure fail open into the full review path while disabling only the deterministic-skip branches that depend on labels/additions/deletions. Do not let metadata lookup failure zero out the whole review run. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+
+- **ID** — BUG-002  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:3171-3282`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/test-and-mark-stable.yml))  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The step named **“Phase 3b: Wait for PR creation (implement phase)”** waits for “PR creation,” but the implementation shown here establishes a grace timer and then defines `capture_run_id()` around `GET /actions/runs?per_page=100&created=>...`, i.e. it infers success from workflow-run discovery rather than from the PR object itself. That makes the waiter sensitive to Actions indexing lag and workflow-name matching instead of the deterministic head/base PR state the phase is actually waiting on. [NEEDS VERIFICATION] ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/test-and-mark-stable.yml))  
+  **Recommended fix** — Make PR existence the primary readiness signal: poll a targeted PR lookup (`gh pr list --head ... --json number,state,url` or a GraphQL PR query) once per loop, and only inspect workflow-run state after the PR is known to exist. Keep the workflow-run search as a secondary diagnostic, not the gate. [NEEDS VERIFICATION] ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/test-and-mark-stable.yml))
+
+- **ID** — BUG-003  
+  **File path** — `scripts/review_run_reviewers.sh:3730-3745`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_run_reviewers.sh))  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The reviewer watchdog resolves PR state with `gh_retry gh api ... --jq '.state' | grep ... || echo "open"`. Any API failure, parse mismatch, or unexpected state therefore collapses to `"open"`, which means the watchdog keeps the reviewer process running even when PR state is actually unknown or already closed. In this code path, transport failure is indistinguishable from a healthy open PR. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_run_reviewers.sh))  
+  **Recommended fix** — Split “open,” “closed,” and “unknown” into distinct states. On API/parsing failure, mark the PR state unknown and terminate or degrade the reviewer pass explicitly instead of defaulting to open. If a fail-open policy is required, log a separate sentinel so stale reviewer runs are still auditable. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_run_reviewers.sh))
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — API-001  
+  **File path** — `.github/workflows/implement.yml:3209-3230`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/implement.yml))  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — This step already has `APPROVAL_COMMENT_ID`, but it still retries `gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100"` up to 5 times and scans the full issue-comment array with `jq any(...)`. **Current call count:** up to 5 paginated list sequences per run, and each sequence can expand to multiple REST calls on long issues. **Proposed call count:** 1 direct `GET /repos/{repo}/issues/comments/{APPROVAL_COMMENT_ID}` call. This is unnecessary list-fetching on a code path that already knows the exact record ID. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/implement.yml))  
+  **Recommended fix** — Add a tiny direct-comment helper to `scripts/gh_helpers.sh`, e.g. `fetch_issue_comment_by_id <repo> <comment_id>`, implemented with the existing `gh_retry` wrapper. Update this step to validate the returned single comment instead of paginating the whole thread. **Batching pattern to extend:** none needed; this should be a direct-ID fetch layered on top of `gh_retry`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/implement.yml))
+
+- **ID** — API-002  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:3232-3282`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/test-and-mark-stable.yml))  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — `capture_run_id()` performs a 5-attempt burst against `GET /actions/runs?per_page=100&created=>...`, sleeping 2 seconds between attempts. **Current call count:** 5 list calls per `capture_run_id()` invocation before the outer waiter advances. **Proposed call count:** 1 targeted PR lookup per loop cycle, cached for the rest of the cycle. This is a review-blocker-style polling pattern because it repeatedly lists recent workflow runs to infer a PR-side state change that should be queried directly. [NEEDS VERIFICATION] ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/test-and-mark-stable.yml))  
+  **Recommended fix** — Replace the burst polling with a cached PR lookup helper in `scripts/gh_helpers.sh`. If the phase truly needs multi-entity state, follow CLAUDE.md §15’s documented batched/cached GraphQL pattern (`_fetch_linked_pr_status_graphql`) rather than repeatedly listing recent Actions runs. **Batching pattern to extend:** the aliased GraphQL + cycle-local cache guidance called out in `codex_system_instructions.md` §14. [NEEDS VERIFICATION] ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/test-and-mark-stable.yml))
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — DUP-001  
+  **File path** — `.github/workflows/issue_pr_status.yml:1768-1800`; `.github/workflows/review_autofix.yml:3100-3119`; `.github/workflows/review_autofix.yml:3319-3350`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Linked-issue resolution is implemented at least three times with diverging semantics: `issue_pr_status.yml` does `closingIssuesReferences` and then a closing-keyword/body fallback; `review_autofix.yml`’s post-merge validate dispatch also falls back to body/title parsing; `review_autofix.yml`’s deterministic-skip path intentionally forbids regex fallback and stays GraphQL-only. The duplication has already drifted into different contracts, so future bug fixes to issue-link resolution will be easy to apply inconsistently. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Recommended fix** — Move this into one shared helper module, preferably `scripts/gh_helpers.sh` or `scripts/label_helpers.sh`, with a signature like `resolve_linked_issue_numbers <repo> <pr_number> <mode>`, where `<mode>` is `graphql_only` or `graphql_or_keyword_fallback`. Update callers in `issue_pr_status.yml`, `review_autofix.yml` post-merge validate dispatch, and `review_autofix.yml` deterministic-skip-merge to use that single helper. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))
+
+- **ID** — DUP-002  
+  **File path** — `.github/workflows/issue_pr_status.yml:1764-1766`; `.github/workflows/implement.yml:3252-3254`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Both workflows silently do `source scripts/gh_helpers.sh 2>/dev/null || true` and then define a local no-op `gh_retry() { "$@"; }` fallback if sourcing fails. That duplicates bootstrap logic and creates contract drift: code that appears to be using the repo’s rate-limit-aware retry helper may actually run raw `gh` calls with no helper semantics at all. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Recommended fix** — Centralize this into a single bootstrap helper, e.g. `scripts/require_gh_helpers.sh` or `ensure_gh_retry`, and stop shadowing `gh_retry` inside workflows. For workflows that require retry semantics for correctness, hard-fail if the helper cannot be sourced; for fail-open workflows, emit an explicit degraded-mode marker instead of silently substituting a no-op. Callers to update: at least `implement.yml` and `issue_pr_status.yml`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- No new Medium/High-risk `${{ }}` blocks were confirmable from the current hot-path excerpts without local measurement. The largest inspected workflow files remain below GitHub’s 1 MB workflow-file ceiling: `.github/workflows/review_autofix.yml` is 252 KB and `.github/workflows/test-and-mark-stable.yml` is 152 KB. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+- The in-progress report already records the historical expression-limit hotspots in `review_autofix.yml` and `orchestrate_poll_process.sh`; from the current excerpts, those prior hotspots appear to have been moved out of the worst inline positions rather than left untouched.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — CONSIST-001  
+  **File path** — `.github/workflows/review_autofix.yml:2764-2768`; `agents.md:796-798`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))  
+  **Severity** — Low  
+  **Category tag** — `consistency`  
+  **Description** — The self-triggered-autofix comment in `review_autofix.yml` says the orchestrator stall cron re-kicks autofix “every 30 min” with a 30-minute worst-case window, but `agents.md` documents `internal-orchestrate-poll.yml` at `*/5 * * * *` with a 5-minute worst-case recovery window. That leaves operators with materially different expectations depending on whether they read the workflow or the repo instructions. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))  
+  **Recommended fix** — Update the workflow comment to match the current 5-minute cadence, or better, point both docs and comments at one source-of-truth constant/documented schedule so cron changes cannot drift operational guidance again. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/review_autofix.yml))
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 6 | BUG-002, BUG-003, API-001, API-002, DUP-001, DUP-002 |
+| Low | 1 | CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1 | Small |
+| API call optimization | 2-3 | Small |
+| Code modularization | 3 | Medium |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 4-5 | Small |
