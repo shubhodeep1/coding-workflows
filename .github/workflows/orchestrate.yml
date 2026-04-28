@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.125.0' }}"
+          CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
           npm install -g "@openai/codex@${CODEX_VERSION}" --include=optional --no-audit --no-fund
 
           missing_tools=()

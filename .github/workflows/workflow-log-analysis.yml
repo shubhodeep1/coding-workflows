@@ -176,7 +176,7 @@ jobs:
       report_file: ${{ steps.analyze.outputs.report_file }}
       analysis_status: ${{ steps.analyze.outputs.analysis_status }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.125.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -194,7 +194,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.125.0' }}
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -599,7 +599,7 @@ jobs:
     outputs:
       audit_status: ${{ steps.audit.outputs.audit_status }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.125.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -617,7 +617,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.125.0' }}
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -915,7 +915,7 @@ jobs:
     outputs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.125.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -933,7 +933,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.125.0' }}
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'

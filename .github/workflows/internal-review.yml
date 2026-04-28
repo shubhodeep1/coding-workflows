@@ -32,6 +32,23 @@ permissions:
   pull-requests: write
   issues: write
 
+# De-duplicate review runs on the same branch. A push to claude/** and
+# a pull_request:opened/synchronize event for the same head ref would
+# otherwise both spawn a `codex-agent (claude-branch-review)` run on
+# the same commit (the `resolve-claude-branch-pr` PR-existence check
+# is evaluated at push time, so it can't see a PR opened a few seconds
+# later — see the open-then-push race documented in PR #1729). Group
+# by head branch (head_ref on PR events, ref_name on push) and cancel
+# the older run; the latest event wins, which is what reviewers want.
+#
+# workflow_dispatch is keyed separately on inputs.pr_number, because on
+# manual dispatch head_ref is empty and ref_name is the workflow's ref
+# (typically the default branch) — without a PR-scoped key, manual
+# re-triggers for different PRs would cancel each other.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && format('internal-review-dispatch-pr-{0}', github.event.inputs.pr_number) || format('internal-review-{0}', github.head_ref || github.ref_name) }}
+  cancel-in-progress: true
+
 jobs:
   review:
     if: ${{ github.event_name != 'push' && (github.event.action != 'closed' || github.event.pull_request.merged == true) }}
