@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The REST fallback classifies managed child issues as `TRACKING_ISSUES`, which can skip finalization during GraphQL/REST outages.\n  WHY: The fallback intentionally fails open conservatively, but that means managed children can be left stranded until another backstop catches them.\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Body-marker detection for `Managed by: AI Orchestrator` is sensitive to case and whitespace variations.\n  WHY: If the marker formatting differs, managed issues may be misdetected and miss the orchestrator-aware finalization path.\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The webhook-driven close path can race with `close_merged_issues_sweep` on the same issue.\n  WHY: Concurrent close/label handling may produce conflicting state transitions even if the close action itself is idempotent.\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Body-marker extraction is not validated before use.\n  WHY: Malformed or missing marker content could lead to incorrect classification or failed API calls.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=4\n  PROBLEM: The REST fallback conservatively defaults to `TRACKING_ISSUES`, so managed child issues can be misclassified during GraphQL/REST outages.\n  WHY: When lookup data is unavailable, the workflow may skip `FINAL_LABEL` application and close handling, leaving the issue stranded until a later sweep.\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=3\n  PROBLEM: Body-marker detection for `Managed by: AI Orchestrator` is case-sensitive and whitespace-sensitive.\n  WHY: Formatting variations in the marker can cause managed issues to be treated as standalone issues and miss the orchestrator-aware path.\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=3\n  PROBLEM: The webhook-driven close path can race with the orchestrator poller's `close_merged_issues_sweep`.\n  WHY: Both paths can act on the same issue concurrently, which can conflict around labeling and close transitions.\n- .github/workflows/issue_pr_status.yml:? | severity=medium | confidence=2\n  PROBLEM: There is no validation that body-marker extraction yields a valid issue number before use.\n  WHY: Malformed marker content could propagate invalid or empty data into classification or API calls.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1a4ca001c477021968ecc474b2c00e8e5aabf48441b0cdbdcb27f99f2188cc38",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1715,
+    "run_id": "25044026034",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25044026034",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428093627_3f28ca667e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1715,
+    "run_id": "25044026034"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-28T09:36:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
