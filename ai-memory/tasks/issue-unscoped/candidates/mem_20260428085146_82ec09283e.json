@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- Sandbox Infrastructure:N/A | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The review environment is blocked by `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`, so shell/file access is unavailable.\n  WHY: All three reviewers report that this prevents reading the diff/changed files and performing code inspection, making the review unverified.\n- .github/workflows/test-and-mark-stable.yml:N/A | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The bait-commit mechanism may be skipped by `AUTOFIX_SKIP_SELF_TRIGGERED`, so the follow-up synchronize event may never run.\n  WHY: Both reviewers say the bot-pushed bait commit can interact with the self-trigger gate and block the intended reviewer\u2192editor\u2192commit flow.\n- scripts/analyze_soft_errors.py:N/A | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Keyword-based soft-error log parsing may misclassify structured telemetry as failures.\n  WHY: Both reviewers note that JSON telemetry lines can contain the same keywords the analyzer uses, creating false positives.\n- .github/workflows/review_autofix.yml:N/A | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Expanding the reviewer set to six models with low reasoning may exhaust the summarizer\u2019s retry budget and hard-fail the workflow.\n  WHY: Both reviewers point to the larger review output volume as a runtime risk for the consensus summarizer.\n- .github/workflows/test-and-mark-stable.yml:N/A | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The default `ALT_EDITOR_MODEL=anthropic/claude-sonnet-4-6` may be an invalid or stale model slug.\n  WHY: Both reviewers flag the alt-model test as vulnerable if the configured OpenRouter model identifier no longer resolves.\n- .github/workflows/test-and-mark-stable.yml:N/A | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The cancel-on-PR-close smoke test may not account for `ENABLE_CLOSE_MERGED_ISSUES`.\n  WHY: Both reviewers note that disabling this environment variable could prevent the expected close/transition cascade.\n- Unspecified:N/A | severity=medium | confidence=3\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: `update_workflows` dispatch may conflict with wrapper pin policy.\n  WHY: The reviewer flags this as a plausible but unverified issue without code access.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Sandbox Infrastructure:N/A | severity=critical | confidence=5\n  PROBLEM: The execution environment is completely inaccessible because shell commands fail with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.\n  WHY: This blocks reading the diff, changed files, and any repository files, so the review cannot verify any code changes.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Critical Infrastructure Issue:N/A | confidence=5\n  PROBLEM: The sandbox configuration failure blocks all shell commands and file access.\n  WHY: The review cannot access the diff or repository files, so no code changes can be verified.\n- .github/workflows/test-and-mark-stable.yml:N/A | confidence=3\n  PROBLEM: The bait-commit mechanism may be skipped by `AUTOFIX_SKIP_SELF_TRIGGERED`.\n  WHY: A bot-pushed bait commit can trigger the self-trigger gate and prevent the synchronize event needed for the flow.\n- scripts/analyze_soft_errors.py:N/A | confidence=3\n  PROBLEM: The soft-error analyser\u2019s keyword parsing may misclassify structured telemetry as failures.\n  WHY: JSON telemetry lines can contain the same failure keywords the analyzer searches for, producing false positives.\n- .github/workflows/review_autofix.yml:N/A | confidence=3\n  PROBLEM: Using the full six-model reviewer list with low reasoning may cause the summariser to hard-fail.\n  WHY: The larger output volume can exhaust the summarizer\u2019s retry budget and fail the release gate.\n- .github/workflows/test-and-mark-stable.yml:N/A | confidence=2\n  PROBLEM: The default `ALT_EDITOR_MODEL=anthropic/claude-sonnet-4-6` may be stale or invalid.\n  WHY: If the OpenRouter slug no longer resolves, the alt-model E2E test will fail with model-not-found errors.\n- .github/workflows/test-and-mark-stable.yml:N/A | confidence=2\n  PROBLEM: The cancel-on-PR-close smoke test may not account for `ENABLE_CLOSE_MERGED_ISSUES`.\n  WHY: If that variable is disabled, the expected close/transition cascade may not happen.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- Review execution environment:N/A | severity=critical | confidence=5\n  PROBLEM: All shell commands fail with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.\n  WHY: The bubblewrap sandbox cannot set up loopback networking, which prevents reading the diff, changed-file lists, or any repository files.\n- .github/workflows/test-and-mark-stable.yml:N/A | confidence=3\n  PROBLEM: The bait-commit mechanism may be skipped by `AUTOFIX_SKIP_SELF_TRIGGERED`.\n  WHY: A self-triggered bot commit can cause the follow-up synchronize event to be skipped.\n- scripts/analyze_soft_errors.py:N/A | confidence=3\n  PROBLEM: The soft-error analyser\u2019s keyword parsing may misclassify structured telemetry as failures.\n  WHY: Structured `AI_MEMORY_TELEMETRY` JSON can contain the same keywords used for failure detection.\n- .github/workflows/test-and-mark-stable.yml:N/A | confidence=2\n  PROBLEM: The cancel-on-PR-close test may not account for `ENABLE_CLOSE_MERGED_ISSUES`.\n  WHY: If that environment variable is disabled, expected close/transition behavior may not occur.\n- Unspecified:N/A | confidence=3\n  PROBLEM: `update_workflows` dispatch vs wrapper pin policy may be inconsistent.\n  WHY: The reviewer marks this as plausible but unverified because code access is blocked.\n- .github/workflows/test-and-mark-stable.yml:N/A | confidence=2\n  PROBLEM: The default `ALT_EDITOR_MODEL=anthropic/claude-sonnet-4-6` may be stale or invalid.\n  WHY: The reviewer notes that model IDs change and a bad slug would fail the alt-model test.\n- .github/workflows/review_autofix.yml:N/A | confidence=3\n  PROBLEM: The six-model reviewer list with low reasoning may trigger a summariser hard-fail.\n  WHY: The reviewer says the larger output volume can exhaust the summarizer retry budget.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "afb9418eaa6da874feda297f0a05f2d081ebb2386b352c76547b4c9006ff2cc8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1712,
+    "run_id": "25042455440",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25042455440",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428085146_82ec09283e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1712,
+    "run_id": "25042455440"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 6 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T08:51:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
