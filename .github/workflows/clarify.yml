@@ -657,7 +657,8 @@ jobs:
           - Batch shell searches with && or ;.
           - When searching for multiple terms (e.g., game names, route patterns), batch
             into ONE shell rg call with alternation (rg 'term1|term2|term3') rather than
-            making separate Serena mcp__serena__find_file or mcp__serena__search_for_pattern calls per term.
+            making separate Serena MCP calls to mcp__serena__find_file or
+            mcp__serena__search_for_pattern for each term.
           - After a Serena search returns empty results, do NOT retry with a slightly
             different regex. Switch to shell rg with broader patterns instead.
           - Do NOT map the full implementation surface. Only inspect code to the extent
