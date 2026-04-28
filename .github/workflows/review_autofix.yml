@@ -657,6 +657,15 @@ jobs:
 
   codex-agent:
     needs: gate
+    # Display name surfaces the gate's claude_branch_review decision in the
+    # GitHub Checks UI. When the head ref is claude/**, the gate flips into
+    # review-only mode (reviewer panel + summariser + PR comment; no
+    # editor/commit/push/judge/auto-merge tail) — the suffix below makes
+    # that mode obvious from the check name without having to open the gate
+    # job logs. Job ID stays "codex-agent" so cross-references in
+    # internal-review.yml / status checks / required-checks rules don't
+    # break.
+    name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
