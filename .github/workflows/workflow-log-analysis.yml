@@ -28,9 +28,15 @@ on:
         required: false
         default: "0"
         type: string
+      alert_msg_level:
+        description: Override the Telegram alert threshold for this run. Set to SILENT when dispatched from the test-and-mark-stable smoke gate to avoid drowning the gate's combined notification in per-job alerts.
+        required: false
+        default: ""
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 permissions:
   contents: write
@@ -543,7 +549,7 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
 
@@ -878,7 +884,7 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
 
@@ -1192,7 +1198,7 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
 

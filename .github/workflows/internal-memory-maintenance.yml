@@ -3,10 +3,19 @@ name: "Internal: Memory Maintenance"
 on:
   schedule:
     - cron: "0 3 1 * *"  # 1st of each month at 03:00 UTC
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      alert_msg_level:
+        description: Override the Telegram alert threshold for this run. Set to SILENT when dispatched from the test-and-mark-stable smoke gate to avoid drowning the gate's combined notification in per-job alerts.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
+
+env:
+  ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 jobs:
   maintenance:

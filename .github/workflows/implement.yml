@@ -542,6 +542,21 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_ENV"
 
+      - name: Detect smoke test and silence Telegram alerts
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          # The test-and-mark-stable gate emits ONE combined pass/fail
+          # Telegram message at the end via raw curl. Suppress every
+          # per-phase alert from this implement run when the issue is
+          # the smoke-test fixture so the gate isn't drowned in
+          # start/progress/finish notifications. SILENT > CRITICAL so
+          # all callers' levels filter to no-op.
+          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+            echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
+            echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+          fi
+
       - name: Fetch issue comments
         if: env.SKIP_IMPLEMENT != 'true'
         env:
