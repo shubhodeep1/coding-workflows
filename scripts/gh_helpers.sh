@@ -205,12 +205,16 @@ _gh_ratelimit_tg_alert()
 
 	# Honour the global ALERT_MSG_LEVEL threshold the same way
 	# tg_helpers.sh::tg_send_msg does. This alert is WARNING level,
-	# so when the operator has configured ALERT_MSG_LEVEL=ERROR or
-	# CRITICAL the rate-limit alert is suppressed (no send, no pin
-	# update, cooldown window is not advanced).
+	# so when the operator has configured ALERT_MSG_LEVEL=ERROR,
+	# CRITICAL, or SILENT the rate-limit alert is suppressed (no
+	# send, no pin update, cooldown window is not advanced).
+	# SILENT (added with the test-and-mark-stable smoke-gate change)
+	# must be in the suppress list explicitly; the permissive default
+	# below would otherwise let SILENT through and the gate would
+	# still see rate-limit pings.
 	case "$(printf '%s' "${ALERT_MSG_LEVEL:-DEBUG}" | tr '[:lower:]' '[:upper:]')" in
 		DEBUG|WARNING) : ;;
-		ERROR|CRITICAL) return 0 ;;
+		ERROR|CRITICAL|SILENT) return 0 ;;
 		*) : ;;  # unknown value → match tg_helpers.sh permissive default
 	esac
 
