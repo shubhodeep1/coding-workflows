@@ -539,3 +539,76 @@ No rendered workflow inspected here crossed the 800 KB workflow-file threshold; 
 | Code modularization | 4 | Medium |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 3 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-04-28)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the duplicate calls meet the repo’s strict hygiene bar for immediate consolidation without changing semantics. `NEEDS_VERIFICATION` means overlap exists, but a human or follow-up analysis must confirm payload, fallback, and error-handling equivalence before implementation. `RISKY_SKIP` means the overlap is real but sits in retry/poll/auth/race-defence behavior where auto-merging or auto-removal is not safe.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — `issue_pr_status.yml` can collapse two GraphQL reads on the common linked-issue path
+- **Safety tag**: `NEEDS_VERIFICATION`
+- **File path and line ranges**:
+  - `.github/workflows/issue_pr_status.yml:1768-1777`
+  - `.github/workflows/issue_pr_status.yml:1948-1963` ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))
+- **Current call count**: 2 GraphQL calls on the common path where `closingIssuesReferences` resolves the linked issues.
+- **Proposed call count**: 1 GraphQL call on that common path; keep a reduced second fetch only if body/title fallback or branch parsing appends issue numbers not present in the original GraphQL payload.
+- **Endpoint(s)**: `POST /graphql` for both calls.
+- **Evidence**: The step first fetches linked issue numbers from `closingIssuesReferences`, then later rehydrates those same issue numbers with a second batched GraphQL query for labels/body. The overlap is structural, not incidental. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))
+
+  ```graphql
+  closingIssuesReferences(first: 50) { nodes { number } }
+  ```
+
+  ```graphql
+  issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }
+  ```
+- **Proposed fix**: Extend the first GraphQL query to request `nodes { number labels(first: 50) { nodes { name } } body }`, derive `ISSUE_NUMBERS`, `TRACKING_ISSUES`, and `MANAGED_ISSUES` from that one payload, and only fall back to the existing alias-batched issue query for issue numbers introduced later by PR body/title fallback or `ai/issue-*` branch parsing. Keep the batching style aligned with the repo’s aliased GraphQL helpers (`_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql`). ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))
+- **Safety rationale**: `NEEDS_VERIFICATION` because the merge is only semantics-preserving if every issue that reaches `ISSUE_NUMBERS` on the GraphQL-resolved path is covered by the enriched first payload; this step can still append extra issue numbers from body/title fallback and branch parsing before the second call. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))
+- **Downstream signal**: Verify three cases before changing code: (1) pure `closingIssuesReferences` resolution, (2) PR body/title fallback resolution, and (3) branch-derived `ai/issue-*` resolution; confirm that the merged payload yields identical `TRACKING_ISSUES`/`MANAGED_ISSUES` sets and that only fallback-added issue numbers still require the reduced second query.
+
+#### MERGE-002 — `review_rb_judge.sh` can batch linked-issue bodies into the existing linked-issue GraphQL fetch
+- **Safety tag**: `NEEDS_VERIFICATION`
+- **File path and line ranges**:
+  - `scripts/review_rb_judge.sh:1821-1831`
+  - `scripts/review_rb_judge.sh:1854-1858` ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_rb_judge.sh))
+- **Current call count**: `1 + N`, where 1 is the linked-issue GraphQL call and `N` is one REST `GET /issues/{number}` call per linked issue body fetch.
+- **Proposed call count**: 1 GraphQL call on the GraphQL-success path; retain REST fallback only for issue numbers introduced outside that query or if GraphQL body hydration proves incomplete.
+- **Endpoint(s)**:
+  - `POST /graphql`
+  - `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence**: The judge first fetches linked issue numbers via GraphQL, then loops over those same issue numbers and performs per-issue REST fetches just to read `.body`. That is exactly the “prefer batched GraphQL over per-item REST” pattern CLAUDE/codex instructions call out. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_rb_judge.sh))
+
+  ```graphql
+  closingIssuesReferences(first: 50) { nodes { number } }
+  ```
+
+  ```bash
+  BODY="$(_safe_gh_jq ... --jq '.body // ""' || echo "")"
+  ```
+- **Proposed fix**: Extend the existing linked-issue GraphQL query in `review_rb_judge.sh` to request `nodes { number body }`, seed `FIRST_ISSUE_BODY` from that response, and skip the per-issue REST body loop when the issue list came from GraphQL. If the script later falls back to non-GraphQL issue-number discovery, preserve the current `_safe_gh_jq` REST fallback for those cases. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_rb_judge.sh))
+- **Safety rationale**: `NEEDS_VERIFICATION` because this only stays correct if GraphQL node order and body availability match the current loop’s “first linked issue body wins” behavior, and because non-GraphQL issue-number fallback paths may still require the REST branch. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/scripts/review_rb_judge.sh))
+- **Downstream signal**: Verify that `closingIssuesReferences.nodes` exposes `body` in this schema, that the chosen first body matches current behavior across multi-issue PRs, and that any fallback-generated issue numbers still populate `FIRST_ISSUE_BODY` correctly before removing the per-issue REST fetches.
+
+### Redundant Re-Fetch (REUSE-###)
+No findings.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: SAFE_TO_MERGE — same deterministic-skip path already has the richer linked-issue payload, so the second GraphQL read is a strict subset reuse.
+- API-002: RISKY_SKIP — the redundant retry behavior is real, but `curl_gh_api` is shared retry infrastructure and should not be auto-changed without helper-level semantic review.
+- BATCH-001: RISKY_SKIP — the PR-state polling duplication is real, but it sits in watchdog/abort behavior where poll cadence, sentinel timing, and log contracts must be preserved exactly.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, MERGE-002 |
+| RISKY_SKIP | 0 | — |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
