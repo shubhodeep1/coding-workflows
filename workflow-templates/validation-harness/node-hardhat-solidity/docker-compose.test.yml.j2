@@ -1,3 +1,9 @@
+{%- set env_overrides = manifest.get('env_overrides', {}) or {} -%}
+{%- set _app_service_override = env_overrides.get('APP_SERVICE') -%}
+{%- set _rpc_url_override = env_overrides.get('RPC_URL') -%}
+{%- set _hardhat_network_override = env_overrides.get('HARDHAT_NETWORK') -%}
+{%- set _hardhat_test_cmd_override = env_overrides.get('HARDHAT_TEST_CMD') -%}
+{%- set _reserved_override_keys = ('APP_SERVICE', 'RPC_URL', 'HARDHAT_NETWORK', 'HARDHAT_TEST_CMD') -%}
 services:
   anvil:
     image: ghcr.io/foundry-rs/foundry:v1.3.1
@@ -22,10 +28,31 @@ services:
     env_file:
       - validate.env
     environment:
+{%- if _app_service_override is not none %}
+      APP_SERVICE: "{{ _app_service_override | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
       APP_SERVICE: "${APP_SERVICE:-app}"
+{%- endif %}
+{%- if _rpc_url_override is not none %}
+      RPC_URL: "{{ _rpc_url_override | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
       RPC_URL: "${RPC_URL:-http://anvil:${ANVIL_PORT:-8545}}"
+{%- endif %}
+{%- if _hardhat_network_override is not none %}
+      HARDHAT_NETWORK: "{{ _hardhat_network_override | string | trim | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
       HARDHAT_NETWORK: "${HARDHAT_NETWORK:-localhost}"
+{%- endif %}
+{%- if _hardhat_test_cmd_override is not none %}
+      HARDHAT_TEST_CMD: "{{ _hardhat_test_cmd_override | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
       HARDHAT_TEST_CMD: "${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"
+{%- endif %}
+{%- for key, value in env_overrides | dictsort %}
+{%- if key not in _reserved_override_keys %}
+      {{ key }}: "{{ value | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- endif %}
+{%- endfor %}
     depends_on:
       anvil:
         condition: service_healthy

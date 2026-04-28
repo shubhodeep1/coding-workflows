@@ -1,5 +1,28 @@
+{%- set env_overrides = manifest.get('env_overrides', {}) or {} -%}
+{%- set _hardhat_network = (env_overrides.get('HARDHAT_NETWORK') or '') | string | trim | lower -%}
+{%- set _skip_probe = _hardhat_network == 'hardhat' -%}
 #!/usr/bin/env bash
 set -euo pipefail
+
+{% if _skip_probe -%}
+# Manifest env_overrides selected the in-process Hardhat network; the harness
+# does not depend on an external JSON-RPC endpoint, so the RPC probe is skipped.
+echo "1..1"
+echo "ok 1 - rpc probe eth_blockNumber returns non-empty string .result # SKIP manifest selects in-process Hardhat network (HARDHAT_NETWORK=hardhat)"
+exit 0
+{%- else -%}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Surface manifest-level env_overrides (APP_SERVICE, RPC_URL, ...) in the
+# harness host shell so service selection and diagnostics use the manifest
+# values instead of stale host-shell defaults.
+if [ -f "${ROOT_DIR}/validate.env" ]; then
+	set -a
+	# shellcheck disable=SC1091
+	. "${ROOT_DIR}/validate.env"
+	set +a
+fi
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
@@ -8,27 +31,69 @@ RPC_PAYLOAD='{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
 echo "1..1"
 
-RESP="$(docker compose -f "${COMPOSE_FILE}" exec -T \
-	-e RPC_URL="${RPC_URL}" \
+PROBE_TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${PROBE_TMP_DIR}"' EXIT
+PROBE_OUT="${PROBE_TMP_DIR}/out"
+PROBE_ERR="${PROBE_TMP_DIR}/err"
+
+set +e
+# The container env (compose env_file + environment) already carries the
+# manifest-provided RPC_URL; do not re-export it from the harness host shell
+# with `docker compose exec -e RPC_URL=...`, because that would silently
+# clobber the manifest override with the host-shell fallback.
+docker compose -f "${COMPOSE_FILE}" exec -T \
 	-e RPC_PAYLOAD="${RPC_PAYLOAD}" \
-	"${APP_SERVICE}" /bin/sh -c 'curl -fsS --max-time 10 -H "Content-Type: application/json" --data "${RPC_PAYLOAD}" "${RPC_URL}" 2>/dev/null' || true)"
+	"${APP_SERVICE}" /bin/sh -c '
+		set -u
+		set +e
+		curl -fsS --max-time 10 \
+			-H "Content-Type: application/json" \
+			--data "${RPC_PAYLOAD}" \
+			"${RPC_URL}"
+		curl_rc=$?
+		printf "\n##CURL_EXIT=%s\n" "${curl_rc}"
+		exit 0
+	' >"${PROBE_OUT}" 2>"${PROBE_ERR}"
+DOCKER_EXEC_RC=$?
+set -e
+
+CURL_EXIT="$(awk -F= '/^##CURL_EXIT=/{print $2}' "${PROBE_OUT}" | tail -n 1)"
+RESP="$(sed '/^##CURL_EXIT=/d' "${PROBE_OUT}")"
+PROBE_ERR_TEXT="$(cat "${PROBE_ERR}" 2>/dev/null || true)"
+
+emit_failure_diagnostics() {
+	echo "# rpc probe target: ${RPC_URL}"
+	echo "# docker compose exec rc: ${DOCKER_EXEC_RC}"
+	if [ -n "${CURL_EXIT}" ]; then
+		echo "# curl exit: ${CURL_EXIT}"
+	fi
+	if [ -n "${PROBE_ERR_TEXT}" ]; then
+		printf '%s\n' "${PROBE_ERR_TEXT}" | while IFS= read -r line || [ -n "${line}" ]; do
+			printf '# stderr: %s\n' "${line}"
+		done
+	fi
+}
 
 if [ -z "${RESP}" ]; then
 	echo "not ok 1 - rpc probe eth_blockNumber returns non-empty string .result"
 	echo "# empty response from ${RPC_URL}"
+	emit_failure_diagnostics
 	exit 1
 fi
 
 if ! printf '%s' "${RESP}" | jq -e 'type == "object"' >/dev/null 2>&1; then
 	echo "not ok 1 - rpc probe eth_blockNumber returns non-empty string .result"
 	echo "# response is not a JSON object: ${RESP}"
+	emit_failure_diagnostics
 	exit 1
 fi
 
 if ! printf '%s' "${RESP}" | jq -e 'has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)' >/dev/null 2>&1; then
 	echo "not ok 1 - rpc probe eth_blockNumber returns non-empty string .result"
 	echo "# missing non-empty string .result field: ${RESP}"
+	emit_failure_diagnostics
 	exit 1
 fi
 
 echo "ok 1 - rpc probe eth_blockNumber returns non-empty string .result"
+{%- endif %}

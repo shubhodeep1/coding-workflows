@@ -194,6 +194,377 @@ def test_compose_dockerfile_path_tracks_output_root_name() -> None:
         assert "dockerfile: custom-output/Dockerfile.app" in compose_text
 
 
+def test_env_overrides_propagate_into_validate_env_and_compose() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        payload["env_overrides"] = {
+            "CI": "true",
+            "HARDHAT_NETWORK": "hardhat",
+            "HARDHAT_TEST_CMD": "npx hardhat test",
+            "RPC_URL_ETHEREUM": "https://example.invalid/eth",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+        assert 'CI="true"' in env_text, env_text
+        assert 'HARDHAT_NETWORK="hardhat"' in env_text, env_text
+        assert 'HARDHAT_TEST_CMD="npx hardhat test"' in env_text, env_text
+        assert 'RPC_URL_ETHEREUM="https://example.invalid/eth"' in env_text, env_text
+        for line in env_text.splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            assert '="' in line and line.endswith('"'), f"unquoted validate.env line: {line}"
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # Manifest overrides must beat the compose host-shell fallbacks. When the
+        # manifest sets an override, the compose `environment:` block must carry
+        # the literal override value (not a `${VAR:-default}` interpolation that
+        # depends on the harness host shell).
+        assert 'HARDHAT_NETWORK: "hardhat"' in compose_text, compose_text
+        assert 'HARDHAT_TEST_CMD: "npx hardhat test"' in compose_text, compose_text
+        assert 'CI: "true"' in compose_text, compose_text
+        assert 'RPC_URL_ETHEREUM: "https://example.invalid/eth"' in compose_text, compose_text
+        # The manifest override must replace the host-shell fallback for the
+        # exact key it covers; any remaining `${HARDHAT_NETWORK:-...}` would
+        # silently revert the override at compose interpolation time.
+        assert "${HARDHAT_NETWORK:-localhost}" not in compose_text, compose_text
+        assert "${HARDHAT_TEST_CMD:-" not in compose_text, compose_text
+
+
+def test_env_overrides_default_compose_falls_back_to_host_shell_when_unset() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # No env_overrides → preserve previous default behavior so existing
+        # consumer manifests render byte-compatibly.
+        assert 'HARDHAT_NETWORK: "${HARDHAT_NETWORK:-localhost}"' in compose_text, compose_text
+        assert 'HARDHAT_TEST_CMD: "${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"' in compose_text, compose_text
+
+
+def test_rpc_probe_is_skipped_for_in_process_hardhat_network() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        payload["env_overrides"] = {
+            "HARDHAT_NETWORK": "hardhat",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        assert "# SKIP manifest selects in-process Hardhat network" in rpc_probe, rpc_probe
+        # The skip path must not perform any Anvil RPC traffic.
+        assert "docker compose" not in rpc_probe, rpc_probe
+        assert "http://anvil" not in rpc_probe, rpc_probe
+
+
+def test_rpc_probe_runs_when_manifest_does_not_select_in_process_hardhat() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        assert "# SKIP manifest selects in-process Hardhat network" not in rpc_probe
+        assert "docker compose" in rpc_probe
+        # Failure diagnostics must surface curl exit/stderr so a regression of
+        # the "empty response" mode is actionable rather than opaque.
+        assert "##CURL_EXIT=" in rpc_probe
+        assert "curl exit" in rpc_probe
+
+
+def test_hardhat_test_runner_does_not_clobber_container_env_with_host_shell_value() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        runner_text = (output_root / "tests" / "30_hardhat_test.sh").read_text(encoding="utf-8")
+        # `docker compose exec -T -e HARDHAT_TEST_CMD=...` would re-export the
+        # harness host shell value into the container and silently override the
+        # manifest-driven container env. The runner must rely on the container
+        # env (set via env_file + compose environment) instead.
+        assert "-e HARDHAT_TEST_CMD" not in runner_text, runner_text
+        # Runner must source validate.env so failure diagnostics report the
+        # actual command that ran inside the container.
+        assert '"${ROOT_DIR}/validate.env"' in runner_text, runner_text
+        # `eval` was replaced with `sh -c "${cmd}"` to avoid double-expansion
+        # surprises; assert the eval form does not regress.
+        assert "eval " not in runner_text, runner_text
+
+
+def test_env_overrides_escape_shell_metacharacters_in_validate_env() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # validate.env is sourced by 30_hardhat_test.sh, so values containing
+        # shell metacharacters must be escaped to prevent host-side command
+        # substitution / variable expansion.
+        payload["env_overrides"] = {
+            "WITH_DOLLAR": "value with $HOME and ${PATH}",
+            "WITH_BACKTICK": "value with `whoami` substitution",
+            "WITH_QUOTE": 'value with "quoted" segment',
+            "WITH_BACKSLASH": "value with \\backslash",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+        # `$` is escaped as `\$` so bash double-quoted sourcing keeps the literal.
+        assert r'WITH_DOLLAR="value with \$HOME and \${PATH}"' in env_text, env_text
+        # Backticks are escaped as `\`` to avoid command substitution on source.
+        assert r'WITH_BACKTICK="value with \`whoami\` substitution"' in env_text, env_text
+        # Embedded double-quotes are escaped.
+        assert r'WITH_QUOTE="value with \"quoted\" segment"' in env_text, env_text
+        # Backslashes are doubled so a single literal `\` round-trips.
+        assert r'WITH_BACKSLASH="value with \\backslash"' in env_text, env_text
+
+
+def test_env_overrides_escape_dollar_for_compose_interpolation() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # Docker Compose performs `${VAR}` interpolation on values in the
+        # `environment:` block; `$` must be escaped as `$$` so a manifest
+        # override that itself contains a `$` is preserved literally inside the
+        # container instead of being substituted from the harness host env.
+        payload["env_overrides"] = {
+            "HARDHAT_TEST_CMD": "npx hardhat test $@",
+            "HARDHAT_NETWORK": "fork-of-${UPSTREAM_NETWORK}",
+            "EXTRA_VAR": "literal-$value",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        assert 'HARDHAT_TEST_CMD: "npx hardhat test $$@"' in compose_text, compose_text
+        assert 'HARDHAT_NETWORK: "fork-of-$${UPSTREAM_NETWORK}"' in compose_text, compose_text
+        assert 'EXTRA_VAR: "literal-$$value"' in compose_text, compose_text
+
+        # Compose YAML must still round-trip through PyYAML cleanly.
+        parsed = yaml.safe_load(compose_text)
+        assert parsed["services"]["app"]["environment"]["EXTRA_VAR"] == "literal-$$value"
+
+
+def test_app_service_and_rpc_url_env_overrides_take_effect_in_compose() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # Compose's `environment:` block beats `env_file`, so APP_SERVICE and
+        # RPC_URL overrides in validate.env alone would be silently ignored.
+        # The compose template must bake manifest overrides for these keys too.
+        payload["env_overrides"] = {
+            "APP_SERVICE": "custom-app",
+            "RPC_URL": "https://example.invalid/rpc",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        assert 'APP_SERVICE: "custom-app"' in compose_text, compose_text
+        assert 'RPC_URL: "https://example.invalid/rpc"' in compose_text, compose_text
+        # Default fallbacks must be replaced when the manifest overrides them.
+        assert "${APP_SERVICE:-app}" not in compose_text, compose_text
+        assert "${RPC_URL:-http://anvil:" not in compose_text, compose_text
+
+
+def test_rpc_probe_inner_shell_captures_curl_exit_without_set_e() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        # Locate the inner `/bin/sh -c '...'` block and check it specifically;
+        # the outer harness script keeps `set -euo pipefail` at the top.
+        inner_marker = "/bin/sh -c '"
+        inner_start = rpc_probe.find(inner_marker)
+        assert inner_start != -1, rpc_probe
+        inner_block_end = rpc_probe.find("' >", inner_start)
+        assert inner_block_end != -1, rpc_probe
+        inner_block = rpc_probe[inner_start:inner_block_end]
+
+        # The inner shell must NOT use `set -e` — that would abort before
+        # `printf "##CURL_EXIT=..."` runs on curl failures, so the diagnostic
+        # marker would never be written.
+        assert "set -eu" not in inner_block, inner_block
+        assert "set +e" in inner_block, inner_block
+        # Inner shell must capture the curl exit code into a variable, emit it,
+        # then exit 0 so docker compose exec succeeds and the host script can
+        # parse the marker for diagnostics.
+        assert "curl_rc=$?" in inner_block, inner_block
+        assert '##CURL_EXIT=%s' in inner_block, inner_block
+        assert "exit 0" in inner_block, inner_block
+
+
+def test_rpc_probe_stderr_diagnostics_prefix_every_line() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        # A multi-line stderr must yield TAP-comment lines for every line, not
+        # just the first; loop over lines so consumers see consistent `# ` prefixes.
+        assert "while IFS= read -r line" in rpc_probe, rpc_probe
+        assert "printf '# stderr: %s\\n' \"${line}\"" in rpc_probe, rpc_probe
+
+
+def test_rpc_probe_does_not_clobber_container_env_with_host_shell_values() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        non_comment_lines = "\n".join(
+            line for line in rpc_probe.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        # `docker compose exec -T -e RPC_URL=...` re-exports the harness host
+        # shell value (which falls back to a default) into the container and
+        # silently overrides the manifest-provided container env. The probe
+        # must rely on the container env (set via env_file + compose
+        # environment) for RPC_URL instead.
+        assert "-e RPC_URL" not in non_comment_lines, non_comment_lines
+        # The probe must source validate.env so APP_SERVICE / RPC_URL service
+        # selection and diagnostics reflect the manifest-provided values.
+        assert '"${ROOT_DIR}/validate.env"' in rpc_probe, rpc_probe
+
+
+def test_schema_rejects_env_overrides_keys_that_are_not_valid_env_var_names() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # A key like "FOO:BAR" or "WITH-DASH" is not a POSIX env-var name and
+        # would either break the rendered compose YAML or fail to export
+        # cleanly inside the container.
+        payload["env_overrides"] = {"FOO:BAR": "value"}
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode != 0, result.stdout
+        assert "Manifest validation failed" in result.stderr, result.stderr
+        assert "env_overrides" in result.stderr, result.stderr
+
+
+def test_env_overrides_escape_carriage_returns_and_newlines() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # A literal newline or CR in an override value would close the YAML
+        # double-quoted string mid-line and either silently truncate or break
+        # the rendered compose / validate.env file.
+        payload["env_overrides"] = {
+            "MULTI_LINE": "line1\nline2",
+            "WITH_CR": "alpha\rbeta",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # Newlines must be escaped so the YAML stays single-line and
+        # syntactically valid; the parsed value will round-trip as the
+        # 2-character escape sequence the consumer wrote.
+        assert 'MULTI_LINE: "line1\\nline2"' in compose_text, compose_text
+        assert 'WITH_CR: "alpha\\rbeta"' in compose_text, compose_text
+        # PyYAML must still parse the rendered compose cleanly. YAML's own
+        # `\n` escape inside double-quoted strings round-trips a literal `\n`
+        # in the source back to a real newline in the parsed value, so the
+        # consumer's original newline survives end-to-end without ever
+        # spanning multiple source lines.
+        parsed = yaml.safe_load(compose_text)
+        assert parsed["services"]["app"]["environment"]["MULTI_LINE"] == "line1\nline2"
+        assert parsed["services"]["app"]["environment"]["WITH_CR"] == "alpha\rbeta"
+
+        env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+        # validate.env is sourced by bash; literal newlines would split the
+        # KEY="VALUE" assignment across lines and either fail or leak the rest
+        # of the file content into the value.
+        assert 'MULTI_LINE="line1\\nline2"' in env_text, env_text
+        assert 'WITH_CR="alpha\\rbeta"' in env_text, env_text
+
+
+def test_rpc_probe_skip_decision_trims_hardhat_network_whitespace() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # YAML block scalars / consumer typos commonly leave trailing
+        # whitespace; the skip decision must normalize before comparing so a
+        # value like "hardhat " still skips the in-process probe.
+        payload["env_overrides"] = {"HARDHAT_NETWORK": "  HARDHAT \t"}
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        assert "# SKIP manifest selects in-process Hardhat network" in rpc_probe, rpc_probe
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # The compose-baked HARDHAT_NETWORK must also be the trimmed,
+        # normalized value so the container's hardhat config sees the canonical
+        # network name.
+        assert 'HARDHAT_NETWORK: "HARDHAT"' in compose_text, compose_text
+
+
 def main() -> int:
     tests = [func for name, func in sorted(globals().items()) if name.startswith("test_")]
     failures = 0

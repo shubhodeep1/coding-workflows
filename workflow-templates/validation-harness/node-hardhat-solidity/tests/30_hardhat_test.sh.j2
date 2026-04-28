@@ -9,15 +9,30 @@ APP_SERVICE="${APP_SERVICE:-app}"
 mkdir -p "${LOG_DIR}"
 TEST_LOG="${LOG_DIR}/hardhat_test.log"
 
+# Surface manifest-level env_overrides (HARDHAT_TEST_CMD, HARDHAT_NETWORK, ...)
+# in the harness host shell so failure diagnostics report what actually ran
+# inside the container instead of a stale localhost fallback.
+if [ -f "${ROOT_DIR}/validate.env" ]; then
+	set -a
+	# shellcheck disable=SC1091
+	. "${ROOT_DIR}/validate.env"
+	set +a
+fi
+
 # shellcheck source=/dev/null
 . "${ROOT_DIR}/_lib/graceful_shutdown.sh"
 
 echo "1..1"
 
+REPORTED_HARDHAT_TEST_CMD="${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"
+
 set +e
+# The container env (set via compose env_file + environment) already carries
+# the manifest-provided HARDHAT_TEST_CMD; do not re-export it from the harness
+# host shell with docker compose exec's per-call env flag, because that would
+# silently clobber the manifest override with the host shell fallback.
 docker compose -f "${COMPOSE_FILE}" exec -T \
-	-e HARDHAT_TEST_CMD="${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}" \
-	"${APP_SERVICE}" /bin/sh -c '${HARDHAT_TEST_CMD}' >"${TEST_LOG}" 2>&1 &
+	"${APP_SERVICE}" /bin/sh -c 'cmd="${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"; exec /bin/sh -c "${cmd}"' >"${TEST_LOG}" 2>&1 &
 TEST_PID=$!
 
 (
@@ -35,7 +50,7 @@ set -e
 
 if [ "${TEST_STATUS}" -ne 0 ]; then
 	echo "not ok 1 - hardhat test suite"
-	echo "# hardhat command failed: ${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"
+	echo "# hardhat command failed: ${REPORTED_HARDHAT_TEST_CMD}"
 	echo "# log tail (${TAIL_LINES:-40} lines):"
 	tail -n "${TAIL_LINES:-40}" "${TEST_LOG}" 2>/dev/null || true
 	exit 1
