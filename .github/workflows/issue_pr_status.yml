@@ -250,17 +250,39 @@ jobs:
           fi
           ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
 
-          # Identify orchestrator-managed issues — those carry the
-          # ai:orchestrator-tracking label or the "Managed by: AI
-          # Orchestrator" body marker. Their terminal phase label
-          # (ai:merged / ai:closed / ai:validation-failed / etc.) is
-          # owned exclusively by scripts/orchestrate_poll_process.sh,
-          # so this PR-close path must NOT relabel or auto-close
-          # them. Single batched GraphQL call (one API request,
-          # regardless of N) per CLAUDE.md §15. Fail-open with a
-          # per-issue REST fallback so a transient GraphQL failure
-          # cannot cause the bug it is trying to prevent.
-          ORCHESTRATED_ISSUES=""
+          # Classify each linked issue into one of three buckets so the
+          # label/close path applies the right policy:
+          #
+          #   1. TRACKING_ISSUES — orchestrator project tracking issues
+          #      (label `ai:orchestrator-tracking`). Their terminal phase
+          #      label and close lifecycle are owned exclusively by
+          #      scripts/orchestrate_poll_process.sh. SKIP entirely.
+          #      This is the regression guard for issue #1469: when a
+          #      child PR's body mentions a tracking issue, we must not
+          #      relabel or auto-close it.
+          #
+          #   2. MANAGED_ISSUES — orchestrator-managed child issues
+          #      (label `ai:orchestrator-managed` OR the
+          #      "Managed by: AI Orchestrator" body marker). These
+          #      always merge into orchestrator/project-N, never main,
+          #      so the default `PR_BASE_REF == main` close gate would
+          #      strand them. Apply FINAL_LABEL and close on PR merge
+          #      regardless of base ref. The orchestrator poller's
+          #      reconcile_managed_issue_labels and
+          #      close_merged_issues_sweep paths remain authoritative
+          #      backstops; this path is idempotent with them.
+          #
+          #   3. Standalone issues — neither tracking nor managed. Keep
+          #      the original `PR_BASE_REF == main` gate to preserve
+          #      the workflow's long-standing safety for non-orchestrator
+          #      flows.
+          #
+          # Single batched GraphQL call (one API request regardless of
+          # N) per CLAUDE.md §15. Fail-open with a per-issue REST
+          # fallback so a transient GraphQL failure cannot silently
+          # degrade detection.
+          TRACKING_ISSUES=""
+          MANAGED_ISSUES=""
           ORCH_ALIAS_FRAGMENT=""
           ORCH_IDX=0
           while IFS= read -r _orch_num; do
@@ -279,36 +301,50 @@ jobs:
               and (.data.repository? != null)
               and (([.data.repository | to_entries[] | .value | select(. != null)] | length) == $expected)
             ' >/dev/null 2>&1; then
-              if _orchestrated_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+              _tracking_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
                 .data.repository | to_entries[] | .value | select(. != null) |
+                select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null) |
+                .number
+              ' 2>/dev/null || echo '')"
+              _managed_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+                .data.repository | to_entries[] | .value | select(. != null) |
+                select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
                 select(
-                  ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null
+                  ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
                   or
                   ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ) | .number
-              ' 2>/dev/null)"; then
-                ORCHESTRATED_ISSUES="${_orchestrated_issues}"
-                ORCH_BATCH_FAILED=false
-              fi
+              ' 2>/dev/null || echo '')"
+              TRACKING_ISSUES="${_tracking_issues}"
+              MANAGED_ISSUES="${_managed_issues}"
+              ORCH_BATCH_FAILED=false
             fi
             if [ "${ORCH_BATCH_FAILED}" = true ]; then
               # GraphQL batch failed — fall back to per-issue REST detection
-              # so we never silently re-introduce the auto-label/close bug.
+              # so a transient failure cannot re-introduce the #1469 bug
+              # (tracking issue auto-closed) or strand a managed child.
               echo "::warning::Orchestrator-issue batch detection failed; falling back to per-issue REST."
               while IFS= read -r _orch_num; do
                 [ -n "${_orch_num}" ] || continue
                 [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
                 _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
                 if [ -z "${_orch_meta}" ]; then
-                  echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively skipping label/close mutation for this issue."
-                  ORCHESTRATED_ISSUES+="${_orch_num}"$'\n'
+                  # Conservative fail-open: treat as tracking so we skip
+                  # the label/close mutation. Mis-classifying a managed
+                  # child as tracking only delays its close to the next
+                  # orchestrator poll cycle; mis-classifying a tracking
+                  # issue as managed would re-introduce #1469.
+                  echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively treating as tracking (skip)."
+                  TRACKING_ISSUES+="${_orch_num}"$'\n'
                   continue
                 fi
-                if printf '%s' "${_orch_meta}" | jq -e '
-                  ((.labels // []) | index("ai:orchestrator-tracking")) != null
+                if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-tracking")) != null' >/dev/null 2>&1; then
+                  TRACKING_ISSUES+="${_orch_num}"$'\n'
+                elif printf '%s' "${_orch_meta}" | jq -e '
+                  ((.labels // []) | index("ai:orchestrator-managed")) != null
                   or ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ' >/dev/null 2>&1; then
-                  ORCHESTRATED_ISSUES+="${_orch_num}"$'\n'
+                  MANAGED_ISSUES+="${_orch_num}"$'\n'
                 fi
               done <<< "${ISSUE_NUMBERS}"
             fi
@@ -317,16 +353,25 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
 
-            if [ -n "${ORCHESTRATED_ISSUES}" ] && printf '%s\n' "${ORCHESTRATED_ISSUES}" | grep -qxF "${issue_number}"; then
-              echo "Skipping orchestrator-managed issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
+            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
+              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
               continue
+            fi
+
+            is_managed_child=false
+            if [ -n "${MANAGED_ISSUES}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${issue_number}"; then
+              is_managed_child=true
             fi
 
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
             set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
 
-            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ]; then
-              echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
+            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then
+              if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "main" ]; then
+                echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into ${PR_BASE_REF} (integration branch)."
+              else
+                echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
+              fi
               if ! gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"; then
                 echo "::warning::Failed to close issue #${issue_number}."
               fi
