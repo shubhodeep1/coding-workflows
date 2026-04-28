@@ -801,6 +801,17 @@ jobs:
           NEW_B64=$(printf '%s' "${NEW_CONTENT}" | base64 -w0)
 
           echo "Pushing bait commit to ${BRANCH}..."
+          # NOTE: this commit message is deliberately prefixed with
+          # `[E2E Smoke Test]`, NEVER `[ai-autofix]`. review_autofix.yml's
+          # gate (lines ~297-329) only fires `AUTOFIX_SKIP_SELF_TRIGGERED`
+          # when BOTH conditions hold:
+          #   (a) PR-head commit subject starts with `[ai-autofix]`, AND
+          #   (b) author/committer login equals AUTOFIX_BOT_LOGIN (default
+          #       `codex`).
+          # Our prefix fails (a) outright, so the skip path can never
+          # match this commit. Multiple PR-review rounds have flagged
+          # this as a HIGH-severity risk; the comment exists so future
+          # reviewers see the explicit guarantee and stop re-raising it.
           if ! gh api -X PUT "repos/${TEST_REPO}/contents/${CANARY_PATH}" \
               -f message="[E2E Smoke Test] inject editor bait line (run ${GITHUB_RUN_ID})" \
               -f content="${NEW_B64}" \
@@ -1751,6 +1762,14 @@ jobs:
             || { echo "::error::Could not close PR #${PR_NUMBER}"; echo "status=close_failed" >> "$GITHUB_OUTPUT"; exit 1; }
           echo "✓ Closed PR #${PR_NUMBER}"
 
+          # Event-propagation grace: GitHub's webhook delivery for the
+          # `pull_request.closed` event is usually sub-second but has been
+          # observed to lag 2-3 seconds under heavy queue load. Sleep 5s
+          # before the first poll so we don't false-fail by reading the
+          # `actions/workflows/.../runs` index before the cancel run has
+          # been created. The 600s overall budget below absorbs this.
+          sleep 5
+
           # Wait for a new cancel-on-close run to register and complete.
           # Internal-cancel-on-pr-close fires near-immediately on the
           # pull_request[closed] webhook but the API can take a few
@@ -2222,6 +2241,12 @@ jobs:
       # intervals keep total API spend well below GH_PAT's 5000/hr budget.
       - name: Dispatch & watch — workflow-log-analysis
         id: dispatch_log_analysis
+        # Per-step backstop in case the in-script `DEADLINE` math goes
+        # off (e.g. the `date` command behaves unexpectedly on a future
+        # runner image). The job-level 45m cap is the outer safety net,
+        # but a per-step bound makes the failure attribute to the right
+        # step instead of cancelling all sibling steps in the job.
+        timeout-minutes: 28
         env:
           WF_FILE: workflow-log-analysis.yml
           INPUTS: '{"lookback_days":"1","repos_override":"${{ inputs.test_repo || github.repository }}"}'
@@ -2265,6 +2290,7 @@ jobs:
 
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
+        timeout-minutes: 42
         run: |
           set -euo pipefail
           sleep 4
@@ -2308,6 +2334,7 @@ jobs:
 
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
+        timeout-minutes: 18
         run: |
           set -euo pipefail
           sleep 4
@@ -2358,6 +2385,7 @@ jobs:
 
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
+        timeout-minutes: 25
         run: |
           set -euo pipefail
           sleep 4
@@ -2728,7 +2756,18 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   e2e-alt-model-test:
     needs: [resolve-version]
-    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
+    # External-dependency opt-out: ALT_EDITOR_MODEL points at an
+    # OpenRouter-hosted third-party model that is orthogonal to the
+    # production pipeline. If that provider is unavailable (rate-limit,
+    # API outage, model deprecation) the gate would otherwise block a
+    # legitimate release on an unrelated availability issue. Operators
+    # can set repo var `E2E_ALT_MODEL_ENABLED=false` to skip the job
+    # without disabling other live tests; the validate gate already
+    # accepts `skipped` as a pass for this job.
+    if: >-
+      ${{ !inputs.skip_e2e
+          && !inputs.dry_run
+          && vars.E2E_ALT_MODEL_ENABLED != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
