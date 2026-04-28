@@ -1765,8 +1765,11 @@ jobs:
           # implement and orchestrator workflows both emit closing keywords
           # when they create PRs, so this still resolves the linked issue
           # for every auto-generated smoke-test PR.
+          # The URL alternative is restricted to the current repository so a
+          # cross-repo "Closes <other-repo>/issues/N" reference cannot route
+          # an unrelated number into this repo's issues lookup.
           if [ "$IS_SMOKE" = "false" ]; then
-            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiP '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/issues/|#)\K\d+' | head -1 || true)
+            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+' || true)
             if [ -n "${ISSUE_NUM:-}" ]; then
               ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
               if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
