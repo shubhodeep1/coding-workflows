@@ -85,17 +85,31 @@ Verified in `scripts/orchestrate_lib.py`, `scripts/orchestrate_poll_process.sh`,
 `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`,
 and `prompts/mode-*.txt`:
 
-1. **Prompt rendering** uses `scripts/render_prompt.sh` which performs
-   shell-style substitution. Undefined variables expand to empty strings;
-   there is no per-mode declared variable contract.
-2. **Stall detection** is phase-age based: the poller compares
-   `now - label_change_time` against `STALL_THRESHOLD_*_MINUTES` per phase.
-   A live-but-stuck Codex session inside a phase burns tokens until the
-   phase-age threshold trips.
-3. **Orchestrator cadence** is `cron: '*/5 * * * *'` plus one
-   `repository_dispatch` shortcut from `scripts/review_conflict_resolve.sh`
-   on resolver failure. All other phase-end events wait up to 5 minutes
-   for the next tick.
+1. **Prompt rendering** uses `scripts/render_prompt.sh` to expand only the
+   `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` and
+   `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}` placeholders (sourced from
+   `prompts/serena-efficiency-block.txt`); the script fails if a
+   placeholder is unresolved but performs no general per-mode variable
+   templating. Other variable substitution happens via shell heredocs
+   and env passthrough in the workflow YAML, with no declared per-mode
+   variable contract.
+2. **Stall detection** is phase-age based, but driven by orchestrator
+   state rather than raw tracker label timestamps:
+   `scripts/orchestrate_lib.py::detect_stalls()` compares
+   `now - status_since_ts` against `STALL_THRESHOLD_*_MINUTES` per phase,
+   where `status_since_ts` is persisted when the orchestrator first
+   *observes* a phase-label change. The measured age can therefore differ
+   from the tracker's real label-change time. The poller also applies an
+   Actions-runs age filter to treat long-running `in_progress` runs as
+   zombies. A live-but-stuck Codex session inside a phase still burns
+   tokens until either the observed phase-age threshold or the
+   zombie-run filter trips.
+3. **Orchestrator cadence** is `cron: '*/5 * * * *'` on
+   `.github/workflows/internal-orchestrate-poll.yml` (the reusable
+   `orchestrate_poll.yml` is `workflow_call`-only), plus one immediate
+   `workflow_dispatch` shortcut (`gh workflow run internal-orchestrate-poll.yml`)
+   from `scripts/review_conflict_resolve.sh` on resolver failure. All
+   other phase-end events wait up to 5 minutes for the next tick.
 4. **Codex invocation** in implement, review-autofix, validation-self-heal,
    and conflict-resolver paths re-renders the full mode prompt on each
    attempt. Thread reuse / continuation-turn semantics are not used today.
@@ -103,9 +117,12 @@ and `prompts/mode-*.txt`:
    (one wave at a time per tracking issue) but uncapped per phase across
    tracking issues. A regression that strands ten PRs in
    `ai:review-blocked` will cause ten autofix loops to run in parallel.
-6. **Workspaces** are per-run ephemeral: `/tmp/codex-issue-<run-id>` for
-   implement, `/tmp/codex-orchestrate-poll-<run-id>` for the poller. Setup
-   work (clone, deps, harness render) is repeated on every retry.
+6. **Workspaces** are ephemeral and scoped by workflow run or attempt:
+   implement uses `RUNTIME_DIR=/tmp/codex-implement-${GITHUB_RUN_ID}`,
+   clarify uses `/tmp/codex-issue-${GITHUB_RUN_ID}`, and the poller uses
+   `/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`.
+   Setup work (clone, deps, harness render) is repeated on every
+   retry/attempt.
 7. **Run-attempt observability** is via job logs and `ai-memory`
    `runs/<run-id>/ledger/events.jsonl` events. There is no explicit
    sub-state vocabulary (`PreparingWorkspace`, `BuildingPrompt`, etc.) and
@@ -120,7 +137,7 @@ and `prompts/mode-*.txt`:
 ```
                            ┌──────────────────────────────────┐
                            │  orchestrate_poll.yml (cron 5m)  │
-                           │  + repository_dispatch tick      │
+                           │  + workflow_dispatch tick        │
                            └──────────────┬───────────────────┘
                                           │
               ┌───────────────────────────┴────────────────────────┐
@@ -184,19 +201,26 @@ and W (per-state caps and sub-state ledger) and is therefore last.
 - Changing which models are called or their reasoning levels.
 - Touching the multi-reviewer panel composition or two-pass logic.
 - Reshaping the wave/dependency-DAG decomposition.
-- Replacing `repository_dispatch` with a webhook receiver.
+- Replacing the existing `workflow_dispatch` tick mechanism with
+  `repository_dispatch`, a webhook receiver, or any other transport.
+  S3 reuses today's `gh workflow run internal-orchestrate-poll.yml`
+  invocation.
 
 ### Sub-Issues
 
 #### S1 — Strict prompt rendering with declared per-mode variable contracts
 
-**Problem.** `scripts/render_prompt.sh` performs shell-style substitution
-via `envsubst`. An undefined variable expands to the empty string, so a
-mode prompt that references e.g. `${INTEGRATION_BRANCH}` when the workflow
-forgot to export it produces a silently-broken prompt rather than a render
-error. There is no per-mode declared variable contract anywhere in the
-repo, so drift between a mode prompt and the workflow that invokes it goes
-undetected until the agent produces obviously-wrong output.
+**Problem.** `scripts/render_prompt.sh` only substitutes the
+`{{SERENA_EFFICIENCY_BLOCK_*}}` placeholders. All other dynamic prompt
+content reaches Codex through workflow YAML — shell heredocs, `cat
+prompt-file`, and env passthrough — with no per-mode declared variable
+contract. When a workflow heredoc references e.g. `${INTEGRATION_BRANCH}`
+but the workflow step forgot to export it, the heredoc emits an empty
+string and the prompt is silently broken. Mode prompts under `prompts/`
+also contain bare `${VAR}` and `{{ TOKEN }}` patterns whose substitution
+contracts live implicitly in whichever workflow happens to invoke them;
+drift between a mode prompt and its caller surfaces only when the agent
+produces obviously-wrong output.
 
 **Fix.** Replace `render_prompt.sh` with a strict renderer
 (`scripts/render_prompt.py` using `chevron` for Mustache strict semantics,
@@ -242,30 +266,45 @@ that today cause re-runs (which would otherwise burn tokens).
 
 #### S2 — Codex-event-based stall detection
 
-**Problem.** Today's stall detector in `scripts/orchestrate_poll_process.sh`
-trips on `now - label_change_time > STALL_THRESHOLD_*_MINUTES`. A live but
-stuck Codex session — one that has stopped emitting events but has not
-exited — burns tokens for the full phase-age threshold (commonly 30–60
-minutes) before being killed. The phase-age threshold is also too coarse
-to distinguish "agent is genuinely working" from "agent is hung after a
-network blip."
+**Problem.** Today's stall detector
+(`scripts/orchestrate_lib.py::detect_stalls()`) trips on
+`now - status_since_ts > STALL_THRESHOLD_*_MINUTES`, where
+`status_since_ts` is set when the orchestrator first observes a phase
+label change. A live but stuck Codex session — one that has stopped
+emitting events but has not exited — burns tokens for the full
+phase-age threshold (commonly 30–60 minutes) before either the
+threshold or the zombie-runs filter kills it. The phase-age threshold
+is also too coarse to distinguish "agent is genuinely working" from
+"agent is hung after a network blip."
 
 **Fix.** Add a parallel stall channel keyed on Codex event idleness:
 
 1. Every Codex invocation in the repo (`implement`, review-autofix
    reviewers, editor, conflict-resolver, validation self-heal,
-   wave-judge, RB-judge) writes a heartbeat file
-   `${RUNNER_TEMP}/codex-heartbeat.json` containing
-   `{ run_id, issue, mode, last_event_at, last_event_kind, pid }`
+   wave-judge, RB-judge) writes a **per-pid** heartbeat file
+   `${RUNNER_TEMP}/codex-heartbeats/codex-${pid}.json` containing
+   `{ run_id, issue, mode, last_event_at, last_event_kind, pid }`,
    updated on each Codex protocol event (one append per stream chunk is
-   enough; coalescing is fine).
+   enough; coalescing is fine). Per-pid filenames are required because
+   `review_autofix.yml` runs five reviewers in parallel inside a single
+   job and a shared filename would clobber.
 2. A new step `scripts/codex_stall_guard.sh` runs as a background
-   sidecar inside each Codex-invoking step. It checks
+   sidecar inside each Codex-invoking step. It scans every heartbeat
+   file in `${RUNNER_TEMP}/codex-heartbeats/`, checks
    `now - last_event_at > CODEX_STALL_TIMEOUT_SECONDS` (default `600`)
-   and on trip kills the Codex pid with SIGTERM, then SIGKILL after
-   `CODEX_STALL_KILL_GRACE_SECONDS` (default `30`).
-3. The killed step exits with a documented stall code (`exit 137` for
-   SIGKILL, mapped to a structured ledger event `codex_stall_killed`).
+   per file, and on trip kills the matching Codex pid with SIGTERM,
+   then SIGKILL after `CODEX_STALL_KILL_GRACE_SECONDS` (default `30`).
+3. The killed Codex pid returns `137` on SIGKILL. The invoking shell
+   script (e.g. `scripts/review_run_reviewers.sh`,
+   `scripts/review_apply_fixes.sh`) **must explicitly check the
+   Codex exit status and propagate it**: a backgrounded Codex whose
+   exit code is not `wait`-ed will allow the script to continue
+   silently. Each invoking script gets a wrapper helper
+   `codex_run_with_stall_guard()` that runs Codex, captures the exit
+   code, emits a `codex_stall_killed` ledger event when the code is
+   `137` and the heartbeat shows a guard-side termination, and exits
+   the calling script with the same non-zero code. Adding the wrapper
+   is part of S2's scope, not a follow-up.
 4. `scripts/orchestrate_poll_process.sh` keeps the phase-age threshold as
    an outer safety net, raised to `90` minutes once event-based killing
    is the primary path.
@@ -299,25 +338,34 @@ this at the new timeout (default 10 minutes).
 
 ---
 
-#### S3 — Force-tick on phase end via `repository_dispatch`
+#### S3 — Force-tick on phase end via `workflow_dispatch`
 
 **Problem.** `scripts/review_conflict_resolve.sh` already uses an EXIT
-trap to dispatch `orchestrator-tick` on resolver failure when
+trap that calls `gh workflow run internal-orchestrate-poll.yml` (a
+`workflow_dispatch`) on resolver failure when
 `IS_INTEGRATION_SYNC=true`, which bypasses the cron wait. Every other
 phase-end event (`ai:done` set, `ai:ready-to-merge` set,
 `ai:validation-passed` set, `ai:review-blocked` set) waits up to 5 minutes
 for the next cron tick before the poller advances state.
 
-**Fix.** Generalize the EXIT-trap pattern into a small helper
+**Fix.** Generalize the existing EXIT-trap pattern (today's
+`gh workflow run internal-orchestrate-poll.yml` from
+`scripts/review_conflict_resolve.sh`) into a small helper
 `scripts/orchestrate_force_tick.sh` that:
 
-1. Posts `repository_dispatch` with `event_type: orchestrator-tick` and
-   a payload `{ reason, source_workflow, issue, run_id }`.
-2. Is idempotent: if a tick was already dispatched in the last
-   `FORCE_TICK_COOLDOWN_SECONDS` (default `30`) for the same tracking
-   issue, the call is a no-op. Cooldown state is tracked in a per-tracking-issue
-   pinned comment or a labeled gist; pick whichever is cheapest given
-   the existing memory plumbing.
+1. Invokes `gh workflow run internal-orchestrate-poll.yml` with
+   inputs `{ reason, source_workflow, issue, run_id }` — the same
+   `workflow_dispatch` mechanism the resolver already uses, so S3 is
+   strictly a generalization rather than a new dispatch surface.
+2. Is idempotent via a cooldown timestamp persisted on the
+   `ai-memory` branch under
+   `runs/force_tick/<tracking_issue>.json` (using the existing
+   memory-branch helpers in `scripts/memory_helpers.sh`). If the last
+   recorded timestamp is within `FORCE_TICK_COOLDOWN_SECONDS`
+   (default `30`) the call is a no-op. Putting cooldown state on
+   `ai-memory` keeps it inside our existing persistent-state surface
+   and avoids adding new GitHub API round-trips for pinned comments
+   or gists.
 3. Is called from EXIT traps in `implement.yml` (after PR push),
    `review_autofix.yml` (after merge or after `ai:review-blocked`),
    `validate.yml` (after final pass/fail label), and the existing
@@ -429,12 +477,22 @@ exhausts. The same applies to `ai:implementing` and
      "ai:planning": 6
    global_max_concurrent: 12
    ```
-2. Before dispatching a phase action for an issue in state S, count
-   the number of currently-running workflow runs (via the GitHub API)
-   targeting issues in state S. If at-or-over cap, defer the action to
-   the next tick and emit a `phase_capped` ledger event.
-3. Caps apply to dispatch only; in-flight runs are not killed.
-4. The cron tick continues; capped issues are retried next tick.
+2. At the **start** of each `orchestrate_poll.yml` tick, prefetch the
+   list of currently-running workflow runs via one paginated GitHub
+   API call (`gh api ...workflows/.../runs?status=in_progress`) and
+   build a per-state count map. This map is held in memory for the
+   duration of the tick (or written to
+   `${RUNTIME_DIR}/running_runs_by_state.json` for child scripts to
+   consume) so per-issue dispatch decisions are O(1) lookups, not
+   per-issue API calls. This honors the API-hygiene rule in
+   `codex_system_instructions.md` §14 (don't fan out API calls inside
+   per-issue loops).
+3. Before dispatching a phase action for an issue in state S, consult
+   the cycle-local map. If the count for state S is at-or-over cap,
+   defer the action to the next tick and emit a `phase_capped` ledger
+   event.
+4. Caps apply to dispatch only; in-flight runs are not killed.
+5. The cron tick continues; capped issues are retried next tick.
 
 **Files touched.** New `.github/ai/concurrency_caps.yml`, edits to
 `scripts/orchestrate_poll_process.sh` and `scripts/orchestrate_lib.py`,
@@ -485,12 +543,26 @@ Caps are advisory; in-flight runs complete normally.
 
 #### W1 — Per-issue workspace cache with `created_now` semantics
 
-**Problem.** `implement.yml` and `validate.yml` create
-`/tmp/codex-issue-<run-id>` and `/tmp/codex-orchestrate-poll-<run-id>`
-fresh on every workflow run. A retry of the implement phase for
+**Problem.** `implement.yml` creates
+`/tmp/codex-implement-${GITHUB_RUN_ID}`, `clarify.yml` creates
+`/tmp/codex-issue-${GITHUB_RUN_ID}`, and the poller creates
+`/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`,
+all fresh on every workflow run. A retry of the implement phase for
 issue 1234 re-clones the repo, re-installs deps, and re-renders the
 validation harness from scratch. On a typical retry this is 2–4 minutes
 of pure setup before any agent work.
+
+**Caveat — `actions/cache` mutability.** `actions/cache@v4` does **not**
+overwrite an existing cache entry: when a job's `key` matches an
+already-stored entry, the post-job save step is a no-op. A naive
+`key = workspace-v1-<issue>` would freeze the very first snapshot
+forever; an `actions/cache` key that includes `${GITHUB_RUN_ID}` would
+save every run but fragment the cache namespace and rapidly hit the
+10 GB per-repo cache cap (LRU-evicting older entries before they can
+be reused). The fix below uses **versioned keys plus `restore-keys`
+prefix matching**, with a maintenance workflow that prunes stale
+entries — and falls back to a sibling-branch persistence model if the
+cache budget is still inadequate in practice.
 
 **Fix.** Introduce a workspace key derived from the sanitized issue
 identifier and use it as the `actions/cache` key:
@@ -499,18 +571,53 @@ identifier and use it as the `actions/cache` key:
    `WORKSPACE_KEY = sanitize(issue_identifier)` (regex
    `[A-Za-z0-9._-]`, replace others with `_`) and
    `WORKSPACE_PATH = ${RUNNER_TEMP}/workspaces/${WORKSPACE_KEY}`.
-2. The workflow step calls `actions/cache@v4` with key
-   `workspace-v1-${{ env.WORKSPACE_KEY }}-${{ hashFiles('package-lock.json', ...) }}`
-   and path `${{ runner.temp }}/workspaces/${{ env.WORKSPACE_KEY }}`.
+2. The workflow step calls `actions/cache@v4` with:
+   - `key: workspace-v1-${{ env.WORKSPACE_KEY }}-${{ env.WORKSPACE_FINGERPRINT }}-${{ github.run_id }}`
+     where `WORKSPACE_FINGERPRINT` is `hashFiles('package-lock.json',
+     '.ai/validate.yml', 'package.json')`. Including `run_id`
+     guarantees the post-job save always writes a new entry.
+   - `restore-keys:` ordered prefix list, longest-to-shortest:
+     1. `workspace-v1-${WORKSPACE_KEY}-${WORKSPACE_FINGERPRINT}-`
+        (newest run with same fingerprint)
+     2. `workspace-v1-${WORKSPACE_KEY}-`
+        (newest run for this issue, any fingerprint — may need a
+        hook re-run; W2 `after_create` is invoked)
+   - This combination produces a true append-and-evolve cache: every
+     run writes a fresh entry, every restore picks the latest entry
+     for the issue, and stale fingerprints are upgraded by re-running
+     `after_create`.
 3. `workspace_init.sh` exports `CREATED_NOW=true` if the cache
-   restore was a miss (workspace absent or freshly created),
-   `CREATED_NOW=false` otherwise. Subsequent steps use this to gate
-   one-time setup (W2 hooks).
-4. Workspace path validation:
+   restore was a complete miss **or** matched only the looser
+   second-tier `restore-keys` prefix (fingerprint changed),
+   `CREATED_NOW=false` only if the first-tier exact-fingerprint
+   prefix matched. Subsequent steps use this to gate one-time setup
+   (W2 hooks).
+4. **Cache-budget maintenance.** A new nightly workflow
+   `workspace-cache-maintenance.yml` calls
+   `gh actions caches list` and deletes:
+   - All but the newest 3 entries per `workspace-v1-<key>-<fingerprint>-` prefix.
+   - All entries for tracking-issue keys whose tracking issue is
+     closed.
+   This bounds per-issue cache spend to roughly
+   `3 × workspace_size` and keeps total usage well under the 10 GB
+   repo cap. The maintenance workflow ships in the same PR as W1.
+5. **Fallback to sibling-branch persistence.** If steady-state cache
+   eviction is still observed despite maintenance (tracked via a
+   `cache_evicted_unexpectedly` ledger event when `CREATED_NOW=true`
+   for an issue that previously had `CREATED_NOW=false`), the W1
+   helper switches at flag time to a sibling-branch model: each
+   workspace lives at `ai-workspaces/<WORKSPACE_KEY>` (an orphan
+   branch), checked out at start and committed at end. This is
+   storage-unbounded (subject to repo size limits) and avoids the
+   cache cap entirely. The fallback is implemented as
+   `WORKSPACE_BACKEND={cache,branch}` in `workspace_init.sh`,
+   default `cache`.
+6. Workspace path validation:
    `WORKSPACE_PATH` must have `${RUNNER_TEMP}/workspaces/` as a prefix;
    the script aborts the step on violation. (W3 generalizes this.)
 
-**Files touched.** New `scripts/workspace_init.sh`, edits to
+**Files touched.** New `scripts/workspace_init.sh`, new
+`.github/workflows/workspace-cache-maintenance.yml`, edits to
 `.github/workflows/implement.yml`,
 `.github/workflows/validate.yml`,
 `.github/workflows/review_autofix.yml` (resolver step only),
@@ -958,9 +1065,15 @@ Recommended sequencing:
    protocol?** Answer determines whether S4 is a thin flag flip or
    needs a wrapper that speaks the protocol. Required before S4 is
    sized.
-2. **Q: Is `actions/cache` viable for workspaces that include a full
-   git clone, given repo size and the 10 GB cache cap?** If not,
-   W1 falls back to a per-issue branch in a sibling cache repo.
+2. **Q: Will the W1 versioned-key + restore-keys + nightly-maintenance
+   strategy keep total `actions/cache` usage under the 10 GB
+   per-repo cap on a steady-state stream of orchestrator runs?** W1
+   already specifies a sibling-branch fallback
+   (`WORKSPACE_BACKEND=branch`) for the case where eviction is still
+   observed. The remaining sizing question is the steady-state
+   working-set size (number of active issues × workspace size); we
+   need one week of cache-usage telemetry from a flag-on canary
+   before deciding whether the fallback is needed in practice.
    Required before W1 is sized.
 3. **Q: Does the existing memory layer already track Codex token
    totals per run with enough fidelity to populate U3's `totals`
