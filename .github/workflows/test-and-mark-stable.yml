@@ -706,6 +706,34 @@ jobs:
       # the editor produced at least one commit on top of the bait. This
       # turns Phase 4 from "review found no issues" into a real exercise of
       # the reviewer→editor→commit pipeline.
+      #
+      # Gate-bypass note: the canary file is `.txt` and the smoke PR is
+      # tiny (≤10 additions/deletions), so review_autofix's deterministic
+      # skip would normally fire (doc-only OR small-diff branches in
+      # AUTOFIX_GATE). The next step applies the `force-review` label to
+      # the PR so the gate's override path kicks in and the full reviewer
+      # → editor pipeline runs. Without this label, the gate would skip
+      # review and the bait would never be removed.
+      - name: "Phase 3b1: Apply force-review label to smoke PR"
+        id: force-review-label
+        if: steps.wait-implement.outputs.pr_number != ''
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Create the label if missing (404 is non-fatal; addLabels below
+          # will fail-soft and the gate will skip — verify-bait-removed
+          # then surfaces the regression as a hard failure).
+          gh api "repos/${TEST_REPO}/labels/force-review" >/dev/null 2>&1 || \
+            gh api "repos/${TEST_REPO}/labels" \
+              -f name="force-review" \
+              -f color="d93f0b" \
+              -f description="Bypass review_autofix deterministic skip" \
+              >/dev/null 2>&1 || true
+          gh api "repos/${TEST_REPO}/issues/${PR_NUMBER}/labels" \
+            -f "labels[]=force-review" >/dev/null 2>&1 \
+            || echo "::warning::Could not apply force-review label to PR #${PR_NUMBER}; gate may skip review (verify-bait-removed will surface this)"
+
       - name: "Phase 3c: Inject editor bait commit on PR branch"
         id: inject-bait
         if: steps.wait-implement.outputs.pr_number != ''
@@ -2406,18 +2434,56 @@ jobs:
           echo "✓ Decomposition produced ${CHILD_COUNT} child issues: ${CHILDREN}"
 
       - name: Cleanup orchestrate test issues
-        if: always() && steps.dispatch.outputs.tracking_issue != ''
+        if: always()
         env:
           TRACKING_NUMBER: ${{ steps.dispatch.outputs.tracking_issue }}
           CHILDREN: ${{ steps.dispatch.outputs.child_issues }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
+          # Defence in depth: never abort cleanup on a single failed close.
+          # The orchestrator can leave behind issues even when the
+          # decompose dispatch fails part-way (children created but
+          # tracking comment missing, etc.), so the cleanup also discovers
+          # any open issues whose title carries this run's marker and
+          # closes them too. Each close is retried 3× with backoff.
+          set +e
+          close_with_retry() {
+            local num="$1"
+            [ -n "${num}" ] || return 0
+            local attempt
+            for attempt in 1 2 3; do
+              if gh api "repos/${TEST_REPO}/issues/${num}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned \
+                  >/dev/null 2>&1; then
+                echo "  closed #${num}"
+                return 0
+              fi
+              sleep $(( attempt * 2 ))
+            done
+            echo "::warning::Could not close issue #${num} after 3 attempts (manual cleanup may be required)"
+            return 1
+          }
+
+          # Phase 1: close known issues from the dispatch step's outputs.
           for n in ${TRACKING_NUMBER} $(echo "${CHILDREN}" | tr ',' ' '); do
-            [ -n "${n}" ] || continue
-            gh api "repos/${TEST_REPO}/issues/${n}" \
-              -X PATCH -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
-              || echo "Warning: could not close issue #${n}"
+            close_with_retry "${n}"
           done
+
+          # Phase 2: discover-and-sweep — search for any open issue whose
+          # title carries this run's smoke marker that we missed. Uses
+          # GitHub's issue search API; failure is non-fatal (we did our
+          # best in Phase 1). Matches the prefix used by the dispatch
+          # step's project_description and any child issue the
+          # orchestrator created from it.
+          MARKER="E2E Orchestrate Smoke ${RUN_ID}"
+          MARKER_Q=$(printf '%s' "${MARKER}" | jq -sRr @uri)
+          STRAGGLERS=$(gh api \
+            "search/issues?q=repo:${TEST_REPO}+state:open+in:title+${MARKER_Q}" \
+            --jq '[.items[].number] | join(" ")' 2>/dev/null || echo "")
+          for n in ${STRAGGLERS}; do
+            close_with_retry "${n}"
+          done
+          true  # ensure step exits 0 even if some closes failed
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1e: Validate (reusable) standalone fixture dispatch
@@ -2523,21 +2589,49 @@ jobs:
           set -euo pipefail
           DEADLINE=$(( $(date +%s) + 1500 ))
           OUTCOME=""
+          # Race-resistance: clarify may transit through `ai:planning`
+          # briefly during a multi-cycle clarification before settling on
+          # `ai:awaiting-clarification`. Require any planning/approval
+          # label to persist for two consecutive polls AND ≥45s before
+          # treating it as terminal "false positive". Rejection labels
+          # are always terminal — once they appear the orchestrator does
+          # not regress to planning, so single observation is sufficient.
+          PLANNING_FIRST_SEEN=0
+          PLANNING_PERSIST_REQUIRED_SECS=45
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
             echo "  labels: ${LABELS:-none}"
-            # Acceptable terminal labels for an unsolvable task. Any of
-            # these proves the rejection path fired.
+            # Terminal rejection labels — any one is sufficient.
             if echo "${LABELS}" | grep -qE 'ai:awaiting-clarification|ai:clarify-failed|ai:rejected|ai:clarification-needed'; then
               OUTCOME="rejected"
               break
             fi
-            # Failure mode: clarify happily moved it to planning despite
-            # being unsolvable (clarify rejection path is broken).
-            if echo "${LABELS}" | grep -qE 'ai:planning|ai:awaiting-approval'; then
-              OUTCOME="false_positive"
+            # Bot comment-based rejection signal: clarify posts a comment
+            # when it asks for clarification; look for the canonical
+            # marker so we still pass even if labels were never applied.
+            BODY=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=20" \
+              --jq '[.[] | select(.user.type == "Bot" or (.user.login | endswith("[bot]"))) | .body] | join("\n")' 2>/dev/null || echo "")
+            if echo "${BODY}" | grep -qiE 'NEEDS_CLARIFICATION|clarification.*(needed|required)|cannot proceed without'; then
+              OUTCOME="rejected"
               break
+            fi
+            # Tentative false-positive: only commit to this verdict if
+            # the planning label persists across ≥45s of polling.
+            if echo "${LABELS}" | grep -qE 'ai:planning|ai:awaiting-approval'; then
+              if [ "${PLANNING_FIRST_SEEN}" = "0" ]; then
+                PLANNING_FIRST_SEEN=$(date +%s)
+                echo "  ⚠ saw planning/approval label — waiting ${PLANNING_PERSIST_REQUIRED_SECS}s to confirm it persists"
+              elif [ $(( $(date +%s) - PLANNING_FIRST_SEEN )) -ge "${PLANNING_PERSIST_REQUIRED_SECS}" ]; then
+                OUTCOME="false_positive"
+                break
+              fi
+            else
+              # Label dropped — reset persistence timer.
+              if [ "${PLANNING_FIRST_SEEN}" != "0" ]; then
+                echo "  ↻ planning/approval label cleared — resetting persistence timer"
+                PLANNING_FIRST_SEEN=0
+              fi
             fi
             sleep 15
           done

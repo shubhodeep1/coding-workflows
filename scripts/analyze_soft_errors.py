@@ -274,21 +274,35 @@ def main() -> int:
 		filtered = filter_soft_error_lines(raw, PER_RUN_CHAR_BUDGET)
 		runs.append({"phase": phase, "run_id": run_id, "filtered": filtered})
 
-	if not runs:
-		out_path.write_text(
-			"## Soft-error analyzer\n\nNo runs were supplied.\n",
-			encoding="utf-8",
+	# Status header is parseable: "## Soft-error analyzer (status: <code>, ...)".
+	# Codes:
+	#   - no_runs          : caller supplied no --run specs (caller bug).
+	#   - api_skipped      : OPENROUTER_API_KEY missing → analyser did not
+	#                         call the model. Different from a crash.
+	#   - call_failed      : analyser called the model but the call raised.
+	#   - analyser_empty   : model returned empty content (suspicious — model
+	#                         output failure, not a "no-findings" signal).
+	#   - ok               : model returned content. Findings are inside;
+	#                         the body itself disambiguates "no findings"
+	#                         from "many findings".
+	def _write_report(status: str, body: str) -> None:
+		header = (
+			f"## Soft-error analyzer (status: `{status}`, model: "
+			f"`{args.model}`, reasoning: `{args.reasoning}`)\n\n"
 		)
+		out_path.write_text(header + body.strip() + "\n", encoding="utf-8")
+
+	if not runs:
+		_write_report("no_runs", "No runs were supplied.")
 		return 0
 
 	api_key = os.environ.get("OPENROUTER_API_KEY")
 	if not api_key:
-		stub = (
-			"## Soft-error analyzer\n\n"
+		_write_report(
+			"api_skipped",
 			"OPENROUTER_API_KEY is not set; analyser was skipped. "
-			f"Phases collected: {', '.join(r['phase'] for r in runs)}.\n"
+			f"Phases collected: {', '.join(r['phase'] for r in runs)}.",
 		)
-		out_path.write_text(stub, encoding="utf-8")
 		return 0
 
 	messages = build_analyser_prompt(args.repo, runs)
@@ -301,19 +315,22 @@ def main() -> int:
 			api_key=api_key,
 		)
 	except Exception as exc:  # noqa: BLE001 — non-blocking by design
-		stub = (
-			"## Soft-error analyzer\n\n"
-			f"Analyser call failed: `{exc}`. Filtered log excerpts retained "
-			f"in the workflow run artifacts.\n"
+		_write_report(
+			"call_failed",
+			f"Analyser call failed: `{exc}`. Filtered log excerpts "
+			"retained in the workflow run artifacts.",
 		)
-		out_path.write_text(stub, encoding="utf-8")
 		return 0
 
-	header = (
-		f"## Soft-error analyzer (model: `{args.model}`, reasoning: "
-		f"`{args.reasoning}`)\n\n"
-	)
-	out_path.write_text(header + report.strip() + "\n", encoding="utf-8")
+	if not report.strip():
+		_write_report(
+			"analyser_empty",
+			"Model returned empty content. Treat as analyser failure, "
+			"not as 'no soft errors found'.",
+		)
+		return 0
+
+	_write_report("ok", report)
 	return 0
 
 
