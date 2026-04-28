@@ -1816,16 +1816,16 @@ jobs:
           fi
 
           if [ "$IS_SMOKE" = "true" ]; then
-            echo "🔬 Smoke test PR detected — switching to low reasoning effort and reduced reviewer set"
+            echo "🔬 Smoke test PR detected — switching to low reasoning effort (full reviewer set retained)"
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-            # Use only 2 fast models for smoke tests
-            {
-              echo 'REVIEWER_MODELS<<SMOKE_EOF'
-              echo 'google/gemini-3-flash-preview'
-              echo 'stepfun/step-3.5-flash'
-              echo 'SMOKE_EOF'
-            } >> "$GITHUB_ENV"
+            # Keep the full production REVIEWER_MODELS list so the smoke gate
+            # exercises every reviewer the consumer pipeline will use; only the
+            # reasoning effort is dialled down. A previous variant pruned the
+            # set to 2 fast models, which hid regressions in models that only
+            # appeared in the production list. Per CLAUDE.md §1 (correctness >
+            # speed) and the release-gate contract: comprehensive coverage
+            # over runtime savings.
             # Patch the already-written codex config to use low reasoning (if present)
             if [ -f "${HOME}/.codex/config.toml" ]; then
               sed -i 's/^[[:space:]]*model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
