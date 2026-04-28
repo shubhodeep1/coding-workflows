@@ -1018,6 +1018,30 @@ jobs:
               rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
             fi
           fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver.txt not found in checked-out support sources for ${SCRIPT_REF}; orchestrator/project-* runs will fall back to the generic conflict-resolver template (intent-injection disabled)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-prelude.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-prelude.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-prelude.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver-retry-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver retries on integration-sync runs will use the original prompt verbatim (no reflexion guidance)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+            fi
+          fi
 
       - name: Show disk usage (post support-source staging)
         run: df -h /
