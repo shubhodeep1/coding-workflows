@@ -194,6 +194,127 @@ def test_compose_dockerfile_path_tracks_output_root_name() -> None:
         assert "dockerfile: custom-output/Dockerfile.app" in compose_text
 
 
+def test_env_overrides_propagate_into_validate_env_and_compose() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        payload["env_overrides"] = {
+            "CI": "true",
+            "HARDHAT_NETWORK": "hardhat",
+            "HARDHAT_TEST_CMD": "npx hardhat test",
+            "RPC_URL_ETHEREUM": "https://example.invalid/eth",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+        assert 'CI="true"' in env_text, env_text
+        assert 'HARDHAT_NETWORK="hardhat"' in env_text, env_text
+        assert 'HARDHAT_TEST_CMD="npx hardhat test"' in env_text, env_text
+        assert 'RPC_URL_ETHEREUM="https://example.invalid/eth"' in env_text, env_text
+        for line in env_text.splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            assert '="' in line and line.endswith('"'), f"unquoted validate.env line: {line}"
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # Manifest overrides must beat the compose host-shell fallbacks. When the
+        # manifest sets an override, the compose `environment:` block must carry
+        # the literal override value (not a `${VAR:-default}` interpolation that
+        # depends on the harness host shell).
+        assert 'HARDHAT_NETWORK: "hardhat"' in compose_text, compose_text
+        assert 'HARDHAT_TEST_CMD: "npx hardhat test"' in compose_text, compose_text
+        assert 'CI: "true"' in compose_text, compose_text
+        assert 'RPC_URL_ETHEREUM: "https://example.invalid/eth"' in compose_text, compose_text
+        # The manifest override must replace the host-shell fallback for the
+        # exact key it covers; any remaining `${HARDHAT_NETWORK:-...}` would
+        # silently revert the override at compose interpolation time.
+        assert "${HARDHAT_NETWORK:-localhost}" not in compose_text, compose_text
+        assert "${HARDHAT_TEST_CMD:-" not in compose_text, compose_text
+
+
+def test_env_overrides_default_compose_falls_back_to_host_shell_when_unset() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # No env_overrides → preserve previous default behavior so existing
+        # consumer manifests render byte-compatibly.
+        assert 'HARDHAT_NETWORK: "${HARDHAT_NETWORK:-localhost}"' in compose_text, compose_text
+        assert 'HARDHAT_TEST_CMD: "${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"' in compose_text, compose_text
+
+
+def test_rpc_probe_is_skipped_for_in_process_hardhat_network() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        payload["env_overrides"] = {
+            "HARDHAT_NETWORK": "hardhat",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        assert "# SKIP manifest selects in-process Hardhat network" in rpc_probe, rpc_probe
+        # The skip path must not perform any Anvil RPC traffic.
+        assert "docker compose" not in rpc_probe, rpc_probe
+        assert "http://anvil" not in rpc_probe, rpc_probe
+
+
+def test_rpc_probe_runs_when_manifest_does_not_select_in_process_hardhat() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        assert "# SKIP manifest selects in-process Hardhat network" not in rpc_probe
+        assert "docker compose" in rpc_probe
+        # Failure diagnostics must surface curl exit/stderr so a regression of
+        # the "empty response" mode is actionable rather than opaque.
+        assert "##CURL_EXIT=" in rpc_probe
+        assert "curl exit" in rpc_probe
+
+
+def test_hardhat_test_runner_does_not_clobber_container_env_with_host_shell_value() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        runner_text = (output_root / "tests" / "30_hardhat_test.sh").read_text(encoding="utf-8")
+        # `docker compose exec -T -e HARDHAT_TEST_CMD=...` would re-export the
+        # harness host shell value into the container and silently override the
+        # manifest-driven container env. The runner must rely on the container
+        # env (set via env_file + compose environment) instead.
+        assert "-e HARDHAT_TEST_CMD" not in runner_text, runner_text
+        # Runner must source validate.env so failure diagnostics report the
+        # actual command that ran inside the container.
+        assert '"${ROOT_DIR}/validate.env"' in runner_text, runner_text
+
+
 def main() -> int:
     tests = [func for name, func in sorted(globals().items()) if name.startswith("test_")]
     failures = 0
