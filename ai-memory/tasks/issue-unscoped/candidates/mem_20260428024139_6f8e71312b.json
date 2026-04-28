@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2:35-36 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The nested shell command uses an unexported variable across exec, causing runtime failure.\n  WHY: minimax marked this as a certain runtime failure; moonshotai and z-ai reviewed the same shell sequence and disputed it as a false positive / not a bug.\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2:14 | severity=high\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The escaping chain may mishandle values with both backslashes and special characters.\n  WHY: Both reviewers raised the same escaping-order concern, and z-ai explicitly concluded the current order is correct, so the item is disputed.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2:32 | severity=medium\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Only HARDHAT_NETWORK uses | string | trim, leaving the other override values untrimmed.\n  WHY: moonshotai called this intentional and correct by design, and z-ai called it a valid observation but not a runtime failure.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2:32, 37, 47 | severity=low\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The escaping order in docker-compose.test.yml.j2 could be fragile.\n  WHY: Both reviewers described it as a theoretical concern and reported no actual bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2:35-36 | severity=critical | confidence=5\n  PROBLEM: The nested shell command uses an unexported variable across exec, causing runtime failure.\n  WHY: The inner `/bin/sh -c \"${cmd}\"` is reached through a separate shell invocation, so the shell variable is not available and the hardhat test command can fail at runtime.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2:35-36 | severity=critical\n  PROBLEM: The nested shell command uses an unexported variable across exec.\n  WHY: The reviewer says the command is actually correct because `${cmd}` is expanded by the first shell before `exec`, so the critical issue is a false positive.\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2:14 | severity=high\n  PROBLEM: The escaping chain may mishandle values with both backslashes and special characters.\n  WHY: The reviewer says the escaping order is correct for the tested cases and the concern is theoretical.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2:32 | severity=medium\n  PROBLEM: Only HARDHAT_NETWORK uses | string | trim.\n  WHY: The reviewer says this is intentional because HARDHAT_NETWORK is the only value used in the lowercased skip decision.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2:32, 37, 47 | severity=low\n  PROBLEM: YAML escaping order could be fragile.\n  WHY: The reviewer says the current replacement order is correct and no actual bug was identified.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2:35 | severity=critical\n  PROBLEM: The nested shell command uses an unexported variable across exec.\n  WHY: The reviewer says `${cmd}` is expanded by the first shell before `exec`, so the finding is not a bug.\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2:14 | severity=high\n  PROBLEM: The escaping chain may mishandle values with both backslashes and special characters.\n  WHY: The reviewer says backslashes are escaped first and the edge cases work correctly.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2:32 | severity=medium\n  PROBLEM: Only HARDHAT_NETWORK uses | string | trim.\n  WHY: The reviewer says this is intentional because trimming is needed only for the HARDHAT_NETWORK skip decision.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2:32, 37, 47 | severity=low\n  PROBLEM: YAML escaping order potentially fragile.\n  WHY: The reviewer says the order is correct and the `$ \u2192 $$` replacement is intentional.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cc63cb1d4e63506cce926bc6cb6bd4323727586aff945f0b1ce7f6f113f3c070",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1701,
+    "run_id": "25030043227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25030043227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428024139_6f8e71312b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1701,
+    "run_id": "25030043227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T02:41:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
