@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The file contains a fourth line, but the task requires exactly three lines with no extra content.\n  WHY: All three reviewers identified the same extra comment line on line 4, and it violates the explicit exact-three-lines requirement.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains an extra fourth line that should be removed.\n  WHY: The file must contain exactly three lines, but line 4 adds an extra comment and violates the requirement.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The added comment on line 4 violates the explicit requirement for exactly three lines and no extra content.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains an extra comment line that violates the required exact 3-line format.\n  WHY: Line 4 adds content beyond the three required lines, which fails the task's explicit \"exactly three lines\" constraint.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "de96be2aa03440033423ac0b4c1bc40b11dcec13b8af62d35489c2683776560c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1735,
+    "run_id": "25074433406",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25074433406",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428201143_d723f18826",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1735,
+    "run_id": "25074433406"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T20:11:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
