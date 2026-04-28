@@ -561,3 +561,55 @@ If you want, I can turn this into a **ranked remediation checklist** with owner/
 | Code modularization | 3 | Medium |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 4-5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-04-28)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is statically proven safe within the same step/function and preserves filters, pagination, retries, and failure semantics. `NEEDS_VERIFICATION` means the overlap is real but at least one of those safety conditions is not fully provable from static reading alone. `RISKY_SKIP` means the inefficiency is visible, but the call lives in a retry/race-defense/pagination-sensitive path that must not be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:1768-1777` and `.github/workflows/issue_pr_status.yml:1948-1967`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Current call count** — 2 GraphQL calls on the path where `ISSUE_NUMBERS` is non-empty.  
+  **Proposed call count** — 1 GraphQL call.  
+  **Endpoint(s)** — GitHub GraphQL `POST /graphql`. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Evidence** — the step first fetches only linked issue numbers from `closingIssuesReferences`, then immediately builds a second GraphQL query to refetch those same issues by number for `labels` and `body`:
+  ```bash
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    -f owner="${REPOSITORY%/*}" \
+    -f name="${REPOSITORY#*/}" \
+    -F number="${PR_NUMBER}" \
+    -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+  ...
+  ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+  ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ```
+  The second call is enrichment-only for the exact issues already discovered by the first call, so the first query is an overlap candidate for direct field expansion. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Proposed fix** — extend the initial `pullRequest(number:$number)` query in `Update linked issue labels when PR closes` to request `closingIssuesReferences(first: 50) { nodes { number body labels(first: 50) { nodes { name } } } }`, parse that response into the existing tracking/managed-issue classifier, and delete the `ORCH_ALIAS_FRAGMENT` / `ORCH_QUERY` round-trip on the GraphQL-success path. If maintainers want to keep an explicit batching helper style, use the aliased-GraphQL batching contract referenced in `codex_system_instructions.md` §14 (`_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql`). ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Safety rationale** — both calls are in the same workflow step and hit the same GraphQL endpoint with the same auth scope, but static reading here does not fully prove that replacing the alias-shaped `ORCH_RESP` payload preserves the current `ORCH_BATCH_FAILED` fail-open behavior for empty or partial GraphQL responses. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/.github/workflows/issue_pr_status.yml))  
+  **Downstream signal** — Verify that `closingIssuesReferences.nodes` in this repository’s GraphQL schema accepts `body` and `labels(first:50)`, then run one merged-PR case with multiple linked issues and one regex-fallback-only case to confirm `TRACKING_ISSUES` / `MANAGED_ISSUES` outcomes remain identical before removing `ORCH_QUERY`.
+
+### Redundant Re-Fetch (REUSE-###)
+No findings.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `NEEDS_VERIFICATION` — the direct comment-by-ID fetch is directionally correct, but the implementer must preserve current behavior when the comment is missing or inaccessible because switching from a paginated list read to `GET /issues/comments/{id}` changes the failure shape from “not found in array” to a hard API error/404. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/analysis/workflow-optimization-2026-04-28.md))
+- `API-002`: `RISKY_SKIP` — this waiter explicitly rides out Actions indexing lag with local rate-limit backoff before trying to infer readiness, so replacing it changes a race-defense polling path and must not be auto-implemented without manual equivalence testing against real delayed-index scenarios. ([github.com](https://github.com/shubhodeep1/coding-workflows/blob/main/analysis/workflow-optimization-2026-04-28.md))
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, API-001 |
+| RISKY_SKIP | 1 | API-002 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
