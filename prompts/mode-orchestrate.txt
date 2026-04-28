@@ -29,17 +29,19 @@ Rules:
   per-attempt wall-time is 110 minutes (`EDITOR_MAX_WALL=6600`), and the
   3-hour job budget allows at most ~2 full attempts before the budget
   guard skips the rest, so a 60-minute target leaves headroom for retry.
-  For each issue, estimate the wall-clock implementation time the editor
-  would need and emit it as `implementation_minutes_estimate` (integer
-  minutes). If the estimate exceeds 60, do NOT emit the issue as-is —
-  split it into smaller sequential sub-issues whose individual estimates
-  are each ≤ 60 minutes and wire them with `dependency_edges` in
-  foundation-first order. Practical signals that a task exceeds 60
-  minutes: >10 files touched, multiple new MongoDB collections + their
-  contracts + their indexes, broad cross-cutting refactors, or a feature
-  that requires both a new write path AND a new read path AND a new
-  background worker. Bias toward smaller issues — the splitter cost is
-  cheap; a wasted 3-hour implement run is not.
+  For each issue, internally estimate the wall-clock implementation
+  time the editor would need; populating `implementation_minutes_estimate`
+  (integer minutes) is optional but STRONGLY RECOMMENDED — when emitted
+  it MUST be ≤ 60. If the estimate exceeds 60, do NOT emit the issue as-is
+  regardless of whether you populate the field — split it into smaller
+  sequential sub-issues whose individual estimates are each ≤ 60 minutes
+  and wire them with `dependency_edges` in foundation-first order.
+  Practical signals that a task exceeds 60 minutes: >10 files touched,
+  multiple new MongoDB collections + their contracts + their indexes,
+  broad cross-cutting refactors, or a feature that requires both a new
+  write path AND a new read path AND a new background worker. Bias
+  toward smaller issues — the splitter cost is cheap; a wasted 3-hour
+  implement run is not.
 - Use dependency edges to encode ordering constraints. An issue should only
   depend on another if it literally cannot be implemented without the other
   being merged first (shared types, API contracts, schema changes, etc.).
