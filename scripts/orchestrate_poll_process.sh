@@ -5316,7 +5316,7 @@ REISSUE_EOF
           [ .[]?
             | select(($since == "") or ((.commit.committer.date // "") >= $since))
             | (.commit.message // "")
-            | select(test("^\\[ai-autofix\\]|^\\[judge-fix\\]"))
+            | select(test("^(\\[ai-autofix\\]|\\[judge-fix\\])"))
           ] | length
         ' 2>/dev/null || echo 0)"
         if [[ "${_skip_recent_autofix}" =~ ^[0-9]+$ ]] && [ "${_skip_recent_autofix}" -gt 0 ]; then
