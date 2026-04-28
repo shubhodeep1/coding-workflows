@@ -64,6 +64,34 @@ SOFT_ERROR_PATTERNS = [
 ]
 SOFT_ERROR_RE = re.compile("|".join(SOFT_ERROR_PATTERNS), re.IGNORECASE)
 
+# Lines that look noisy under SOFT_ERROR_PATTERNS but are actually
+# structured-telemetry success signals. Matched case-insensitively against
+# the *whole* line; on a hit the line is excluded from the analyser payload
+# even when one of the inclusion patterns also matches. Use this for known
+# JSON event shapes the workflows emit during normal operation, where the
+# raw "FAIL" / "ERROR" / numeric-status keywords appear inside JSON values
+# (e.g. `"last_error":""`, `"http_status":200`, `"event":"batch_noop"`)
+# rather than as actual error indicators. Reviewer-flagged false-positive
+# mitigation; conservative on purpose — only adds known-safe sigils.
+SOFT_ERROR_EXCLUDE_PATTERNS = [
+	# Healthy structured telemetry events with no real failure.
+	r'"event"\s*:\s*"batch_noop"',
+	r'"event"\s*:\s*"codex_contract_noop"',
+	r'"event"\s*:\s*"telemetry"\b.*"status"\s*:\s*"ok"',
+	# JSON keys that contain failure-keyword substrings but are field
+	# names rather than incident indicators.
+	r'"(last_error|prev_error|previous_failure|max_retries|retry_count|cache_misses|fallback_used|error_count|warning_count)"\s*:\s*("?(?:0|"\s*"|"")"?|null|false)\b',
+	# `gh api` HTTP envelopes that print the matched status code in the
+	# 2xx range — these are healthy responses but the line trips the
+	# numeric-status soft-error pattern.
+	r"\bHTTP/[12]\.[01]\s+(20\d|30\d)\b",
+	# Single-line `STATUS=success conclusion=success` summaries from the
+	# orphan-workflows-test dispatch loops, which contain literal
+	# "success" but also reference status keywords.
+	r"\bSTATUS=completed\b.*\bCONCLUSION=success\b",
+]
+SOFT_ERROR_EXCLUDE_RE = re.compile("|".join(SOFT_ERROR_EXCLUDE_PATTERNS), re.IGNORECASE)
+
 
 def _gh_api(path: str, *, accept: str = "application/vnd.github+json") -> bytes:
 	token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
@@ -132,12 +160,20 @@ def filter_soft_error_lines(text: str, char_budget: int) -> str:
 	lines = text.splitlines()
 	keep = [False] * len(lines)
 	for i, line in enumerate(lines):
-		if SOFT_ERROR_RE.search(line):
-			keep[i] = True
-			if i > 0:
-				keep[i - 1] = True
-			if i + 1 < len(lines):
-				keep[i + 1] = True
+		# Inclusion gate: line matches a soft-error keyword pattern.
+		if not SOFT_ERROR_RE.search(line):
+			continue
+		# Exclusion gate: the line is structured telemetry that happens
+		# to share substrings with the inclusion patterns. Drop it so
+		# the analyser's input is not poisoned with false-positive
+		# success events.
+		if SOFT_ERROR_EXCLUDE_RE.search(line):
+			continue
+		keep[i] = True
+		if i > 0:
+			keep[i - 1] = True
+		if i + 1 < len(lines):
+			keep[i + 1] = True
 
 	out: list[str] = []
 	last_emitted = -2
