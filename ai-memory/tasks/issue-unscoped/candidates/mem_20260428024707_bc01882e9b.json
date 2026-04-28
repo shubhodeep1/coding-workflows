@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2667-2674 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The `grep -c ... || echo 0` fallback can turn the no-match case into `0\\n0`, so the first-iteration empty-output retry never fires.\n  WHY: Two reviewers independently identified the same shell bug, and one confirmed the fix to `|| true` restores the intended retry behavior.\n- tests/test_orchestrate_lib.py:N/A | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The new `max_recoveries_by_phase` override behavior lacks explicit test coverage.\n  WHY: The reviewer noted that the existing tests only cover backward compatibility, so bugs in the new phase-specific cap path would only show up when the override is non-default.\n- scripts/orchestrate_poll_process.sh:~5319 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The regex `^\\\\[ai-autofix\\\\]|^\\\\[judge-fix\\\\]` relies on precedence behavior that is fragile across refactors or regex engines.\n  WHY: The reviewer pointed out that the current jq/Oniguruma interpretation happens to work, but an apparently clearer rewrite or a port could change the match behavior.\n- scripts/review_commit_changes.sh:~525-535 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The audit parser depends on PCRE negative lookbehind and can silently fail in environments without `grep -P`.\n  WHY: The reviewer warned that `(?<!already )` assumes PCRE support, and the `|| true` fallback would mask a grep failure by returning empty strings.\n- scripts/orchestrate_poll_process.sh:~5312, .github/workflows/review_autofix.yml:~1614 | severity=medium | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `gh api --paginate | jq -s 'add // []'` can load all check-run pages into memory at once.\n  WHY: The reviewer noted that a very large number of check-runs could OOM the runner and lose context for that iteration.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:2667-2674 | severity=medium | confidence=5\n  PROBLEM: The `grep -c ... || echo 0` fallback can turn the no-match case into `0\\n0`, so the first-iteration empty-output retry never fires.\n  WHY: `grep -c` prints `0` and exits 1 on no matches, so `|| echo 0` appends a second `0`; changing it to `|| true` fixes the behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_lib.py:N/A | severity=low | confidence=4\n  PROBLEM: The new `max_recoveries_by_phase` override behavior lacks explicit test coverage.\n  WHY: The existing tests only verify backward compatibility, not the new phase-specific override path.\n- scripts/orchestrate_poll_process.sh:~5319 | severity=low | confidence=3\n  PROBLEM: The regex `^\\\\[ai-autofix\\\\]|^\\\\[judge-fix\\\\]` relies on precedence behavior that is fragile across refactors or regex engines.\n  WHY: The current jq/Oniguruma interpretation works, but the reviewer warned it could become a false-positive source if rewritten or ported.\n- scripts/review_commit_changes.sh:~525-535 | severity=medium | confidence=3\n  PROBLEM: The audit parser depends on PCRE negative lookbehind and can silently fail in environments without `grep -P`.\n  WHY: The `(?<!already )` extraction assumes PCRE support, and the `|| true` fallback would mask a grep failure by returning empty strings.\n- scripts/orchestrate_poll_process.sh:~5312, .github/workflows/review_autofix.yml:~1614 | severity=medium | confidence=2\n  PROBLEM: `gh api --paginate | jq -s 'add // []'` can load all check-run pages into memory at once.\n  WHY: The reviewer warned that very large check-run sets could OOM the runner and lose context for that iteration.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:2672-2674 | severity=medium | confidence=5\n  PROBLEM: The `grep -c ... || echo 0` fallback can turn the no-match case into `0\\n0`, so the first-iteration empty-output retry never fires.\n  WHY: `grep -c` prints `0` and exits 1 when there are no matches, so `|| echo 0` appends a second `0`; switching to `|| true` restores the intended behavior.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5e51f53790f76aca61eca6082aec59a22440aa26674ffb14c2ccf2898c81c3d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1703,
+    "run_id": "25030592835",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25030592835",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428024707_bc01882e9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1703,
+    "run_id": "25030592835"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T02:47:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
