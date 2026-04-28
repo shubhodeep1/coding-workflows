@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Clarification required\n\nClarification required before planning. Current understanding: scope is `scripts/test_and_mark_stable.sh`, and this is a bug-fix request tied to run `25052125603`, but the concrete symptom is still missing.\n\n**Q3: What exact bug in `scripts/test_and_mark_stable.sh` from run `25052125603` should the plan target?**\n\nChoices:\n- **A** \u2014 Wrong pass/fail outcome or premature exit; include the failing step name and the exact error/log line (RECOMMENDED)\n- **B** \u2014 Wrong side effect (issue/PR/comment/label/artifact/notification); include expected vs actual behavior\n- **C** \u2014 Different script bug; include the exact symptom and where it appeared in run `25052125603`\n\nReply: `Q3: A`\n\nReply with:\n/answer",
+  "fingerprint": "3f0f8385afb2e995fd5163d46a9e20924f9c2fea4d92de39922de609dd1f3ace",
+  "lineage": {
+    "issue_number": 1718,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25052390881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25052390881",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1718"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260428133316_01fb92d844",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1718,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25052390881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #1718",
+  "timestamps": {
+    "created_at": "2026-04-28T13:33:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
