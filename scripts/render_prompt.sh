@@ -65,7 +65,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
 	esac
 done < "${PROMPT_FILE}" > "${RENDERED_FILE}"
 
-if grep -q '{{SERENA_EFFICIENCY_BLOCK_[A-Z_][A-Z_]*}}' "${RENDERED_FILE}"; then
+if grep -qE '^\{\{SERENA_EFFICIENCY_BLOCK_[A-Z_][A-Z_]*\}\}$' "${RENDERED_FILE}"; then
 	echo "Unresolved Serena placeholder token(s) in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi
