@@ -71,36 +71,37 @@ def test_orchestrator_tracking_issues_are_skipped_in_label_close_loop() -> None:
 
 	When a PR's body mentions an orchestrator tracking issue (or one is
 	resolved via the regex fallback), this workflow must not relabel or
-	auto-close it. Terminal-phase ownership for orchestrator-managed
+	auto-close it. Terminal-phase ownership for orchestrator project
 	tracking issues belongs exclusively to scripts/orchestrate_poll_process.sh.
 
-	The Telegram alert step at the bottom of the workflow already had an
-	IS_ORCHESTRATED guard scanning the issue body for the
-	"Managed by: AI Orchestrator" marker, but the guard was not applied
-	to the label/close path above it. This test pins the new guard.
+	Tracking issues carry the `ai:orchestrator-tracking` label; the
+	classifier must skip them based on that label (the parent body does
+	NOT contain the "Managed by: AI Orchestrator" marker — that marker
+	identifies child issues, see orchestrate_poll_process.sh:8406).
 	"""
 	text = _workflow_text()
 
 	# The detection step builds an aliased GraphQL query that fetches both
 	# labels and body for every linked issue in a single API call.
 	assert "ORCH_ALIAS_FRAGMENT" in text, (
-		"Expected batched GraphQL detection of orchestrator-managed issues"
+		"Expected batched GraphQL detection of orchestrator-related issues"
 	)
 	assert ' i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }' in text, (
 		"Expected aliased GraphQL fragment that fetches labels+body in one call"
 	)
 
-	# Detection must check both the orchestrator-tracking label and the
-	# body marker (either signal must be sufficient).
+	# Tracking detection MUST be by label only — the parent tracking body
+	# does not carry "Managed by: AI Orchestrator", so a body-based check
+	# would mis-classify children as tracking and re-introduce the
+	# stranded-child bug.
 	assert 'index("ai:orchestrator-tracking")' in text
-	assert 'contains("Managed by: AI Orchestrator")' in text
 
 	# GraphQL validity requires complete aliased-issue coverage; any missing/null
 	# alias entry must trigger REST fallback.
 	assert 'and (([.data.repository | to_entries[] | .value | select(. != null)] | length) == $expected)' in text
 
 	# Fail-open contract: GraphQL failure must fall back to per-issue REST,
-	# not silently degrade to the buggy "label everything" behavior.
+	# not silently degrade detection.
 	assert "Orchestrator-issue batch detection failed; falling back to per-issue REST" in text, (
 		"GraphQL failure path must use per-issue REST fallback so a transient "
 		"GraphQL error cannot re-introduce the auto-label bug."
@@ -109,20 +110,20 @@ def test_orchestrator_tracking_issues_are_skipped_in_label_close_loop() -> None:
 		"Per-issue REST fallback lookup must remain wired in the GraphQL-failure path."
 	)
 
-	# Loop guard: the label/close loop must consult ORCHESTRATED_ISSUES
+	# Loop guard: the label/close loop must consult TRACKING_ISSUES
 	# and continue (skip) before touching the label or issue state.
 	assert (
-		'if [ -n "${ORCHESTRATED_ISSUES}" ] && '
-		'printf \'%s\\n\' "${ORCHESTRATED_ISSUES}" | grep -qxF "${issue_number}"; then'
-	) in text, "Expected ORCHESTRATED_ISSUES gate inside the label/close loop"
+		'if [ -n "${TRACKING_ISSUES}" ] && '
+		'printf \'%s\\n\' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then'
+	) in text, "Expected TRACKING_ISSUES skip gate inside the label/close loop"
 
 	# Detection block must precede the label/close loop.
-	detect_pos = text.find("ORCH_ALIAS_FRAGMENT=\"\"")
-	gate_pos = text.find('Skipping orchestrator-managed issue #${issue_number}')
+	detect_pos = text.find("TRACKING_ISSUES=\"\"")
+	gate_pos = text.find('Skipping orchestrator-tracking issue #${issue_number}')
 	label_call_pos = text.find('set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"')
 	close_call_pos = text.find('gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"')
 	assert detect_pos != -1, "Detection block missing"
-	assert gate_pos != -1, "Skip-log marker missing inside label/close loop"
+	assert gate_pos != -1, "Tracking-skip log marker missing inside label/close loop"
 	assert label_call_pos != -1, "set_issue_phase_label_resilient call missing"
 	assert close_call_pos != -1, "gh issue close call missing"
 	assert detect_pos < gate_pos < label_call_pos, (
@@ -133,9 +134,87 @@ def test_orchestrator_tracking_issues_are_skipped_in_label_close_loop() -> None:
 		"Skip gate must precede the gh issue close call."
 	)
 
+	# Conservative fail-open contract: when the per-issue REST lookup also
+	# fails, classify as tracking (skip) rather than managed (close). This
+	# keeps the #1469 regression closed even when GitHub is degraded.
+	assert "conservatively treating as tracking (skip)" in text, (
+		"REST fallback must default to tracking-skip on metadata fetch failure"
+	)
+
+
+def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() -> None:
+	"""Regression guard for the orchestrator-child stranding recurrence.
+
+	Orchestrator-managed child issues carry the `ai:orchestrator-managed`
+	label and the "Managed by: AI Orchestrator" body marker. Their PRs
+	always target an integration branch (`orchestrator/project-N`),
+	never `main`, so the previous skip-everything-orchestrator rule
+	combined with the `PR_BASE_REF == main` close gate left them stuck
+	open on `ai:ready-to-merge` until the orchestrator poller eventually
+	caught them via close_merged_issues_sweep.
+
+	Policy:
+	  - Detect children by `ai:orchestrator-managed` label OR the body
+	    marker, but NOT if they also carry `ai:orchestrator-tracking`
+	    (tracking takes precedence, skip wins).
+	  - On PR close, set FINAL_LABEL on the child and close the issue
+	    regardless of base ref.
+	  - Non-orchestrator standalone issues continue to use the original
+	    `PR_BASE_REF == main` close gate.
+	"""
+	text = _workflow_text()
+
+	# Two distinct buckets must exist.
+	assert "TRACKING_ISSUES=\"\"" in text, "Tracking bucket must be initialized"
+	assert "MANAGED_ISSUES=\"\"" in text, "Managed-children bucket must be initialized"
+
+	# Managed-child detection must include the label AND body marker as
+	# either signal, but must EXCLUDE issues with the tracking label (so
+	# tracking always wins).
+	assert 'index("ai:orchestrator-managed")' in text, (
+		"Managed-children classifier must check ai:orchestrator-managed label"
+	)
+	assert 'contains("Managed by: AI Orchestrator")' in text, (
+		"Managed-children classifier must check the body marker"
+	)
+	assert 'index("ai:orchestrator-tracking")) == null' in text, (
+		"Managed-children classifier must exclude issues that also carry "
+		"ai:orchestrator-tracking (tracking takes precedence)"
+	)
+
+	# Loop must compute is_managed_child for the active issue.
+	assert "is_managed_child=false" in text, "Default is_managed_child must be false"
+	assert (
+		'if [ -n "${MANAGED_ISSUES}" ] && '
+		'printf \'%s\\n\' "${MANAGED_ISSUES}" | grep -qxF "${issue_number}"; then'
+	) in text, "Loop must consult MANAGED_ISSUES for the current issue"
+	assert "is_managed_child=true" in text, "Loop must flip is_managed_child when matched"
+
+	# Close gate must include the managed-child branch — closing the
+	# issue when its PR merges into orchestrator/project-N (base != main).
+	assert (
+		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then'
+	) in text, (
+		"Close gate must close on PR_MERGED!=true, PR_BASE_REF==main, "
+		"OR is_managed_child==true"
+	)
+	assert "Closing orchestrator-managed child issue #${issue_number}" in text, (
+		"Managed-child close path must emit a distinguishing log line"
+	)
+
+	# Managed-child detection must run before the loop touches the label.
+	managed_classify_pos = text.find('index("ai:orchestrator-managed")')
+	loop_check_pos = text.find('is_managed_child=true')
+	label_call_pos = text.find('set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"')
+	assert managed_classify_pos != -1
+	assert loop_check_pos != -1
+	assert label_call_pos != -1
+	assert managed_classify_pos < loop_check_pos < label_call_pos
+
 
 if __name__ == "__main__":
 	test_payload_first_fallback_and_shared_helper_usage()
 	test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls()
 	test_orchestrator_tracking_issues_are_skipped_in_label_close_loop()
+	test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge()
 	print("PASS")

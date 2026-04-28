@@ -150,6 +150,46 @@ EOF
   rm -rf "${probe_home}" 2>/dev/null || true
 }
 
+# Reviewer slugs whose upstream OpenRouter providers reject codex-cli v0.125's
+# `type: "namespace"` MCP tool envelope on /v1/responses with HTTP 422 "Provider
+# returned error". For these, strip MCP from the per-reviewer codex-home so no
+# namespace tool is sent. Empirically determined from review run #25041117408:
+# minimax/minimax-m2.5, moonshotai/kimi-k2.5, z-ai/glm-5 accept the envelope;
+# deepseek/deepseek-v4-pro, qwen/qwen3.6-plus, x-ai/grok-4.1-fast reject it.
+# Re-evaluate when bumping codex-cli or rotating reviewer slugs. Newline-
+# separated like REVIEWER_MODELS; override via env to add/remove without an
+# edit. Empty value disables the no-MCP fallback path entirely.
+MCP_INCOMPATIBLE_REVIEWER_MODELS="${MCP_INCOMPATIBLE_REVIEWER_MODELS-deepseek/deepseek-v4-pro
+qwen/qwen3.6-plus
+x-ai/grok-4.1-fast}"
+
+is_mcp_incompatible_model() {
+  local model="$1"
+  local incompat
+  # Use default IFS so `read` strips leading/trailing whitespace (spaces, tabs)
+  # — robust to operator-supplied values that may carry indentation or tabs
+  # from multi-line GitHub Actions env definitions.
+  while read -r incompat; do
+    [ -z "${incompat}" ] && continue
+    [ "${model}" = "${incompat}" ] && return 0
+  done <<< "${MCP_INCOMPATIBLE_REVIEWER_MODELS}"
+  return 1
+}
+
+# Strip every [mcp_servers.*] table (and sub-tables like [mcp_servers.git.env])
+# from the given codex config.toml. Mirrors the awk pattern in setup_serena.sh's
+# remove_mcp_server_blocks but matches all server names. Used to neuter MCP for
+# reviewer slugs that 422 on namespace-wrapped tool envelopes.
+strip_all_mcp_server_blocks() {
+  local codex_cfg="$1"
+  [ -f "${codex_cfg}" ] || return 0
+  awk '
+    /^[[:space:]]*\[mcp_servers\./ { skip=1; next }
+    /^[[:space:]]*\[/ { skip=0 }
+    !skip { print }
+  ' "${codex_cfg}" > "${codex_cfg}.tmp" && mv "${codex_cfg}.tmp" "${codex_cfg}" || { rm -f "${codex_cfg}.tmp"; return 1; }
+}
+
 mkdir -p "${PREVIOUS_REVIEWS_DIR}"
 
 run_cache_probe || true
@@ -721,6 +761,10 @@ run_reviewer() {
   local output_prefix="${3:-review}"
   local prompt_file="${4:-${REVIEWER_PROMPT_FILE}}"
   local reasoning_level="${5:-}"
+  local strip_mcp=0
+  if is_mcp_incompatible_model "${model}"; then
+    strip_mcp=1
+  fi
   local output_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt"
   local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
 	local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
@@ -784,6 +828,20 @@ run_reviewer() {
   fi
   mkdir -p "${reviewer_codex_home}/bin"
   export CODEX_HOME="${reviewer_codex_home}"
+
+  # Strip MCP server tables from this reviewer's isolated codex-home for slugs
+  # whose upstream provider rejects the v0.125 namespace tool envelope on
+  # /v1/responses. The Serena prompt block already says "If Serena tools are
+  # unavailable or error, fall back to normal file operations" so the model
+  # naturally falls back to shell tools (rg/grep/cat) when MCP is absent.
+  if [ "${strip_mcp}" = "1" ]; then
+    for cfg_path in "${reviewer_codex_home}/config.toml" "${reviewer_codex_home}/.codex/config.toml"; do
+      if [ -f "${cfg_path}" ]; then
+        strip_all_mcp_server_blocks "${cfg_path}" || \
+          echo "::warning::Failed to strip MCP blocks from ${cfg_path} for reviewer ${model}; namespace tool envelope may still trigger 422." >&2
+      fi
+    done
+  fi
 
   while [ "${attempt}" -le 3 ]; do
     # Early exit if PR was closed/merged (detected by watchdog or another reviewer)
@@ -1017,7 +1075,6 @@ run_reviewer_pass() {
   local pass_prefix="$1"
   local pass_prompt="$2"
   local pass_reasoning="${3:-}"
-
   local -a pass_pids=()
   local -a pass_models=()
   local -a pass_status_files=()
