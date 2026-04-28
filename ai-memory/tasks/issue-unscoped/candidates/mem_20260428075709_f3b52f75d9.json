@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:Phase 3c/4b | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The bait-commit editor exercise can be skipped by the default self-triggered autofix filter, so the expected editor run never happens.\n  WHY: The workflow itself pushes the bait commit, and if it matches the `[ai-autofix]`/bot-identity heuristic the subsequent synchronize event can be classified as self-triggered and skipped.\n- .github/workflows/test-and-mark-stable.yml:orphan-workflows-test job | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The orphan-workflows-test job waits for dispatched workflows without explicit timeout handling, so a stalled workflow can block the release gate indefinitely.\n  WHY: The job dispatches multiple workflows and then waits for completion, but no timeout guard or bounded wait logic is described.\n- .github/workflows/test-and-mark-stable.yml:Phase 7 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The cancel-on-PR-close test is timing-sensitive and can race GitHub event delivery.\n  WHY: The smoke PR is closed and the workflow is checked to completion, but the `pull_request.closed` event may not have propagated yet when the assertion runs.\n- .github/workflows/test-and-mark-stable.yml:Smoke-test branch | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The smoke test runs at low reasoning effort and may miss failures that only appear at higher production reasoning levels.\n  WHY: The smoke path uses lower effort than the production pipeline, so bugs dependent on deeper cross-file or control-flow reasoning may not be exercised.\n- scripts/analyze_soft_errors.py:Phase 8 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The soft-error analyser is non-blocking, so recurring soft failures do not stop a release.\n  WHY: The analyser only reports issues and does not fail the release even when it finds repeated rate-limit recoveries, codex fallbacks, or summarizer/editor failures.\n- .github/workflows/test-and-mark-stable.yml:e2e-alt-model-test job | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The alt-model e2e test can block the release gate on an external model availability or access problem.\n  WHY: The job depends on `ALT_EDITOR_MODEL`, so if that model or its API access is unavailable, the release gate fails even though the primary path is unaffected.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:Phase 3c/4b | confidence=4\n  PROBLEM: The bait-commit editor exercise can be skipped by the default `AUTOFIX_SKIP_SELF_TRIGGERED=true` setting.\n  WHY: The workflow\u2019s own bait commit can be classified as self-triggered, which prevents the reviewer/editor cycle from running and makes Phase 4b fail.\n- .github/workflows/test-and-mark-stable.yml:orphan-workflows-test job | confidence=3\n  PROBLEM: The orphan-workflows-test job does not specify explicit timeout handling for dispatched workflow waits.\n  WHY: If one of the dispatched workflows hangs or runs extremely long, the release gate can block indefinitely.\n- .github/workflows/test-and-mark-stable.yml:Phase 7 | confidence=3\n  PROBLEM: The cancel-on-PR-close test may race GitHub event delivery latency.\n  WHY: The workflow could check for cancellation before the PR-close event has propagated and triggered `internal-cancel-on-pr-close.yml`.\n- .github/workflows/test-and-mark-stable.yml:Smoke-test branch | confidence=3\n  PROBLEM: The smoke test uses low reasoning effort and may miss bugs that only appear at higher effort.\n  WHY: The production pipeline runs with higher reasoning, so deeper-analysis failures may pass smoke tests but fail in production.\n- scripts/analyze_soft_errors.py:Phase 8 | confidence=3\n  PROBLEM: The soft-error analyser is non-blocking by design.\n  WHY: It can surface serious recurring issues but still allow the release to be tagged.\n- .github/workflows/test-and-mark-stable.yml:e2e-alt-model-test job | confidence=2\n  PROBLEM: The alt-model e2e test introduces external dependency risk.\n  WHY: If `ALT_EDITOR_MODEL` becomes unavailable or inaccessible, the release gate fails even though the primary production models are unaffected.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:Phase 3c/4b | confidence=5\n  PROBLEM: The bait-commit editor exercise will be skipped by the default self-triggered autofix behavior.\n  WHY: The bait commit is pushed by the gate itself, so a `[ai-autofix]` commit from the bot can be classified as self-triggered and skipped before the editor runs.\n- .github/workflows/test-and-mark-stable.yml:orphan-workflows-test job | confidence=4\n  PROBLEM: The job waits for several dispatched workflows without explicit timeout enforcement.\n  WHY: A stalled or infinite workflow run could keep the release gate waiting indefinitely.\n- .github/workflows/test-and-mark-stable.yml:e2e-alt-model-test job | confidence=3\n  PROBLEM: The alt-model e2e test depends on an external model that may be unavailable or inaccessible.\n  WHY: If `ALT_EDITOR_MODEL` cannot be used on OpenRouter or the API key lacks access, the release gate fails even though this test is orthogonal to the production path.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/test-and-mark-stable.yml:Phase 3c/4b | confidence=3\n  PROBLEM: The bait-commit editor exercise may be skipped by the self-triggered autofix filter.\n  WHY: If the bait commit is authored by the bot and uses the `[ai-autofix]` prefix, the synchronize event can be skipped and the editor will never run.\n- .github/workflows/test-and-mark-stable.yml:orphan-workflows-test job | confidence=2\n  PROBLEM: The orphan-workflows-test job may lack timeout handling.\n  WHY: Without a timeout, a long-running dispatched workflow can stall the release gate.\n- .github/workflows/test-and-mark-stable.yml:Phase 7 | confidence=3\n  PROBLEM: The cancel-on-PR-close test is sensitive to GitHub event latency.\n  WHY: The workflow may assert cancellation before the close event has had time to trigger the downstream cancel workflow.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "53cacc8e60ebc4c31d97482ca8e22ad743c3f77bfc05bbbddc2cb6e38cc7c9e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1712,
+    "run_id": "25039883840",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25039883840",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428075709_f3b52f75d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1712,
+    "run_id": "25039883840"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T07:57:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
