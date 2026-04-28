@@ -827,7 +827,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
-          EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '3300' }}
+          EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '6600' }}
         run: |
           set -euo pipefail
 
@@ -925,7 +925,7 @@ jobs:
           # ────────────────────────────────────────────────────────────────
 
           IMPLEMENT_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min default
-          IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min default
+          IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-6600}"            # 110 min default
           JOB_TIMEOUT_SECS=$((180 * 60))
           JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 
@@ -1100,6 +1100,19 @@ jobs:
                 fi
                 echo "::warning::Codex returned output but produced no file changes on attempt ${attempt}."
               else
+                # Codex exited 0 with no stdout — in practice this is the
+                # watchdog SIGTERM path: codex catches TERM, exits 0, and
+                # the final summary never flushes to CODEX_OUTPUT_FILE.
+                # PR #1695's salvage in the cmd_rc != 0 branch never fires
+                # for this case, so back-to-back 3h jobs on the same issue
+                # discarded full sets of streamed apply_patch diffs.
+                # Salvage any file changes already on disk here too.
+                codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+                if [ -n "${codex_delta}" ]; then
+                  echo "::warning::Codex returned empty output on attempt ${attempt} but produced file changes; salvaging partial work."
+                  implement_succeeded=true
+                  break
+                fi
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
               fi
             else
