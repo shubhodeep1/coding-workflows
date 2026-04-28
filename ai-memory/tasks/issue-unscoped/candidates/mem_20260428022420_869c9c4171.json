@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2`:35 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The nested `exec /bin/sh -c \"${cmd}\"` expands an unexported shell variable, so the Hardhat test command can end up empty at runtime.\n  WHY: The reviewer reports that `cmd` is set as a shell variable inside the first `/bin/sh -c`, but shell variables are not inherited across `exec`, so the rendered script may not run the intended `HARDHAT_TEST_CMD` and could fail or execute the wrong command.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2`:35 | severity=critical | confidence=5\n  PROBLEM: The nested `exec /bin/sh -c \"${cmd}\"` expands an unexported shell variable, so the Hardhat test command can end up empty at runtime.\n  WHY: Shell variables are not inherited across `exec`, so the inner shell may see an empty `${cmd}` and fail to run the manifest-provided `HARDHAT_TEST_CMD`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f8a4bb05ac35ff948dd58f3285c0026d10ab28db03fd7143360448926a95b009",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1701,
+    "run_id": "25029831625",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25029831625",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428022420_869c9c4171",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1701,
+    "run_id": "25029831625"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-28T02:24:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
