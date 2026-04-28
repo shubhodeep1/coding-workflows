@@ -717,37 +717,6 @@ reviewer_prompt_rendered="$(mktemp)"
   cd "${SUPPORT_ROOT_DIR}"
   bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
 ) > "${reviewer_prompt_rendered}"
-
-# No-MCP variant of the rendered body. Built by substituting the Serena
-# efficiency placeholder with a fallback note BEFORE rendering, so the
-# rendered output has no Serena guidance. Used by reviewer slugs whose
-# upstream OpenRouter providers reject the v0.125 namespace tool envelope
-# (see MCP_INCOMPATIBLE_REVIEWER_MODELS above). When the deny-list is empty
-# this file is built but never consumed.
-REVIEWER_PROMPT_BODY_FILE_NO_MCP="${RUNTIME_DIR}/reviewer_prompt_body_no_mcp.txt"
-no_mcp_note_file="$(mktemp)"
-cat > "${no_mcp_note_file}" <<'NO_MCP_NOTE'
-SERENA MCP UNAVAILABLE FOR THIS REVIEWER
-- Serena MCP is not registered for this codex-cli invocation due to an upstream provider compatibility gap on /v1/responses.
-- Use shell tools instead: rg/grep for pattern search; cat/sed/awk for targeted file reads.
-- For impact analysis (where is this called?), grep the symbol name across the repository.
-- All other review guidance still applies — read efficiently, avoid full-file scans when targeted reads suffice.
-NO_MCP_NOTE
-no_mcp_pre_render="$(mktemp)"
-awk -v note_file="${no_mcp_note_file}" '
-  /^\{\{SERENA_EFFICIENCY_BLOCK_READ_ONLY\}\}$/ {
-    while ((getline line < note_file) > 0) print line
-    close(note_file)
-    next
-  }
-  { print }
-' "${REVIEWER_PROMPT_BODY_FILE}" > "${no_mcp_pre_render}"
-(
-  cd "${SUPPORT_ROOT_DIR}"
-  bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${no_mcp_pre_render}"
-) > "${REVIEWER_PROMPT_BODY_FILE_NO_MCP}"
-rm -f "${no_mcp_pre_render}" "${no_mcp_note_file}"
-
 mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
 # Assemble the base reviewer prompt (used by both passes in two-pass mode,
@@ -785,9 +754,6 @@ assemble_reviewer_prompt() {
 
 # Assemble the default (pass 1 / single-pass) prompt.
 assemble_reviewer_prompt "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
-# Sibling no-MCP prompt for reviewer slugs in MCP_INCOMPATIBLE_REVIEWER_MODELS.
-REVIEWER_PROMPT_FILE_NO_MCP="${RUNTIME_DIR}/reviewer_prompt_no_mcp.txt"
-assemble_reviewer_prompt "${REVIEWER_PROMPT_FILE_NO_MCP}" "${REVIEWER_PROMPT_BODY_FILE_NO_MCP}"
 
 run_reviewer() {
   local model="$1"
@@ -795,13 +761,9 @@ run_reviewer() {
   local output_prefix="${3:-review}"
   local prompt_file="${4:-${REVIEWER_PROMPT_FILE}}"
   local reasoning_level="${5:-}"
-  local prompt_file_no_mcp="${6:-}"
   local strip_mcp=0
   if is_mcp_incompatible_model "${model}"; then
     strip_mcp=1
-    if [ -n "${prompt_file_no_mcp}" ] && [ -s "${prompt_file_no_mcp}" ]; then
-      prompt_file="${prompt_file_no_mcp}"
-    fi
   fi
   local output_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt"
   local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
@@ -869,8 +831,9 @@ run_reviewer() {
 
   # Strip MCP server tables from this reviewer's isolated codex-home for slugs
   # whose upstream provider rejects the v0.125 namespace tool envelope on
-  # /v1/responses. The accompanying no-MCP prompt body (chosen above) tells
-  # the model Serena is unavailable and to use shell tools instead.
+  # /v1/responses. The Serena prompt block already says "If Serena tools are
+  # unavailable or error, fall back to normal file operations" so the model
+  # naturally falls back to shell tools (rg/grep/cat) when MCP is absent.
   if [ "${strip_mcp}" = "1" ]; then
     for cfg_path in "${reviewer_codex_home}/config.toml" "${reviewer_codex_home}/.codex/config.toml"; do
       if [ -f "${cfg_path}" ]; then
@@ -1112,8 +1075,6 @@ run_reviewer_pass() {
   local pass_prefix="$1"
   local pass_prompt="$2"
   local pass_reasoning="${3:-}"
-  local pass_prompt_no_mcp="${4:-}"
-
   local -a pass_pids=()
   local -a pass_models=()
   local -a pass_status_files=()
@@ -1126,7 +1087,7 @@ run_reviewer_pass() {
     pass_models+=("${model}")
     pass_status_files+=("${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_${safe_name}.txt")
     pass_log_files+=("${PREVIOUS_REVIEWS_DIR}/${pass_prefix}_${safe_name}.log")
-    run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" "${pass_prompt_no_mcp}" >&2 &
+    run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
     pass_pids+=("$!")
   done <<< "${REVIEWER_MODELS}"
 
@@ -1205,11 +1166,9 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # ── PASS 1: broad sweep at medium thinking ──
   echo "=== PASS 1: Broad sweep (medium reasoning) ==="
   PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
-  PASS1_PROMPT_FILE_NO_MCP="${RUNTIME_DIR}/reviewer_prompt_pass1_no_mcp.txt"
   assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
-  assemble_reviewer_prompt "${PASS1_PROMPT_FILE_NO_MCP}" "${REVIEWER_PROMPT_BODY_FILE_NO_MCP}"
 
-  pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "medium" "${PASS1_PROMPT_FILE_NO_MCP}")"
+  pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "medium")"
   echo "Pass 1 complete: ${pass1_successful} reviewers successful."
 
   # Check for PR closure after pass 1
@@ -1234,11 +1193,9 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # ── PASS 2: deep review at full thinking, with cross-pollination ──
   echo "=== PASS 2: Deep review (${REVIEWER_REASONING_EFFORT:-xhigh} reasoning) ==="
   PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
-  PASS2_PROMPT_FILE_NO_MCP="${RUNTIME_DIR}/reviewer_prompt_pass2_no_mcp.txt"
   assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"
-  assemble_reviewer_prompt "${PASS2_PROMPT_FILE_NO_MCP}" "${REVIEWER_PROMPT_BODY_FILE_NO_MCP}" "${CROSS_POLLINATION_FILE}"
 
-  pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "" "${PASS2_PROMPT_FILE_NO_MCP}")"
+  pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "")"
   echo "Pass 2 complete: ${pass2_successful} reviewers successful."
   reviewers_successful="${pass2_successful}"
 
@@ -1250,7 +1207,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   fi
 else
   echo "Single-pass review mode."
-  reviewers_successful="$(run_reviewer_pass "review" "${REVIEWER_PROMPT_FILE}" "" "${REVIEWER_PROMPT_FILE_NO_MCP}")"
+  reviewers_successful="$(run_reviewer_pass "review" "${REVIEWER_PROMPT_FILE}" "")"
   echo "Review complete: ${reviewers_successful} reviewers successful."
 
   # Produce REVIEWER_CONSENSUS_FILE so the editor + memory-record step get the
