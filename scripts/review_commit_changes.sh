@@ -503,7 +503,54 @@ PY
     echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
     echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
   else
-    echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
-    echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
+    # Audit-driven convergence detector.  When every per-file audit entry
+    # in the editor summary reports `issues applied: 0` AND the cumulative
+    # `issues already applied` is ≥1, the editor's own bookkeeping says
+    # "nothing new to do" — every reviewer finding was already satisfied
+    # in a prior iteration.  Treat that as ledger-only-equivalent so the
+    # autofix loop converges (skip rb_judge, fall through to auto-merge)
+    # even when an unrelated file (e.g. the editor noting a follow-up
+    # one-liner) sneaked into the commit.  Without this, the path-only
+    # heuristic above fails open and the loop forces an rb_judge call
+    # against a converged tree.
+    #
+    # Disable by setting AUTOFIX_AUDIT_CONVERGENCE_ENABLED=false.
+    _audit_convergence_applies=false
+    if [ "${AUTOFIX_AUDIT_CONVERGENCE_ENABLED:-true}" = "true" ] \
+        && [ -n "${EDITOR_SUMMARY_FILE:-}" ] \
+        && [ -s "${EDITOR_SUMMARY_FILE}" ]; then
+      # Sum the per-file audit counters.  Lines look like
+      #   "- … total issues listed: N, issues applied: A, issues already applied: AA, issues ignored: I"
+      # The same regex anchors the existing arithmetic-mismatch check at
+      # review_autofix.yml:3055-3079, so use the same tolerant matching.
+      _audit_total_applied=0
+      _audit_total_already=0
+      _audit_total_lines=0
+      while IFS= read -r _audit_line; do
+        [ -n "${_audit_line}" ] || continue
+        _t="$(printf '%s' "${_audit_line}" | grep -ioP 'total issues listed[^0-9]*\K[0-9]+' || true)"
+        [ -n "${_t}" ] || continue
+        _a="$(printf '%s' "${_audit_line}" | grep -ioP '(?<!already )issues applied[^0-9]*\K[0-9]+' || echo 0)"
+        _aa="$(printf '%s' "${_audit_line}" | grep -ioP 'issues already applied[^0-9]*\K[0-9]+' || echo 0)"
+        _audit_total_lines=$((_audit_total_lines + 1))
+        _audit_total_applied=$((_audit_total_applied + ${_a:-0}))
+        _audit_total_already=$((_audit_total_already + ${_aa:-0}))
+      done < "${EDITOR_SUMMARY_FILE}"
+
+      if [ "${_audit_total_lines}" -gt 0 ] \
+          && [ "${_audit_total_applied}" -eq 0 ] \
+          && [ "${_audit_total_already}" -ge 1 ]; then
+        _audit_convergence_applies=true
+        echo "Audit convergence detected: ${_audit_total_lines} reviewer file(s), applied=${_audit_total_applied}, already_applied=${_audit_total_already}. Treating as ledger-only-equivalent so the autofix loop converges."
+      fi
+    fi
+
+    if [ "${_audit_convergence_applies}" = "true" ]; then
+      echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
+      echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
+    else
+      echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
+      echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
+    fi
   fi
 fi

@@ -1437,6 +1437,28 @@ def _nearest_non_human_stall_action(actions: list[str], start_idx: int) -> str |
 	return None
 
 
+def _phase_specific_max_recoveries(
+	phase: str,
+	max_recoveries: int,
+	max_recoveries_by_phase: dict[str, int] | None,
+) -> int:
+	"""Return the effective recovery cap for ``phase``.
+
+	Per-phase caps allow operators to keep the global cap (default 5) tight
+	for cheap recovery actions (auto_respond_clarify, retrigger_plan) while
+	exempting expensive phases — e.g. ``ai:done``, where each "recovery" is
+	a fresh review-autofix run that itself takes ≥10 min, so a uniform 5×
+	cap can hard-close a PR after ~25 minutes of cron ticks even when the
+	autofix loop is making real progress.
+	"""
+	if not isinstance(max_recoveries_by_phase, dict):
+		return max_recoveries
+	override = max_recoveries_by_phase.get(phase)
+	if not isinstance(override, int) or override < 1:
+		return max_recoveries
+	return override
+
+
 def resolve_stall_recovery_action(
 	phase: str,
 	recovery_count: int,
@@ -1444,9 +1466,13 @@ def resolve_stall_recovery_action(
 	enable_stall_human_terminalization: bool = False,
 	actions_by_phase: dict[str, list[str]] | None = None,
 	fallback_action: str = "retrigger_pipeline",
+	max_recoveries_by_phase: dict[str, int] | None = None,
 ) -> str:
 	"""Resolve the declarative stall recovery action for a phase/recovery count."""
-	if recovery_count >= max_recoveries:
+	effective_max = _phase_specific_max_recoveries(
+		phase, max_recoveries, max_recoveries_by_phase
+	)
+	if recovery_count >= effective_max:
 		return "skip"
 
 	recovery_idx = max(recovery_count, 0)
@@ -1474,6 +1500,7 @@ def resolve_effective_stall_recovery_action(
 	candidate_action: str | None,
 	max_recoveries: int = 5,
 	enable_stall_human_terminalization: bool = False,
+	max_recoveries_by_phase: dict[str, int] | None = None,
 ) -> str:
 	"""Normalize a candidate action (e.g. stall judge output) into a safe action."""
 	fallback_action = resolve_stall_recovery_action(
@@ -1481,6 +1508,7 @@ def resolve_effective_stall_recovery_action(
 		recovery_count,
 		max_recoveries=max_recoveries,
 		enable_stall_human_terminalization=enable_stall_human_terminalization,
+		max_recoveries_by_phase=max_recoveries_by_phase,
 	)
 
 	if not isinstance(candidate_action, str) or not candidate_action:

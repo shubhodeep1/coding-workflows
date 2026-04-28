@@ -583,6 +583,68 @@ def test_resolve_stall_recovery_action_fails_open_for_terminal_only_malformed_la
 	assert action == "retrigger_pipeline"
 
 
+def test_resolve_stall_recovery_action_phase_specific_cap_overrides_global_max():
+	# At/above the global max_recoveries cap, the default behaviour returns
+	# "skip" — see test_detect_stalls_still_skips_at_or_above_max_recoveries
+	# below.  A per-phase override raises that cap so the configured ladder
+	# runs to its natural end (e.g. retrigger_review → escalate_human for
+	# ai:done) instead of devolving into a destructive skip.
+	action_default = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:done",
+		recovery_count=5,
+		max_recoveries=5,
+	)
+	assert action_default == "skip"
+
+	action_overridden = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:done",
+		recovery_count=5,
+		max_recoveries=5,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+	assert action_overridden == "retrigger_review"
+
+	# Override on an unrelated phase must not affect ai:done.
+	action_unrelated = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:done",
+		recovery_count=5,
+		max_recoveries=5,
+		max_recoveries_by_phase={"ai:clarification": 99},
+	)
+	assert action_unrelated == "skip"
+
+
+def test_resolve_stall_recovery_action_phase_specific_cap_invalid_values_ignored():
+	# Non-int / non-positive overrides must be ignored so a misconfigured
+	# operator setting (e.g. MAX_STALL_RECOVERIES_DONE=0 or "bogus") cannot
+	# accidentally raise the effective cap to 0 and turn every ai:done
+	# recovery into "skip" on the first attempt.
+	for bogus in (0, -1, "bogus", None, 3.5):
+		action = orchestrate_lib.resolve_stall_recovery_action(
+			"ai:done",
+			recovery_count=5,
+			max_recoveries=5,
+			max_recoveries_by_phase={"ai:done": bogus},  # type: ignore[dict-item]
+		)
+		# Falls back to the global cap, which at recovery_count=5 returns skip.
+		assert action == "skip", f"bogus override {bogus!r} should fall back to global cap"
+
+
+def test_resolve_effective_stall_recovery_action_threads_phase_specific_cap():
+	# `resolve_effective_stall_recovery_action` is the entry point used to
+	# normalise stall-judge candidate actions; it must thread the per-phase
+	# cap through to the fallback resolution so a candidate of None /
+	# unrecognised string still respects the ai:done override.
+	effective = orchestrate_lib.resolve_effective_stall_recovery_action(
+		"ai:done",
+		recovery_count=10,
+		candidate_action=None,
+		max_recoveries=5,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+	assert effective == "retrigger_review"
+
+
 def test_detect_stalls_skips_needs_human_label():
 	state = _make_state()
 	state["waves"][0]["issues"][0]["status"] = "in_progress"

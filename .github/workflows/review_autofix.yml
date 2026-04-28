@@ -1625,8 +1625,21 @@ jobs:
           _err_file="$(mktemp)"
           _final_status="ready"
           _deadline=$(( $(date +%s) + _wait_timeout ))
+
+          # Source gh_retry so transient 5xx/network failures don't strand
+          # the editor with `collection_status: api_error` while CI is
+          # actually green.  Fall back to a no-op shim if the helper is
+          # unavailable so the step still functions in degraded mode.
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          # `gh api --paginate --slurp` emits a JSON array containing each
+          # page's response object, so PRs whose check-runs span multiple
+          # pages are no longer truncated to the first 100 entries.  The
+          # python writer below merges `.[].check_runs[]` across pages.
           while :; do
-            if ! gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+            if ! gh_retry gh api --paginate --slurp \
+                  "repos/${{ github.repository }}/commits/${HEAD_SHA}/check-runs?per_page=100" \
                   > "${_raw_file}" 2>"${_err_file}"; then
               cat "${_err_file}" >&2 || true
               _final_status="api_error"
@@ -1637,10 +1650,18 @@ jobs:
             # the codex-agent job's own in_progress check-run does not keep
             # the count perpetually above zero. Sibling workflow runs on the
             # same SHA (e.g. the implement run's `Agent` job) are still waited
-            # on. Fail-open to count=0 on jq error.
+            # on. Fail-open to count=0 on jq error.  Robust to both shapes:
+            # `gh api --paginate --slurp` returns an array of page objects,
+            # while plain `gh api` (legacy / fallback) returns a single page
+            # object directly.  Without the `if type == "array"` guard, the
+            # latter shape would iterate the object's *values* — yielding
+            # numbers like `total_count` — and `.check_runs` on a number
+            # errors out, silently returning 0 (which the wait loop would
+            # mistake for "no in-flight checks").
             _in_flight="$(jq --arg run_id "${SELF_RUN_ID:-}" '
               [
-                .check_runs // []
+                ( if type == "array" then .[]? else . end )
+                | (.check_runs // [])
                 | .[]
                 | select(.status == "in_progress" or .status == "queued")
                 | select(
@@ -1678,10 +1699,17 @@ jobs:
                   text = fh.read().strip()
               if text:
                   obj = json.loads(text)
-                  if isinstance(obj, dict):
-                      page_runs = obj.get("check_runs", [])
+                  # `gh api --paginate --slurp` produces a JSON array of
+                  # page response objects.  Fall back to the legacy
+                  # single-object shape so the writer still works if the
+                  # caller drops `--slurp`.
+                  pages = obj if isinstance(obj, list) else [obj]
+                  for page in pages:
+                      if not isinstance(page, dict):
+                          continue
+                      page_runs = page.get("check_runs", [])
                       if isinstance(page_runs, list):
-                          runs = [r for r in page_runs if isinstance(r, dict)]
+                          runs.extend(r for r in page_runs if isinstance(r, dict))
           except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
               runs = []
 
@@ -2640,6 +2668,58 @@ jobs:
 
           bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
 
+          # Bounded in-step retry for first-iteration empty-output failures.
+          #
+          # When the editor crashes/times out on the very first autofix
+          # iteration (no prior `[ai-autofix]` commits on HEAD), the
+          # downstream "Post editor summary comment" step posts a "will
+          # retry" comment and exits non-zero, deferring the retry to
+          # the stall poller's next cron tick — typically 1–3 hours
+          # later, which directly contributes to ai:done elapsed time.
+          # On iteration 2+ an empty editor output is a legitimate
+          # convergence signal (no new defects), so the retry is
+          # gated to the first-iteration case only.
+          #
+          # Skipped when AUTOFIX_INSTEP_RETRY_ENABLED=false so consumers
+          # can opt out without redeploying the workflow.  Tune the
+          # cooldown via AUTOFIX_INSTEP_RETRY_SLEEP_SECS (default 30) so
+          # slower runner environments can give the editor more time to
+          # recover from transient crashes/timeouts without holding the
+          # job for an excessive fixed window.
+          _instep_retry_enabled="${AUTOFIX_INSTEP_RETRY_ENABLED:-true}"
+          _instep_retry_sleep="${AUTOFIX_INSTEP_RETRY_SLEEP_SECS:-30}"
+          if ! [[ "${_instep_retry_sleep}" =~ ^[0-9]+$ ]] || [ "${_instep_retry_sleep}" -lt 1 ] || [ "${_instep_retry_sleep}" -gt 600 ]; then
+            echo "::warning::AUTOFIX_INSTEP_RETRY_SLEEP_SECS must be an integer in [1, 600]; defaulting to 30."
+            _instep_retry_sleep=30
+          fi
+          if [ "${_instep_retry_enabled}" = "true" ] \
+              && [ ! -s "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
+            # `git log` here intentionally walks HEAD on the already-
+            # checked-out PR branch (the surrounding workflow checks
+            # out the PR head before this step runs, see "Checkout PR
+            # head branch" earlier in the job).  If this block is ever
+            # extracted to a standalone script, the caller must ensure
+            # the PR branch is current.
+            # `grep -c` prints "0" AND exits 1 when there are no matches, so
+            # `|| echo 0` would append a second "0" (yielding "0\n0") and the
+            # subsequent equality check would silently fail — the retry would
+            # never fire because the comparison is never the literal "0".
+            # Use `|| true` instead so grep's own "0" output is the only value
+            # captured.  See PR #1703 review comment by copilot-pull-request-reviewer.
+            # The grouping (`^(A|B)`) is semantically equivalent to
+            # `^A|^B` under standard ERE precedence, but is more
+            # robust against refactors and reviewer-bot misreadings.
+            _prior_autofix_count="$(git log --format='%s' -n 5 2>/dev/null \
+              | grep -cE '^(\[ai-autofix\]|\[judge-fix\])' || true)"
+            if [ "${_prior_autofix_count}" = "0" ]; then
+              echo "::warning::Editor produced no summary on first iteration — retrying once after ${_instep_retry_sleep}s before falling through to noop-comment path."
+              sleep "${_instep_retry_sleep}"
+              bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" || {
+                echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
+              }
+            fi
+          fi
+
       # Save the updated per-PR review-issue ledger so the next iteration
       # (separate workflow run triggered by pull_request.synchronize after
       # the autofix commit) can restore it above.  Runs even if the apply
@@ -3584,21 +3664,34 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
-          # Retry wrapper: transient CI runner issues (filesystem
-          # corruption, IO races after git reset) can cause spurious
-          # bash syntax errors in the judge script.  Retry once with
-          # a short pause to let the runner stabilise.
+          # Graceful-degradation wrapper.  The judge has two recognised
+          # failure modes:
+          #   exit 2 — transient bash syntax error from runner FS races;
+          #            retry once after a short pause.
+          #   exit !=0,!=2 — anything else (timeout, OpenRouter 5xx,
+          #            JSON schema reject).  Previously this propagated
+          #            and failed the whole job, leaving the linked
+          #            issue stranded with no terminal label.  Instead,
+          #            emit rb_judge_status=failed so the next step can
+          #            still apply ai:review-blocked (which the stall
+          #            poller's dispatch_rb_judge rung can recover from
+          #            on a later cycle).
           _judge_exit=0
           bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
           if [ "${_judge_exit}" -eq 2 ]; then
             echo "::warning::review_rb_judge.sh exited 2 (syntax error) — retrying once after 5 s"
             sleep 5
-            bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh"
-          elif [ "${_judge_exit}" -ne 0 ]; then
-            exit "${_judge_exit}"
+            _judge_exit=0
+            bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
+          fi
+          if [ "${_judge_exit}" -ne 0 ]; then
+            echo "::warning::review_rb_judge.sh exited ${_judge_exit} — degrading to ai:review-blocked recovery path"
+            echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
+          else
+            echo "rb_judge_status=ok" >> "$GITHUB_OUTPUT"
           fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: "(success() || steps.rb_judge.outputs.rb_judge_status == 'failed') && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}

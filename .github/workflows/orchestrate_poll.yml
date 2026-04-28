@@ -408,6 +408,16 @@ jobs:
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          # Phase-specific override for ai:done — defaults to a high cap (99)
+          # that effectively avoids `skip` in normal operation windows, though
+          # `skip` can still occur if the cap is eventually reached.  This
+          # keeps a stalled review-autofix loop from hard-closing the linked
+          # PR too quickly via the ladder cap.  Each ai:done recovery triggers
+          # a fresh review-autofix run that itself takes ≥10 min, so the
+          # global 5× cap can hard-close a PR after ~25 minutes of cron ticks
+          # even when the autofix loop is making real progress.  Lower
+          # (e.g. 2) to reach escalate_human faster.
+          MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
           STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
           ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
           ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}
