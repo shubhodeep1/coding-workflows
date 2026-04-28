@@ -1769,7 +1769,7 @@ jobs:
           # cross-repo "Closes <other-repo>/issues/N" reference cannot route
           # an unrelated number into this repo's issues lookup.
           if [ "$IS_SMOKE" = "false" ]; then
-            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+' || true)
+            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
             if [ -n "${ISSUE_NUM:-}" ]; then
               ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
               if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
