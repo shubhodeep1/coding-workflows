@@ -2460,6 +2460,11 @@ jobs:
           PROJECT_DESC+="Issue 2 (depends on Issue 1): append the file with exactly this line 'decompose-run: ${GITHUB_RUN_ID}'. "
           PROJECT_DESC+="Constraints: both changes target the same file; Issue 2 must declare dependency on Issue 1 in the orchestrator DAG; this is fully specified — no clarification is needed."
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
+          # Capture an upper bound on the tracking issue's created_at
+          # before dispatching, so the post-run lookup can filter to
+          # issues opened by THIS orchestrate run rather than scanning
+          # the whole open-issue list.
+          DISPATCH_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
             --field project_description="${PROJECT_DESC}"
           DEADLINE=$(( $(date +%s) + 3000 ))
@@ -2492,14 +2497,22 @@ jobs:
             exit 1
           fi
 
-          # Locate the tracking issue (created by the orchestrator) by the
-          # smoke-test title prefix and capture the child issue numbers it
-          # references. The orchestrator's tracking-issue body lists child
-          # issues with `- [ ] #N` or `Issue #N` markers.
-          TRACKING_NUMBER=$(gh api "repos/${TEST_REPO}/issues?state=open&per_page=50" \
-            --jq "[.[] | select(.title | startswith(\"[E2E Orchestrate Smoke ${GITHUB_RUN_ID}]\"))] | sort_by(.created_at) | last | .number // empty" 2>/dev/null || echo "")
+          # Locate the tracking issue (created by the orchestrator).
+          # The orchestrator titles it `[Orchestrator] <project_title>`
+          # where project_title is LLM-derived from project_description
+          # and the smoke-test prefix is not guaranteed to survive that
+          # rewrite. Filter instead by the canonical
+          # `ai:orchestrator-tracking` label, restrict to issues
+          # updated since this dispatch began, and confirm the body
+          # references this run's GITHUB_RUN_ID (the project_description
+          # we sent embeds it, and the body includes project_summary
+          # which typically carries it through).
+          TRACKING_NUMBER=$(gh api \
+            "repos/${TEST_REPO}/issues?state=open&labels=ai:orchestrator-tracking&since=${DISPATCH_START_ISO}&per_page=50" \
+            --jq "[.[] | select(.body // \"\" | contains(\"${GITHUB_RUN_ID}\"))] | sort_by(.created_at) | last | .number // empty" \
+            2>/dev/null || echo "")
           if [ -z "${TRACKING_NUMBER}" ]; then
-            echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID}"
+            echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
             exit 1
           fi
           echo "tracking_issue=${TRACKING_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -2558,8 +2571,12 @@ jobs:
           # orchestrator created from it.
           MARKER="E2E Orchestrate Smoke ${RUN_ID}"
           MARKER_Q=$(printf '%s' "${MARKER}" | jq -sRr @uri)
+          # `is:issue` is required by the search API; without it the
+          # call returns 422 "Query must include 'is:issue' or
+          # 'is:pull-request'", and the JSON error body would otherwise
+          # word-split into bogus issue numbers in the loop below.
           STRAGGLERS=$(gh api \
-            "search/issues?q=repo:${TEST_REPO}+state:open+in:title+${MARKER_Q}" \
+            "search/issues?q=repo:${TEST_REPO}+is:issue+state:open+in:title+${MARKER_Q}" \
             --jq '[.items[].number] | join(" ")' 2>/dev/null || echo "")
           for n in ${STRAGGLERS}; do
             close_with_retry "${n}"
@@ -2684,7 +2701,14 @@ jobs:
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
             echo "  labels: ${LABELS:-none}"
             # Terminal rejection labels — any one is sufficient.
-            if echo "${LABELS}" | grep -qE 'ai:awaiting-clarification|ai:clarify-failed|ai:rejected|ai:clarification-needed'; then
+            # `ai:clarification` is the canonical label clarify.yml
+            # applies while waiting for human clarification (see
+            # clarify.yml:399); it persists until questions are
+            # answered, at which point the label swaps to ai:planning.
+            # For the negative-test path (under-specified issue, no
+            # human will reply), `ai:clarification` IS the terminal
+            # rejection signal.
+            if echo "${LABELS}" | grep -qE 'ai:clarification|ai:awaiting-clarification|ai:clarify-failed|ai:rejected|ai:clarification-needed'; then
               OUTCOME="rejected"
               break
             fi
