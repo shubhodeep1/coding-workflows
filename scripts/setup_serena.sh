@@ -570,7 +570,7 @@ if [ "${CONTEXT7_DISABLED:-false}" != "true" ]; then
 
 [mcp_servers.context7]
 command = "npx"
-args = ["-y", "@upstash/context7-mcp@latest"]
+args = ["-y", "@upstash/context7-mcp@2.1.8"]
 required = false
 CONTEXT7_MCP_EOF
 	then
