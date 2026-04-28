@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:DISPATCH_START_ISO capture in orchestrate-decompose-test job | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `DISPATCH_START_ISO` may be captured without an explicit UTC timezone, making the tracking-issue cutoff ambiguous.\n  WHY: All three reviewers flagged that a local-time ISO timestamp can compare incorrectly against GitHub's UTC timestamps and produce incorrect issue filtering.\n- .github/workflows/test-and-mark-stable.yml:Search query construction with +is:issue | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The `is:issue` qualifier may be encoded or assembled inconsistently in the GitHub search query.\n  WHY: All three reviewers flagged a possible query-construction mismatch, though one reviewer thought the current `+is:issue` form is probably correct.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:DISPATCH_START_ISO capture in orchestrate-decompose-test job\n  PROBLEM: `DISPATCH_START_ISO` should include timezone information.\n  WHY: ISO 8601 timestamps without timezone info are ambiguous and can be compared incorrectly across runner and GitHub timezones.\n- .github/workflows/test-and-mark-stable.yml:Search query construction with +is:issue\n  PROBLEM: The `+is:issue` qualifier may be inconsistently handled by GitHub's search API depending on how the query string is constructed.\n  WHY: The query encoding was called out as a low-confidence concern, even though the reviewer noted that the current implementation appears correct.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:DISPATCH_START_ISO capture in orchestrate-decompose-test job | confidence=3\n  PROBLEM: The ISO timestamp may lack timezone information, creating ambiguity if the runner timezone differs from GitHub's expected timezone.\n  WHY: If the runner uses a non-UTC timezone, the timestamp comparison with GitHub's `created_at` field could yield incorrect results and affect tracking-issue lookup.\n- .github/workflows/test-and-mark-stable.yml:Search query construction with +is:issue | confidence=2\n  PROBLEM: The `+is:issue` encoding may not be consistently handled by GitHub's search API depending on how the full query string is constructed.\n  WHY: The reviewer considered this a minor hardening concern and recommended verifying the exact query construction.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/test-and-mark-stable.yml:DISPATCH_START_ISO capture in orchestrate-decompose-test job | confidence=3\n  PROBLEM: `DISPATCH_START_ISO` may be captured without explicit timezone information.\n  WHY: Without a UTC suffix, the timestamp can be interpreted inconsistently and may break `created:>=` filtering against GitHub's UTC timestamps.\n- .github/workflows/test-and-mark-stable.yml:Search query construction with +is:issue | confidence=2\n  PROBLEM: The query encoding for `is:issue` may be inconsistent or incorrect depending on how the GitHub search string is assembled.\n  WHY: The reviewer noted that the issue is uncertain and depends on whether the query is passed as a URL parameter, CLI argument, or already-encoded string.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d09591a5c0aca362b1ed04666275e7f185529838d49aa678077895923c5af7c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1729,
+    "run_id": "25060848691",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25060848691",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428152846_60bac24c0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1729,
+    "run_id": "25060848691"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T15:28:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
