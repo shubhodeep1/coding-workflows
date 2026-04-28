@@ -166,9 +166,10 @@ x-ai/grok-4.1-fast}"
 is_mcp_incompatible_model() {
   local model="$1"
   local incompat
-  while IFS= read -r incompat; do
-    incompat="${incompat## }"
-    incompat="${incompat%% }"
+  # Use default IFS so `read` strips leading/trailing whitespace (spaces, tabs)
+  # — robust to operator-supplied values that may carry indentation or tabs
+  # from multi-line GitHub Actions env definitions.
+  while read -r incompat; do
     [ -z "${incompat}" ] && continue
     [ "${model}" = "${incompat}" ] && return 0
   done <<< "${MCP_INCOMPATIBLE_REVIEWER_MODELS}"
