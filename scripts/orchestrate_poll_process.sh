@@ -10042,11 +10042,15 @@ ${RB_FIX_DESC}
           IF_SHOULD_ESCALATE="true"
           IF_ESCALATED_FLAG="true"
         fi
-        jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
+        if jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
           .implementation_failed_defer_state //= {}
           | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count, escalated: $escalated}
-        ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        IMPL_FAILED_STATE_CHANGED=true
+        ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+          mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          IMPL_FAILED_STATE_CHANGED=true
+        else
+          rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+        fi
 
         echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; blockers=${IF_BLOCKERS_CSV}; statuses=${IF_BLOCKER_STATUS_SUMMARY}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${IF_ESCALATED_FLAG}."
         if [ "${IF_SHOULD_ESCALATE}" = "true" ]; then
@@ -10078,11 +10082,15 @@ ${RB_FIX_DESC}
         IF_SHOULD_ESCALATE="true"
         IF_ESCALATED_FLAG="true"
       fi
-      jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
+      if jq --arg key "${if_issue}" --arg summary "${IF_DEFER_SIGNATURE}" --argjson count "${IF_DEFER_COUNT}" --argjson escalated "${IF_ESCALATED_FLAG}" '
         .implementation_failed_defer_state //= {}
         | .implementation_failed_defer_state[$key] = {summary: $summary, count: $count, escalated: $escalated}
-      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      IMPL_FAILED_STATE_CHANGED=true
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+        mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        IMPL_FAILED_STATE_CHANGED=true
+      else
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      fi
 
       echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; reason=${IF_DEFER_REASON}; cycle=${IF_DEFER_COUNT}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${IF_ESCALATED_FLAG}."
       if [ "${IF_SHOULD_ESCALATE}" = "true" ]; then
@@ -10100,13 +10108,17 @@ ${RB_FIX_DESC}
     # Reissue path reached: clear any stale defer-state entry so a
     # later failure starts a fresh dedup/escalation window.
     if jq -e --arg key "${if_issue}" '(.implementation_failed_defer_state // {}) | has($key)' "${STATE_FILE}" >/dev/null 2>&1; then
-      jq --arg key "${if_issue}" '
+      if jq --arg key "${if_issue}" '
         if (.implementation_failed_defer_state | type) == "object"
           then .implementation_failed_defer_state |= del(.[$key])
           else .
         end
-      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      IMPL_FAILED_STATE_CHANGED=true
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+        mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        IMPL_FAILED_STATE_CHANGED=true
+      else
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      fi
     fi
 
     if [ "${IF_MODE}" = "no-op-implementation" ]; then

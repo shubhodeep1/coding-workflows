@@ -124,7 +124,7 @@ while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     strip_full_file_fence "${f}"
     checker_stderr="$(mktemp)"
-    if ! python3 -c "import json, sys; json.load(open(sys.argv[1], 'rb'))" "${f}" 2>"${checker_stderr}"; then
+    if ! python3 -c "import json, sys; f=open(sys.argv[1], 'rb'); json.load(f); f.close()" "${f}" 2>"${checker_stderr}"; then
       echo "::error file=${f}::JSON syntax error in ${f}"
       cat "${checker_stderr}" >&2
       append_checker_error "${f}" "python3 json.load" "${checker_stderr}"
