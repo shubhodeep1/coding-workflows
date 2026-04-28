@@ -1,5 +1,5 @@
 {%- set env_overrides = manifest.get('env_overrides', {}) or {} -%}
-{%- set _hardhat_network = (env_overrides.get('HARDHAT_NETWORK') or '') | string | lower -%}
+{%- set _hardhat_network = (env_overrides.get('HARDHAT_NETWORK') or '') | string | trim | lower -%}
 {%- set _skip_probe = _hardhat_network == 'hardhat' -%}
 #!/usr/bin/env bash
 set -euo pipefail

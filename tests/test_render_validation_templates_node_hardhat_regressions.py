@@ -481,6 +481,90 @@ def test_rpc_probe_does_not_clobber_container_env_with_host_shell_values() -> No
         assert '"${ROOT_DIR}/validate.env"' in rpc_probe, rpc_probe
 
 
+def test_schema_rejects_env_overrides_keys_that_are_not_valid_env_var_names() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # A key like "FOO:BAR" or "WITH-DASH" is not a POSIX env-var name and
+        # would either break the rendered compose YAML or fail to export
+        # cleanly inside the container.
+        payload["env_overrides"] = {"FOO:BAR": "value"}
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode != 0, result.stdout
+        assert "Manifest validation failed" in result.stderr, result.stderr
+        assert "env_overrides" in result.stderr, result.stderr
+
+
+def test_env_overrides_escape_carriage_returns_and_newlines() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # A literal newline or CR in an override value would close the YAML
+        # double-quoted string mid-line and either silently truncate or break
+        # the rendered compose / validate.env file.
+        payload["env_overrides"] = {
+            "MULTI_LINE": "line1\nline2",
+            "WITH_CR": "alpha\rbeta",
+        }
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # Newlines must be escaped so the YAML stays single-line and
+        # syntactically valid; the parsed value will round-trip as the
+        # 2-character escape sequence the consumer wrote.
+        assert 'MULTI_LINE: "line1\\nline2"' in compose_text, compose_text
+        assert 'WITH_CR: "alpha\\rbeta"' in compose_text, compose_text
+        # PyYAML must still parse the rendered compose cleanly. YAML's own
+        # `\n` escape inside double-quoted strings round-trips a literal `\n`
+        # in the source back to a real newline in the parsed value, so the
+        # consumer's original newline survives end-to-end without ever
+        # spanning multiple source lines.
+        parsed = yaml.safe_load(compose_text)
+        assert parsed["services"]["app"]["environment"]["MULTI_LINE"] == "line1\nline2"
+        assert parsed["services"]["app"]["environment"]["WITH_CR"] == "alpha\rbeta"
+
+        env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+        # validate.env is sourced by bash; literal newlines would split the
+        # KEY="VALUE" assignment across lines and either fail or leak the rest
+        # of the file content into the value.
+        assert 'MULTI_LINE="line1\\nline2"' in env_text, env_text
+        assert 'WITH_CR="alpha\\rbeta"' in env_text, env_text
+
+
+def test_rpc_probe_skip_decision_trims_hardhat_network_whitespace() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # YAML block scalars / consumer typos commonly leave trailing
+        # whitespace; the skip decision must normalize before comparing so a
+        # value like "hardhat " still skips the in-process probe.
+        payload["env_overrides"] = {"HARDHAT_NETWORK": "  HARDHAT \t"}
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        rpc_probe = (output_root / "tests" / "25_rpc_probe.sh").read_text(encoding="utf-8")
+        assert "# SKIP manifest selects in-process Hardhat network" in rpc_probe, rpc_probe
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        # The compose-baked HARDHAT_NETWORK must also be the trimmed,
+        # normalized value so the container's hardhat config sees the canonical
+        # network name.
+        assert 'HARDHAT_NETWORK: "HARDHAT"' in compose_text, compose_text
+
+
 def main() -> int:
     tests = [func for name, func in sorted(globals().items()) if name.startswith("test_")]
     failures = 0
