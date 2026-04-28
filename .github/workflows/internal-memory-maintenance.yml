@@ -15,7 +15,9 @@ permissions:
   contents: write
 
 env:
-  ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  # `inputs` is null on schedule-triggered runs; use `github.event.inputs`
+  # (which is null-safe via `||`) to avoid a parse-time/runtime miss.
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 jobs:
   maintenance:

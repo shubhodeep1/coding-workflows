@@ -23,7 +23,9 @@ name: Validation Refresh
         type: string
 
 env:
-  ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  # `inputs` is null on schedule-triggered runs; use `github.event.inputs`
+  # (which is null-safe via `||`) to avoid a parse-time/runtime miss.
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 permissions:
   contents: write
@@ -151,6 +153,17 @@ jobs:
             echo "Telegram notification skipped (missing TG_BOT_SECRET or TG_CHAT_ID)."
             exit 0
           fi
+          # This step uses raw curl (not tg_send_msg) so the
+          # ALERT_MSG_LEVEL=SILENT plumbing won't filter it
+          # automatically; gate explicitly on SILENT/ERROR/CRITICAL so
+          # the smoke gate's release-gate dispatch
+          # (alert_msg_level=SILENT) doesn't surface a failure ping.
+          case "$(printf '%s' "${ALERT_MSG_LEVEL:-DEBUG}" | tr '[:lower:]' '[:upper:]')" in
+            ERROR|CRITICAL|SILENT)
+              echo "ALERT_MSG_LEVEL=${ALERT_MSG_LEVEL} suppresses WARNING-level Telegram failure ping."
+              exit 0
+              ;;
+          esac
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           printf -v TEXT '⚠️ Validation refresh failed in %s\n%s' "${{ github.repository }}" "${RUN_URL}"
           curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
