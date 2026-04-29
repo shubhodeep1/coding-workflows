@@ -1203,7 +1203,16 @@ jobs:
                 implement_succeeded=true
                 break
               fi
-              echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
+              # Watchdog-kill / non-zero-exit + empty stdout is the same
+              # stuck/no-output failure mode as the cmd_rc==0 + empty
+              # branch above; count it toward the empty-streak so a
+              # series of watchdog kills also trips the Fix #2 bail.
+              if [ ! -s "${CODEX_OUTPUT_FILE}" ]; then
+                echo "::warning::Codex exited with code $cmd_rc and returned empty output on attempt ${attempt}."
+                attempt_was_empty=true
+              else
+                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
+              fi
             fi
 
             # Fix #1: detect Codex's `request_user_input is not supported in
@@ -1298,9 +1307,35 @@ jobs:
               for a in $(seq 1 "${max_attempts}"); do
                 a_log="${RUNTIME_DIR}/codex_log_attempt_${a}.txt"
                 [ -f "${a_log}" ] || continue
-                printf '### Attempt %d — last 40 stderr lines\n\n' "${a}"
+                printf '### Attempt %d — last 40 stderr lines (redacted)\n\n' "${a}"
                 printf '```\n'
-                tail -n 40 "${a_log}" 2>/dev/null || printf '(empty log)\n'
+                # SECURITY: codex stderr can include tool output (e.g.
+                # `apply_patch` diffs, `cat`/`sed -n` results) that
+                # carries repo file content — and therefore secrets if
+                # the model touched a credential-bearing file. The
+                # diagnostics post lands as a public GitHub issue
+                # comment, so we redact line-by-line before printing.
+                # Same redaction policy as the validator's offending-
+                # bytes block (`scripts/validate_changed_files_syntax.sh`):
+                # secret-like keys → "<redacted: secret-like key>",
+                # long opaque tokens → "<redacted: long opaque token>".
+                # Mirrors the policy keyword list verbatim — keep them
+                # in lockstep when adding new patterns.
+                tail -n 40 "${a_log}" 2>/dev/null | awk '
+                  {
+                    line = $0
+                    lower = tolower(line)
+                    if (match(lower, /^[[:space:]-]*[a-z0-9_.-]*(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret|bearer)[a-z0-9_.-]*/)) {
+                      print "<redacted: secret-like key>"
+                      next
+                    }
+                    if (match(line, /[A-Za-z0-9+\/=_-]{40,}/)) {
+                      print "<redacted: long opaque token>"
+                      next
+                    }
+                    print line
+                  }
+                ' || printf '(empty log)\n'
                 printf '```\n\n'
               done
             } > "${diag_file}" 2>/dev/null || true

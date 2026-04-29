@@ -1544,6 +1544,17 @@ def test_codex_empty_output_streak_bail_and_flag() -> None:
 		"the bail error must explain WHY the loop is aborting, with the "
 		"actual streak count, so the GHA log shows a one-line root cause"
 	)
+	# Watchdog-kill / non-zero-exit + empty stdout is the same
+	# stuck/no-output failure mode and must also count toward the
+	# streak. Without this, a series of watchdog kills (which exit
+	# with non-zero AND empty stdout) would never trip the bail and
+	# the loop would burn the full 5-attempt budget on stuck runs.
+	assert 'Codex exited with code $cmd_rc and returned empty output' in codex_block, (
+		"the cmd_rc != 0 branch must distinguish empty-stdout exits "
+		"(stuck/no-output, count toward streak) from non-empty exits "
+		"(legitimate work attempted, don't count). Without this, a run "
+		"of watchdog kills would never trip the empty-streak bail"
+	)
 
 
 def test_retry_nudge_includes_apply_patch_directive() -> None:
@@ -1604,6 +1615,37 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 		"diagnostics must include the last 40 lines of each per-attempt "
 		"log — small enough to fit in a GitHub issue comment, large "
 		"enough to capture the actual failure tail"
+	)
+	# SECURITY: the per-attempt stderr tail can include tool output
+	# (apply_patch diffs, cat/sed results) carrying repo file content
+	# — so credentials present in any touched file would leak into a
+	# public GitHub issue comment without redaction. Pin the same
+	# keyword list and high-entropy guard the validator uses, so a
+	# regression dropping the redaction (or out-of-sync keyword lists)
+	# fails the test.
+	for keyword in (
+		"secret", "token", "password", "credential",
+		"api[_-]?key", "private[_-]?key", "auth[_-]?token",
+		"client[_-]?secret", "bearer",
+	):
+		assert keyword in codex_block, (
+			f"diagnostics tail-redaction awk must include the '{keyword}' "
+			"secret-key keyword, matching the validator's redaction "
+			"policy in scripts/validate_changed_files_syntax.sh — "
+			"otherwise public-issue posts can exfiltrate file content"
+		)
+	assert "<redacted: secret-like key>" in codex_block, (
+		"diagnostics tail-redaction must replace secret-keyword lines "
+		"with the standard redaction marker (lockstep with the validator)"
+	)
+	assert "<redacted: long opaque token>" in codex_block, (
+		"diagnostics tail-redaction must replace high-entropy value "
+		"lines with the standard redaction marker"
+	)
+	assert "tolower(line)" in codex_block, (
+		"diagnostics tail-redaction must use tolower() rather than "
+		"GNU-only `IGNORECASE = 1` so mixed-case keys (Api_Token, "
+		"AUTH_TOKEN) redact on POSIX/BSD/mawk runtimes too"
 	)
 	assert 'gh issue comment "${ISSUE_NUMBER}"' in codex_block, (
 		"diagnostics must be posted to the source issue (not just left "
