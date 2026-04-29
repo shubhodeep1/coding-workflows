@@ -22,27 +22,56 @@ Rules:
 - Keep issues focused. One concern per issue. A single issue should be
   implementable within a single PR touching at most ~10 files.
 - Author-supplied decomposition (OVERRIDES the "one concern per issue" rule
-  above): if the project description **explicitly enumerates** sub-issues
-  with structural markers — `Issue 1: …, Issue 2: …`, a numbered list of
-  distinct sub-tasks, or named child IDs that the description references in
-  dependency declarations — honor that enumeration verbatim. Emit exactly the
-  enumerated issues, in the stated order, with the stated `dependency_edges`.
+  above — LOAD-BEARING, violations are treated as a fatal orchestrator
+  contract failure and re-issued with corrective feedback until satisfied):
+  if the project description **explicitly enumerates** sub-issues with
+  structural markers of the form `Issue <N>:` or `Issue <N> (...):`
+  (case-insensitive; whitespace between `Issue` and the digits is
+  optional, so `Issue1:` is equivalent; whitespace between the digits
+  and the trailing `:` / `(` is also allowed), honor that enumeration
+  verbatim.
+  MANDATORY procedure before you emit any JSON:
+    1. Scan the project description for the structural markers above.
+       (Casual mentions like "as introduced by Issue 5 last week" do NOT
+       count — only markers where the digits are followed (after
+       optional whitespace) by `:` or `(` are structural. `.` and `-`
+       are intentionally NOT structural markers because they collide
+       with prose endings like "fixed in Issue 1.")
+    2. Count the **distinct** structural-marker numbers you find — call
+       this `AUTHOR_N`. (Distinct, not max: a non-contiguous enumeration
+       like `Issue 1:` + `Issue 3:` has `AUTHOR_N = 2`, not 3.)
+    3. Your `issues[]` array MUST have **at least `AUTHOR_N` entries**, one
+       per enumerated sub-task, in the stated order, with the stated
+       `dependency_edges`. Anything fewer than `AUTHOR_N` issues is a hard
+       failure — the orchestrator's post-LLM validator (which uses the
+       same distinct-marker counting rule described above,
+       case-insensitive) will reject your output and re-prompt you with
+       the actual emitted/expected counts as feedback. Do NOT try to be
+       clever and merge enumerated sub-tasks into a single issue
+       "because they're related"; that is exactly the failure mode this
+       rule exists to prevent.
   The author has already done the decomposition work; do NOT collapse
   explicitly-enumerated issues into a single issue even if they appear to
-  share a single concern, and do NOT insert additional issues beyond the
-  enumeration unless one of the stated issues is internally too large per the
-  per-issue implementation-time budget rule below (only then split that
-  single oversized issue into sequential sub-issues, preserving the rest of
-  the author's enumeration). This rule lets users (and smoke tests) drive a
-  deterministic multi-issue decomposition when they need one.
+  share a single concern, share a directory, share a file family, or look
+  like the same logical change. Treat each enumerated `Issue <N>:` as an
+  independent, non-mergeable unit. Do NOT insert additional issues beyond
+  the enumeration unless one of the stated issues is internally too large
+  per the per-issue implementation-time budget rule below (only then split
+  that single oversized issue into sequential sub-issues, preserving the
+  rest of the author's enumeration). This rule lets users (and smoke
+  tests) drive a deterministic multi-issue decomposition when they need
+  one.
 - If a feature naturally spans many files or modules, split it into sequential
   issues (foundation first, then layers that depend on it).
 - Per-issue implementation-time budget: each issue MUST be scoped so the
   downstream `implement.yml` editor (`codex exec`, `xhigh` reasoning) can
   finish it within ONE 60-minute attempt. The implement watchdog's
-  per-attempt wall-time is 110 minutes (`EDITOR_MAX_WALL=6600`), and the
-  3-hour job budget allows at most ~2 full attempts before the budget
-  guard skips the rest, so a 60-minute target leaves headroom for retry.
+  per-attempt wall-time is 130 minutes (`EDITOR_MAX_WALL=7800`), and the
+  3-hour job budget usually allows at most ~1 full-length attempt before
+  the budget guard skips the rest. A 60-minute target keeps attempt 1
+  well inside the watchdog window; retries are only possible when earlier
+  attempts finish well under the wall cap / remaining budget, so
+  undersizing the per-issue scope is mandatory.
   For each issue, internally estimate the wall-clock implementation
   time the editor would need; populating `implementation_minutes_estimate`
   (integer minutes) is optional but STRONGLY RECOMMENDED — when emitted

@@ -22,6 +22,110 @@ append_checker_error() {
     else
       echo "(no stderr output)"
     fi
+    # Surface the offending bytes inline so the post-Codex repair model
+    # doesn't have to shell out to rg/grep with literal special
+    # characters — that has burned repair turns in production
+    # (tele-funtoken-msg-scoring run 25099535242: the model tried
+    # `rg "...\`..."` with an unescapable backtick and lost its only
+    # repair attempt). yaml.scanner.ScannerError, json.JSONDecodeError,
+    # py_compile, and bash -n all surface "line <N>" in stderr; pick
+    # the LAST match (Python tracebacks list stack frames first and
+    # the actual error location last, so head would land on the wrong
+    # line number) and dump <N-2>..<N+2> with line numbers so the
+    # repair prompt sees the exact bytes inline. node --check uses a
+    # different `<file>:<line>:<col>` format and won't match this
+    # regex; that's fine — the offending-bytes block just won't appear
+    # for node, and the original stderr is still in the capture.
+    #
+    # SECURITY: this snippet is later embedded into prompts AND posted
+    # to GitHub issues by the diagnose fallback path. Two layered
+    # guards prevent secret exfiltration:
+    # (a) Path denylist: skip the dump entirely for files whose names
+    #     match common secret-bearing patterns (.env, *secret*, *token*,
+    #     *.pem, *credential*, *key, etc.). The original stderr (which
+    #     just names a line+column) still appears in the capture.
+    # (b) Per-line redaction: lines matching a key=value / key: value
+    #     pattern with high-entropy or known-credential markers are
+    #     emitted as "<redacted>" with the same line number, so the
+    #     repair model still sees the file structure but never the
+    #     credential.
+    if [ -f "${file}" ] && [ -s "${stderr_file}" ]; then
+      local lineno start end basename_lc skip_dump=0
+      basename_lc="$(printf '%s' "$(basename "${file}")" | tr '[:upper:]' '[:lower:]')"
+      # Path denylist: every `.<ext>*` pattern (.env*, .pem*, .key*,
+      # .cer*, .crt*, .p12*, .pfx*) deliberately includes a trailing
+      # `*` so backup-style names (`.key.bak`, `.pem.old`,
+      # `.crt.archived`) and compound-extension credential files
+      # (`.keystore`, `.keychain`, `.crt.pem`) are also suppressed.
+      # This is over-redaction by design — false positives only cost
+      # ~5 lines of diagnostic context (the underlying syntax error
+      # still surfaces in stderr), whereas false negatives leak file
+      # content into prompts and public issue comments. The same
+      # trade-off applies to `.env*` (matches `.env.example`) and
+      # `.pem*` (matches `.pem.bak`); `.key*`/`.cer*`/`.crt*` are
+      # kept consistent with the rest. Don't tighten any of these
+      # to exact-suffix-only without also loosening the others to
+      # match — the precision/coverage choice is unified across
+      # the alternation.
+      case "${file},${basename_lc}" in
+        *.env*|*.pem*|*.p12*|*.pfx*|*.key*|*.cer*|*.crt*|\
+        *,*secret*|*,*credential*|*,*password*|*,*token*|\
+        *,*.envrc|*,.env*)
+          skip_dump=1
+          ;;
+      esac
+      if [ "${skip_dump}" = "0" ]; then
+        lineno="$(grep -oE 'line[[:space:]]+[0-9]+' "${stderr_file}" | tail -n 1 | grep -oE '[0-9]+' | tail -n 1 || true)"
+        if [ -n "${lineno}" ] && [[ "${lineno}" =~ ^[0-9]+$ ]] && [ "${lineno}" -gt 0 ]; then
+          start=$(( lineno > 2 ? lineno - 2 : 1 ))
+          end=$(( lineno + 2 ))
+          printf -- '----- Offending bytes (lines %d-%d; error reported at line %d) -----\n' "${start}" "${end}" "${lineno}"
+          # Per-line redaction: any line whose key contains common
+          # secret indicators (token/secret/password/credential/api[_-]?key/
+          # private[_-]?key/etc.) is replaced with "<redacted: secret-like
+          # key>" but keeps its line number. Lines that look like raw
+          # high-entropy values (>40 chars of base64/hex on a single line)
+          # also redact. Everything else passes through unchanged.
+          #
+          # Portability: case-insensitive matching is implemented via
+          # `tolower(line)` rather than `BEGIN { IGNORECASE = 1 }`,
+          # because IGNORECASE is a GNU awk extension and is silently
+          # ignored on POSIX awk / BSD awk / mawk (which would let
+          # mixed-case secrets like `Api_Token` evade redaction). The
+          # key-name regex uses lowercase letters only and matches
+          # against the lowercased copy.
+          #
+          # Key-name regex: matches the keyword anywhere in the leading
+          # key-portion of a line (allowing leading whitespace, dashes
+          # for YAML list syntax, and surrounding key-name characters).
+          # The trailing `[:=]` requirement was DROPPED so that bare
+          # YAML keys (`api_token:` at end of line, `api_token: |`
+          # block-scalar header) also redact — false positives on
+          # innocuous matches are safer than silent secret leaks.
+          sed -n "${start},${end}p" "${file}" | awk -v start="${start}" '
+            {
+              line = $0
+              lower = tolower(line)
+              # Key-name based redaction (case-insensitive via tolower).
+              if (match(lower, /^[[:space:]-]*[a-z0-9_.-]*(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret|bearer)[a-z0-9_.-]*/)) {
+                printf "  %d: <redacted: secret-like key>\n", start + NR - 1
+                next
+              }
+              # High-entropy value redaction: a long unbroken token
+              # (>=40 chars, no whitespace) on the line — typical of
+              # base64/hex secrets even when the key is innocent.
+              if (match(line, /[A-Za-z0-9+\/=_-]{40,}/)) {
+                printf "  %d: <redacted: long opaque token>\n", start + NR - 1
+                next
+              }
+              printf "  %d: %s\n", start + NR - 1, line
+            }
+          '
+        fi
+      else
+        printf -- '----- Offending bytes (suppressed: file path matches secret-bearing pattern) -----\n'
+      fi
+    fi
     printf '\n'
   } >> "${CAPTURE_FILE}" || true
 }

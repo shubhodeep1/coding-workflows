@@ -87,6 +87,19 @@ Data-file output discipline (MANDATORY when writing YAML or JSON):
   valid YAML/JSON — anything else is a syntax error that breaks the
   post-Codex validation step.
 
+- **YAML reserved-indicator quoting (MANDATORY).** When writing or editing
+  `*.yml` / `*.yaml` files, any scalar (list item or mapping value) whose
+  first non-whitespace character is one of `` ` ``, `@`, `*`, `&`, `|`,
+  `>`, `!`, `%`, `#`, `?`, `,`, `[`, `]`, `{`, or `}` MUST be wrapped in
+  double quotes. Plain (unquoted) scalars starting with these characters
+  are reserved indicators in YAML 1.2 and cause
+  `yaml.scanner.ScannerError: ... found character 'X' that cannot start
+  any token` at parse time. This is enforced by
+  `scripts/validate_changed_files_syntax.sh` and a single failure burns a
+  post-Codex repair attempt. Common cases: prose-heavy invariants in
+  `db/contracts/*.yml` mentioning backticked technical terms, list items
+  beginning with `@username` mentions, or a `*` glob pattern.
+
 If clarification context is incomplete, apply the safest minimal interpretation and explicitly record assumptions in your output/log summary without asking interactive questions.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}

@@ -16,7 +16,7 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-  MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}
+  MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
 
 jobs:
   implement:
@@ -832,7 +832,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
-          EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '6600' }}
+          EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
+          # Required by the Fix #5 diagnostics-posting branch. Without
+          # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
+          # is always false and the per-attempt failure diagnostics
+          # never reach the source issue.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -930,7 +935,7 @@ jobs:
           # ────────────────────────────────────────────────────────────────
 
           IMPLEMENT_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min default
-          IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-6600}"            # 110 min default
+          IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-7800}"            # 130 min default
           JOB_TIMEOUT_SECS=$((180 * 60))
           JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 
@@ -966,6 +971,16 @@ jobs:
             fi
           fi
 
+          # Consecutive empty-output streak counter for Fix #2: when
+          # Codex returns empty stdout `empty_streak_threshold` attempts
+          # in a row the agent loop is stuck in exploration and further
+          # retries waste budget without converging (see analyze-log
+          # tele-funtoken-msg-scoring run with all 5/5 empty attempts
+          # ~120 min wasted). Reset on any non-empty branch so a
+          # mid-run recovery doesn't re-tip the threshold.
+          empty_streak=0
+          empty_streak_threshold=2
+
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
@@ -995,10 +1010,38 @@ jobs:
             # .codex-workflow-src*) so the nudge only fires when Codex
             # itself produced no changes, not when the untouched support
             # checkout shows up as untracked.
+            #
+            # Also feed back the prior attempts' exploration history (the
+            # `exec` shell calls Codex made — `ls`, `rg`, `nl`, `sed`,
+            # etc.). Without this, every retry redoes the same recon and
+            # the wall-time / model-side budget runs out before any edit
+            # lands. Observed in production on `bitsafe.io` issue #26
+            # where 5 back-to-back attempts all spent their full window
+            # exploring and never wrote a single file.
             PROMPT_FILE_TO_USE="${CODEX_PROMPT_FILE}"
             codex_retry_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
             if [ "${attempt}" -gt 1 ] && [ -z "${codex_retry_delta}" ]; then
               PROMPT_FILE_TO_USE="${RUNTIME_DIR}/codex_prompt_retry.txt"
+              # Extract distinct `exec` commands from prior-attempt stderr
+              # (`tee -a`'d into codex_log.txt and accumulating across
+              # attempts). Codex CLI prints `exec\n<cmd> in <cwd> <status>:`
+              # so awk pairs each `exec` line with the following command
+              # line. Long commands (>500 chars — typical for serialized
+              # MCP calls like `mcp__serena__find_symbol` with a long
+              # body arg) are truncated to 500 chars + `…[truncated]`
+              # rather than dropped, so the model still sees that the
+              # call was tried even if the full args are clipped. Dedup
+              # is order-preserving (`!seen[display]++` keeps the first
+              # occurrence of each display string in chronological
+              # order) rather than `sort -u` (which would alphabetize
+              # and lose the recon sequence the model can read for
+              # what was tried first → next). head caps the recap so
+              # it doesn't blow up the retry prompt on long runs.
+              prior_exec_history=""
+              if [ -s "${RUNTIME_DIR}/codex_log.txt" ]; then
+                prior_exec_history="$(awk '/^exec$/ { getline cmd; if (length(cmd) > 0) { display = (length(cmd) > 500) ? substr(cmd, 1, 500) " …[truncated]" : cmd; if (!seen[display]++) print "  - " display } }' \
+                  "${RUNTIME_DIR}/codex_log.txt" 2>/dev/null | head -n 40 || true)"
+              fi
               {
                 cat <<'RETRY_EOF'
           IMPORTANT: Your previous attempt produced NO file changes. The implementation
@@ -1006,7 +1049,26 @@ jobs:
           described in the plan. Do NOT just describe the changes — execute them by
           writing to disk. Proceed now.
 
+          Concretely on this attempt:
+          - Use `apply_patch` (or the equivalent Serena edit tool) to make
+            edits, NOT `sed`/`grep` shell-out workarounds. `sed` and `rg`
+            with literal special characters routinely fail shell quoting
+            and waste the entire attempt.
+          - Do NOT read additional files until your first `apply_patch`
+            call has succeeded. Pick the file you understand best from
+            the plan, edit it first, verify the patch landed, and only
+            then expand scope.
+
           RETRY_EOF
+                if [ -n "${prior_exec_history}" ]; then
+                  printf '%s\n' \
+                    "Prior-attempt exploration recap (DO NOT redo these — go straight to editing):" \
+                    "${prior_exec_history}" \
+                    "" \
+                    "Based on the above, you have already inspected the relevant files. Skip" \
+                    "re-exploration. Make the edits now using apply_patch / Serena edit tools." \
+                    ""
+                fi
                 cat "${CODEX_PROMPT_FILE}"
               } > "${PROMPT_FILE_TO_USE}"
             fi
@@ -1060,14 +1122,21 @@ jobs:
             ) &
             wd_pid=$!
 
-            # Run codex in background with stderr-based heartbeat tracking
+            # Run codex in background with stderr-based heartbeat tracking.
+            # The per-attempt `codex_log_attempt_<N>.txt` file is a `tee`
+            # branch alongside the cumulative `codex_log.txt`, so on
+            # final-failure (Fix #5) we can post the last 40 lines of
+            # each attempt's stderr to the issue without having to slice
+            # the cumulative log by line offset.
+            attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
+            : > "${attempt_log_file}"
             (
               exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${PROMPT_FILE_TO_USE}"
             ) > "${CODEX_OUTPUT_FILE}" 2> >(
               while IFS= read -r line || [ -n "$line" ]; do
                 printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
                 printf '%s\n' "$line"
-              done | tee -a "${RUNTIME_DIR}/codex_log.txt" >&2
+              done | tee -a "${RUNTIME_DIR}/codex_log.txt" "${attempt_log_file}" >&2
             ) &
             codex_bg_pid=$!
             echo "${codex_bg_pid}" > "${codex_pid_file}"
@@ -1078,6 +1147,7 @@ jobs:
             kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
             rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
+            attempt_was_empty=false
             if [ "${cmd_rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 # Codex returned output — check if it actually changed files.
@@ -1097,7 +1167,7 @@ jobs:
                 # The success-no-op path leaves a flag file for the
                 # "Handle no-op implementation" step so it can close the
                 # issue with ai:closed instead of re-issuing it.
-                if grep -qEi '^([[:space:]]*([-[:space:]]*)?)?(no file changes were made|nothing to change|already (aligned|implemented|up[- ]to[- ]date|done|exists|present|complete)|no changes needed)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
+                if grep -qEi '^([[:space:]]*([-[:space:]]*)?)?(no file changes were made|nothing to change|already (aligned|implemented|satisfied|up[- ]to[- ]date|done|exists|present|complete)|no changes needed|no repository changes (were )?made|no file changes made)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
                   echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
                   : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
@@ -1119,6 +1189,7 @@ jobs:
                   break
                 fi
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
+                attempt_was_empty=true
               fi
             else
               # Watchdog kill (wall-time/idle) or other non-zero exit. Salvage
@@ -1132,17 +1203,185 @@ jobs:
                 implement_succeeded=true
                 break
               fi
-              echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
+              # Watchdog-kill / non-zero-exit + empty stdout is the same
+              # stuck/no-output failure mode as the cmd_rc==0 + empty
+              # branch above; count it toward the empty-streak so a
+              # series of watchdog kills also trips the Fix #2 bail.
+              # Use the same whitespace-stripped emptiness check as the
+              # cmd_rc==0 branch (`grep -q '[^[:space:]]'`) so the
+              # streak treats both branches identically — otherwise a
+              # codex_output containing just newlines/spaces would
+              # count as "non-empty" here but as "empty" in the
+              # cmd_rc==0 branch (drift between the two paths).
+              if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                echo "::warning::Codex exited with code $cmd_rc and returned empty output on attempt ${attempt}."
+                attempt_was_empty=true
+              else
+                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
+              fi
             fi
+
+            # Fix #1: detect Codex's `request_user_input is not supported in
+            # exec mode` error path. The CLI emits this to stderr (codex_log)
+            # when the model decides it needs to ask the user a clarifying
+            # question — but in --full-auto / exec mode the request is
+            # rejected with code=-32000 and Codex bails with an empty
+            # CODEX_OUTPUT_FILE. Retrying with the same prompt cannot fix an
+            # ambiguity the model wanted to ask about; the previous run on
+            # tele-funtoken-msg-scoring wasted ~80 min and ~1.7M tokens
+            # before exhausting all 5 attempts. Bail immediately on this
+            # signal and leave a flag file so the orchestrator's
+            # `ai:implementation-failed` sweep can route the issue back to
+            # the clarify phase instead of re-issuing as another implement.
+            #
+            # Scope the grep to the CURRENT attempt's per-attempt log
+            # (`codex_log_attempt_<N>.txt`), not the cumulative
+            # `codex_log.txt` — the cumulative log accumulates across
+            # attempts via `tee -a`, so a stale request_user_input from
+            # attempt 1 would otherwise trip a false bail on every
+            # subsequent attempt and prevent legitimate later recovery.
+            if [ -f "${attempt_log_file}" ] && \
+                grep -q 'request_user_input is not supported in exec mode' \
+                  "${attempt_log_file}"; then
+              echo "::error::Codex emitted request_user_input in exec mode (issue/plan ambiguity). Aborting retry loop and routing back to clarify."
+              : > "${RUNTIME_DIR}/codex_request_user_input.flag"
+              break
+            fi
+
+            # Fix #2: track consecutive empty-output streak so a stuck-in-
+            # exploration agent loop bails early instead of burning the full
+            # 5-attempt budget. Reset to 0 on any attempt that produced
+            # output (even output-without-changes), incrementing only on
+            # the genuine empty-output path. Counter is checked AFTER
+            # increment; a `>= empty_streak_threshold` (default 2) trips
+            # the bail. This complements the exec-history retry nudge
+            # (which tries to break the redo-recon loop) by recovering
+            # budget when the nudge doesn't take.
+            if [ "${attempt_was_empty}" = "true" ]; then
+              empty_streak=$((empty_streak + 1))
+              if [ "${empty_streak}" -ge "${empty_streak_threshold}" ]; then
+                echo "::error::Codex returned empty output ${empty_streak} attempts in a row — agent loop is stuck in exploration. Aborting retry loop."
+                : > "${RUNTIME_DIR}/codex_stuck_in_exploration.flag"
+                break
+              fi
+            else
+              empty_streak=0
+            fi
+
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$((10 * (2 ** (attempt - 1))))
               echo "Retrying in ${sleep_secs}s..."
               sleep "${sleep_secs}"
-            else
-              echo "::error::Codex implement failed after ${max_attempts} attempts."
-              exit 1
             fi
           done
+
+          # Fix #5: on any failure path (5/5 attempts exhausted OR an
+          # early-bail flag tripped), assemble a compact per-attempt
+          # diagnostics report and post it as a comment on the source
+          # issue so the orchestrator and the next operator can see
+          # WHY the loop failed without re-downloading the 24K-line
+          # job log. Mirrors the validation-harness exit-14 pattern
+          # documented in the spec.
+          if [ "${implement_succeeded}" != "true" ]; then
+            diag_reason="Codex implement failed after ${max_attempts} attempts"
+            if [ -f "${RUNTIME_DIR}/codex_request_user_input.flag" ]; then
+              diag_reason="Codex bailed: request_user_input rejected in exec mode (issue/plan ambiguity — route back to clarify)"
+            elif [ -f "${RUNTIME_DIR}/codex_stuck_in_exploration.flag" ]; then
+              diag_reason="Codex bailed: ${empty_streak} consecutive empty-output attempts (agent loop stuck in exploration)"
+            fi
+
+            diag_file="${RUNTIME_DIR}/codex_failure_diagnostics.md"
+            {
+              printf '## Codex implement diagnostics\n\n'
+              printf '%s.\n\n' "${diag_reason}"
+              printf 'Run: <https://github.com/%s/actions/runs/%s>\n\n' \
+                "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
+              printf '| Attempt | Tokens | Outcome |\n'
+              printf '| --- | --- | --- |\n'
+              for a in $(seq 1 "${max_attempts}"); do
+                a_log="${RUNTIME_DIR}/codex_log_attempt_${a}.txt"
+                if [ ! -f "${a_log}" ]; then
+                  printf '| %d | _(skipped)_ | _(no log — attempt did not run)_ |\n' "${a}"
+                  continue
+                fi
+                # Codex CLI's "tokens used" output has two known formats:
+                #   - multi-line: "tokens used\n75,222"   (dominant)
+                #   - single-line: "tokens used 12345"    (edge case)
+                #   - single-line w/ commas: "tokens used 1,234,567"
+                # Try multi-line first (matches production logs), fall
+                # back to extracting the FIRST number that follows
+                # "tokens used" on the matching line. The single-line
+                # form may have trailing prose (e.g. "(cached)") or
+                # a `\r` line ending — anchoring on the leading
+                # "tokens used" rather than end-of-line tolerates
+                # both. Lowercase the line first so the case-
+                # insensitive grep result still works with a case-
+                # sensitive sed.
+                a_tokens="$(grep -A1 -i 'tokens used' "${a_log}" 2>/dev/null | tail -1 | tr -d '[:space:],' || true)"
+                if ! [[ "${a_tokens}" =~ ^[0-9]+$ ]]; then
+                  match_line="$(grep -i 'tokens used' "${a_log}" 2>/dev/null | tail -1 || true)"
+                  if [ -n "${match_line}" ]; then
+                    a_tokens="$(printf '%s' "${match_line}" | tr '[:upper:]' '[:lower:]' | sed -E 's/.*tokens used[^0-9]*([0-9][0-9,]*).*/\1/' | tr -d ',\r' || true)"
+                    [[ "${a_tokens}" =~ ^[0-9]+$ ]] || a_tokens=""
+                  fi
+                fi
+                [ -n "${a_tokens}" ] || a_tokens="—"
+                a_outcome="(see tail below)"
+                printf '| %d | %s | %s |\n' "${a}" "${a_tokens}" "${a_outcome}"
+              done
+              printf '\n'
+              for a in $(seq 1 "${max_attempts}"); do
+                a_log="${RUNTIME_DIR}/codex_log_attempt_${a}.txt"
+                [ -f "${a_log}" ] || continue
+                printf '### Attempt %d — last 40 stderr lines (redacted)\n\n' "${a}"
+                printf '```\n'
+                # SECURITY: codex stderr can include tool output (e.g.
+                # `apply_patch` diffs, `cat`/`sed -n` results) that
+                # carries repo file content — and therefore secrets if
+                # the model touched a credential-bearing file. The
+                # diagnostics post lands as a public GitHub issue
+                # comment, so we redact line-by-line before printing.
+                # Same redaction policy as the validator's offending-
+                # bytes block (`scripts/validate_changed_files_syntax.sh`):
+                # secret-like keys → "<redacted: secret-like key>",
+                # long opaque tokens → "<redacted: long opaque token>".
+                # Mirrors the policy keyword list verbatim — keep them
+                # in lockstep when adding new patterns.
+                tail -n 40 "${a_log}" 2>/dev/null | awk '
+                  {
+                    line = $0
+                    lower = tolower(line)
+                    if (match(lower, /^[[:space:]-]*[a-z0-9_.-]*(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret|bearer)[a-z0-9_.-]*/)) {
+                      print "<redacted: secret-like key>"
+                      next
+                    }
+                    if (match(line, /[A-Za-z0-9+\/=_-]{40,}/)) {
+                      print "<redacted: long opaque token>"
+                      next
+                    }
+                    print line
+                  }
+                ' || printf '(empty log)\n'
+                printf '```\n\n'
+              done
+            } > "${diag_file}" 2>/dev/null || true
+
+            if [ -s "${diag_file}" ] && [ -n "${ISSUE_NUMBER:-}" ] && \
+                [ -n "${GH_TOKEN:-}" ]; then
+              if gh issue comment "${ISSUE_NUMBER}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --body-file "${diag_file}" >/dev/null 2>&1; then
+                echo "Posted Codex implement failure diagnostics to issue #${ISSUE_NUMBER}."
+              else
+                echo "::warning::Could not post Codex failure diagnostics to issue #${ISSUE_NUMBER} (gh issue comment failed); diagnostics saved at ${diag_file}."
+              fi
+            else
+              echo "::warning::Skipping diagnostics issue comment (ISSUE_NUMBER='${ISSUE_NUMBER:-}', diag_file size=$(wc -c < "${diag_file}" 2>/dev/null || echo 0)); diagnostics saved locally."
+            fi
+
+            echo "::error::${diag_reason}."
+            exit 1
+          fi
 
       - name: Write run summary
         if: env.SKIP_IMPLEMENT != 'true' && always()
@@ -1254,10 +1493,10 @@ jobs:
             exit 1
           fi
 
-          max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-1}"
+          max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-3}"
           if ! [[ "${max_attempts_raw}" =~ ^[0-9]+$ ]] || [ "${max_attempts_raw}" -lt 0 ]; then
-            echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 1."
-            max_attempts=1
+            echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 3."
+            max_attempts=3
           else
             max_attempts="${max_attempts_raw}"
           fi

@@ -11,6 +11,21 @@ Rules:
 4. Do not create new files unless they are in the allow-list.
 5. Do not run broad refactors or unrelated cleanups.
 
+Category-specific repair recipes:
+
+- **YAML reserved-indicator scalar.** If the captured diagnostic is
+  `yaml.scanner.ScannerError: ... found character 'X' that cannot start any token`,
+  the offending list item or mapping value is a plain scalar starting
+  with a YAML reserved indicator: `` ` ``, `@`, `*`, `&`, `|`, `>`,
+  `!`, `%`, `#`, `?`, `,`, `[`, `]`, `{`, `}`. Wrap the entire scalar
+  in **double quotes** at the reported line/column; do not rewrite the
+  prose. Verify locally with
+  `python3 -c "import yaml; yaml.safe_load(open('<path>'))"`.
+  Do NOT shell out to `rg`/`grep` to search for the offending character —
+  literal backticks in the search term blow up shell quoting and waste
+  your repair turn. Use `sed -n '<line>p' <path>` (or
+  `<line-2>,<line+2>p`) to inspect the exact bytes instead.
+
 Output requirements:
 - Apply edits directly in the repository.
 - Keep output concise and focused on what was changed.

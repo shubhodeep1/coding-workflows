@@ -707,7 +707,7 @@ def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 
 def test_post_codex_syntax_repair_step_contract() -> None:
 	wf = _workflow_text()
-	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}" in wf
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}" in wf
 
 	repair_block = _step_block_text("Attempt post-Codex syntax repair")
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
@@ -1178,6 +1178,719 @@ def test_codex_success_detection_uses_baseline_diff() -> None:
 	for phrase in ("implemented", "done", "exists", "present", "complete"):
 		assert phrase in codex_block, (
 			f"Success-no-op regex should include the '{phrase}' completion signal"
+		)
+	# Phrases added after observed Codex outputs ("No repository changes
+	# made.", "already satisfied.") on issue #1768 — keep them covered so
+	# a future regex tightening can't silently regress them.
+	for phrase in ("satisfied", "no repository changes", "no file changes made"):
+		assert phrase in codex_block, (
+			f"Success-no-op regex should include the '{phrase}' completion signal "
+			f"(observed Codex phrasing on issue #1768)"
+		)
+
+
+def test_retry_prompt_includes_exec_history_recap() -> None:
+	"""Pin the cross-attempt exec-history recap so a future Codex CLI
+	output-format change (or accidental edit to the awk parser) cannot
+	silently disable the feature.
+
+	The recap is critical for multi-file issues with xhigh reasoning:
+	without it, every retry redoes the same recon and the wall-time
+	budget runs out before any edit lands (observed on bitsafe.io
+	issue #26 — see the agents.md historical note).
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+
+	# (a) The retry-prompt expansion block must be present in the step.
+	#     These are the marker strings the model sees on retry; if any
+	#     drifts, the recap stops being an effective nudge.
+	assert "codex_prompt_retry.txt" in codex_block, (
+		"Retry-prompt path must be referenced so the nudged prompt is built"
+	)
+	assert "Prior-attempt exploration recap" in codex_block, (
+		"Retry prompt must include the explicit exploration-recap header so the "
+		"model knows the bullet list is what it has already tried"
+	)
+	assert "DO NOT redo these — go straight to editing" in codex_block, (
+		"Recap header must instruct the model to skip re-exploration and edit"
+	)
+	assert "apply_patch / Serena edit tools" in codex_block, (
+		"Recap must point the model at the actual editing tools to use"
+	)
+
+	# (b) The awk parser must match the Codex CLI stderr format we
+	#     observe in production. We extract the parser fragment from the
+	#     workflow and run it against a synthetic codex_log fixture that
+	#     mirrors what Codex CLI prints (verified against real bitsafe.io
+	#     run logs). If Codex CLI changes its `exec\n<cmd>` format, this
+	#     test fails loudly instead of the recap silently going empty.
+	assert "/^exec$/" in codex_block, (
+		"awk pattern must anchor on `exec` lines as Codex CLI prints them"
+	)
+	assert "!seen[display]++" in codex_block, (
+		"Dedup must be order-preserving (awk associative array), not sort -u, "
+		"so the recap shows commands in the chronological order they were tried. "
+		"(`display` rather than `cmd` because long commands are truncated to a "
+		"display string before dedup so two identical truncated calls dedup as one)"
+	)
+	assert "${RUNTIME_DIR}/codex_log.txt" in codex_block, (
+		"Parser must read codex_log.txt — the file accumulates across attempts "
+		"via `tee -a` so attempt N+1 sees attempt 1..N's exec calls"
+	)
+
+	# (c) Run the actual awk command against a synthetic log to verify
+	#     the parser still extracts what we expect. Pattern lifted
+	#     verbatim from implement.yml so a regex/format edit there
+	#     surfaces here as a parse mismatch.
+	#
+	#     The fixture intentionally exercises suffix variation that
+	#     real Codex CLI logs exhibit (different `succeeded in <N>ms:`
+	#     elapsed values, `exited <code> in <N>ms:` failure forms,
+	#     non-zero ms values) so a parser that accidentally hard-codes
+	#     `succeeded in 0ms:` would fail this test.
+	# A long synthetic command (>500 chars) that mirrors the
+	# `mcp__serena__find_symbol` style — these get serialized into one
+	# line and routinely exceed 500 chars. The parser must show them
+	# (truncated) rather than drop them, otherwise the model can't see
+	# they were already tried and re-runs them on retry.
+	long_cmd = "/bin/bash -lc 'mcp__serena__find_symbol --name " + ("X" * 600) + "' in /repo succeeded in 99ms:"
+	assert len(long_cmd) > 500, "long_cmd fixture must exceed 500 chars to exercise truncation"
+	codex_log_fixture = (
+		"some startup chatter\n"
+		"exec\n"
+		"/bin/bash -lc 'ls -1' in /repo succeeded in 0ms:\n"
+		"file_a\n"
+		"file_b\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:\n"
+		"matches…\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n MISSING' in /repo exited 1 in 12ms:\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:\n"
+		"duplicate of attempt 2 — should dedup\n"
+		"exec\n"
+		f"{long_cmd}\n"
+		"exec\n"
+		"/bin/bash -lc 'cat foo' in /repo succeeded in 3ms:\n"
+		"tokens used 12345\n"
+	)
+	with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+		f.write(codex_log_fixture)
+		log_path = f.name
+	try:
+		# Pattern verbatim from implement.yml retry-nudge block.
+		awk_program = (
+			'/^exec$/ { getline cmd; '
+			'if (length(cmd) > 0) { '
+			'display = (length(cmd) > 500) ? substr(cmd, 1, 500) " …[truncated]" : cmd; '
+			'if (!seen[display]++) print "  - " display } }'
+		)
+		result = subprocess.run(
+			["awk", awk_program, log_path],
+			capture_output=True,
+			text=True,
+			check=True,
+			timeout=10,
+		)
+	finally:
+		os.unlink(log_path)
+	lines = [line for line in result.stdout.splitlines() if line]
+	expected_long_recap = "  - " + long_cmd[:500] + " …[truncated]"
+	assert lines == [
+		"  - /bin/bash -lc 'ls -1' in /repo succeeded in 0ms:",
+		"  - /bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:",
+		"  - /bin/bash -lc 'rg -n MISSING' in /repo exited 1 in 12ms:",
+		expected_long_recap,
+		"  - /bin/bash -lc 'cat foo' in /repo succeeded in 3ms:",
+	], (
+		"awk parser must (1) capture each `exec`-followed command line "
+		"regardless of trailing-suffix variability (succeeded vs exited, "
+		"different ms values), (2) dedup duplicates while preserving "
+		"chronological order, (3) skip non-`exec` chatter, "
+		"(4) truncate commands >500 chars with a `…[truncated]` marker "
+		"rather than dropping them silently. Got:\n"
+		+ "\n".join(lines)
+	)
+
+
+def test_yaml_reserved_indicator_recipe_in_repair_prompts() -> None:
+	"""Pin the YAML reserved-indicator recipe in both repair prompts so a
+	future edit can't silently drop the guidance that prevents the
+	`rg "...\\`..."` shell-quoting failure observed on
+	tele-funtoken-msg-scoring run 25099535242.
+
+	Both prompts must:
+	- Name the diagnostic substring the recipe matches against
+	- Tell the model to wrap the scalar in DOUBLE quotes
+	- Tell the model to use sed (NOT rg/grep) to inspect the line
+	- Provide the python3 yaml.safe_load verification command
+	"""
+	for prompt_path in (
+		REPO_ROOT / "prompts" / "mode-implement-repair.txt",
+		REPO_ROOT / "prompts" / "mode-implement-repair-syntax.txt",
+	):
+		body = prompt_path.read_text(encoding="utf-8")
+		assert "yaml.scanner.ScannerError" in body, (
+			f"{prompt_path.name} must reference the diagnostic substring "
+			"`yaml.scanner.ScannerError` so the recipe matches at the right time"
+		)
+		assert "cannot start any token" in body, (
+			f"{prompt_path.name} must include the ScannerError message tail "
+			"so the model knows which exact diagnostic this recipe handles"
+		)
+		assert "double quotes" in body, (
+			f"{prompt_path.name} must instruct the model to wrap the scalar "
+			"in double quotes (the actual YAML fix)"
+		)
+		assert "sed -n" in body, (
+			f"{prompt_path.name} must point the model at sed -n for line "
+			"inspection — using rg/grep with literal backticks blows up "
+			"shell quoting and burns the repair turn"
+		)
+		assert "python3 -c \"import yaml; yaml.safe_load" in body, (
+			f"{prompt_path.name} must give the model an exact verification "
+			"command so the repair doesn't ship without revalidation"
+		)
+		assert "Do NOT shell out to `rg`/`grep`" in body or "Do NOT shell out to `rg`" in body, (
+			f"{prompt_path.name} must explicitly forbid the failed strategy "
+			"(rg/grep with literal backtick)"
+		)
+
+
+def test_yaml_quoting_clause_in_implement_prompt() -> None:
+	"""Pin the YAML reserved-indicator quoting clause in the main
+	implement prompt. Source-side prevention complements the repair
+	recipe — without this, Codex keeps emitting bare scalars starting
+	with backtick / @ / etc. in db/contracts/*.yml prose."""
+	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "YAML reserved-indicator quoting" in body, (
+		"mode-implement.txt must have a labelled clause for YAML reserved-"
+		"indicator quoting so it's discoverable on review"
+	)
+	# All YAML 1.2 reserved indicators that cannot start a plain scalar.
+	for ch in ("`", "@", "*", "&", "|", ">", "!", "%", "#", "?", ",", "[", "]", "{", "}"):
+		assert f"`{ch}`" in body, (
+			f"mode-implement.txt must list the reserved indicator `{ch}` in "
+			"the YAML quoting clause"
+		)
+	assert "double quotes" in body, (
+		"mode-implement.txt must say to wrap reserved-indicator scalars "
+		"in DOUBLE quotes specifically (single quotes don't escape backticks "
+		"identically and the consistency matters for the repair regex)"
+	)
+	assert "validate_changed_files_syntax.sh" in body, (
+		"mode-implement.txt must reference the validator that enforces "
+		"the rule, so the model knows the cost of getting this wrong"
+	)
+
+
+def test_validator_diagnostic_surfaces_offending_lines() -> None:
+	"""End-to-end test for `append_checker_error` line-context surfacing.
+
+	Bootstrap a git repo with a YAML file that has a reserved-indicator
+	scalar (`` ` ``) on a known line. Run
+	`scripts/validate_changed_files_syntax.sh` with `CAPTURE_FILE` set,
+	and verify the capture contains both the original ScannerError and
+	an "Offending bytes" block with the backticked line numbered. This
+	guards the failure mode where the repair prompt has to find the
+	offending byte itself — when the validator surfaces the bytes
+	inline, the repair model patches in one shot.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_validator_diag_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		# Stage prior file so git diff sees the new YAML as a modification
+		# (validator iterates `git diff --name-only HEAD ...` + untracked).
+		# Just leaving as untracked is enough — the script's second list
+		# (`git ls-files --others --exclude-standard`) covers it.
+		yaml_path = repo_dir / "broken.yml"
+		yaml_path.write_text(
+			# 5 lines of valid YAML, then a reserved-indicator scalar on
+			# line 6. Python's yaml.scanner.ScannerError will report
+			# `line 6, column N`.
+			"key1: value1\n"
+			"key2: value2\n"
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - `backticked-leader is invalid YAML\n",
+			encoding="utf-8",
+		)
+		capture_path = repo_dir / "captured.txt"
+		env = os.environ.copy()
+		env["CAPTURE_FILE"] = str(capture_path)
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		result = subprocess.run(
+			["bash", str(validator)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		# Validator should fail (YAML is broken).
+		assert result.returncode != 0, (
+			f"validator should fail on a YAML with reserved-indicator "
+			f"scalar on line 6, got rc={result.returncode}\n"
+			f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+		)
+		assert capture_path.exists(), (
+			f"validator must write the capture file at CAPTURE_FILE; "
+			f"missing at {capture_path}"
+		)
+		captured = capture_path.read_text(encoding="utf-8")
+		# (a) The original ScannerError stderr must be in the capture
+		assert "yaml.scanner.ScannerError" in captured or "ScannerError" in captured, (
+			f"capture must include the YAML ScannerError stderr. Got:\n{captured}"
+		)
+		# (b) The "Offending bytes" block must be present with the
+		#     reported line number (6 in this fixture).
+		assert "Offending bytes" in captured, (
+			f"capture must include the new offending-bytes block so the "
+			f"repair prompt sees the exact failing line inline. Got:\n{captured}"
+		)
+		assert "error reported at line 6" in captured, (
+			f"capture must report the line number extracted from the "
+			f"ScannerError (6 in fixture). Got:\n{captured}"
+		)
+		# (c) The actual offending line content must be in the capture,
+		#     numbered.
+		assert "6: " in captured and "backticked-leader" in captured, (
+			f"capture must show the backticked line content, numbered, so "
+			f"the repair prompt can patch it without re-grepping. Got:\n{captured}"
+		)
+
+
+def test_codex_request_user_input_bail_and_flag() -> None:
+	"""Pin Fix #1: when Codex emits the `request_user_input is not
+	supported in exec mode` error path (model wanted to ask the user a
+	clarifying question, but exec mode rejected the request), the
+	retry loop must bail immediately and leave a flag file so the
+	orchestrator's `ai:implementation-failed` sweep can route the
+	issue back to clarify instead of re-issuing as another implement.
+
+	Production failure mode: tele-funtoken-msg-scoring run
+	(2026-04-29) wasted ~80 min and ~1.7M tokens before exhausting
+	all 5 attempts on an issue/plan ambiguity Codex wanted to ask
+	about. Retrying with the same prompt cannot fix that; bail early.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "request_user_input is not supported in exec mode" in codex_block, (
+		"loop must grep for the exact CLI error string; this is the "
+		"canonical signal that the model needed user input"
+	)
+	# The grep must scope to the CURRENT attempt's per-attempt log,
+	# not the cumulative codex_log.txt. The cumulative log accumulates
+	# across attempts via `tee -a`, so grepping it would let a stale
+	# error from attempt 1 trip a false bail on every subsequent
+	# attempt and prevent legitimate later recovery (consensus finding
+	# from multi-model review on commit 523cc99).
+	assert 'grep -q \'request_user_input is not supported in exec mode\' \\\n                  "${attempt_log_file}"' in codex_block or \
+		'"${attempt_log_file}"' in codex_block.split('request_user_input is not supported in exec mode')[1][:200], (
+		"request_user_input grep MUST target ${attempt_log_file} (the "
+		"per-attempt log), not the cumulative ${RUNTIME_DIR}/codex_log.txt. "
+		"A stale error from an earlier attempt would otherwise trip a "
+		"false bail on every subsequent attempt"
+	)
+	assert "codex_request_user_input.flag" in codex_block, (
+		"loop must touch a request-user-input flag file so downstream "
+		"routing (the orchestrator's ai:implementation-failed sweep) can "
+		"send the issue back to clarify"
+	)
+	# The bail must be a `break`, not `continue` — the request-user-input
+	# error means retrying with the same prompt cannot fix the underlying
+	# ambiguity. The flag-touch must precede the break so the flag is
+	# always present when the loop exits via this path.
+	bail_idx = codex_block.find("codex_request_user_input.flag")
+	assert bail_idx != -1
+	assert "break" in codex_block[bail_idx:bail_idx + 200], (
+		"request_user_input bail must `break` out of the retry loop, "
+		"not `continue` — same prompt won't fix an ambiguity"
+	)
+
+
+def test_codex_empty_output_streak_bail_and_flag() -> None:
+	"""Pin Fix #2: when Codex returns empty output for
+	`empty_streak_threshold` (default 2) attempts in a row, the retry
+	loop must bail and leave a flag file. Recovers ~60% of wasted
+	budget on confirmed stuck-in-exploration scenarios where the
+	exec-history retry nudge alone hasn't broken the loop.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "empty_streak=0" in codex_block, (
+		"loop must initialise the empty-output streak counter to 0 before "
+		"the for-loop so it accumulates across attempts"
+	)
+	assert "empty_streak_threshold=" in codex_block, (
+		"threshold must be a named knob (not a magic 2) so it can be "
+		"tuned without re-deriving it from the increment logic"
+	)
+	assert "empty_streak=$((empty_streak + 1))" in codex_block, (
+		"streak must increment on the genuine empty-output path"
+	)
+	assert "else\n              empty_streak=0" in codex_block, (
+		"streak must reset to 0 on any non-empty attempt outcome so a "
+		"mid-run recovery doesn't re-tip the threshold from accumulated "
+		"earlier empties"
+	)
+	assert "codex_stuck_in_exploration.flag" in codex_block, (
+		"streak-bail must touch a stuck-in-exploration flag file so "
+		"the orchestrator can distinguish exploration-stuck from other "
+		"failure modes when picking the recovery action"
+	)
+	assert 'empty_streak} consecutive empty-output attempts' in codex_block or \
+		'consecutive empty-output' in codex_block, (
+		"the bail error must explain WHY the loop is aborting, with the "
+		"actual streak count, so the GHA log shows a one-line root cause"
+	)
+	# Watchdog-kill / non-zero-exit + empty stdout is the same
+	# stuck/no-output failure mode and must also count toward the
+	# streak. Without this, a series of watchdog kills (which exit
+	# with non-zero AND empty stdout) would never trip the bail and
+	# the loop would burn the full 5-attempt budget on stuck runs.
+	assert 'Codex exited with code $cmd_rc and returned empty output' in codex_block, (
+		"the cmd_rc != 0 branch must distinguish empty-stdout exits "
+		"(stuck/no-output, count toward streak) from non-empty exits "
+		"(legitimate work attempted, don't count). Without this, a run "
+		"of watchdog kills would never trip the empty-streak bail"
+	)
+
+
+def test_retry_nudge_includes_apply_patch_directive() -> None:
+	"""Pin Fix #4-generic: the retry preamble that fires when an
+	attempt produces no file changes must include actionable guidance
+	(use apply_patch, don't read more files until first patch lands)
+	rather than just chiding ("you MUST create or edit files"). The
+	chiding-only version was already there; this clause is what
+	moves the model from "describe the changes" → "execute them".
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "apply_patch`" in codex_block, (
+		"retry preamble must name `apply_patch` as the preferred edit "
+		"tool — `sed`/`grep` shell-out workarounds routinely fail "
+		"shell quoting on literal special chars and waste the attempt"
+	)
+	assert "Do NOT read additional files until your first" in codex_block, (
+		"retry preamble must constrain the model to apply edits before "
+		"expanding scope, since the bitsafe.io / tele-funtoken-msg-scoring "
+		"failure mode was the model spending the full budget on recon"
+	)
+
+
+def test_failure_diagnostics_posted_to_source_issue() -> None:
+	"""Pin Fix #5: when the loop exits without success (5/5 attempts
+	exhausted OR an early-bail flag tripped), the workflow must post
+	a per-attempt diagnostics report to the source issue so the
+	orchestrator and the next operator can debug without re-downloading
+	the 24K-line job log. Mirrors the validation-harness exit-14
+	pattern documented in the spec.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	# Per-attempt log capture must be wired into the stderr tee.
+	assert "codex_log_attempt_${attempt}.txt" in codex_block, (
+		"per-attempt log files must accumulate alongside the cumulative "
+		"codex_log.txt so the diagnostics block can tail each attempt"
+	)
+	# Final-failure diagnostics block must check implement_succeeded
+	# AFTER the loop, branch on which flag tripped, and assemble a
+	# diagnostics file before posting to the issue.
+	assert 'if [ "${implement_succeeded}" != "true" ]; then' in codex_block, (
+		"diagnostics block must run on any failure path (5/5 exhausted "
+		"OR early-bail), not only when the final attempt fails"
+	)
+	assert "codex_failure_diagnostics.md" in codex_block, (
+		"diagnostics file must have a stable name so future tooling "
+		"can read it"
+	)
+	assert "Codex bailed: request_user_input rejected" in codex_block, (
+		"diagnostics reason must distinguish the request_user_input "
+		"bail so the orchestrator can route accordingly"
+	)
+	assert "consecutive empty-output attempts" in codex_block, (
+		"diagnostics reason must distinguish the empty-streak bail "
+		"from the 5/5 exhausted path"
+	)
+	assert "tail -n 40" in codex_block, (
+		"diagnostics must include the last 40 lines of each per-attempt "
+		"log — small enough to fit in a GitHub issue comment, large "
+		"enough to capture the actual failure tail"
+	)
+	# SECURITY: the per-attempt stderr tail can include tool output
+	# (apply_patch diffs, cat/sed results) carrying repo file content
+	# — so credentials present in any touched file would leak into a
+	# public GitHub issue comment without redaction. Pin the same
+	# keyword list and high-entropy guard the validator uses, so a
+	# regression dropping the redaction (or out-of-sync keyword lists)
+	# fails the test.
+	#
+	# Naive substring (`"token" in codex_block`) is unreliable — words
+	# like "token" / "secret" appear in many places in the step
+	# (env names, GH_TOKEN, comments, gh-issue-comment messages). To
+	# avoid incidental false-positives masking a regression, extract
+	# the actual `match(lower, /^...(<alternation>)...$/)` regex
+	# alternation from the awk block and check membership against
+	# just that. The same check runs against
+	# `scripts/validate_changed_files_syntax.sh` to catch drift
+	# between the two duplicated redaction implementations — there is
+	# only ONE policy, encoded in two places, and both must contain
+	# every keyword.
+	#
+	# Membership is by EXACT alternation entry (`alt.split("|")`),
+	# not substring — otherwise removing standalone `token` from the
+	# alternation would still pass because `auth[_-]?token` contains
+	# the substring `token`. The reviewer-flagged regression mode.
+	def extract_redaction_alternation(text: str, source: str) -> list[str]:
+		# The redaction regex looks like:
+		#   match(lower, /^[[:space:]-]*[a-z0-9_.-]*(secret|token|...|bearer)[a-z0-9_.-]*/)
+		# Anchor on `match(lower,` and the alternation parens; allow
+		# arbitrary whitespace around the awk-regex bracket-class
+		# prefix/suffix so harmless awk refactors (extra newlines,
+		# different whitespace) don't break extraction. The
+		# alternation runs to the matching `)` followed by the
+		# `[a-z0-9_.-]*` suffix — anchoring on that suffix avoids
+		# being fooled by any nested `)` inside future keyword
+		# patterns.
+		m = re.search(
+			r"match\(\s*lower\s*,\s*/[^/]*?\(([^)]+)\)\[a-z0-9_\.-\]\*",
+			text,
+			re.DOTALL,
+		)
+		assert m is not None, (
+			f"could not locate the secret-keyword alternation in {source}; "
+			"either the redaction awk was removed or its shape changed "
+			"materially and this test needs updating to match"
+		)
+		return m.group(1).split("|")
+
+	expected_keywords = (
+		"secret", "token", "password", "passwd", "credential",
+		"api[_-]?key", "private[_-]?key", "access[_-]?key",
+		"auth[_-]?token", "client[_-]?secret", "bearer",
+	)
+
+	# (i) Diagnostics-tail redaction in implement.yml's "Run Codex
+	#     implementation" step.
+	implement_alts = extract_redaction_alternation(
+		codex_block, "implement.yml diagnostics-tail awk"
+	)
+	for keyword in expected_keywords:
+		assert keyword in implement_alts, (
+			f"diagnostics tail-redaction (implement.yml) must include the "
+			f"'{keyword}' secret-key keyword as a STANDALONE alternation "
+			f"entry in its awk regex. Found alternation: {implement_alts!r}. "
+			"(Substring match is not enough — `token` substring-matches "
+			"`auth[_-]?token`, so a regression dropping standalone `token` "
+			"would slip through a substring check.)"
+		)
+
+	# (ii) Validator offending-bytes redaction in
+	#      scripts/validate_changed_files_syntax.sh — the policy MUST
+	#      stay synchronised with the diagnostics path, so check it
+	#      against the same keyword list with the same exact-entry
+	#      semantics.
+	validator_text = (
+		REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+	).read_text(encoding="utf-8")
+	validator_alts = extract_redaction_alternation(
+		validator_text, "validate_changed_files_syntax.sh awk"
+	)
+	for keyword in expected_keywords:
+		assert keyword in validator_alts, (
+			f"validator offending-bytes redaction (validate_changed_files_"
+			f"syntax.sh) must include the '{keyword}' secret-key keyword "
+			f"as a STANDALONE alternation entry. Found alternation: "
+			f"{validator_alts!r}. The validator capture is later embedded "
+			"in prompts and posted to issues by the diagnose fallback path."
+		)
+
+	# (iii) Lockstep: the two alternations must be identical (same
+	#       keywords, same order). Drift between them means one path
+	#       redacts and the other doesn't.
+	assert implement_alts == validator_alts, (
+		"implement.yml diagnostics-tail and validate_changed_files_syntax.sh "
+		"redaction alternations have drifted apart — they must stay "
+		"identical so adding/removing a keyword affects both paths "
+		"atomically.\n"
+		f"implement.yml entries: {implement_alts!r}\n"
+		f"validator.sh entries:  {validator_alts!r}"
+	)
+
+	assert "<redacted: secret-like key>" in codex_block, (
+		"diagnostics tail-redaction must replace secret-keyword lines "
+		"with the standard redaction marker (lockstep with the validator)"
+	)
+	assert "<redacted: long opaque token>" in codex_block, (
+		"diagnostics tail-redaction must replace high-entropy value "
+		"lines with the standard redaction marker"
+	)
+	assert "tolower(line)" in codex_block, (
+		"diagnostics tail-redaction must use tolower() rather than "
+		"GNU-only `IGNORECASE = 1` so mixed-case keys (Api_Token, "
+		"AUTH_TOKEN) redact on POSIX/BSD/mawk runtimes too"
+	)
+	assert 'gh issue comment "${ISSUE_NUMBER}"' in codex_block, (
+		"diagnostics must be posted to the source issue (not just left "
+		"in /tmp); the orchestrator polls comments to pick recovery actions"
+	)
+	# gh failure must not abort the job — the diagnostics file is
+	# preserved locally as a fallback.
+	assert "Could not post Codex failure diagnostics" in codex_block, (
+		"a failed gh issue comment must downgrade to a warning, not "
+		"abort the job — the underlying Codex failure is still the "
+		"primary signal"
+	)
+	# CRITICAL: the gh-issue-comment guard checks `[ -n "${GH_TOKEN:-}" ]`.
+	# If GH_TOKEN isn't in the step's `env:` block, the guard always
+	# fails and the entire diagnostics-posting branch is dead code —
+	# the same regression that the multi-model consensus review caught
+	# on commit 523cc99. Parse the workflow YAML and look up the
+	# step's env directly so this assertion is robust to harmless
+	# workflow refactors (re-ordering, run-syntax changes, etc.) — a
+	# previous fixed-anchor implementation was flagged as brittle in
+	# review.
+	import yaml as _yaml
+	wf_doc = _yaml.safe_load(_workflow_text())
+	codex_step_env: dict | None = None
+	for job in (wf_doc.get("jobs") or {}).values():
+		for step in (job.get("steps") or []):
+			if isinstance(step, dict) and step.get("name") == "Run Codex implementation":
+				codex_step_env = step.get("env") or {}
+				break
+		if codex_step_env is not None:
+			break
+	assert codex_step_env is not None, (
+		"could not locate `Run Codex implementation` step in workflow YAML"
+	)
+	assert "GH_TOKEN" in codex_step_env, (
+		"`Run Codex implementation` step must declare GH_TOKEN in its "
+		"env: block so the Fix #5 diagnostics-posting branch (`gh issue "
+		"comment`) can authenticate. Without it, the `[ -n \"${GH_TOKEN:-}\" ]` "
+		"guard is always false and the whole diagnostics feature is dead "
+		f"code at runtime. Step env keys: {sorted(codex_step_env.keys())}"
+	)
+	assert "${{ secrets.GH_PAT }}" in str(codex_step_env["GH_TOKEN"]), (
+		"GH_TOKEN must reference `${{ secrets.GH_PAT }}` (the workflow's "
+		"canonical secret name for GitHub auth — every other gh-using "
+		"step in this workflow uses the same name). Found: "
+		f"{codex_step_env['GH_TOKEN']!r}"
+	)
+
+
+def test_validator_offending_bytes_redacts_secrets() -> None:
+	"""Pin the SECURITY hardening on `append_checker_error`'s offending-
+	bytes block. The block dumps file contents around a syntax error
+	into the capture file, which is later embedded into prompts AND
+	posted to GitHub issues by the diagnose fallback path. Without
+	guardrails, a syntax error in a credential-bearing config could
+	exfiltrate secrets to public issue text.
+
+	Two layered guards (per Copilot review):
+	(a) Path denylist: skip the dump for files whose names match
+	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+	(b) Per-line redaction: replace lines whose key contains
+	    secret-like keywords (token/password/api_key/...) or whose
+	    value contains a long opaque token with a redaction marker.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		# (b) Per-line redaction: file with credential lines + a YAML
+		#     syntax error on the line AFTER them. Includes a mixed-
+		#     case key (`Api_Token`) on line 5 (within the ±2 window
+		#     of the line-7 error) to exercise the portability fix
+		#     for GNU-only `IGNORECASE = 1` (replaced with tolower()
+		#     so non-GNU awk also redacts mixed-case keys).
+		#
+		# Layout (line numbers):
+		#   1: service:
+		#   2:   name: foo
+		#   3:   url: http://example.com
+		#   4:   api_token: sk-...     <- in window, exact-case
+		#   5:   Api_Token: sk-...     <- in window, MIXED CASE (key fix)
+		#   6:   password: hunter2-... <- in window
+		#   7:   - `bad scalar         <- ERROR LINE
+		(repo_dir / "config.yml").write_text(
+			"service:\n"
+			"  name: foo\n"
+			"  url: http://example.com\n"
+			"  api_token: sk-1234567890abcdef1234567890abcdef1234567890abcdef\n"
+			"  Api_Token: sk-mixed-case-1234567890abcdef1234567890abcdef\n"
+			"  password: hunter2-very-secret\n"
+			"  - `bad scalar that breaks YAML\n",
+			encoding="utf-8",
+		)
+		# (a) Path denylist: secret-named file with the same syntax error.
+		(repo_dir / ".env.broken.yml").write_text(
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - gamma\n"
+			"  - delta\n"
+			"  - `bad scalar\n",
+			encoding="utf-8",
+		)
+		# Control: innocuous file with same error — should dump fully.
+		(repo_dir / "innocuous.yml").write_text(
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - gamma\n"
+			"  - delta\n"
+			"  - `bad scalar\n",
+			encoding="utf-8",
+		)
+		capture_path = repo_dir / "captured.txt"
+		env = os.environ.copy()
+		env["CAPTURE_FILE"] = str(capture_path)
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		subprocess.run(
+			["bash", str(validator)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert capture_path.exists(), "validator must produce CAPTURE_FILE"
+		captured = capture_path.read_text(encoding="utf-8")
+		# (b) Per-line redaction must hide credential values from
+		#     config.yml. The actual secrets must NOT appear in the
+		#     capture; the redaction marker must.
+		assert "sk-1234567890abcdef" not in captured, (
+			"api_token value MUST be redacted from the offending-bytes "
+			"dump — leaking it would exfiltrate the secret into prompts "
+			"and issue text. Got:\n" + captured
+		)
+		assert "sk-mixed-case-1234567890abcdef" not in captured, (
+			"MIXED-CASE `Api_Token` value MUST be redacted on POSIX/BSD "
+			"awk runtimes too — `BEGIN { IGNORECASE = 1 }` is a GNU "
+			"extension and silently no-ops elsewhere. The portable "
+			"replacement is tolower() + lowercase-only regex. If this "
+			"fails, mixed-case secrets evade redaction on non-GNU awk. "
+			"Got:\n" + captured
+		)
+		assert "hunter2-very-secret" not in captured, (
+			"password value MUST be redacted from the offending-bytes "
+			"dump. Got:\n" + captured
+		)
+		assert "<redacted: secret-like key>" in captured, (
+			"redaction marker must replace each suppressed line so the "
+			"repair model still sees the file structure (line numbers + "
+			"placeholder) without the actual credentials"
+		)
+		# (a) Path denylist must suppress the entire dump for .env*.
+		assert "Offending bytes (suppressed: file path matches secret-bearing pattern)" in captured, (
+			"secret-named files (.env*, *.pem, etc.) must produce a "
+			"path-denylist suppression marker instead of any file content. "
+			"Got:\n" + captured
+		)
+		# Innocuous file must still dump in full — the redaction must
+		# not be over-broad.
+		assert "  6:   - `bad scalar" in captured, (
+			"innocuous file (no secrets in name or content) must still "
+			"surface its offending line content — the redaction is "
+			"targeted, not an indiscriminate suppression. Got:\n" + captured
 		)
 
 
