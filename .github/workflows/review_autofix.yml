@@ -2637,6 +2637,25 @@ jobs:
           set -euo pipefail
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
+          # Enable reasoning summaries for the editor so the model is forced to
+          # externalize its decision tokens. Investigation of run #25115530167
+          # found gpt-5.3-codex @ xhigh + summaries=none can complete a session
+          # with empty stdout: it reasons silently, decides not to call
+          # apply_patch, and the session ends cleanly with 0 bytes output
+          # (no stderr error, no SIGTERM). Setting summaries to "auto" forces
+          # at least a brief externalized rationale on every turn — gives
+          # us diagnostic visibility AND nudges the model toward emitting
+          # a final assistant message instead of silent termination. The
+          # field name `model_reasoning_summary` mirrors the Codex CLI
+          # convention used by `model_reasoning_effort`; the catalog
+          # at scripts/codex_model_catalog.json confirms gpt-5.3-codex
+          # supports it (`default_reasoning_summary: "auto"`).
+          if grep -q "^model_reasoning_summary = " ~/.codex/config.toml; then
+            sed -i "s/^model_reasoning_summary = \".*\"/model_reasoning_summary = \"auto\"/" ~/.codex/config.toml
+          else
+            sed -i "/^model_reasoning_effort = /a model_reasoning_summary = \"auto\"" ~/.codex/config.toml
+          fi
+          echo "Enabled reasoning summaries (auto) for editor phase"
 
       # Restore the per-PR review-issue ledger from the previous autofix
       # iteration (each iteration is a separate workflow run).  The ledger
