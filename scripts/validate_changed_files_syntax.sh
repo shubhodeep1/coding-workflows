@@ -52,6 +52,21 @@ append_checker_error() {
     if [ -f "${file}" ] && [ -s "${stderr_file}" ]; then
       local lineno start end basename_lc skip_dump=0
       basename_lc="$(printf '%s' "$(basename "${file}")" | tr '[:upper:]' '[:lower:]')"
+      # Path denylist: every `.<ext>*` pattern (.env*, .pem*, .key*,
+      # .cer*, .crt*, .p12*, .pfx*) deliberately includes a trailing
+      # `*` so backup-style names (`.key.bak`, `.pem.old`,
+      # `.crt.archived`) and compound-extension credential files
+      # (`.keystore`, `.keychain`, `.crt.pem`) are also suppressed.
+      # This is over-redaction by design — false positives only cost
+      # ~5 lines of diagnostic context (the underlying syntax error
+      # still surfaces in stderr), whereas false negatives leak file
+      # content into prompts and public issue comments. The same
+      # trade-off applies to `.env*` (matches `.env.example`) and
+      # `.pem*` (matches `.pem.bak`); `.key*`/`.cer*`/`.crt*` are
+      # kept consistent with the rest. Don't tighten any of these
+      # to exact-suffix-only without also loosening the others to
+      # match — the precision/coverage choice is unified across
+      # the alternation.
       case "${file},${basename_lc}" in
         *.env*|*.pem*|*.p12*|*.pfx*|*.key*|*.cer*|*.crt*|\
         *,*secret*|*,*credential*|*,*password*|*,*token*|\
