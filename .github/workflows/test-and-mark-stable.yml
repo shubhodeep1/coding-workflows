@@ -2487,14 +2487,17 @@ jobs:
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
           # Two-issue project description with an explicit dependency so the
-          # orchestrator must produce >=2 issues across >=2 waves. Stays
-          # inside the smoke canary file family to minimise blast radius and
-          # lets cleanup target the new issues by title prefix.
-          PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] Update tests/e2e_smoke_canary.txt with two changes that MUST be decomposed into TWO separate child issues wired by an explicit dependency_edges entry. "
-          PROJECT_DESC+="DO NOT collapse these into a single child issue. Both changes touch the same file (tests/e2e_smoke_canary.txt), so per the decomposer's same-file-siblings rule in prompts/mode-orchestrate.txt they MUST serialize into different waves via an explicit dependency_edges entry — leaving both edits in one issue is the prohibited 'unresolved conflict at planning time' failure mode. "
-          PROJECT_DESC+="Issue 1 (no dependencies, files_touched=[tests/e2e_smoke_canary.txt]): set the file's first line to exactly 'status: ok'. "
-          PROJECT_DESC+="Issue 2 (depends on Issue 1, files_touched=[tests/e2e_smoke_canary.txt]): append exactly the line 'decompose-run: ${GITHUB_RUN_ID}'. Represent this dependency in the orchestrate_decomposition.v1 schema as a dependency_edges entry {from: <Issue 1 id>, to: <Issue 2 id>}. Issue 2 must execute AFTER Issue 1 has merged because its acceptance criterion is that the file's first line already reads 'status: ok' AND the appended line is present; combining them into one PR removes the dependency-aware wave ordering this smoke test exists to exercise. "
-          PROJECT_DESC+="Constraints: both issues target the same file; declare the dependency edge Issue 1 -> Issue 2 in the orchestrator DAG; this is fully specified — no clarification is needed."
+          # orchestrator must produce >=2 issues across >=2 waves. The two
+          # sub-issues target DIFFERENT files (canary.txt vs canary_b.txt) so
+          # the decomposer's "one concern per issue" rule does not pressure it
+          # to collapse them. Issue 2's content is derived from Issue 1's
+          # output, so the dependency edge is structurally inevitable rather
+          # than judgment-dependent. Cleanup still targets new issues via
+          # tracking-issue back-reference + title-prefix marker.
+          PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] This is an author-decomposed project that requires TWO sequential child issues touching DIFFERENT files. Per the orchestrator's author-decomposition rule (see prompts/mode-orchestrate.txt), honor the enumeration below verbatim — emit exactly two issues with the stated dependency edge. "
+          PROJECT_DESC+="Issue 1 (no dependencies, files_touched=[tests/e2e_smoke_canary.txt]): set the first line of tests/e2e_smoke_canary.txt to exactly 'status: ok'. "
+          PROJECT_DESC+="Issue 2 (depends on Issue 1, files_touched=[tests/e2e_smoke_canary_b.txt]): edit tests/e2e_smoke_canary_b.txt — change its first line to mirror the first line of tests/e2e_smoke_canary.txt (which Issue 1 establishes as 'status: ok') AND append the line 'decompose-run: ${GITHUB_RUN_ID}'. Issue 2's acceptance criterion explicitly requires reading Issue 1's output at implementation time, so Issue 2 MUST execute AFTER Issue 1 has merged. "
+          PROJECT_DESC+="Represent this dependency in the orchestrate_decomposition.v1 schema as a dependency_edges entry {from: <Issue 1 id>, to: <Issue 2 id>}. The two issues' files_touched lists MUST NOT overlap. This is fully specified — no clarification is needed."
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Capture the dispatch start time before dispatching so the
           # post-run lookup can use it as a lower-bound created_at filter
