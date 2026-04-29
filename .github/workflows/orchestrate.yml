@@ -567,7 +567,14 @@ jobs:
           EXPECTED_MIN_ISSUES="$(PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION}" python3 - <<'PYEOF'
           import os, re
           text = os.environ.get("PROJECT_DESCRIPTION", "")
-          matches = [int(m.group(1)) for m in re.finditer(r"\bIssue\s+(\d+)\s*[:(]", text)]
+          # Accepted marker forms: case-insensitive `Issue`, optional
+          # whitespace before the digits (so `Issue1:` is recognized too),
+          # and a wider set of list-marker punctuation after the number
+          # (`:`, `(`, `.`, `-`, `–`, `—`). Casual mentions like
+          # "as introduced by Issue 5 last week" still fail to match
+          # because they're typically followed by a regular word.
+          pattern = r"\bIssue\s*(\d+)\s*[:(.\-–—]"
+          matches = [int(m.group(1)) for m in re.finditer(pattern, text, re.IGNORECASE)]
           print(max(matches) if matches else 1)
           PYEOF
           )"
@@ -622,14 +629,26 @@ jobs:
           json.dump(data, open(out_path, 'w'), indent=2)
           PYEOF
                 then
-                  EMITTED=$(jq '(.issues // []) | length' "${DECOMPOSITION_FILE}")
+                  # `if .issues|type == "array"` guards against malformed
+                  # outputs where `.issues` is a string/object/number —
+                  # without it, `jq | length` would return the string
+                  # length / object-key count and silently pass the
+                  # minimum-count gate, only failing later at schema
+                  # validation. -1 forces this attempt down the retry
+                  # path.
+                  EMITTED=$(jq 'if (.issues|type) == "array" then (.issues | length) else -1 end' "${DECOMPOSITION_FILE}")
                   last_emitted="${EMITTED}"
+                  if [ "${EMITTED}" -lt 0 ]; then
+                    EMITTED_DESC="a malformed (non-array) issues field"
+                  else
+                    EMITTED_DESC="${EMITTED} issue(s)"
+                  fi
                   if [ "${EMITTED}" -ge "${EXPECTED_MIN_ISSUES}" ]; then
                     echo "Codex orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
                     attempt_ok=1
                   else
-                    echo "::warning::Attempt ${attempt} emitted only ${EMITTED} issue(s); author enumeration requires >= ${EXPECTED_MIN_ISSUES}. Re-prompting with corrective feedback."
-                    last_status="emitted ${EMITTED} issues, expected >= ${EXPECTED_MIN_ISSUES}"
+                    echo "::warning::Attempt ${attempt} produced ${EMITTED_DESC}; author enumeration requires >= ${EXPECTED_MIN_ISSUES}. Re-prompting with corrective feedback."
+                    last_status="emitted=${EMITTED}, expected >= ${EXPECTED_MIN_ISSUES}"
                     # Rebuild the prompt from the clean base and append a
                     # strongly-worded retry directive that names the actual
                     # vs. expected counts, so the next attempt has explicit
@@ -640,8 +659,8 @@ jobs:
                       echo
                       echo "=== RETRY FEEDBACK (attempt ${attempt} REJECTED) ==="
                       echo
-                      echo "Your previous response emitted ${EMITTED} issue(s)."
-                      echo "The project description above explicitly enumerates ${EXPECTED_MIN_ISSUES} sub-issues using \"Issue 1:\", \"Issue 2:\", … structural markers."
+                      echo "Your previous response produced ${EMITTED_DESC}."
+                      echo "The project description above explicitly enumerates ${EXPECTED_MIN_ISSUES} sub-issues using \"Issue <N>:\" / \"Issue <N> (...):\" structural markers (case-insensitive; trailing list-marker punctuation may also be \".\", \"-\", or a dash)."
                       echo
                       echo "PER prompts/mode-orchestrate.txt (Author-supplied decomposition rule), you MUST honor that enumeration verbatim — emit AT LEAST ${EXPECTED_MIN_ISSUES} distinct issues, in the stated order, with the stated dependency_edges. Do NOT collapse enumerated sub-tasks into a single issue, even if they appear to share a single concern, a directory, or a file family. The author already did the decomposition work; your job is to transcribe it faithfully into the schema, not to re-decide it."
                       echo

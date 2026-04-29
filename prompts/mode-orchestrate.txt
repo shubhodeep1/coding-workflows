@@ -25,24 +25,25 @@ Rules:
   above — LOAD-BEARING, violations are treated as a fatal orchestrator
   contract failure and re-issued with corrective feedback until satisfied):
   if the project description **explicitly enumerates** sub-issues with
-  `Issue <N>:` or `Issue <N> (...):` structural markers, honor that
-  enumeration verbatim.
+  structural markers of the form `Issue <N>:`, `Issue <N> (...):`,
+  `Issue <N>.`, or `Issue <N> -` (case-insensitive; whitespace between
+  `Issue` and the digits is optional, so `Issue1:` is equivalent),
+  honor that enumeration verbatim.
   MANDATORY procedure before you emit any JSON:
-    1. Scan the project description for `Issue <N>:` / `Issue <N> (...):`
-       markers. (Casual mentions like "as introduced by Issue 5 last week"
-       do NOT count — only markers immediately followed by `:` or `(` are
-       structural.)
+    1. Scan the project description for the structural markers above.
+       (Casual mentions like "as introduced by Issue 5 last week" do NOT
+       count — only markers where the digits are immediately followed by
+       one of `: ( . - – —` are structural.)
     2. Count the highest `<N>` you find — call this `AUTHOR_N`.
     3. Your `issues[]` array MUST have **at least `AUTHOR_N` entries**, one
        per enumerated sub-task, in the stated order, with the stated
        `dependency_edges`. Anything fewer than `AUTHOR_N` issues is a hard
        failure — the orchestrator's post-LLM validator (which uses the
-       same `Issue <N>:`/`Issue <N> (...):` regex described above) will
-       reject your output and re-prompt you with the actual
-       emitted/expected counts as feedback. Do NOT try to be clever and
-       merge enumerated sub-tasks into a single issue "because they're
-       related"; that is exactly the failure mode this rule exists to
-       prevent.
+       same regex described above, case-insensitive) will reject your
+       output and re-prompt you with the actual emitted/expected counts
+       as feedback. Do NOT try to be clever and merge enumerated
+       sub-tasks into a single issue "because they're related"; that is
+       exactly the failure mode this rule exists to prevent.
   The author has already done the decomposition work; do NOT collapse
   explicitly-enumerated issues into a single issue even if they appear to
   share a single concern, share a directory, share a file family, or look
