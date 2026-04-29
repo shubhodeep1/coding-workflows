@@ -438,3 +438,117 @@
 | Orchestration fan-out | Recent + family metrics | Downstream workflows launched then immediately skipped | Fewer runs, lower queue pressure, lower API/control-plane churn |
 
 If you want, I can turn this into a shorter executive memo or a backlog-style prioritized action list with owners and rollout order.
+
+## Deep Audit — Workflows & Scripts (2026-04-29)
+
+### Section 1: Bug & Correctness Sweep
+
+#### Finding CONSIST-001
+- **File path** — `.github/workflows/review_autofix.yml:3659-3667, 3779-3788, 4465-4472`; `.github/workflows/issue_pr_status.yml:240-248`; canonical helper in `scripts/label_helpers.sh:144-194`
+- **Severity** — High
+- **Category tag** — `consistency`
+- **Description** — Both workflows carry inline fallback implementations of `set_issue_phase_label_resilient` that only `POST` the target label. The canonical helper in `scripts/label_helpers.sh` first reads current labels, removes conflicting phase labels, and then `PUT`s the normalized phase set. If the support script is unavailable and the fallback path runs, issues can accumulate contradictory phase labels such as `ai:implementing` plus `ai:ready-to-merge`, which violates the phase-group contract in `.github/ai/label_contract.v1.json` and can confuse downstream orchestration.
+- **Recommended fix** — Make `scripts/label_helpers.sh:set_issue_phase_label_resilient(issue_number, target_label, repo="${GITHUB_REPOSITORY:-}")` the only implementation. In these workflows, either source that helper from the checked-out support source or fail before mutating labels; do not degrade to add-only semantics on fallback.
+
+#### Finding BUG-001
+- **File path** — `scripts/review_run_reviewers.sh:38-47, 930-945`; `scripts/review_apply_fixes.sh:663-673`; `.github/workflows/review_autofix.yml:1067-1076`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — The closed-PR guards treat API/parsing failure as `"open"`. Examples: `gh api ... --jq '.state' | grep ... || echo "open"` in `review_run_reviewers.sh` and `review_apply_fixes.sh`, and `review_autofix.yml` only sets `PR_CLOSED=true` when a non-empty state is returned. Under rate limits or transient API failures, a PR that is already closed/merged is allowed to continue through expensive reviewer/editor work instead of short-circuiting.
+- **Recommended fix** — Use a tri-state result (`open|closed|unknown`) rather than defaulting to `open`. Reuse `scripts/gh_helpers.sh:_safe_gh_jq` or `gh_api_json_to_file` so API failure is distinguishable from a real `"open"` state; on `unknown`, stop new model work and retry/back off instead of continuing.
+
+#### Finding SEC-001
+- **File path** — `scripts/review_commit_changes.sh:448-455`; `scripts/review_conflict_resolve.sh:852-853`
+- **Severity** — Medium
+- **Category tag** — `security`
+- **Description** — Both scripts rewrite `origin` to `https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. That places the PAT in `.git/config` and in process arguments, increasing leak surface through debug output, crash dumps, and accidental `git remote -v`/config inspection.
+- **Recommended fix** — Keep `origin` tokenless and authenticate only the push operation. Reuse the existing checkout/auth path or switch the push step to a one-shot authenticated transport (for example a scoped Git extra-header or credential helper) and immediately clear it afterward.
+
+#### Finding SHELL-001
+- **File path** — `scripts/orchestrate_poll_process.sh:10681-10684`
+- **Severity** — Medium
+- **Category tag** — `shellcheck`
+- **Description** — `_sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"` and `for inum in ${_sorted_issue_nums}; do` expand unquoted variables. ShellCheck flags this as SC2086. If `ISSUE_NUMS` ever contains unexpected whitespace or glob characters from state/comment-derived input, the loop can iterate the wrong set of issues.
+- **Recommended fix** — Quote the source expansion and iterate line-by-line: build the sorted list with `printf '%s\n' "${ISSUE_NUMS}" | sort -un`, then consume it with `while IFS= read -r inum; do ...; done`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### Finding BATCH-001
+- **File path** — `scripts/review_rb_judge.sh:146-166`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — The judge first fetches linked issue numbers via GraphQL, then loops over `ISSUE_NUMBERS` and calls `GET /repos/{repo}/issues/{n}` once per linked issue to retrieve bodies. Current call count is **1 GraphQL call + N REST calls** on the same execution path; for 50 linked issues that is **51 calls**. The same data can be fetched in the original GraphQL query by requesting `nodes { number body }`.
+- **Recommended fix** — Extend the existing GraphQL query to return `body` (and `title` if needed), then populate `FIRST_ISSUE_BODY` from that payload. **Current call count:** 1+N. **Proposed call count:** 1. **Batching pattern to extend:** the GraphQL alias/batch construction pattern already used in `scripts/orchestrate_poll_process.sh:1279-1292`.
+
+#### Finding BATCH-002
+- **File path** — `.github/workflows/review_autofix.yml:478-505`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — In the post-merge validate-dispatch fallback path, once issue numbers are inferred from PR text, the workflow iterates each issue and runs `gh issue view ... --json labels` to test for `ai:orchestrator-validate-required`. Current call count is **N REST calls** after fallback inference. This is a per-issue API loop on a hot path that can be collapsed into a single batched query.
+- **Recommended fix** — Batch those label lookups with one GraphQL request for all inferred issue numbers, or cache labels alongside numbers in the earlier linked-issue fetch. **Current call count:** N. **Proposed call count:** 1. **Batching pattern to extend:** the issue-alias GraphQL batching pattern in `scripts/orchestrate_poll_process.sh:1279-1292`.
+
+#### Finding API-001
+- **File path** — `scripts/review_rb_judge.sh:153-156, 193-203`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — When `closingIssuesReferences` is empty, the judge refetches PR title/body with `_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}"`, but a few lines later it already builds `PRELOADED_PR_META` from `${PR_META_FILE}` and passes that into `gh_pr_with_all_comments`. The title/body fetch is therefore redundant on the same execution path whenever `PR_META_FILE` exists.
+- **Recommended fix** — Read title/body from `PR_META_FILE` first and only hit the API if the local metadata file is missing/corrupt. **Current call count:** 1 redundant `GET /pulls/{pr}` in the fallback path. **Proposed call count:** 0 redundant calls. **Existing pattern/helper to extend:** reuse `PRELOADED_PR_META` / `gh_pr_with_all_comments` in `scripts/gh_helpers.sh`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### Finding DUP-001
+- **File path** — `.github/workflows/issue_pr_status.yml:240-248`; `.github/workflows/review_autofix.yml:3659-3667, 3779-3788, 4465-4472`; canonical implementation in `scripts/label_helpers.sh:144-194`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — `set_issue_phase_label_resilient` is redefined inline at least four times even though the repository already has a fuller canonical implementation in `scripts/label_helpers.sh`. The copies have diverged semantically from the shared helper, which is how the fallback-path contract drift in CONSIST-001 was introduced.
+- **Recommended fix** — Centralize ownership in `scripts/label_helpers.sh` with the signature `set_issue_phase_label_resilient(issue_number, target_label, repo="${GITHUB_REPOSITORY:-}")`. Update callers in `issue_pr_status.yml` and `review_autofix.yml` to source that helper only; remove all inline clones.
+
+#### Finding DUP-002
+- **File path** — `.github/workflows/review_autofix.yml:485-488, 3674-3680, 3794-3801, 4481-4487`; `.github/workflows/issue_pr_status.yml:196-210`; `scripts/review_rb_judge.sh:153-156`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — Repository-scoped issue-number extraction from PR title/body is duplicated across workflows and scripts, with slight regex drift between callers. Some copies treat bare `issue #N` as linkable, others restrict to closing-keyword patterns. That makes linked-issue resolution behavior inconsistent across success, failure, and judge paths.
+- **Recommended fix** — Extract one shared helper, e.g. `extract_linked_issue_numbers_from_pr_text(repo_slug, title, body, mode)` in `scripts/gh_helpers.sh`, where `mode` is `closing_only` or `legacy`. Update callers in `review_autofix.yml`, `issue_pr_status.yml`, and `review_rb_judge.sh` to use the shared function so matching rules stay aligned.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No `EXPR-###` findings were triggered.
+
+- I measured every workflow for `${{ }}` usage and checked interpolated `run:`/`if:` bodies.
+- The largest single expression observed was **234 characters** in `.github/workflows/internal-review.yml:65`.
+- No interpolated `run:` block approached the **15,000 / 18,000** risk thresholds.
+- The largest workflow file in scope is `.github/workflows/review_autofix.yml` at **258,851 characters**, which remains well below the **800 KB** alert threshold and far below the **1 MB** hard limit.
+
+### Section 5: Cross-Cutting Concerns
+
+#### Finding DEAD-001
+- **File path** — `scripts/orchestrate_poll_process.sh:9779-9780, 9998-10052`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `RB_FOLLOWUP_REFUSED` and `IF_BLOCKERS_SOURCE` are written but never read anywhere else in the repository. Repo-wide search only finds assignments, not consumption. As written, they do not affect orchestrator behavior, persisted state, or telemetry, so they create misleading pseudo-state.
+- **Recommended fix** — Either remove both variables or wire them into a real sink (state JSON, tracking comments, or structured logs) so the information is actionable.
+
+Additional cross-cutting notes:
+- No `TODO` / `FIXME` / `HACK` markers were found in the audited workflow/script scope.
+- ShellCheck surfaced additional low-priority hygiene issues, but the most material one affecting runtime behavior is already captured as SHELL-001.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | CONSIST-001 |
+| Medium | 8 | BUG-001, SEC-001, SHELL-001, API-001, BATCH-001, BATCH-002, DUP-001, DUP-002 |
+| Low | 1 | DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 2 | Medium |
+| Code modularization | 3 | Medium |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 5 | Small |
