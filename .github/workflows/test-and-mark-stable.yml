@@ -2508,7 +2508,8 @@ jobs:
           # (later waves come from the poller after the prior wave merges).
           # The smoke-test assertion is ≥2 GitHub child issues immediately
           # after bootstrap, so the issues must be independent. The two
-          # sub-issues still target DIFFERENT files (canary.txt vs canary_b.txt)
+          # sub-issues still target DIFFERENT files
+          # (tests/e2e_smoke_canary.txt vs tests/e2e_smoke_canary_b.txt)
           # so the decomposer's "one concern per issue" rule does not pressure
           # it to collapse them and the partition guard keeps them disjoint.
           # Cleanup still targets new issues via tracking-issue back-reference +
