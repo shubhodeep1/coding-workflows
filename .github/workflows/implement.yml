@@ -1011,15 +1011,20 @@ jobs:
               # (`tee -a`'d into codex_log.txt and accumulating across
               # attempts). Codex CLI prints `exec\n<cmd> in <cwd> <status>:`
               # so awk pairs each `exec` line with the following command
-              # line. Dedup is order-preserving (`!seen[cmd]++` keeps the
-              # first occurrence of each command in chronological order)
-              # rather than `sort -u` (which would alphabetize and lose
-              # the recon sequence the model can read for what was tried
-              # first → next). head caps the recap so it doesn't blow up
-              # the retry prompt on long runs.
+              # line. Long commands (>500 chars — typical for serialized
+              # MCP calls like `mcp__serena__find_symbol` with a long
+              # body arg) are truncated to 500 chars + `…[truncated]`
+              # rather than dropped, so the model still sees that the
+              # call was tried even if the full args are clipped. Dedup
+              # is order-preserving (`!seen[display]++` keeps the first
+              # occurrence of each display string in chronological
+              # order) rather than `sort -u` (which would alphabetize
+              # and lose the recon sequence the model can read for
+              # what was tried first → next). head caps the recap so
+              # it doesn't blow up the retry prompt on long runs.
               prior_exec_history=""
               if [ -s "${RUNTIME_DIR}/codex_log.txt" ]; then
-                prior_exec_history="$(awk '/^exec$/ { getline cmd; if (length(cmd) > 0 && length(cmd) < 500 && !seen[cmd]++) print "  - " cmd }' \
+                prior_exec_history="$(awk '/^exec$/ { getline cmd; if (length(cmd) > 0) { display = (length(cmd) > 500) ? substr(cmd, 1, 500) " …[truncated]" : cmd; if (!seen[display]++) print "  - " display } }' \
                   "${RUNTIME_DIR}/codex_log.txt" 2>/dev/null | head -n 40 || true)"
               fi
               {

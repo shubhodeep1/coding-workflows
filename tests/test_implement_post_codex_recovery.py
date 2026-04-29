@@ -1227,9 +1227,11 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	assert "/^exec$/" in codex_block, (
 		"awk pattern must anchor on `exec` lines as Codex CLI prints them"
 	)
-	assert "!seen[cmd]++" in codex_block, (
+	assert "!seen[display]++" in codex_block, (
 		"Dedup must be order-preserving (awk associative array), not sort -u, "
-		"so the recap shows commands in the chronological order they were tried"
+		"so the recap shows commands in the chronological order they were tried. "
+		"(`display` rather than `cmd` because long commands are truncated to a "
+		"display string before dedup so two identical truncated calls dedup as one)"
 	)
 	assert "${RUNTIME_DIR}/codex_log.txt" in codex_block, (
 		"Parser must read codex_log.txt — the file accumulates across attempts "
@@ -1246,6 +1248,13 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	#     elapsed values, `exited <code> in <N>ms:` failure forms,
 	#     non-zero ms values) so a parser that accidentally hard-codes
 	#     `succeeded in 0ms:` would fail this test.
+	# A long synthetic command (>500 chars) that mirrors the
+	# `mcp__serena__find_symbol` style — these get serialized into one
+	# line and routinely exceed 500 chars. The parser must show them
+	# (truncated) rather than drop them, otherwise the model can't see
+	# they were already tried and re-runs them on retry.
+	long_cmd = "/bin/bash -lc 'mcp__serena__find_symbol --name " + ("X" * 600) + "' in /repo succeeded in 99ms:"
+	assert len(long_cmd) > 500, "long_cmd fixture must exceed 500 chars to exercise truncation"
 	codex_log_fixture = (
 		"some startup chatter\n"
 		"exec\n"
@@ -1261,6 +1270,8 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:\n"
 		"duplicate of attempt 2 — should dedup\n"
 		"exec\n"
+		f"{long_cmd}\n"
+		"exec\n"
 		"/bin/bash -lc 'cat foo' in /repo succeeded in 3ms:\n"
 		"tokens used 12345\n"
 	)
@@ -1271,8 +1282,9 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 		# Pattern verbatim from implement.yml retry-nudge block.
 		awk_program = (
 			'/^exec$/ { getline cmd; '
-			'if (length(cmd) > 0 && length(cmd) < 500 && !seen[cmd]++) '
-			'print "  - " cmd }'
+			'if (length(cmd) > 0) { '
+			'display = (length(cmd) > 500) ? substr(cmd, 1, 500) " …[truncated]" : cmd; '
+			'if (!seen[display]++) print "  - " display } }'
 		)
 		result = subprocess.run(
 			["awk", awk_program, log_path],
@@ -1284,16 +1296,20 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	finally:
 		os.unlink(log_path)
 	lines = [line for line in result.stdout.splitlines() if line]
+	expected_long_recap = "  - " + long_cmd[:500] + " …[truncated]"
 	assert lines == [
 		"  - /bin/bash -lc 'ls -1' in /repo succeeded in 0ms:",
 		"  - /bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:",
 		"  - /bin/bash -lc 'rg -n MISSING' in /repo exited 1 in 12ms:",
+		expected_long_recap,
 		"  - /bin/bash -lc 'cat foo' in /repo succeeded in 3ms:",
 	], (
 		"awk parser must (1) capture each `exec`-followed command line "
 		"regardless of trailing-suffix variability (succeeded vs exited, "
 		"different ms values), (2) dedup duplicates while preserving "
-		"chronological order, (3) skip non-`exec` chatter. Got:\n"
+		"chronological order, (3) skip non-`exec` chatter, "
+		"(4) truncate commands >500 chars with a `…[truncated]` marker "
+		"rather than dropping them silently. Got:\n"
 		+ "\n".join(lines)
 	)
 
