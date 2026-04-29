@@ -22,6 +22,30 @@ append_checker_error() {
     else
       echo "(no stderr output)"
     fi
+    # Surface the offending bytes inline so the post-Codex repair model
+    # doesn't have to shell out to rg/grep with literal special
+    # characters — that has burned repair turns in production
+    # (tele-funtoken-msg-scoring run 25099535242: the model tried
+    # `rg "...\`..."` with an unescapable backtick and lost its only
+    # repair attempt). yaml.scanner.ScannerError, json.JSONDecodeError,
+    # py_compile, and bash -n all surface "line <N>" in stderr; pick
+    # the LAST match (Python tracebacks list stack frames first and
+    # the actual error location last, so head would land on the wrong
+    # line number) and dump <N-2>..<N+2> with line numbers so the
+    # repair prompt sees the exact bytes inline. node --check uses a
+    # different `<file>:<line>:<col>` format and won't match this
+    # regex; that's fine — the offending-bytes block just won't appear
+    # for node, and the original stderr is still in the capture.
+    if [ -f "${file}" ] && [ -s "${stderr_file}" ]; then
+      local lineno start end
+      lineno="$(grep -oE 'line[[:space:]]+[0-9]+' "${stderr_file}" | tail -n 1 | grep -oE '[0-9]+' | tail -n 1 || true)"
+      if [ -n "${lineno}" ] && [[ "${lineno}" =~ ^[0-9]+$ ]] && [ "${lineno}" -gt 0 ]; then
+        start=$(( lineno > 2 ? lineno - 2 : 1 ))
+        end=$(( lineno + 2 ))
+        printf -- '----- Offending bytes (lines %d-%d; error reported at line %d) -----\n' "${start}" "${end}" "${lineno}"
+        sed -n "${start},${end}p" "${file}" | awk -v start="${start}" '{ printf "  %d: %s\n", start + NR - 1, $0 }'
+      fi
+    fi
     printf '\n'
   } >> "${CAPTURE_FILE}" || true
 }

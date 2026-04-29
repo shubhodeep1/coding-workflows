@@ -1314,6 +1314,154 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	)
 
 
+def test_yaml_reserved_indicator_recipe_in_repair_prompts() -> None:
+	"""Pin the YAML reserved-indicator recipe in both repair prompts so a
+	future edit can't silently drop the guidance that prevents the
+	`rg "...\\`..."` shell-quoting failure observed on
+	tele-funtoken-msg-scoring run 25099535242.
+
+	Both prompts must:
+	- Name the diagnostic substring the recipe matches against
+	- Tell the model to wrap the scalar in DOUBLE quotes
+	- Tell the model to use sed (NOT rg/grep) to inspect the line
+	- Provide the python3 yaml.safe_load verification command
+	"""
+	for prompt_path in (
+		REPO_ROOT / "prompts" / "mode-implement-repair.txt",
+		REPO_ROOT / "prompts" / "mode-implement-repair-syntax.txt",
+	):
+		body = prompt_path.read_text(encoding="utf-8")
+		assert "yaml.scanner.ScannerError" in body, (
+			f"{prompt_path.name} must reference the diagnostic substring "
+			"`yaml.scanner.ScannerError` so the recipe matches at the right time"
+		)
+		assert "cannot start any token" in body, (
+			f"{prompt_path.name} must include the ScannerError message tail "
+			"so the model knows which exact diagnostic this recipe handles"
+		)
+		assert "double quotes" in body, (
+			f"{prompt_path.name} must instruct the model to wrap the scalar "
+			"in double quotes (the actual YAML fix)"
+		)
+		assert "sed -n" in body, (
+			f"{prompt_path.name} must point the model at sed -n for line "
+			"inspection — using rg/grep with literal backticks blows up "
+			"shell quoting and burns the repair turn"
+		)
+		assert "python3 -c \"import yaml; yaml.safe_load" in body, (
+			f"{prompt_path.name} must give the model an exact verification "
+			"command so the repair doesn't ship without revalidation"
+		)
+		assert "Do NOT shell out to `rg`/`grep`" in body or "Do NOT shell out to `rg`" in body, (
+			f"{prompt_path.name} must explicitly forbid the failed strategy "
+			"(rg/grep with literal backtick)"
+		)
+
+
+def test_yaml_quoting_clause_in_implement_prompt() -> None:
+	"""Pin the YAML reserved-indicator quoting clause in the main
+	implement prompt. Source-side prevention complements the repair
+	recipe — without this, Codex keeps emitting bare scalars starting
+	with backtick / @ / etc. in db/contracts/*.yml prose."""
+	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "YAML reserved-indicator quoting" in body, (
+		"mode-implement.txt must have a labelled clause for YAML reserved-"
+		"indicator quoting so it's discoverable on review"
+	)
+	# All YAML 1.2 reserved indicators that cannot start a plain scalar.
+	for ch in ("`", "@", "*", "&", "|", ">", "!", "%", "#", "?", ",", "[", "]", "{", "}"):
+		assert f"`{ch}`" in body, (
+			f"mode-implement.txt must list the reserved indicator `{ch}` in "
+			"the YAML quoting clause"
+		)
+	assert "double quotes" in body, (
+		"mode-implement.txt must say to wrap reserved-indicator scalars "
+		"in DOUBLE quotes specifically (single quotes don't escape backticks "
+		"identically and the consistency matters for the repair regex)"
+	)
+	assert "validate_changed_files_syntax.sh" in body, (
+		"mode-implement.txt must reference the validator that enforces "
+		"the rule, so the model knows the cost of getting this wrong"
+	)
+
+
+def test_validator_diagnostic_surfaces_offending_lines() -> None:
+	"""End-to-end test for `append_checker_error` line-context surfacing.
+
+	Bootstrap a git repo with a YAML file that has a reserved-indicator
+	scalar (`` ` ``) on a known line. Run
+	`scripts/validate_changed_files_syntax.sh` with `CAPTURE_FILE` set,
+	and verify the capture contains both the original ScannerError and
+	an "Offending bytes" block with the backticked line numbered. This
+	guards the failure mode where the repair prompt has to find the
+	offending byte itself — when the validator surfaces the bytes
+	inline, the repair model patches in one shot.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_validator_diag_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		# Stage prior file so git diff sees the new YAML as a modification
+		# (validator iterates `git diff --name-only HEAD ...` + untracked).
+		# Just leaving as untracked is enough — the script's second list
+		# (`git ls-files --others --exclude-standard`) covers it.
+		yaml_path = repo_dir / "broken.yml"
+		yaml_path.write_text(
+			# 5 lines of valid YAML, then a reserved-indicator scalar on
+			# line 6. Python's yaml.scanner.ScannerError will report
+			# `line 6, column N`.
+			"key1: value1\n"
+			"key2: value2\n"
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - `backticked-leader is invalid YAML\n",
+			encoding="utf-8",
+		)
+		capture_path = repo_dir / "captured.txt"
+		env = os.environ.copy()
+		env["CAPTURE_FILE"] = str(capture_path)
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		result = subprocess.run(
+			["bash", str(validator)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		# Validator should fail (YAML is broken).
+		assert result.returncode != 0, (
+			f"validator should fail on a YAML with reserved-indicator "
+			f"scalar on line 6, got rc={result.returncode}\n"
+			f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+		)
+		assert capture_path.exists(), (
+			f"validator must write the capture file at CAPTURE_FILE; "
+			f"missing at {capture_path}"
+		)
+		captured = capture_path.read_text(encoding="utf-8")
+		# (a) The original ScannerError stderr must be in the capture
+		assert "yaml.scanner.ScannerError" in captured or "ScannerError" in captured, (
+			f"capture must include the YAML ScannerError stderr. Got:\n{captured}"
+		)
+		# (b) The "Offending bytes" block must be present with the
+		#     reported line number (6 in this fixture).
+		assert "Offending bytes" in captured, (
+			f"capture must include the new offending-bytes block so the "
+			f"repair prompt sees the exact failing line inline. Got:\n{captured}"
+		)
+		assert "error reported at line 6" in captured, (
+			f"capture must report the line number extracted from the "
+			f"ScannerError (6 in fixture). Got:\n{captured}"
+		)
+		# (c) The actual offending line content must be in the capture,
+		#     numbered.
+		assert "6: " in captured and "backticked-leader" in captured, (
+			f"capture must show the backticked line content, numbered, so "
+			f"the repair prompt can patch it without re-grepping. Got:\n{captured}"
+		)
+
+
 def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:
 	noop_block = _step_block_text("Handle no-op implementation")
 	# Guard 0 must run BEFORE Guard 1 (pathspec hard-fail) and Guard 2
