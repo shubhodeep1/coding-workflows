@@ -932,7 +932,13 @@ jobs:
     needs: [analyze-commit-notify, deep-audit]
     if: success() && needs.deep-audit.outputs.audit_status == 'completed'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bumped 30 → 60 after run 25115192726 cancelled at 30m19s on this job
+    # — Codex was still mid-analysis ("considering whether I can combine
+    # findings from two separate call sites") when the 30m cap fired and
+    # emitted `##[error]The operation was canceled.`. The orphan-workflows
+    # poller's 8400s/140m outer DEADLINE (test-and-mark-stable.yml dispatch
+    # step) covers the new 60m cap with plenty of headroom.
+    timeout-minutes: 60
     outputs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
     env:

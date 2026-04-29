@@ -202,6 +202,20 @@ jobs:
       POLL_INTERVAL: 10
 
     steps:
+      # Checkout repo at the start so `if: always()` steps (Phase 8 soft-error
+      # analyser, Cleanup test artifacts) can find scripts/ even when an
+      # earlier phase exits non-zero. The original "Checkout repository for
+      # integration tests" step (Phase 5, ~line 1100) is skipped on early
+      # failure, leaving downstream `if: always()` steps with no scripts/
+      # on disk — observed in run 25115169454 where Phase 4b's bait failure
+      # cascaded into `python3: can't open file '...scripts/analyze_soft_errors.py'`
+      # and `_safe_gh_jq: command not found` in cleanup. The Phase 5 checkout
+      # is left in place (idempotent re-checkout against `ref: main`).
+      - name: Checkout repository (early — needed by Phase 8 & Cleanup on early failure)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -2486,18 +2500,23 @@ jobs:
         run: |
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
-          # Two-issue project description with an explicit dependency so the
-          # orchestrator must produce >=2 issues across >=2 waves. The two
-          # sub-issues target DIFFERENT files (canary.txt vs canary_b.txt) so
-          # the decomposer's "one concern per issue" rule does not pressure it
-          # to collapse them. Issue 2's content is derived from Issue 1's
-          # output, so the dependency edge is structurally inevitable rather
-          # than judgment-dependent. Cleanup still targets new issues via
-          # tracking-issue back-reference + title-prefix marker.
-          PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] This is an author-decomposed project that requires TWO sequential child issues touching DIFFERENT files. Per the orchestrator's author-decomposition rule (see prompts/mode-orchestrate.txt), honor the enumeration below verbatim — emit exactly two issues with the stated dependency edge. "
+          # Two-issue project description with NO dependency between issues so
+          # both land in Wave 1 and both GitHub issues get created at
+          # orchestrator bootstrap. Run 25115188957 confirmed the decomposer
+          # correctly emitted 2 issues with a dependency edge, but the
+          # orchestrator architecture only creates Wave 1 issues at bootstrap
+          # (later waves come from the poller after the prior wave merges).
+          # The smoke-test assertion is ≥2 GitHub child issues immediately
+          # after bootstrap, so the issues must be independent. The two
+          # sub-issues still target DIFFERENT files (canary.txt vs canary_b.txt)
+          # so the decomposer's "one concern per issue" rule does not pressure
+          # it to collapse them and the partition guard keeps them disjoint.
+          # Cleanup still targets new issues via tracking-issue back-reference +
+          # title-prefix marker.
+          PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] This is an author-decomposed project that requires TWO independent (no-dependency) child issues touching DIFFERENT files. Per the orchestrator's author-decomposition rule (see prompts/mode-orchestrate.txt), honor the enumeration below verbatim — emit exactly two issues with NO dependency_edges between them so both can run in Wave 1. "
           PROJECT_DESC+="Issue 1 (no dependencies, files_touched=[tests/e2e_smoke_canary.txt]): set the first line of tests/e2e_smoke_canary.txt to exactly 'status: ok'. "
-          PROJECT_DESC+="Issue 2 (depends on Issue 1, files_touched=[tests/e2e_smoke_canary_b.txt]): edit tests/e2e_smoke_canary_b.txt — change its first line to mirror the first line of tests/e2e_smoke_canary.txt (which Issue 1 establishes as 'status: ok') AND append the line 'decompose-run: ${GITHUB_RUN_ID}'. Issue 2's acceptance criterion explicitly requires reading Issue 1's output at implementation time, so Issue 2 MUST execute AFTER Issue 1 has merged. "
-          PROJECT_DESC+="Represent this dependency in the orchestrate_decomposition.v1 schema as a dependency_edges entry {from: <Issue 1 id>, to: <Issue 2 id>}. The two issues' files_touched lists MUST NOT overlap. This is fully specified — no clarification is needed."
+          PROJECT_DESC+="Issue 2 (no dependencies, files_touched=[tests/e2e_smoke_canary_b.txt]): set the first line of tests/e2e_smoke_canary_b.txt to exactly 'status: ok' AND append the line 'decompose-run: ${GITHUB_RUN_ID}' as the second line. Issue 2 is fully self-contained — it does NOT need to read Issue 1's output and can run in parallel with Issue 1. "
+          PROJECT_DESC+="The orchestrate_decomposition.v1 schema dependency_edges array MUST be empty ([]) so both issues are placed in Wave 1. The two issues' files_touched lists MUST NOT overlap. This is fully specified — no clarification is needed."
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Capture the dispatch start time before dispatching so the
           # post-run lookup can use it as a lower-bound created_at filter
