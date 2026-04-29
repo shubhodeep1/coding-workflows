@@ -1623,10 +1623,16 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 	# keyword list and high-entropy guard the validator uses, so a
 	# regression dropping the redaction (or out-of-sync keyword lists)
 	# fails the test.
+	# This list MUST stay byte-for-byte synchronised with the awk
+	# alternation in `scripts/validate_changed_files_syntax.sh` and
+	# the matching alternation in implement.yml's diagnostics tail
+	# redaction. Any keyword present in the workflow but missing here
+	# would let a regression silently drop redaction coverage; verify
+	# both directions when adding to either side.
 	for keyword in (
-		"secret", "token", "password", "credential",
-		"api[_-]?key", "private[_-]?key", "auth[_-]?token",
-		"client[_-]?secret", "bearer",
+		"secret", "token", "password", "passwd", "credential",
+		"api[_-]?key", "private[_-]?key", "access[_-]?key",
+		"auth[_-]?token", "client[_-]?secret", "bearer",
 	):
 		assert keyword in codex_block, (
 			f"diagnostics tail-redaction awk must include the '{keyword}' "
