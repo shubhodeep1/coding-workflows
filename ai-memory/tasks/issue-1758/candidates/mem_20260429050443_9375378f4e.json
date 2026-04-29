@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"[E2E Orchestrate Smoke 25091759000] Serialize canary file edits into two waves\",\"issues\":[{\"id\":\"set_smoke_canary_status\",\"title\":\"Set tests/e2e_smoke_canary.txt first line to status: ok\",\"priority\":1},{\"id\":\"append_smoke_canary_decompose_run\",\"title\":\"Append decompose-run marker to tests/e2e_smoke_canary.txt\",\"priority\":2}],\"dependency_edges\":[{\"from\":\"set_smoke_canary_status\",\"to\":\"append_smoke_canary_decompose_run\"}]}",
+  "fingerprint": "9d69df6459193d3d8ef417498936c715c7be8f03a3ca7763db8c1cc1c6e511ad",
+  "lineage": {
+    "issue_number": 1758,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25091768619",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25091768619",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260429050443_9375378f4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1758,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25091768619"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project '[E2E Orchestrate Smoke 25091759000] Serialize canary file edits into two waves' into 2 issues (tracking #1758)",
+  "timestamps": {
+    "created_at": "2026-04-29T05:04:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
