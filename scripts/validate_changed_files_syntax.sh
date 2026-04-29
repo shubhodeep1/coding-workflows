@@ -53,7 +53,7 @@ append_checker_error() {
       local lineno start end basename_lc skip_dump=0
       basename_lc="$(printf '%s' "$(basename "${file}")" | tr '[:upper:]' '[:lower:]')"
       case "${file},${basename_lc}" in
-        *.env*|*.pem*|*.p12*|*.pfx*|*.key|*.cer|*.crt|\
+        *.env*|*.pem*|*.p12*|*.pfx*|*.key*|*.cer*|*.crt*|\
         *,*secret*|*,*credential*|*,*password*|*,*token*|\
         *,*.envrc|*,.env*)
           skip_dump=1
