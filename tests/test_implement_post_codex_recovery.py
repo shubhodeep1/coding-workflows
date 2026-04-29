@@ -1623,23 +1623,84 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 	# keyword list and high-entropy guard the validator uses, so a
 	# regression dropping the redaction (or out-of-sync keyword lists)
 	# fails the test.
-	# This list MUST stay byte-for-byte synchronised with the awk
-	# alternation in `scripts/validate_changed_files_syntax.sh` and
-	# the matching alternation in implement.yml's diagnostics tail
-	# redaction. Any keyword present in the workflow but missing here
-	# would let a regression silently drop redaction coverage; verify
-	# both directions when adding to either side.
-	for keyword in (
+	#
+	# Naive substring (`"token" in codex_block`) is unreliable — words
+	# like "token" / "secret" appear in many places in the step
+	# (env names, GH_TOKEN, comments, gh-issue-comment messages). To
+	# avoid incidental false-positives masking a regression, extract
+	# the actual `match(lower, /^...(<alternation>)...$/)` regex
+	# alternation from the awk block and check membership against
+	# just that. The same check runs against
+	# `scripts/validate_changed_files_syntax.sh` to catch drift
+	# between the two duplicated redaction implementations — there is
+	# only ONE policy, encoded in two places, and both must contain
+	# every keyword.
+	def extract_redaction_alternation(text: str, source: str) -> str:
+		# The redaction regex looks like:
+		#   match(lower, /^[[:space:]-]*[a-z0-9_.-]*(secret|token|...|bearer)[a-z0-9_.-]*/)
+		# We want the substring inside the parentheses (the alternation).
+		m = re.search(
+			r"match\(lower,\s*/\^\[\[:space:\]-\]\*\[a-z0-9_\.-\]\*\(([^)]+)\)\[a-z0-9_\.-\]\*",
+			text,
+		)
+		assert m is not None, (
+			f"could not locate the secret-keyword alternation in {source}; "
+			"either the redaction awk was removed or its shape changed and "
+			"this test needs updating to match"
+		)
+		return m.group(1)
+
+	expected_keywords = (
 		"secret", "token", "password", "passwd", "credential",
 		"api[_-]?key", "private[_-]?key", "access[_-]?key",
 		"auth[_-]?token", "client[_-]?secret", "bearer",
-	):
-		assert keyword in codex_block, (
-			f"diagnostics tail-redaction awk must include the '{keyword}' "
-			"secret-key keyword, matching the validator's redaction "
-			"policy in scripts/validate_changed_files_syntax.sh — "
-			"otherwise public-issue posts can exfiltrate file content"
+	)
+
+	# (i) Diagnostics-tail redaction in implement.yml's "Run Codex
+	#     implementation" step.
+	implement_alternation = extract_redaction_alternation(
+		codex_block, "implement.yml diagnostics-tail awk"
+	)
+	for keyword in expected_keywords:
+		assert keyword in implement_alternation, (
+			f"diagnostics tail-redaction (implement.yml) must include the "
+			f"'{keyword}' secret-key keyword in its awk alternation. "
+			f"Found alternation: {implement_alternation!r}. Public-issue "
+			"posts can exfiltrate file content without it."
 		)
+
+	# (ii) Validator offending-bytes redaction in
+	#      scripts/validate_changed_files_syntax.sh — the policy MUST
+	#      stay synchronised with the diagnostics path, so check it
+	#      against the same keyword list.
+	validator_text = (
+		REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+	).read_text(encoding="utf-8")
+	validator_alternation = extract_redaction_alternation(
+		validator_text, "validate_changed_files_syntax.sh awk"
+	)
+	for keyword in expected_keywords:
+		assert keyword in validator_alternation, (
+			f"validator offending-bytes redaction (validate_changed_files_"
+			f"syntax.sh) must include the '{keyword}' secret-key keyword "
+			f"in its awk alternation. Found alternation: "
+			f"{validator_alternation!r}. The validator capture is later "
+			"embedded in prompts and posted to issues by the diagnose "
+			"fallback path."
+		)
+
+	# (iii) Lockstep: the two alternations must be identical (same
+	#       keywords, same order). Drift between them means one path
+	#       redacts and the other doesn't.
+	assert implement_alternation == validator_alternation, (
+		"implement.yml diagnostics-tail and validate_changed_files_syntax.sh "
+		"redaction alternations have drifted apart — they must stay "
+		"byte-for-byte identical so adding/removing a keyword affects "
+		"both paths atomically.\n"
+		f"implement.yml: {implement_alternation!r}\n"
+		f"validator.sh:  {validator_alternation!r}"
+	)
+
 	assert "<redacted: secret-like key>" in codex_block, (
 		"diagnostics tail-redaction must replace secret-keyword lines "
 		"with the standard redaction marker (lockstep with the validator)"
@@ -1668,14 +1729,8 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 	# If GH_TOKEN isn't in the step's `env:` block, the guard always
 	# fails and the entire diagnostics-posting branch is dead code —
 	# the same regression that the multi-model consensus review caught
-	# on commit 523cc99. Grab the raw step header (everything before
-	# `run: |`) and assert GH_TOKEN is wired in.
-	step_full_text = "\n".join(_step_block("Run Codex implementation", include_metadata=True)) \
-		if "include_metadata" in _step_block.__code__.co_varnames \
-		else _workflow_text()
-	# Fallback: search the full workflow text for the env block of
-	# this specific step. We anchor on the step name and look forward
-	# until the next `- name:` for the env section.
+	# on commit 523cc99. Search the full workflow text for the env
+	# block of this specific step.
 	wf = _workflow_text()
 	step_anchor = wf.find('- name: Run Codex implementation')
 	assert step_anchor != -1, "Run Codex implementation step must exist"
