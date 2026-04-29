@@ -116,7 +116,7 @@ env:
   # CI/lint failures are detected and fixed every run. See README and
   # agents.md for the contract.
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
-  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '600' }}
+  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
 
 jobs:
@@ -1636,9 +1636,9 @@ jobs:
 
           # Clamp configurable values to safe ranges. Invalid values fall back
           # to defaults rather than failing the workflow.
-          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-600}"
+          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-1200}"
           if ! [[ "${_wait_timeout}" =~ ^[0-9]+$ ]] || [ "${_wait_timeout}" -gt 3600 ]; then
-            _wait_timeout=600
+            _wait_timeout=1200
           fi
           _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-20}"
           if ! [[ "${_poll_interval}" =~ ^[0-9]+$ ]] || [ "${_poll_interval}" -lt 5 ] || [ "${_poll_interval}" -gt 300 ]; then
