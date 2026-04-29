@@ -16,7 +16,7 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-  MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}
+  MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
 
 jobs:
   implement:
@@ -1291,10 +1291,10 @@ jobs:
             exit 1
           fi
 
-          max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-1}"
+          max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-3}"
           if ! [[ "${max_attempts_raw}" =~ ^[0-9]+$ ]] || [ "${max_attempts_raw}" -lt 0 ]; then
-            echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 1."
-            max_attempts=1
+            echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 3."
+            max_attempts=3
           else
             max_attempts="${max_attempts_raw}"
           fi

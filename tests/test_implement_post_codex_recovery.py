@@ -707,7 +707,7 @@ def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 
 def test_post_codex_syntax_repair_step_contract() -> None:
 	wf = _workflow_text()
-	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}" in wf
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}" in wf
 
 	repair_block = _step_block_text("Attempt post-Codex syntax repair")
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
