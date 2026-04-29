@@ -761,7 +761,7 @@ Contract:
 
 API cost audit (CLAUDE.md §15):
 
-- Worst-case API cost per autofix iteration: `ceil(CHECK_RUNS_WAIT_TIMEOUT_SECS / CHECK_RUNS_POLL_INTERVAL_SECS) + 1` calls (default ≤ 61). Best case (no in-flight checks at start): exactly 1 call. The shared `gh_helpers::gh_retry` wrapper is intentionally not used inside the poll loop — a single transient API error breaks the loop, marks `collection_status: api_error`, and continues fail-open (the goal is not to maximise reliability of an advisory signal at the cost of blocking the autofix run).
+- Worst-case API cost per autofix iteration is higher than the logical poll-count bound because the poll loop currently calls `gh_retry gh api --paginate --slurp ...`: each poll iteration performs one logical snapshot attempt, but that attempt may retry on transient failures and may consume multiple underlying GitHub API requests when pagination is needed. Best case (no in-flight checks at start, no pagination, no retries): exactly 1 API request. On unrecoverable API failure, the loop still fails open by marking `collection_status: api_error` and continuing the autofix run; retries are used to reduce flakiness, not to make this advisory signal blocking.
 - Net cost is strongly negative on the hit path: one `check-runs` snapshot saves a follow-up autofix iteration (5 reviewers + consensus + editor) that would otherwise run after a human notices the failed check.
 
 Operational rules:
