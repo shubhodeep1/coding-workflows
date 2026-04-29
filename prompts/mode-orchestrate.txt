@@ -68,7 +68,9 @@ Rules:
   finish it within ONE 60-minute attempt. The implement watchdog's
   per-attempt wall-time is 130 minutes (`EDITOR_MAX_WALL=7800`), and the
   3-hour job budget allows at most ~1 full attempt before the budget
-  guard skips the rest, so a 60-minute target leaves headroom for retry.
+  guard skips the rest, so a 60-minute target keeps attempt 1 well
+  inside the watchdog window — there is NO budgeted retry on
+  watchdog kill, so undersizing the per-issue scope is mandatory.
   For each issue, internally estimate the wall-clock implementation
   time the editor would need; populating `implementation_minutes_estimate`
   (integer minutes) is optional but STRONGLY RECOMMENDED — when emitted

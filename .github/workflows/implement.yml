@@ -1011,12 +1011,16 @@ jobs:
               # (`tee -a`'d into codex_log.txt and accumulating across
               # attempts). Codex CLI prints `exec\n<cmd> in <cwd> <status>:`
               # so awk pairs each `exec` line with the following command
-              # line. sort -u dedups across attempts; head caps the recap
-              # so it doesn't blow up the retry prompt on long runs.
+              # line. Dedup is order-preserving (`!seen[$0]++` keeps the
+              # first occurrence of each command in chronological order)
+              # rather than `sort -u` (which would alphabetize and lose
+              # the recon sequence the model can read for what was tried
+              # first → next). head caps the recap so it doesn't blow up
+              # the retry prompt on long runs.
               prior_exec_history=""
               if [ -s "${RUNTIME_DIR}/codex_log.txt" ]; then
-                prior_exec_history="$(awk '/^exec$/ { getline cmd; if (length(cmd) > 0 && length(cmd) < 500) print "  - " cmd }' \
-                  "${RUNTIME_DIR}/codex_log.txt" 2>/dev/null | sort -u | head -n 40 || true)"
+                prior_exec_history="$(awk '/^exec$/ { getline cmd; if (length(cmd) > 0 && length(cmd) < 500 && !seen[cmd]++) print "  - " cmd }' \
+                  "${RUNTIME_DIR}/codex_log.txt" 2>/dev/null | head -n 40 || true)"
               fi
               {
                 cat <<'RETRY_EOF'
