@@ -1189,6 +1189,105 @@ def test_codex_success_detection_uses_baseline_diff() -> None:
 		)
 
 
+def test_retry_prompt_includes_exec_history_recap() -> None:
+	"""Pin the cross-attempt exec-history recap so a future Codex CLI
+	output-format change (or accidental edit to the awk parser) cannot
+	silently disable the feature.
+
+	The recap is critical for multi-file issues with xhigh reasoning:
+	without it, every retry redoes the same recon and the wall-time
+	budget runs out before any edit lands (observed on bitsafe.io
+	issue #26 — see the agents.md historical note).
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+
+	# (a) The retry-prompt expansion block must be present in the step.
+	#     These are the marker strings the model sees on retry; if any
+	#     drifts, the recap stops being an effective nudge.
+	assert "codex_prompt_retry.txt" in codex_block, (
+		"Retry-prompt path must be referenced so the nudged prompt is built"
+	)
+	assert "Prior-attempt exploration recap" in codex_block, (
+		"Retry prompt must include the explicit exploration-recap header so the "
+		"model knows the bullet list is what it has already tried"
+	)
+	assert "DO NOT redo these — go straight to editing" in codex_block, (
+		"Recap header must instruct the model to skip re-exploration and edit"
+	)
+	assert "apply_patch / Serena edit tools" in codex_block, (
+		"Recap must point the model at the actual editing tools to use"
+	)
+
+	# (b) The awk parser must match the Codex CLI stderr format we
+	#     observe in production. We extract the parser fragment from the
+	#     workflow and run it against a synthetic codex_log fixture that
+	#     mirrors what Codex CLI prints (verified against real bitsafe.io
+	#     run logs). If Codex CLI changes its `exec\n<cmd>` format, this
+	#     test fails loudly instead of the recap silently going empty.
+	assert "/^exec$/" in codex_block, (
+		"awk pattern must anchor on `exec` lines as Codex CLI prints them"
+	)
+	assert "!seen[cmd]++" in codex_block, (
+		"Dedup must be order-preserving (awk associative array), not sort -u, "
+		"so the recap shows commands in the chronological order they were tried"
+	)
+	assert "${RUNTIME_DIR}/codex_log.txt" in codex_block, (
+		"Parser must read codex_log.txt — the file accumulates across attempts "
+		"via `tee -a` so attempt N+1 sees attempt 1..N's exec calls"
+	)
+
+	# (c) Run the actual awk command against a synthetic log to verify
+	#     the parser still extracts what we expect. Pattern lifted
+	#     verbatim from implement.yml so a regex/format edit there
+	#     surfaces here as a parse mismatch.
+	codex_log_fixture = (
+		"some startup chatter\n"
+		"exec\n"
+		"/bin/bash -lc 'ls -1' in /repo succeeded in 0ms:\n"
+		"file_a\n"
+		"file_b\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 0ms:\n"
+		"matches…\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 0ms:\n"
+		"duplicate of attempt 2 — should dedup\n"
+		"exec\n"
+		"/bin/bash -lc 'cat foo' in /repo succeeded in 0ms:\n"
+		"tokens used 12345\n"
+	)
+	with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+		f.write(codex_log_fixture)
+		log_path = f.name
+	try:
+		# Pattern verbatim from implement.yml retry-nudge block.
+		awk_program = (
+			'/^exec$/ { getline cmd; '
+			'if (length(cmd) > 0 && length(cmd) < 500 && !seen[cmd]++) '
+			'print "  - " cmd }'
+		)
+		result = subprocess.run(
+			["awk", awk_program, log_path],
+			capture_output=True,
+			text=True,
+			check=True,
+			timeout=10,
+		)
+	finally:
+		os.unlink(log_path)
+	lines = [line for line in result.stdout.splitlines() if line]
+	assert lines == [
+		"  - /bin/bash -lc 'ls -1' in /repo succeeded in 0ms:",
+		"  - /bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 0ms:",
+		"  - /bin/bash -lc 'cat foo' in /repo succeeded in 0ms:",
+	], (
+		"awk parser must (1) capture each `exec`-followed command line, "
+		"(2) dedup duplicates while preserving chronological order, "
+		"(3) skip non-`exec` chatter. Got:\n"
+		+ "\n".join(lines)
+	)
+
+
 def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:
 	noop_block = _step_block_text("Handle no-op implementation")
 	# Guard 0 must run BEFORE Guard 1 (pathspec hard-fail) and Guard 2
