@@ -538,3 +538,140 @@ If you want, I can turn this into a shorter executive memo or a backlog-style pr
 | Code modularization | 10 | Large |
 | Expression size reduction | 3 | Medium |
 | Medium/Low fixes | 8 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-04-29)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the call reduction is statically proven safe enough for direct implementation in this repo without changing observable behavior. `NEEDS_VERIFICATION` means there is a plausible consolidation/reuse win, but a human or follow-up analysis must verify semantic parity first. `RISKY_SKIP` means the overlap/deadness is real enough to note, but the call sits in a retry/race-sensitive/orchestrator-defensive path (or otherwise fails the safe-merge bar), so it must **not** be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:295-297`, `.github/workflows/issue_pr_status.yml:327-330`, `.github/workflows/issue_pr_status.yml:505-508`  
+  **Current call count** — GraphQL-success path: `1 + up to N`; GraphQL-fallback path: `up to 2N`  
+  **Proposed call count** — GraphQL-success path: `1`; GraphQL-fallback path: `up to N`  
+  **Endpoint(s)** — GraphQL `repository { issue(number) { number labels body } }`; REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The first step already classifies the linked issues for orchestrator handling, but the later merged-alert step re-fetches each issue body to answer essentially the same “is this orchestrated?” question.
+
+  ```bash
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ...
+  _managed_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+    .data.repository | to_entries[] | .value | select(. != null) |
+    ...
+    select(
+      ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+      or
+      ((.body // "") | contains("Managed by: AI Orchestrator"))
+    ) | .number
+  ' 2>/dev/null || echo '')"
+  ```
+
+  ```bash
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+    IS_ORCHESTRATED="true"
+    break
+  fi
+  ```
+
+  The job only exports `LINKED_ISSUE_NUMBERS` after the first step, so the alert step has to re-fetch issue bodies instead of reusing the earlier classification result.  
+  **Proposed fix** — Extend `Update linked issue labels when PR closes` to export either `MANAGED_ISSUES`/`TRACKING_ISSUES` or a derived boolean such as `HAS_ORCHESTRATOR_LINKED_ISSUE` to `$GITHUB_ENV`, then update `Send PR merged Telegram alert` to consume that exported result instead of looping over `_safe_gh_jq "issues/${issue_number}"`.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because the reuse crosses workflow steps, and the earlier classifier (`tracking` vs `managed`, GraphQL success vs REST fallback) is not exactly the same predicate as the later alert step’s current body-marker-only check.  
+  **Downstream signal** — Verify on one standalone merged PR and one orchestrator-managed merged PR that the exported early-step classification yields the same alert/no-alert result as the current per-issue body loop in both GraphQL-success and forced-fallback modes before removing the later REST fetches.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:61-61`, `.github/workflows/orchestrate_clarify_respond.yml:76-76`, `.github/workflows/orchestrate_clarify_respond.yml:418-418`, `.github/workflows/orchestrate_clarify_respond.yml:429-429`  
+  **Current call count** — No-tracking path: `2`; tracking-issue path: `4`  
+  **Proposed call count** — No-tracking path: `1`; tracking-issue path: `2`  
+  **Endpoint(s)** — REST `GET /repos/{repo}/issues/{ISSUE_NUMBER}` and `GET /repos/{repo}/issues/{TRACKING_NUM}`  
+  **Evidence** — The workflow fetches the same child issue twice, and fetches the same tracking issue twice with different field projections.
+
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+
+  The later step only needs fields already available from the earlier payloads (`body`, `title`, and parsed `TRACKING_NUM`); it re-fetches because nothing from the first step is persisted.  
+  **Proposed fix** — In `Check orchestrator metadata`, persist the full child-issue JSON and (when `TRACKING_NUM` exists) the full tracking-issue JSON to stable temp files under `${RUNNER_TEMP}`; in `Fetch issue and tracking context`, read those files first and fall back to `gh_retry gh api` only if a cache file is missing or invalid.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because the reuse crosses steps, the first step runs before the later runtime-context setup, and the implementation must prove the cached files survive checkout/setup boundaries without changing freshness assumptions.  
+  **Downstream signal** — Verify that cached `${RUNNER_TEMP}` issue/tracking JSON is available to the later step and that no step between lines 55-76 and 403-430 mutates the issue/tracking title/body semantics before replacing the second fetch pair.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:1088-1089`  
+  **Current call count** — `1`  
+  **Proposed call count** — `0`  
+  **Endpoint(s)** — REST `GET /repos/{TEST_REPO}/commits?sha={BRANCH}&per_page=20`  
+  **Evidence** — `COMMITS_AFTER` is assigned from the commits API and then never read; the actual post-bait success gate uses only `PR_HEAD`.
+
+  ```bash
+  COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
+    --jq "[.[] | select(.sha != \"${BAIT_SHA}\") | .sha] | length" 2>/dev/null || echo "0")
+  # The PR head SHA should differ from the bait SHA.
+  PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
+    ...
+  fi
+  ```
+
+  A file-local reference scan after line 1088 finds no later use of `COMMITS_AFTER`.  
+  **Proposed fix** — Remove the `COMMITS_AFTER` fetch and leave the existing `PR_HEAD != BAIT_SHA` check as the sole proof that the editor pushed a post-bait commit.  
+  **Safety rationale** — `SAFE_TO_MERGE` because the fetched value is provably unused in the same step/file, the call is not paginated or part of a retry/auth/race-recovery flow, and removing it does not alter downstream failure handling.  
+  **Downstream signal** — Delete the `COMMITS_AFTER` assignment in `verify-bait-removed` and keep the `PR_HEAD` comparison unchanged.
+
+- **ID** — `DEAD-API-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:11400-11400`  
+  **Current call count** — `1` per standalone-conflict sweep  
+  **Proposed call count** — `0`  
+  **Endpoint(s)** — REST `GET /repos/{GITHUB_REPOSITORY}`  
+  **Evidence** — The standalone conflict sweep fetches `DEFAULT_BRANCH` and then never consumes it; the loop immediately works from `STANDALONE_PRS`, `S_HEAD`, `S_BASE`, and the per-PR payload.
+
+  ```bash
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+    S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
+    S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+    S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
+  ```
+
+  A post-assignment reference scan in this sweep finds no later `${DEFAULT_BRANCH}` read.  
+  **Proposed fix** — Remove the unused `DEFAULT_BRANCH` fetch from the standalone conflict sweep if manual review confirms there is no latent dependency or test relying on that variable being populated.  
+  **Safety rationale** — `RISKY_SKIP` because this code lives inside `scripts/orchestrate_poll_process.sh`, which the audit contract explicitly treats as a race-defensive orchestrator path that must not be auto-changed even for apparently dead API calls.  
+  **Downstream signal** — Do not auto-implement; manual poller-path review must confirm no hidden dependency/log-contract expectation on `DEFAULT_BRANCH` in the standalone conflict sweep and rerun the targeted conflict-sweep tests before removal.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `RISKY_SKIP` — The redundancy is real, but it sits in `scripts/orchestrate_poll_process.sh` final-merge logic where race-window and retry semantics are load-bearing.
+- `BATCH-001`: `NEEDS_VERIFICATION` — Batched label hydration is directionally correct, but GraphQL aliasing must be parity-checked against the current fallback issue-number path before replacing per-issue `gh issue view`.
+- `BATCH-002`: `NEEDS_VERIFICATION` — Expanding the existing GraphQL query should remove the per-issue REST body loop, but “first linked issue wins” ordering and non-GraphQL fallback behavior need explicit verification.
+- `BATCH-003`: `RISKY_SKIP` — The call fanout is real, but the feature sweep lives in `scripts/orchestrate_poll_process.sh` and feeds branch-update conflict handling, so it is not safe for blind consolidation.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | DEAD-API-002 |
+
+### Implement-Stage Handoff
+- `DEAD-API-001`
