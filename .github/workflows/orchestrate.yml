@@ -643,7 +643,16 @@ jobs:
                   # minimum-count gate, only failing later at schema
                   # validation. -1 forces this attempt down the retry
                   # path.
-                  EMITTED=$(jq 'if (.issues|type) == "array" then (.issues | length) else -1 end' "${DECOMPOSITION_FILE}")
+                  EMITTED=$(jq 'if (.issues|type) == "array" then (.issues | length) else -1 end' "${DECOMPOSITION_FILE}" 2>/dev/null || echo "")
+                  # Defensive guard: if jq exited non-zero or printed
+                  # nothing, treat the response as malformed (-1) so the
+                  # downstream `[ "${EMITTED}" -lt 0 ]` /
+                  # `[ "${EMITTED}" -ge "${EXPECTED_MIN_ISSUES}" ]`
+                  # arithmetic doesn't bail with "integer expression
+                  # expected" under set -e.
+                  if ! [[ "${EMITTED}" =~ ^-?[0-9]+$ ]]; then
+                    EMITTED=-1
+                  fi
                   last_emitted="${EMITTED}"
                   if [ "${EMITTED}" -lt 0 ]; then
                     EMITTED_DESC="a malformed (non-array) issues field"

@@ -832,7 +832,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
-          EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '6600' }}
+          EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
         run: |
           set -euo pipefail
 
@@ -930,7 +930,7 @@ jobs:
           # ────────────────────────────────────────────────────────────────
 
           IMPLEMENT_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min default
-          IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-6600}"            # 110 min default
+          IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-7800}"            # 130 min default
           JOB_TIMEOUT_SECS=$((180 * 60))
           JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 
@@ -995,10 +995,29 @@ jobs:
             # .codex-workflow-src*) so the nudge only fires when Codex
             # itself produced no changes, not when the untouched support
             # checkout shows up as untracked.
+            #
+            # Also feed back the prior attempts' exploration history (the
+            # `exec` shell calls Codex made — `ls`, `rg`, `nl`, `sed`,
+            # etc.). Without this, every retry redoes the same recon and
+            # the wall-time / model-side budget runs out before any edit
+            # lands. Observed in production on `bitsafe.io` issue #26
+            # where 5 back-to-back attempts all spent their full window
+            # exploring and never wrote a single file.
             PROMPT_FILE_TO_USE="${CODEX_PROMPT_FILE}"
             codex_retry_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
             if [ "${attempt}" -gt 1 ] && [ -z "${codex_retry_delta}" ]; then
               PROMPT_FILE_TO_USE="${RUNTIME_DIR}/codex_prompt_retry.txt"
+              # Extract distinct `exec` commands from prior-attempt stderr
+              # (`tee -a`'d into codex_log.txt and accumulating across
+              # attempts). Codex CLI prints `exec\n<cmd> in <cwd> <status>:`
+              # so awk pairs each `exec` line with the following command
+              # line. sort -u dedups across attempts; head caps the recap
+              # so it doesn't blow up the retry prompt on long runs.
+              prior_exec_history=""
+              if [ -s "${RUNTIME_DIR}/codex_log.txt" ]; then
+                prior_exec_history="$(awk '/^exec$/ { getline cmd; if (length(cmd) > 0 && length(cmd) < 500) print "  - " cmd }' \
+                  "${RUNTIME_DIR}/codex_log.txt" 2>/dev/null | sort -u | head -n 40 || true)"
+              fi
               {
                 cat <<'RETRY_EOF'
           IMPORTANT: Your previous attempt produced NO file changes. The implementation
@@ -1007,6 +1026,15 @@ jobs:
           writing to disk. Proceed now.
 
           RETRY_EOF
+                if [ -n "${prior_exec_history}" ]; then
+                  printf '%s\n' \
+                    "Prior-attempt exploration recap (DO NOT redo these — go straight to editing):" \
+                    "${prior_exec_history}" \
+                    "" \
+                    "Based on the above, you have already inspected the relevant files. Skip" \
+                    "re-exploration. Make the edits now using apply_patch / Serena edit tools." \
+                    ""
+                fi
                 cat "${CODEX_PROMPT_FILE}"
               } > "${PROMPT_FILE_TO_USE}"
             fi
