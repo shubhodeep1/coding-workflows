@@ -129,8 +129,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
-| `CONTEXT7_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Context7 MCP server |
-| `GIT_MCP_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Git MCP server setup (preloaded diff artifacts remain the fallback). |
+| `CONTEXT7_DISABLED` | No | `true` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Context7 MCP server. Default flipped to `true` because failed Context7 handshakes leave Codex emitting an invalid `tools[N]` entry that OpenRouter→Azure rejects with HTTP 400 (#1754). |
+| `GIT_MCP_DISABLED` | No | `true` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Git MCP server setup (preloaded diff artifacts remain the fallback). Default flipped to `true` for the same MCP-handshake reason as `CONTEXT7_DISABLED` (#1754). |
 | `OPENROUTER_PROMPT_CACHE_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Kill switch for OpenRouter prompt-cache instrumentation. `false` enables cache-friendly prompt ordering and cache telemetry logging; `true` disables explicit cache breakpoints and related instrumentation. (No longer consumed by `workflow-log-analysis`, which is Codex-only.) |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `30` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
@@ -999,8 +999,8 @@ The analyzer is now a context-prep stage only — it loads the collector report,
 | `FINGERPRINT_PER_FILE_CAP` | `12` | Cap on `must_contain`/`must_not_contain` patterns captured per file per merged sub-issue |
 | `FINGERPRINT_MIN_PATTERN_CHARS` | `12` | Minimum trimmed-line length for a captured fingerprint pattern |
 | `ACTIONS_RUNS_CACHE_TTL_SECONDS` | `60` | Cross-tick cache TTL (seconds) for `GET /actions/runs` snapshots persisted on the `ai-memory` branch and reused by orchestrator poll run-state readers |
-| `CONTEXT7_DISABLED` | `false` | Disable the optional Context7 MCP server setup in workflows |
-| `GIT_MCP_DISABLED` | `false` | Disable the optional Git MCP server setup in workflows (preloaded diff artifacts remain fallback) |
+| `CONTEXT7_DISABLED` | `true` | Disable the optional Context7 MCP server setup in workflows (default flipped per #1754) |
+| `GIT_MCP_DISABLED` | `true` | Disable the optional Git MCP server setup in workflows (preloaded diff artifacts remain fallback; default flipped per #1754) |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
