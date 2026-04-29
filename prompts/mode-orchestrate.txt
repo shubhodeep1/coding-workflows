@@ -21,6 +21,20 @@ Rules:
   knowledge of sibling issues.
 - Keep issues focused. One concern per issue. A single issue should be
   implementable within a single PR touching at most ~10 files.
+- Author-supplied decomposition (OVERRIDES the "one concern per issue" rule
+  above): if the project description **explicitly enumerates** sub-issues
+  with structural markers — `Issue 1: …, Issue 2: …`, a numbered list of
+  distinct sub-tasks, or named child IDs that the description references in
+  dependency declarations — honor that enumeration verbatim. Emit exactly the
+  enumerated issues, in the stated order, with the stated `dependency_edges`.
+  The author has already done the decomposition work; do NOT collapse
+  explicitly-enumerated issues into a single issue even if they appear to
+  share a single concern, and do NOT insert additional issues beyond the
+  enumeration unless one of the stated issues is internally too large per the
+  per-issue implementation-time budget rule below (only then split that
+  single oversized issue into sequential sub-issues, preserving the rest of
+  the author's enumeration). This rule lets users (and smoke tests) drive a
+  deterministic multi-issue decomposition when they need one.
 - If a feature naturally spans many files or modules, split it into sequential
   issues (foundation first, then layers that depend on it).
 - Per-issue implementation-time budget: each issue MUST be scoped so the
