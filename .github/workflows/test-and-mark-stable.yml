@@ -2487,10 +2487,11 @@ jobs:
           # orchestrator must produce >=2 issues across >=2 waves. Stays
           # inside the smoke canary file family to minimise blast radius and
           # lets cleanup target the new issues by title prefix.
-          PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] Update tests/e2e_smoke_canary.txt with two changes that MUST be applied as separate issues with a dependency. "
-          PROJECT_DESC+="Issue 1 (no dependencies): set the file's first line to exactly 'status: ok'. "
-          PROJECT_DESC+="Issue 2 (depends on Issue 1): append the file with exactly this line 'decompose-run: ${GITHUB_RUN_ID}'. "
-          PROJECT_DESC+="Constraints: both changes target the same file; Issue 2 must declare dependency on Issue 1 in the orchestrator DAG; this is fully specified — no clarification is needed."
+          PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] Update tests/e2e_smoke_canary.txt with two changes that MUST be decomposed into TWO separate child issues wired by an explicit dependency_edges entry. "
+          PROJECT_DESC+="DO NOT collapse these into a single child issue. Both changes touch the same file (tests/e2e_smoke_canary.txt), so per the decomposer's same-file-siblings rule in mode-orchestrate.txt they MUST serialize into different waves via an explicit dependency_edges entry — leaving both edits in one issue is the prohibited 'unresolved conflict at planning time' failure mode. "
+          PROJECT_DESC+="Issue 1 (no dependencies, files_touched=[tests/e2e_smoke_canary.txt]): set the file's first line to exactly 'status: ok'. "
+          PROJECT_DESC+="Issue 2 (depends_on Issue 1, files_touched=[tests/e2e_smoke_canary.txt]): append exactly the line 'decompose-run: ${GITHUB_RUN_ID}'. Issue 2 must execute AFTER Issue 1 has merged because its acceptance criterion is that the file's first line already reads 'status: ok' AND the appended line is present; combining them into one PR removes the dependency-aware wave ordering this smoke test exists to exercise. "
+          PROJECT_DESC+="Constraints: both issues target the same file; declare the dependency edge Issue 1 -> Issue 2 in the orchestrator DAG; this is fully specified — no clarification is needed."
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Capture the dispatch start time before dispatching so the
           # post-run lookup can use it as a lower-bound created_at filter
