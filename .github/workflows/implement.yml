@@ -1011,7 +1011,7 @@ jobs:
               # (`tee -a`'d into codex_log.txt and accumulating across
               # attempts). Codex CLI prints `exec\n<cmd> in <cwd> <status>:`
               # so awk pairs each `exec` line with the following command
-              # line. Dedup is order-preserving (`!seen[$0]++` keeps the
+              # line. Dedup is order-preserving (`!seen[cmd]++` keeps the
               # first occurrence of each command in chronological order)
               # rather than `sort -u` (which would alphabetize and lose
               # the recon sequence the model can read for what was tried
