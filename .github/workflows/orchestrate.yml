@@ -540,81 +540,138 @@ jobs:
       - name: Run Codex (decomposer)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
           set -euo pipefail
 
+          # Author-enumeration enforcement.
+          #
+          # When the project description explicitly enumerates sub-issues
+          # with structural markers (`Issue 1:`, `Issue 2 (...):`, etc.) —
+          # the same markers documented in prompts/mode-orchestrate.txt
+          # under the Author-supplied decomposition rule — the orchestrator
+          # MUST emit at least that many issues. The LLM has historically
+          # collapsed enumerated issues into a single one despite the
+          # prompt rule, so this loop counts the markers and rejects any
+          # response with fewer issues than the author enumerated, feeding
+          # the actual vs. expected counts back into the next attempt's
+          # prompt. Without enumerated markers the loop degrades to the
+          # previous behavior (any non-empty response is accepted).
+          EXPECTED_MIN_ISSUES=$(printf '%s' "${PROJECT_DESCRIPTION}" \
+            | grep -oE '\bIssue[[:space:]]+[0-9]+' \
+            | awk '{print $2}' \
+            | sort -un | tail -n 1)
+          EXPECTED_MIN_ISSUES="${EXPECTED_MIN_ISSUES:-1}"
+          echo "Author enumeration requires >= ${EXPECTED_MIN_ISSUES} issue(s)."
+
+          # Snapshot the original prompt so retry feedback is appended to a
+          # clean base each attempt rather than accumulating across attempts.
+          BASE_PROMPT_FILE="${CODEX_PROMPT_FILE}.base"
+          cp "${CODEX_PROMPT_FILE}" "${BASE_PROMPT_FILE}"
+
           max_attempts=3
+          last_status="no attempts ran"
+          last_emitted=0
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
+            attempt_ok=0
             if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
-              if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "Codex orchestrate succeeded on attempt ${attempt}."
-                break
+              if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+                echo "::warning::Codex returned empty output on attempt ${attempt}."
+                last_status="empty output"
+              else
+                # Try to extract a JSON object from the response.
+                if python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
+          import json, re, sys
+
+          raw = open(sys.argv[1]).read()
+          out_path = sys.argv[2]
+          data = None
+          try:
+              data = json.loads(raw.strip())
+          except json.JSONDecodeError:
+              cleaned = re.sub(r'```(?:json)?\s*', '', raw)
+              cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.MULTILINE)
+              depth, start = 0, None
+              for i, ch in enumerate(cleaned):
+                  if ch == '{':
+                      if depth == 0:
+                          start = i
+                      depth += 1
+                  elif ch == '}':
+                      depth -= 1
+                      if depth == 0 and start is not None:
+                          try:
+                              data = json.loads(cleaned[start:i+1])
+                              break
+                          except json.JSONDecodeError:
+                              start = None
+          if data is None:
+              print('ERROR: Could not extract valid JSON from Codex output', file=sys.stderr)
+              print(raw[:2000], file=sys.stderr)
+              sys.exit(1)
+          json.dump(data, open(out_path, 'w'), indent=2)
+          PYEOF
+                then
+                  EMITTED=$(jq '(.issues // []) | length' "${DECOMPOSITION_FILE}")
+                  last_emitted="${EMITTED}"
+                  if [ "${EMITTED}" -ge "${EXPECTED_MIN_ISSUES}" ]; then
+                    echo "Codex orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
+                    attempt_ok=1
+                  else
+                    echo "::warning::Attempt ${attempt} emitted only ${EMITTED} issue(s); author enumeration requires >= ${EXPECTED_MIN_ISSUES}. Re-prompting with corrective feedback."
+                    last_status="emitted ${EMITTED} issues, expected >= ${EXPECTED_MIN_ISSUES}"
+                    # Rebuild the prompt from the clean base and append a
+                    # strongly-worded retry directive that names the actual
+                    # vs. expected counts, so the next attempt has explicit
+                    # numeric feedback rather than the same instruction
+                    # text it just ignored.
+                    cp "${BASE_PROMPT_FILE}" "${CODEX_PROMPT_FILE}"
+                    {
+                      echo
+                      echo "=== RETRY FEEDBACK (attempt ${attempt} REJECTED) ==="
+                      echo
+                      echo "Your previous response emitted ${EMITTED} issue(s)."
+                      echo "The project description above explicitly enumerates ${EXPECTED_MIN_ISSUES} sub-issues using \"Issue 1:\", \"Issue 2:\", … structural markers."
+                      echo
+                      echo "PER prompts/mode-orchestrate.txt (Author-supplied decomposition rule), you MUST honor that enumeration verbatim — emit AT LEAST ${EXPECTED_MIN_ISSUES} distinct issues, in the stated order, with the stated dependency_edges. Do NOT collapse enumerated sub-tasks into a single issue, even if they appear to share a single concern, a directory, or a file family. The author already did the decomposition work; your job is to transcribe it faithfully into the schema, not to re-decide it."
+                      echo
+                      echo "This is your retry. Anything other than >= ${EXPECTED_MIN_ISSUES} issues will fail the orchestrator and waste the run. Re-emit the decomposition JSON now with at least ${EXPECTED_MIN_ISSUES} issues honoring the author enumeration."
+                    } >> "${CODEX_PROMPT_FILE}"
+                  fi
+                else
+                  echo "::warning::Could not extract JSON from Codex output on attempt ${attempt}."
+                  last_status="invalid JSON"
+                fi
               fi
-              echo "::warning::Codex returned empty output on attempt ${attempt}."
             else
               rc=$?
               echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+              last_status="codex exit ${rc}"
+            fi
+            if [ "${attempt_ok}" = "1" ]; then
+              break
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex orchestrate failed after ${max_attempts} attempts."
+              echo "::error::Codex orchestrate failed after ${max_attempts} attempts (last_status=${last_status}, last_emitted=${last_emitted}, expected_min=${EXPECTED_MIN_ISSUES})."
               exit 1
             fi
           done
 
-      - name: Extract and validate decomposition JSON
+      - name: Validate decomposition JSON
         run: |
           set -euo pipefail
 
-          # The LLM may wrap output in markdown fences or add prose around the JSON.
-          # Extract the first JSON object from the output.
-          python3 -c "
-          import json, re, sys
-
-          raw = open('${CODEX_OUTPUT_FILE}', 'r').read()
-
-          # Try parsing the whole output as JSON first
-          try:
-              data = json.loads(raw.strip())
-              json.dump(data, open('${DECOMPOSITION_FILE}', 'w'), indent=2)
-              sys.exit(0)
-          except json.JSONDecodeError:
-              pass
-
-          # Strip markdown fences and try again
-          cleaned = re.sub(r'\`\`\`(?:json)?\s*', '', raw)
-          cleaned = re.sub(r'\`\`\`\s*$', '', cleaned, flags=re.MULTILINE)
-
-          # Find the first { ... } block
-          brace_depth = 0
-          start = None
-          for i, ch in enumerate(cleaned):
-              if ch == '{':
-                  if brace_depth == 0:
-                      start = i
-                  brace_depth += 1
-              elif ch == '}':
-                  brace_depth -= 1
-                  if brace_depth == 0 and start is not None:
-                      candidate = cleaned[start:i+1]
-                      try:
-                          data = json.loads(candidate)
-                          json.dump(data, open('${DECOMPOSITION_FILE}', 'w'), indent=2)
-                          sys.exit(0)
-                      except json.JSONDecodeError:
-                          start = None
-
-          print('ERROR: Could not extract valid JSON from Codex output', file=sys.stderr)
-          print('Raw output (first 2000 chars):', file=sys.stderr)
-          print(raw[:2000], file=sys.stderr)
-          sys.exit(1)
-          "
-
-          # Validate against schema rules
+          # JSON extraction and the author-enumeration count check ran in
+          # the previous step's retry loop; ${DECOMPOSITION_FILE} is
+          # already populated with a parsed JSON object that satisfies
+          # `len(issues) >= EXPECTED_MIN_ISSUES`. This step only re-runs
+          # the schema-shape validation (id uniqueness, edge references,
+          # cycle detection, files_touched normalization).
           python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"
           echo "Decomposition validated successfully."
 
