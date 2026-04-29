@@ -600,7 +600,13 @@ jobs:
     needs: analyze-commit-notify
     if: success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bumped 30 → 45 after run #25088541089 cancelled at 30m 16s — the
+    # original 30m budget gave no headroom for LLM latency variance, and
+    # `api-redundancy` was skipped (`needs: deep-audit`) when the timeout
+    # tripped. 45m absorbs the observed margin and leaves room for slow
+    # codex calls without changing the watcher's overall ceiling beyond
+    # what test-and-mark-stable.yml already accommodates.
+    timeout-minutes: 45
     outputs:
       audit_status: ${{ steps.audit.outputs.audit_status }}
     env:
@@ -643,7 +649,6 @@ jobs:
       - name: Create Codex config
         env:
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
-          THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'xhigh' }}
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
@@ -652,7 +657,19 @@ jobs:
             echo 'web_search = "live"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${WORKFLOW_EDITOR_MODEL}\""
-            echo "model_reasoning_effort = \"${THINKING_LEVEL_ANALYSIS}\""
+            # Reasoning effort is hardcoded at "high" for deep-audit (was
+            # previously read from THINKING_LEVEL_ANALYSIS, which defaulted
+            # to "xhigh" and is still used by api-redundancy below). Run
+            # #25088541089 cancelled this job at 30m 16s on its prior 30m
+            # cap; xhigh reasoning over the audit's wide surface area
+            # (~30 workflow files + scripts/, plus the full report file
+            # concatenated as context) is the structural latency tax that
+            # forced the 30m → 45m timeout bump in this same change set.
+            # high gives ~30-50% per-pass latency cut with negligible
+            # impact on audit depth; xhigh remains available to
+            # api-redundancy via THINKING_LEVEL_ANALYSIS for callers
+            # that still need it. To override, edit this hardcoded value.
+            echo 'model_reasoning_effort = "high"'
             if [ -f "${CATALOG_PATH}" ]; then
               echo "model_catalog_json = \"${CATALOG_PATH}\""
             fi
