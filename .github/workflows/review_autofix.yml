@@ -2461,6 +2461,20 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
+
+      - name: Upload per-reviewer logs (always)
+        if: always() && env.PREVIOUS_REVIEWS_DIR != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: reviewer-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/*.log
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/status_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/review_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Record reviewer consensus candidate in memory (fail-open)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
