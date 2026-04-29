@@ -1240,6 +1240,12 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	#     the parser still extracts what we expect. Pattern lifted
 	#     verbatim from implement.yml so a regex/format edit there
 	#     surfaces here as a parse mismatch.
+	#
+	#     The fixture intentionally exercises suffix variation that
+	#     real Codex CLI logs exhibit (different `succeeded in <N>ms:`
+	#     elapsed values, `exited <code> in <N>ms:` failure forms,
+	#     non-zero ms values) so a parser that accidentally hard-codes
+	#     `succeeded in 0ms:` would fail this test.
 	codex_log_fixture = (
 		"some startup chatter\n"
 		"exec\n"
@@ -1247,13 +1253,15 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 		"file_a\n"
 		"file_b\n"
 		"exec\n"
-		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 0ms:\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:\n"
 		"matches…\n"
 		"exec\n"
-		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 0ms:\n"
+		"/bin/bash -lc 'rg -n MISSING' in /repo exited 1 in 12ms:\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:\n"
 		"duplicate of attempt 2 — should dedup\n"
 		"exec\n"
-		"/bin/bash -lc 'cat foo' in /repo succeeded in 0ms:\n"
+		"/bin/bash -lc 'cat foo' in /repo succeeded in 3ms:\n"
 		"tokens used 12345\n"
 	)
 	with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -1278,12 +1286,14 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	lines = [line for line in result.stdout.splitlines() if line]
 	assert lines == [
 		"  - /bin/bash -lc 'ls -1' in /repo succeeded in 0ms:",
-		"  - /bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 0ms:",
-		"  - /bin/bash -lc 'cat foo' in /repo succeeded in 0ms:",
+		"  - /bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:",
+		"  - /bin/bash -lc 'rg -n MISSING' in /repo exited 1 in 12ms:",
+		"  - /bin/bash -lc 'cat foo' in /repo succeeded in 3ms:",
 	], (
-		"awk parser must (1) capture each `exec`-followed command line, "
-		"(2) dedup duplicates while preserving chronological order, "
-		"(3) skip non-`exec` chatter. Got:\n"
+		"awk parser must (1) capture each `exec`-followed command line "
+		"regardless of trailing-suffix variability (succeeded vs exited, "
+		"different ms values), (2) dedup duplicates while preserving "
+		"chronological order, (3) skip non-`exec` chatter. Got:\n"
 		+ "\n".join(lines)
 	)
 
