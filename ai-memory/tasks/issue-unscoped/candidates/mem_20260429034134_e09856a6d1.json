@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:2 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The `run_id` value is `alt-25088532565` instead of the required exact value `25088532565`.\n  WHY: The task required exact file content, so the altered value will fail the E2E smoke test validation.\n- analysis/workflow-optimization-2026-04-29.md:entire file | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: An out-of-scope analysis file was created even though only `tests/e2e_smoke_canary.txt` was supposed to be modified.\n  WHY: The task explicitly forbade touching any other file, so adding this file violates the scope constraint.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:2 - CRITICAL\n  PROBLEM: The run_id value was changed from `25088532565` to `alt-25088532565`.\n  WHY: The original task explicitly required `run_id: 25088532565`, so this will cause the E2E smoke test to fail because it expects exact content matching.\n- analysis/workflow-optimization-2026-04-29.md - SCOPE VIOLATION (Low severity)\n  PROBLEM: A 500-line analysis file was created.\n  WHY: The task explicitly stated: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file\", so this is a clear scope violation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/e2e_smoke_canary.txt\nLine: 2\n  PROBLEM: The run_id value is incorrect.\n  WHY: The file contains `run_id: alt-25088532565` but the issue explicitly requires the exact value `run_id: 25088532565`.\n- File: analysis/workflow-optimization-2026-04-29.md\n  PROBLEM: A new 500-line analysis file was created, but the task constraints explicitly state: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  WHY: This is a scope violation. The task is a tightly-scoped smoke test that only permits modification of one specific file.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- File: tests/e2e_smoke_canary.txt\nLine: 2\n  PROBLEM: The `run_id` value is `alt-25088532565` but must be exactly `25088532565` as specified in the task.\n  WHY: The E2E smoke test validation will fail because the file content does not match the expected exact value. The task explicitly stated: \"Update its content so it is exactly these three lines\" with `run_id: 25088532565`.\n- File: analysis/workflow-optimization-2026-04-29.md\nLine: entire file (new file)\n  PROBLEM: A 500-line analysis file was created by this AI autofix run, violating the task constraint.\n  WHY: The task explicitly stated \"Only modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\" Creating a new analysis file is a direct scope violation that will cause the PR to contain unrequested changes.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5c7bed5106520530aa91e4eab0cceb91eda6b073b47808dae2f2945831967433",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1749,
+    "run_id": "25089327327",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25089327327",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429034134_e09856a6d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1749,
+    "run_id": "25089327327"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T03:41:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
