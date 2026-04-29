@@ -133,9 +133,9 @@ Same as B but stated as a conditional rather than a gate addition. Either form i
 | # | Action | Owner | Cost |
 |---|---|---|---|
 | 1 | Decide which of A1/A2/A3 to pursue (consolidator passthrough hardening) | maintainer | discussion |
-| 2 | Add `env.EDITOR_NOOP_SUSPICIOUS != 'true'` gate to merge-conflict detect & resolver steps in `review_autofix.yml` | trivial | ~30 min + tests |
-| 3 | Add empty-editor-marker shortcut to e2e poller in `test-and-mark-stable.yml` | small | ~1 hr + e2e re-run |
-| 4 | Loosen `AUTOFIX_INSTEP_RETRY` gate to also fire on `EDITOR_NOOP_SUSPICIOUS=true` | small | ~30 min |
+| 2 | Add `env.EDITOR_NOOP_SUSPICIOUS != 'true'` gate to merge-conflict detect & resolver steps in `review_autofix.yml` | maintainer | trivial (~30 min + tests) |
+| 3 | Add empty-editor-marker shortcut to e2e poller in `test-and-mark-stable.yml` | maintainer | small (~1 hr + e2e re-run) |
+| 4 | Loosen `AUTOFIX_INSTEP_RETRY` gate to also fire on `EDITOR_NOOP_SUSPICIOUS=true` | maintainer | small (~30 min) |
 | 5 | Re-run the e2e smoke test with item 2 + 3 + 4 applied to confirm the cascade is cleaned up; the underlying editor-model regression (item 1) will still need separate investigation | — | one e2e run |
 
 Items 2–4 are mechanical and low-risk. Item 1 is the actual root-cause fix and needs a maintainer call on which lever to pull.
