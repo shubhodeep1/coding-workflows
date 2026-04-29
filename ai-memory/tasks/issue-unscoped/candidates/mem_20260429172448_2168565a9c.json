@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-log-analysis.yml:936-939 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The cross-reference comment still says the outer DEADLINE is 8400s/140m even though test-and-mark-stable.yml now uses 10200s/170m.\n  WHY: The runtime value was updated but this comment was not, so the documentation is stale and can mislead maintainers.\n- .github/workflows/test-and-mark-stable.yml:2233-2245,2277-2288,2294-2311 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The timeout-rationale comments hardcode transient run IDs as justification for the timeout values.\n  WHY: These references are historical only and will go stale, making the rationale harder to audit later.\n- .github/workflows/workflow-log-analysis.yml:603-603,663-663,935-935 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The timeout-rationale comments hardcode transient run IDs as justification for the timeout values.\n  WHY: These references are historical only and will go stale, making the rationale harder to audit later.\n- .github/workflows/test-and-mark-stable.yml:2230,2274,2294-2311 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The timeout values leave only the documented buffer and no additional slack for queueing spikes or upstream drift.\n  WHY: One reviewer flagged the margins as tight because the healthy run budget exactly matches the stated worst-case plus named buffers, while other reviewers treated this as an intentional design choice.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/workflow-log-analysis.yml:938 | confidence=4\n  PROBLEM: The comment reads \"poller's 8400s/140m outer DEADLINE (test-and-mark-stable.yml dispatch step) covers the new 60m cap with plenty of headroom.\"\n  WHY: The actual DEADLINE in test-and-mark-stable.yml was updated to 10200s/170m, so this cross-reference comment is stale.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/workflow-log-analysis.yml:~938-939 | confidence=3\n  PROBLEM: The comment says the poller's outer DEADLINE is 8400s/140m.\n  WHY: test-and-mark-stable.yml was bumped to 10200s/170m in this PR, so the cross-reference comment should be updated.\n- .github/workflows/test-and-mark-stable.yml and .github/workflows/workflow-log-analysis.yml | confidence=2\n  PROBLEM: Comments reference specific run IDs like `#25088541089`, `#25115192726`, `#25115188957`.\n  WHY: They are historical evidence for the timeout changes, but they can confuse future maintainers once the underlying runs are no longer salient.\n- .github/workflows/test-and-mark-stable.yml | confidence=3\n  PROBLEM: The 250m job timeout, 175m step timeout, and 170m DEADLINE leave only the named buffers.\n  WHY: This is a design consideration rather than a bug, but it provides no extra slack for future timeout drift.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/workflow-log-analysis.yml:938 | confidence=4\n  PROBLEM: The comment references the old DEADLINE value of 8400s/140m.\n  WHY: test-and-mark-stable.yml was updated to use 10200s/170m, so the cross-reference comment is stale.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:2233-2245,2277-2288,2294-2311 | confidence=3\n  PROBLEM: Comments hardcode transient run IDs (`#25088541089`, `#25115192726`) as justification for timeout values.\n  WHY: These references are historical only and can confuse maintainers auditing timeout rationale during future drifts.\n- .github/workflows/test-and-mark-stable.yml:2230,2274,2294 | confidence=4\n  PROBLEM: Timeout values have no slack beyond the documented worst-case plus named buffers.\n  WHY: A healthy run hitting the precise worst case can still cancel at the GitHub wall-clock timeout, and there is no probabilistic headroom for queue variance or upstream creep.\n- .github/workflows/workflow-log-analysis.yml:936-937 | confidence=3\n  PROBLEM: The comment claims test-and-mark-stable.yml uses an 8400s/140m outer DEADLINE.\n  WHY: The coordinated bump now uses 10200s/170m, so this cross-reference is stale and misleads cross-workflow auditors.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/workflow-log-analysis.yml:939 | confidence=5\n  PROBLEM: The cross-reference is stale.\n  WHY: test-and-mark-stable.yml updated the dispatch-step DEADLINE from 8400s (140m) to 10200s (170m), but the comment still references the old value.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b3bf7010eabcba2650c8a5fca1374def0545126fe250bfc1954b1399a35b97e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1780,
+    "run_id": "25122593606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25122593606",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429172448_2168565a9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1780,
+    "run_id": "25122593606"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T17:24:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
