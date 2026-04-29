@@ -25,21 +25,24 @@ Rules:
   above — LOAD-BEARING, violations are treated as a fatal orchestrator
   contract failure and re-issued with corrective feedback until satisfied):
   if the project description **explicitly enumerates** sub-issues with
-  structural markers — `Issue 1: …, Issue 2: …`, a numbered list of
-  distinct sub-tasks, or named child IDs that the description references in
-  dependency declarations — honor that enumeration verbatim.
+  `Issue <N>:` or `Issue <N> (...):` structural markers, honor that
+  enumeration verbatim.
   MANDATORY procedure before you emit any JSON:
     1. Scan the project description for `Issue <N>:` / `Issue <N> (...):`
-       markers (or an equivalent enumerated list of named sub-tasks).
+       markers. (Casual mentions like "as introduced by Issue 5 last week"
+       do NOT count — only markers immediately followed by `:` or `(` are
+       structural.)
     2. Count the highest `<N>` you find — call this `AUTHOR_N`.
     3. Your `issues[]` array MUST have **at least `AUTHOR_N` entries**, one
        per enumerated sub-task, in the stated order, with the stated
        `dependency_edges`. Anything fewer than `AUTHOR_N` issues is a hard
-       failure — the orchestrator's post-LLM validator will reject your
-       output and re-prompt you with the actual emitted/expected counts as
-       feedback. Do NOT try to be clever and merge enumerated sub-tasks
-       into a single issue "because they're related"; that is exactly the
-       failure mode this rule exists to prevent.
+       failure — the orchestrator's post-LLM validator (which uses the
+       same `Issue <N>:`/`Issue <N> (...):` regex described above) will
+       reject your output and re-prompt you with the actual
+       emitted/expected counts as feedback. Do NOT try to be clever and
+       merge enumerated sub-tasks into a single issue "because they're
+       related"; that is exactly the failure mode this rule exists to
+       prevent.
   The author has already done the decomposition work; do NOT collapse
   explicitly-enumerated issues into a single issue even if they appear to
   share a single concern, share a directory, share a file family, or look

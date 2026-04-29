@@ -547,21 +547,30 @@ jobs:
           # Author-enumeration enforcement.
           #
           # When the project description explicitly enumerates sub-issues
-          # with structural markers (`Issue 1:`, `Issue 2 (...):`, etc.) —
-          # the same markers documented in prompts/mode-orchestrate.txt
-          # under the Author-supplied decomposition rule — the orchestrator
-          # MUST emit at least that many issues. The LLM has historically
+          # with `Issue <N>:` structural markers — the same markers
+          # documented in prompts/mode-orchestrate.txt under the
+          # Author-supplied decomposition rule — the orchestrator MUST
+          # emit at least that many issues. The LLM has historically
           # collapsed enumerated issues into a single one despite the
           # prompt rule, so this loop counts the markers and rejects any
           # response with fewer issues than the author enumerated, feeding
           # the actual vs. expected counts back into the next attempt's
-          # prompt. Without enumerated markers the loop degrades to the
-          # previous behavior (any non-empty response is accepted).
-          EXPECTED_MIN_ISSUES=$(printf '%s' "${PROJECT_DESCRIPTION}" \
-            | grep -oE '\bIssue[[:space:]]+[0-9]+' \
-            | awk '{print $2}' \
-            | sort -un | tail -n 1)
-          EXPECTED_MIN_ISSUES="${EXPECTED_MIN_ISSUES:-1}"
+          # prompt. Without enumerated markers EXPECTED_MIN_ISSUES
+          # defaults to 1, so non-author-decomposed dispatches behave
+          # exactly as before.
+          #
+          # Done in Python rather than `grep | awk | sort | tail` because
+          # under `set -euo pipefail` a no-match grep would abort the
+          # whole step (which is the common case for non-enumerated
+          # dispatches) — Python's regex returns an empty list cleanly
+          # and the `or 1` fallback handles it.
+          EXPECTED_MIN_ISSUES="$(PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION}" python3 - <<'PYEOF'
+          import os, re
+          text = os.environ.get("PROJECT_DESCRIPTION", "")
+          matches = [int(m.group(1)) for m in re.finditer(r"\bIssue\s+(\d+)\s*[:(]", text)]
+          print(max(matches) if matches else 1)
+          PYEOF
+          )"
           echo "Author enumeration requires >= ${EXPECTED_MIN_ISSUES} issue(s)."
 
           # Snapshot the original prompt so retry feedback is appended to a
