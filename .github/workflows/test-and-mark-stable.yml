@@ -2418,8 +2418,13 @@ jobs:
           sleep 4
           WF_FILE="internal-memory-maintenance.yml"
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
-          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
-            --field alert_msg_level=SILENT
+          # internal-memory-maintenance is a thin wrapper around the
+          # reusable memory_maintenance.yml; neither the wrapper nor the
+          # called workflow nor `ai_memory.py compact` emit Telegram
+          # alerts (per Copilot review on PR #1742), so there is no
+          # `alert_msg_level` input to pass — the smoke gate dispatch
+          # already produces no per-phase pings here.
+          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}"
           DEADLINE=$(( $(date +%s) + 900 ))
           NEW_ID=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do

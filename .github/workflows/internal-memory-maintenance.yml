@@ -3,21 +3,10 @@ name: "Internal: Memory Maintenance"
 on:
   schedule:
     - cron: "0 3 1 * *"  # 1st of each month at 03:00 UTC
-  workflow_dispatch:
-    inputs:
-      alert_msg_level:
-        description: Override the Telegram alert threshold for this run. Set to SILENT when dispatched from the test-and-mark-stable smoke gate to avoid drowning the gate's combined notification in per-job alerts.
-        required: false
-        default: ""
-        type: string
+  workflow_dispatch: {}
 
 permissions:
   contents: write
-
-env:
-  # `inputs` is null on schedule-triggered runs; use `github.event.inputs`
-  # (which is null-safe via `||`) to avoid a parse-time/runtime miss.
-  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 jobs:
   maintenance:
