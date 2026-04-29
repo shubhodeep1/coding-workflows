@@ -936,8 +936,8 @@ jobs:
     # — Codex was still mid-analysis ("considering whether I can combine
     # findings from two separate call sites") when the 30m cap fired and
     # emitted `##[error]The operation was canceled.`. The orphan-workflows
-    # poller's 8400s/140m outer DEADLINE (test-and-mark-stable.yml dispatch
-    # step) covers the new 60m cap with plenty of headroom.
+    # poller's outer DEADLINE in test-and-mark-stable.yml (dispatch step)
+    # still covers the new 60m cap with plenty of headroom.
     timeout-minutes: 60
     outputs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
