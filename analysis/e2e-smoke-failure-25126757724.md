@@ -136,7 +136,7 @@ Same as B but stated as a conditional rather than a gate addition. Either form i
 | 2 | Add `env.EDITOR_NOOP_SUSPICIOUS != 'true'` gate to merge-conflict detect & resolver steps in `review_autofix.yml` | maintainer | trivial (~30 min + tests) |
 | 3 | Add empty-editor-marker shortcut to e2e poller in `test-and-mark-stable.yml` | maintainer | small (~1 hr + e2e re-run) |
 | 4 | Loosen `AUTOFIX_INSTEP_RETRY` gate to also fire on `EDITOR_NOOP_SUSPICIOUS=true` | maintainer | small (~30 min) |
-| 5 | Re-run the e2e smoke test with item 2 + 3 + 4 applied to confirm the cascade is cleaned up; the underlying editor-model regression (item 1) will still need separate investigation | — | one e2e run |
+| 5 | Re-run the e2e smoke test with item 2 + 3 + 4 applied to confirm the cascade is cleaned up; the underlying editor-model regression (item 1) will still need separate investigation | maintainer | one e2e run |
 
 Items 2–4 are mechanical and low-risk. Item 1 is the actual root-cause fix and needs a maintainer call on which lever to pull.
 
@@ -144,9 +144,9 @@ Items 2–4 are mechanical and low-risk. Item 1 is the actual root-cause fix and
 
 ## References
 
-- e2e job log: `https://github.com/shubhodeep1/coding-workflows/actions/runs/25126757724/job/73642869884`
-- review-autofix job log: `https://github.com/shubhodeep1/coding-workflows/actions/runs/25127054791/job/73642854993`
-- PR: `https://github.com/shubhodeep1/coding-workflows/pull/1787`
-- Issue: `https://github.com/shubhodeep1/coding-workflows/issues/1783`
+- e2e job log: https://github.com/shubhodeep1/coding-workflows/actions/runs/25126757724/job/73642869884
+- review-autofix job log: https://github.com/shubhodeep1/coding-workflows/actions/runs/25127054791/job/73642854993
+- PR: https://github.com/shubhodeep1/coding-workflows/pull/1787
+- Issue: https://github.com/shubhodeep1/coding-workflows/issues/1783
 - Bait commit: `90fe0da593cf5098605e4abf2bed02b27d377da9`
-- Editor summary comment (fallback): `https://github.com/shubhodeep1/coding-workflows/pull/1787#issuecomment-4346699142`
+- Editor summary comment (fallback): https://github.com/shubhodeep1/coding-workflows/pull/1787#issuecomment-4346699142
