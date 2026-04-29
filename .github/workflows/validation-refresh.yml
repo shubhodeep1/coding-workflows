@@ -160,7 +160,7 @@ jobs:
           # (alert_msg_level=SILENT) doesn't surface a failure ping.
           case "$(printf '%s' "${ALERT_MSG_LEVEL:-DEBUG}" | tr '[:lower:]' '[:upper:]')" in
             ERROR|CRITICAL|SILENT)
-              echo "ALERT_MSG_LEVEL=${ALERT_MSG_LEVEL} suppresses WARNING-level Telegram failure ping."
+              echo "ALERT_MSG_LEVEL=${ALERT_MSG_LEVEL} suppresses this WARNING-level Telegram failure ping (threshold ≥ ERROR filters it)."
               exit 0
               ;;
           esac

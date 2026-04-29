@@ -32,7 +32,7 @@ name: Update Workflow Wrappers
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 jobs:
   update-wrappers:
@@ -299,7 +299,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level != '' && inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
 
