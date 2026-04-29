@@ -568,14 +568,21 @@ jobs:
           import os, re
           text = os.environ.get("PROJECT_DESCRIPTION", "")
           # Accepted marker forms: case-insensitive `Issue`, optional
-          # whitespace before the digits (so `Issue1:` is recognized too),
-          # and a wider set of list-marker punctuation after the number
-          # (`:`, `(`, `.`, `-`, `–`, `—`). Casual mentions like
-          # "as introduced by Issue 5 last week" still fail to match
-          # because they're typically followed by a regular word.
-          pattern = r"\bIssue\s*(\d+)\s*[:(.\-–—]"
+          # whitespace before the digits (so `Issue1:` is recognized
+          # alongside `Issue 1:`), optional whitespace after the digits,
+          # then `:` or `(` as the structural list-marker punctuation.
+          # `:` and `(` are unambiguous list markers; `.` / `-` / `–` /
+          # `—` were considered but rejected because they too easily
+          # match casual mentions ("Issue 5 - last week", "Issue 1.").
+          # The smoke test uses `Issue 1 (...)`, `Issue 2 (...)` so `(`
+          # is essential.
+          pattern = r"\bIssue\s*(\d+)\s*[:(]"
           matches = [int(m.group(1)) for m in re.finditer(pattern, text, re.IGNORECASE)]
-          print(max(matches) if matches else 1)
+          # Use the count of DISTINCT structural markers (not max(N)) so
+          # a non-contiguous enumeration like `Issue 1:` + `Issue 3:`
+          # demands 2 issues, not 3 phantom ones. Same value when the
+          # author numbers contiguously from 1.
+          print(len(set(matches)) if matches else 1)
           PYEOF
           )"
           echo "Author enumeration requires >= ${EXPECTED_MIN_ISSUES} issue(s)."
@@ -660,7 +667,7 @@ jobs:
                       echo "=== RETRY FEEDBACK (attempt ${attempt} REJECTED) ==="
                       echo
                       echo "Your previous response produced ${EMITTED_DESC}."
-                      echo "The project description above explicitly enumerates ${EXPECTED_MIN_ISSUES} sub-issues using \"Issue <N>:\" / \"Issue <N> (...):\" structural markers (case-insensitive; trailing list-marker punctuation may also be \".\", \"-\", or a dash)."
+                      echo "The project description above explicitly enumerates ${EXPECTED_MIN_ISSUES} distinct sub-issues using \"Issue <N>:\" / \"Issue <N> (...):\" structural markers (case-insensitive; whitespace between \"Issue\" and the number is optional)."
                       echo
                       echo "PER prompts/mode-orchestrate.txt (Author-supplied decomposition rule), you MUST honor that enumeration verbatim — emit AT LEAST ${EXPECTED_MIN_ISSUES} distinct issues, in the stated order, with the stated dependency_edges. Do NOT collapse enumerated sub-tasks into a single issue, even if they appear to share a single concern, a directory, or a file family. The author already did the decomposition work; your job is to transcribe it faithfully into the schema, not to re-decide it."
                       echo
