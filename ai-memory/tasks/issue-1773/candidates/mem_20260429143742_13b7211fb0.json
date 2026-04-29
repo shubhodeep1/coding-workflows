@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repository should change?**\nChoices:\n- **A** \u2014 `review_autofix` / PR review-autofix behavior\n- **B** \u2014 `orchestrate` / `orchestrate_poll` / issue-pipeline behavior\n- **C** \u2014 Another specific workflow or script; include the exact workflow name or file path in your reply (RECOMMENDED)\nReply: `Q1: C`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a broken or incorrect behavior; include one concrete failing symptom, issue number, PR number, or workflow run example (RECOMMENDED)\n- **B** \u2014 Reduce cost, noise, or performance problems; include the concrete symptom or metric you want improved\n- **C** \u2014 Docs, readability, or maintainability only, with no intended behavior change\nReply: `Q2: A`",
+  "fingerprint": "e20df629aee1f9db0701d7e08db2019164216f77e942aaea50460e99b20a1f69",
+  "lineage": {
+    "issue_number": 1773,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25115189878",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25115189878",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260429143742_13b7211fb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1773,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25115189878"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1773 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-29T14:37:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
