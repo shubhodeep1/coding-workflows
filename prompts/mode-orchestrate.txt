@@ -66,8 +66,8 @@ Rules:
 - Per-issue implementation-time budget: each issue MUST be scoped so the
   downstream `implement.yml` editor (`codex exec`, `xhigh` reasoning) can
   finish it within ONE 60-minute attempt. The implement watchdog's
-  per-attempt wall-time is 110 minutes (`EDITOR_MAX_WALL=6600`), and the
-  3-hour job budget allows at most ~2 full attempts before the budget
+  per-attempt wall-time is 130 minutes (`EDITOR_MAX_WALL=7800`), and the
+  3-hour job budget allows at most ~1 full attempt before the budget
   guard skips the rest, so a 60-minute target leaves headroom for retry.
   For each issue, internally estimate the wall-clock implementation
   time the editor would need; populating `implementation_minutes_estimate`
