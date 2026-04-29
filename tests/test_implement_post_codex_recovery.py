@@ -1477,8 +1477,21 @@ def test_codex_request_user_input_bail_and_flag() -> None:
 	"""
 	codex_block = _step_block_text("Run Codex implementation")
 	assert "request_user_input is not supported in exec mode" in codex_block, (
-		"loop must grep for the exact CLI error string from codex_log.txt; "
-		"this is the canonical signal that the model needed user input"
+		"loop must grep for the exact CLI error string; this is the "
+		"canonical signal that the model needed user input"
+	)
+	# The grep must scope to the CURRENT attempt's per-attempt log,
+	# not the cumulative codex_log.txt. The cumulative log accumulates
+	# across attempts via `tee -a`, so grepping it would let a stale
+	# error from attempt 1 trip a false bail on every subsequent
+	# attempt and prevent legitimate later recovery (consensus finding
+	# from multi-model review on commit 523cc99).
+	assert 'grep -q \'request_user_input is not supported in exec mode\' \\\n                  "${attempt_log_file}"' in codex_block or \
+		'"${attempt_log_file}"' in codex_block.split('request_user_input is not supported in exec mode')[1][:200], (
+		"request_user_input grep MUST target ${attempt_log_file} (the "
+		"per-attempt log), not the cumulative ${RUNTIME_DIR}/codex_log.txt. "
+		"A stale error from an earlier attempt would otherwise trip a "
+		"false bail on every subsequent attempt"
 	)
 	assert "codex_request_user_input.flag" in codex_block, (
 		"loop must touch a request-user-input flag file so downstream "
@@ -1603,6 +1616,34 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 		"abort the job — the underlying Codex failure is still the "
 		"primary signal"
 	)
+	# CRITICAL: the gh-issue-comment guard checks `[ -n "${GH_TOKEN:-}" ]`.
+	# If GH_TOKEN isn't in the step's `env:` block, the guard always
+	# fails and the entire diagnostics-posting branch is dead code —
+	# the same regression that the multi-model consensus review caught
+	# on commit 523cc99. Grab the raw step header (everything before
+	# `run: |`) and assert GH_TOKEN is wired in.
+	step_full_text = "\n".join(_step_block("Run Codex implementation", include_metadata=True)) \
+		if "include_metadata" in _step_block.__code__.co_varnames \
+		else _workflow_text()
+	# Fallback: search the full workflow text for the env block of
+	# this specific step. We anchor on the step name and look forward
+	# until the next `- name:` for the env section.
+	wf = _workflow_text()
+	step_anchor = wf.find('- name: Run Codex implementation')
+	assert step_anchor != -1, "Run Codex implementation step must exist"
+	next_step = wf.find('- name:', step_anchor + 1)
+	step_header = wf[step_anchor:next_step] if next_step != -1 else wf[step_anchor:]
+	# The env: block lives between the `- name:` and the `run: |`.
+	run_marker = step_header.find("run: |")
+	assert run_marker != -1, "step must have a run: | block"
+	step_env_section = step_header[:run_marker]
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step_env_section, (
+		"`Run Codex implementation` step must export GH_TOKEN: "
+		"${{ secrets.GH_PAT }} so the Fix #5 diagnostics-posting "
+		"branch (`gh issue comment`) can authenticate. Without it, "
+		"the `[ -n \"${GH_TOKEN:-}\" ]` guard is always false and "
+		"the whole diagnostics feature is dead code at runtime."
+	)
 
 
 def test_validator_offending_bytes_redacts_secrets() -> None:
@@ -1624,12 +1665,26 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 		repo_dir = Path(td)
 		_bootstrap_git_repo(repo_dir)
 		# (b) Per-line redaction: file with credential lines + a YAML
-		#     syntax error on the line AFTER them.
+		#     syntax error on the line AFTER them. Includes a mixed-
+		#     case key (`Api_Token`) on line 5 (within the ±2 window
+		#     of the line-7 error) to exercise the portability fix
+		#     for GNU-only `IGNORECASE = 1` (replaced with tolower()
+		#     so non-GNU awk also redacts mixed-case keys).
+		#
+		# Layout (line numbers):
+		#   1: service:
+		#   2:   name: foo
+		#   3:   url: http://example.com
+		#   4:   api_token: sk-...     <- in window, exact-case
+		#   5:   Api_Token: sk-...     <- in window, MIXED CASE (key fix)
+		#   6:   password: hunter2-... <- in window
+		#   7:   - `bad scalar         <- ERROR LINE
 		(repo_dir / "config.yml").write_text(
 			"service:\n"
 			"  name: foo\n"
 			"  url: http://example.com\n"
 			"  api_token: sk-1234567890abcdef1234567890abcdef1234567890abcdef\n"
+			"  Api_Token: sk-mixed-case-1234567890abcdef1234567890abcdef\n"
 			"  password: hunter2-very-secret\n"
 			"  - `bad scalar that breaks YAML\n",
 			encoding="utf-8",
@@ -1675,6 +1730,14 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 			"api_token value MUST be redacted from the offending-bytes "
 			"dump — leaking it would exfiltrate the secret into prompts "
 			"and issue text. Got:\n" + captured
+		)
+		assert "sk-mixed-case-1234567890abcdef" not in captured, (
+			"MIXED-CASE `Api_Token` value MUST be redacted on POSIX/BSD "
+			"awk runtimes too — `BEGIN { IGNORECASE = 1 }` is a GNU "
+			"extension and silently no-ops elsewhere. The portable "
+			"replacement is tolower() + lowercase-only regex. If this "
+			"fails, mixed-case secrets evade redaction on non-GNU awk. "
+			"Got:\n" + captured
 		)
 		assert "hunter2-very-secret" not in captured, (
 			"password value MUST be redacted from the offending-bytes "

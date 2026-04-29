@@ -833,6 +833,11 @@ jobs:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
+          # Required by the Fix #5 diagnostics-posting branch. Without
+          # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
+          # is always false and the per-attempt failure diagnostics
+          # never reach the source issue.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -1213,9 +1218,16 @@ jobs:
             # signal and leave a flag file so the orchestrator's
             # `ai:implementation-failed` sweep can route the issue back to
             # the clarify phase instead of re-issuing as another implement.
-            if [ -f "${RUNTIME_DIR}/codex_log.txt" ] && \
+            #
+            # Scope the grep to the CURRENT attempt's per-attempt log
+            # (`codex_log_attempt_<N>.txt`), not the cumulative
+            # `codex_log.txt` — the cumulative log accumulates across
+            # attempts via `tee -a`, so a stale request_user_input from
+            # attempt 1 would otherwise trip a false bail on every
+            # subsequent attempt and prevent legitimate later recovery.
+            if [ -f "${attempt_log_file}" ] && \
                 grep -q 'request_user_input is not supported in exec mode' \
-                  "${RUNTIME_DIR}/codex_log.txt"; then
+                  "${attempt_log_file}"; then
               echo "::error::Codex emitted request_user_input in exec mode (issue/plan ambiguity). Aborting retry loop and routing back to clarify."
               : > "${RUNTIME_DIR}/codex_request_user_input.flag"
               break

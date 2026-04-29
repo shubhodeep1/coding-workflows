@@ -71,12 +71,28 @@ append_checker_error() {
           # key>" but keeps its line number. Lines that look like raw
           # high-entropy values (>40 chars of base64/hex on a single line)
           # also redact. Everything else passes through unchanged.
+          #
+          # Portability: case-insensitive matching is implemented via
+          # `tolower(line)` rather than `BEGIN { IGNORECASE = 1 }`,
+          # because IGNORECASE is a GNU awk extension and is silently
+          # ignored on POSIX awk / BSD awk / mawk (which would let
+          # mixed-case secrets like `Api_Token` evade redaction). The
+          # key-name regex uses lowercase letters only and matches
+          # against the lowercased copy.
+          #
+          # Key-name regex: matches the keyword anywhere in the leading
+          # key-portion of a line (allowing leading whitespace, dashes
+          # for YAML list syntax, and surrounding key-name characters).
+          # The trailing `[:=]` requirement was DROPPED so that bare
+          # YAML keys (`api_token:` at end of line, `api_token: |`
+          # block-scalar header) also redact — false positives on
+          # innocuous matches are safer than silent secret leaks.
           sed -n "${start},${end}p" "${file}" | awk -v start="${start}" '
-            BEGIN { IGNORECASE = 1 }
             {
               line = $0
-              # Key-name based redaction (case-insensitive)
-              if (match(line, /^[[:space:]-]*[A-Za-z0-9_.-]*(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret|bearer)[A-Za-z0-9_.-]*[[:space:]]*[:=]/)) {
+              lower = tolower(line)
+              # Key-name based redaction (case-insensitive via tolower).
+              if (match(lower, /^[[:space:]-]*[a-z0-9_.-]*(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret|bearer)[a-z0-9_.-]*/)) {
                 printf "  %d: <redacted: secret-like key>\n", start + NR - 1
                 next
               }
