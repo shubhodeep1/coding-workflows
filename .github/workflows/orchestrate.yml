@@ -615,8 +615,26 @@ jobs:
           except json.JSONDecodeError:
               cleaned = re.sub(r'```(?:json)?\s*', '', raw)
               cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.MULTILINE)
-              depth, start = 0, None
+              # Walk the cleaned text tracking brace depth, but skip over
+              # JSON strings so braces inside string values (e.g.
+              # `"prose like {foo}"`) don't close the outer object early.
+              # Track string state with the standard JSON escape rules:
+              # `"` toggles string mode; inside a string `\\` consumes the
+              # next char so an escaped quote (`\\"`) doesn't end it.
+              depth, start, in_string, escape_next = 0, None, False, False
               for i, ch in enumerate(cleaned):
+                  if escape_next:
+                      escape_next = False
+                      continue
+                  if in_string:
+                      if ch == '\\':
+                          escape_next = True
+                      elif ch == '"':
+                          in_string = False
+                      continue
+                  if ch == '"':
+                      in_string = True
+                      continue
                   if ch == '{':
                       if depth == 0:
                           start = i
