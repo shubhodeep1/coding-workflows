@@ -36,11 +36,22 @@ jobs:
 
     steps:
       - name: Log trigger context
+        env:
+          PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
           echo "Orchestrate workflow triggered"
           echo "Run ID: ${{ github.run_id }}"
           echo "Model: ${MODEL_EDITOR}"
           echo "Reasoning: ${MODEL_REASONING_EFFORT}"
+          # The test-and-mark-stable gate's orchestrate-decompose-test step
+          # dispatches this workflow with a project_description prefixed
+          # `[E2E Orchestrate Smoke <run_id>]`; suppress per-phase Telegram
+          # alerts so the gate's combined pass/fail message is the only
+          # notification. SILENT > CRITICAL so all callers' levels filter.
+          if printf '%s' "${PROJECT_DESCRIPTION}" | grep -qiE '\[E2E (Orchestrate )?Smoke'; then
+            echo "🔬 Smoke orchestrate detected — suppressing per-phase Telegram alerts"
+            echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+          fi
 
       - name: Checkout repository
         uses: actions/checkout@v5

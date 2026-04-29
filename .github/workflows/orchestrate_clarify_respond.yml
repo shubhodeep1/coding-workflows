@@ -58,12 +58,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          ISSUE_BODY="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""')"
+          ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+          ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+          ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
             echo "is_orchestrator=true" >> "$GITHUB_OUTPUT"
           else
             echo "Issue #${ISSUE_NUMBER} is not orchestrator-managed. Skipping."
             echo "is_orchestrator=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Suppress per-phase Telegram alerts when the orchestrator
+          # tracking parent of this child is the test-and-mark-stable
+          # smoke fixture (title `[Orchestrator] E2E …`). The gate emits
+          # a single combined pass/fail notification at the end.
+          TRACKING_NUM="$(printf '%s' "${ISSUE_BODY}" | sed -n 's/.*Tracking issue: #\([0-9][0-9]*\).*/\1/p' | head -n1)"
+          if [ -n "${TRACKING_NUM}" ]; then
+            TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+            if printf '%s' "${TRACKING_TITLE}" | grep -qiE '^\[Orchestrator\] E2E '; then
+              echo "🔬 Smoke orchestrator parent (#${TRACKING_NUM}) — suppressing per-phase Telegram alerts"
+              echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+            fi
           fi
 
       - name: Resolve integration ref

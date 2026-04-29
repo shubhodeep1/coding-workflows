@@ -1840,20 +1840,24 @@ jobs:
           fi
 
           if [ "$IS_SMOKE" = "true" ]; then
-            echo "🔬 Smoke test PR detected — switching to low reasoning effort (full reviewer set retained)"
-            echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-            echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-            # Keep the full production REVIEWER_MODELS list so the smoke gate
-            # exercises every reviewer the consumer pipeline will use; only the
-            # reasoning effort is dialled down. A previous variant pruned the
-            # set to 2 fast models, which hid regressions in models that only
-            # appeared in the production list. Per CLAUDE.md §1 (correctness >
-            # speed) and the release-gate contract: comprehensive coverage
-            # over runtime savings.
-            # Patch the already-written codex config to use low reasoning (if present)
-            if [ -f "${HOME}/.codex/config.toml" ]; then
-              sed -i 's/^[[:space:]]*model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
-            fi
+            echo "🔬 Smoke test PR detected — keeping workflow-level default reasoning"
+            # PR #1723 removed the low-reasoning override in implement.yml after
+            # log analysis (issue #1719) showed openai/gpt-5.3-codex emits
+            # Serena MCP calls without the mcp__serena__ prefix at low
+            # reasoning, the Codex tool router rejects them as `unsupported
+            # call: activate_project / git_status / search_for_pattern`, the
+            # session corrupts, and the editor produces 0 file changes. The
+            # release v1.0.113 run hit the identical failure here: PR #1735's
+            # editor (review_autofix's codex-agent) ran 3 attempts × 1700+
+            # Serena calls, produced no commit, and Phase 4b reported
+            # "Editor failed to remove bait line E2E_EDITOR_BAIT_<run>".
+            # Mirror PR #1723: keep the full reviewer set + the workflow-level
+            # default reasoning (xhigh) for smoke runs too. Per CLAUDE.md §1
+            # correctness > speed.
+            # Suppress per-phase Telegram alerts; the test-and-mark-stable
+            # gate emits a single combined pass/fail notification at the
+            # end via raw curl. SILENT > CRITICAL so all levels filter.
+            echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
           else
             echo "Standard PR — using default LLM settings"
           fi
@@ -2457,6 +2461,20 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
+
+      - name: Upload per-reviewer logs (always)
+        if: always() && env.PREVIOUS_REVIEWS_DIR != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: reviewer-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/*.log
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/status_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/review_*.txt
+            ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Record reviewer consensus candidate in memory (fail-open)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |

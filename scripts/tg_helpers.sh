@@ -36,9 +36,18 @@ _tg_chat_id()
 
 # ---------------------------------------------------------------
 # Alert level support
-# Levels: DEBUG < WARNING < ERROR < CRITICAL
+# Levels: DEBUG < WARNING < ERROR < CRITICAL < SILENT
 # ALERT_MSG_LEVEL env var controls minimum level sent (default: DEBUG).
 # New alerts default to CRITICAL until explicitly recategorised.
+# Setting ALERT_MSG_LEVEL=SILENT suppresses all existing helper-based
+# sends because no existing call site emits at SILENT — every caller
+# below uses CRITICAL (default), ERROR, WARNING, or DEBUG, and all of
+# those map to a number < 99. (Used by the test-and-mark-stable
+# release gate to silence its smoke-test pipeline; only the gate's
+# final pass/fail notification is emitted via raw curl, bypassing
+# this filter. A future caller wishing to bypass SILENT could pass
+# `SILENT` itself as the level — the threshold check would let it
+# through — but no such call exists today.)
 # ---------------------------------------------------------------
 
 _tg_level_num()
@@ -48,6 +57,7 @@ _tg_level_num()
 		WARNING)  printf '1' ;;
 		ERROR)    printf '2' ;;
 		CRITICAL) printf '3' ;;
+		SILENT)   printf '99' ;;
 		*)        printf '0' ;;
 	esac
 }
@@ -59,6 +69,7 @@ _tg_level_icon()
 		WARNING)  printf '⚠️' ;;
 		ERROR)    printf '❌' ;;
 		CRITICAL) printf '🚨' ;;
+		SILENT)   printf '🔕' ;;
 		*)        printf '🚨' ;;
 	esac
 }

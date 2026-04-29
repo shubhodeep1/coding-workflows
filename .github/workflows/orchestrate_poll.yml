@@ -119,6 +119,19 @@ jobs:
           echo "has_tracking=true" >> "$GITHUB_OUTPUT"
           echo "has_work=true" >> "$GITHUB_OUTPUT"
 
+          # If every active tracking issue is the test-and-mark-stable
+          # smoke fixture, suppress per-phase Telegram alerts; the gate
+          # emits a single combined pass/fail notification at the end.
+          # SILENT > CRITICAL so all callers' levels filter to no-op.
+          # We only set SILENT when EVERY tracking issue is a smoke
+          # fixture so production projects sharing a poll cycle keep
+          # their alerts.
+          NON_SMOKE="$(echo "${TRACKING_ISSUES}" | jq '[.[] | select(.title | test("^\\[Orchestrator\\] E2E "; "i") | not)] | length')"
+          if [ "${NON_SMOKE}" = "0" ]; then
+            echo "🔬 All tracking issues are smoke fixtures — suppressing per-phase Telegram alerts"
+            echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:

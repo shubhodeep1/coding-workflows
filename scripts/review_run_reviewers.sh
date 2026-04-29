@@ -150,18 +150,30 @@ EOF
   rm -rf "${probe_home}" 2>/dev/null || true
 }
 
-# Reviewer slugs whose upstream OpenRouter providers reject codex-cli v0.125's
-# `type: "namespace"` MCP tool envelope on /v1/responses with HTTP 422 "Provider
-# returned error". For these, strip MCP from the per-reviewer codex-home so no
-# namespace tool is sent. Empirically determined from review run #25041117408:
-# minimax/minimax-m2.5, moonshotai/kimi-k2.5, z-ai/glm-5 accept the envelope;
-# deepseek/deepseek-v4-pro, qwen/qwen3.6-plus, x-ai/grok-4.1-fast reject it.
-# Re-evaluate when bumping codex-cli or rotating reviewer slugs. Newline-
-# separated like REVIEWER_MODELS; override via env to add/remove without an
-# edit. Empty value disables the no-MCP fallback path entirely.
-MCP_INCOMPATIBLE_REVIEWER_MODELS="${MCP_INCOMPATIBLE_REVIEWER_MODELS-deepseek/deepseek-v4-pro
-qwen/qwen3.6-plus
-x-ai/grok-4.1-fast}"
+# Reviewer slugs whose upstream OpenRouter providers reject codex-cli's
+# v0.125+ `type: "namespace"` MCP tool envelope on /v1/responses with
+# HTTP 422 "Provider returned error". When a model is on this list, the
+# per-reviewer codex-home has every `[mcp_servers.*]` table stripped so
+# no namespace tool gets sent.
+#
+# Currently empty by default. PR #1717 added deepseek/deepseek-v4-pro,
+# qwen/qwen3.6-plus, x-ai/grok-4.1-fast here because Codex CLI v0.125
+# was the pinned default and those three providers 422'd on its
+# namespace envelope. PR #1729 reverted Codex CLI to v0.114, which
+# emits flat MCP tools (no namespace envelope) that all three providers
+# accept. Stripping MCP for those three with v0.114 was the *cause* of
+# their continued failures — the reviewer prompt references
+# `mcp__serena__*` tools but the stripped config doesn't register them,
+# so the model produces empty output and codex-cli reports
+# `status='failed'` after the configured retries (observed on
+# PR #1742, run 25084895203).
+#
+# Re-populate this list when next bumping codex-cli to v0.125+ (and
+# only after a per-provider probe confirms which slugs still 422 on
+# the namespace envelope). Override at runtime via the
+# `MCP_INCOMPATIBLE_REVIEWER_MODELS` env var (newline-separated like
+# `REVIEWER_MODELS`).
+MCP_INCOMPATIBLE_REVIEWER_MODELS="${MCP_INCOMPATIBLE_REVIEWER_MODELS-}"
 
 is_mcp_incompatible_model() {
   local model="$1"
