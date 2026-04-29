@@ -69,6 +69,7 @@ _tg_level_icon()
 		WARNING)  printf '⚠️' ;;
 		ERROR)    printf '❌' ;;
 		CRITICAL) printf '🚨' ;;
+		SILENT)   printf '🔕' ;;
 		*)        printf '🚨' ;;
 	esac
 }
