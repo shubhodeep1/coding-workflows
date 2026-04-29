@@ -1462,6 +1462,244 @@ def test_validator_diagnostic_surfaces_offending_lines() -> None:
 		)
 
 
+def test_codex_request_user_input_bail_and_flag() -> None:
+	"""Pin Fix #1: when Codex emits the `request_user_input is not
+	supported in exec mode` error path (model wanted to ask the user a
+	clarifying question, but exec mode rejected the request), the
+	retry loop must bail immediately and leave a flag file so the
+	orchestrator's `ai:implementation-failed` sweep can route the
+	issue back to clarify instead of re-issuing as another implement.
+
+	Production failure mode: tele-funtoken-msg-scoring run
+	(2026-04-29) wasted ~80 min and ~1.7M tokens before exhausting
+	all 5 attempts on an issue/plan ambiguity Codex wanted to ask
+	about. Retrying with the same prompt cannot fix that; bail early.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "request_user_input is not supported in exec mode" in codex_block, (
+		"loop must grep for the exact CLI error string from codex_log.txt; "
+		"this is the canonical signal that the model needed user input"
+	)
+	assert "codex_request_user_input.flag" in codex_block, (
+		"loop must touch a request-user-input flag file so downstream "
+		"routing (the orchestrator's ai:implementation-failed sweep) can "
+		"send the issue back to clarify"
+	)
+	# The bail must be a `break`, not `continue` — the request-user-input
+	# error means retrying with the same prompt cannot fix the underlying
+	# ambiguity. The flag-touch must precede the break so the flag is
+	# always present when the loop exits via this path.
+	bail_idx = codex_block.find("codex_request_user_input.flag")
+	assert bail_idx != -1
+	assert "break" in codex_block[bail_idx:bail_idx + 200], (
+		"request_user_input bail must `break` out of the retry loop, "
+		"not `continue` — same prompt won't fix an ambiguity"
+	)
+
+
+def test_codex_empty_output_streak_bail_and_flag() -> None:
+	"""Pin Fix #2: when Codex returns empty output for
+	`empty_streak_threshold` (default 2) attempts in a row, the retry
+	loop must bail and leave a flag file. Recovers ~60% of wasted
+	budget on confirmed stuck-in-exploration scenarios where the
+	exec-history retry nudge alone hasn't broken the loop.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "empty_streak=0" in codex_block, (
+		"loop must initialise the empty-output streak counter to 0 before "
+		"the for-loop so it accumulates across attempts"
+	)
+	assert "empty_streak_threshold=" in codex_block, (
+		"threshold must be a named knob (not a magic 2) so it can be "
+		"tuned without re-deriving it from the increment logic"
+	)
+	assert "empty_streak=$((empty_streak + 1))" in codex_block, (
+		"streak must increment on the genuine empty-output path"
+	)
+	assert "else\n              empty_streak=0" in codex_block, (
+		"streak must reset to 0 on any non-empty attempt outcome so a "
+		"mid-run recovery doesn't re-tip the threshold from accumulated "
+		"earlier empties"
+	)
+	assert "codex_stuck_in_exploration.flag" in codex_block, (
+		"streak-bail must touch a stuck-in-exploration flag file so "
+		"the orchestrator can distinguish exploration-stuck from other "
+		"failure modes when picking the recovery action"
+	)
+	assert 'empty_streak} consecutive empty-output attempts' in codex_block or \
+		'consecutive empty-output' in codex_block, (
+		"the bail error must explain WHY the loop is aborting, with the "
+		"actual streak count, so the GHA log shows a one-line root cause"
+	)
+
+
+def test_retry_nudge_includes_apply_patch_directive() -> None:
+	"""Pin Fix #4-generic: the retry preamble that fires when an
+	attempt produces no file changes must include actionable guidance
+	(use apply_patch, don't read more files until first patch lands)
+	rather than just chiding ("you MUST create or edit files"). The
+	chiding-only version was already there; this clause is what
+	moves the model from "describe the changes" → "execute them".
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "apply_patch`" in codex_block, (
+		"retry preamble must name `apply_patch` as the preferred edit "
+		"tool — `sed`/`grep` shell-out workarounds routinely fail "
+		"shell quoting on literal special chars and waste the attempt"
+	)
+	assert "Do NOT read additional files until your first" in codex_block, (
+		"retry preamble must constrain the model to apply edits before "
+		"expanding scope, since the bitsafe.io / tele-funtoken-msg-scoring "
+		"failure mode was the model spending the full budget on recon"
+	)
+
+
+def test_failure_diagnostics_posted_to_source_issue() -> None:
+	"""Pin Fix #5: when the loop exits without success (5/5 attempts
+	exhausted OR an early-bail flag tripped), the workflow must post
+	a per-attempt diagnostics report to the source issue so the
+	orchestrator and the next operator can debug without re-downloading
+	the 24K-line job log. Mirrors the validation-harness exit-14
+	pattern documented in the spec.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	# Per-attempt log capture must be wired into the stderr tee.
+	assert "codex_log_attempt_${attempt}.txt" in codex_block, (
+		"per-attempt log files must accumulate alongside the cumulative "
+		"codex_log.txt so the diagnostics block can tail each attempt"
+	)
+	# Final-failure diagnostics block must check implement_succeeded
+	# AFTER the loop, branch on which flag tripped, and assemble a
+	# diagnostics file before posting to the issue.
+	assert 'if [ "${implement_succeeded}" != "true" ]; then' in codex_block, (
+		"diagnostics block must run on any failure path (5/5 exhausted "
+		"OR early-bail), not only when the final attempt fails"
+	)
+	assert "codex_failure_diagnostics.md" in codex_block, (
+		"diagnostics file must have a stable name so future tooling "
+		"can read it"
+	)
+	assert "Codex bailed: request_user_input rejected" in codex_block, (
+		"diagnostics reason must distinguish the request_user_input "
+		"bail so the orchestrator can route accordingly"
+	)
+	assert "consecutive empty-output attempts" in codex_block, (
+		"diagnostics reason must distinguish the empty-streak bail "
+		"from the 5/5 exhausted path"
+	)
+	assert "tail -n 40" in codex_block, (
+		"diagnostics must include the last 40 lines of each per-attempt "
+		"log — small enough to fit in a GitHub issue comment, large "
+		"enough to capture the actual failure tail"
+	)
+	assert 'gh issue comment "${ISSUE_NUMBER}"' in codex_block, (
+		"diagnostics must be posted to the source issue (not just left "
+		"in /tmp); the orchestrator polls comments to pick recovery actions"
+	)
+	# gh failure must not abort the job — the diagnostics file is
+	# preserved locally as a fallback.
+	assert "Could not post Codex failure diagnostics" in codex_block, (
+		"a failed gh issue comment must downgrade to a warning, not "
+		"abort the job — the underlying Codex failure is still the "
+		"primary signal"
+	)
+
+
+def test_validator_offending_bytes_redacts_secrets() -> None:
+	"""Pin the SECURITY hardening on `append_checker_error`'s offending-
+	bytes block. The block dumps file contents around a syntax error
+	into the capture file, which is later embedded into prompts AND
+	posted to GitHub issues by the diagnose fallback path. Without
+	guardrails, a syntax error in a credential-bearing config could
+	exfiltrate secrets to public issue text.
+
+	Two layered guards (per Copilot review):
+	(a) Path denylist: skip the dump for files whose names match
+	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+	(b) Per-line redaction: replace lines whose key contains
+	    secret-like keywords (token/password/api_key/...) or whose
+	    value contains a long opaque token with a redaction marker.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		# (b) Per-line redaction: file with credential lines + a YAML
+		#     syntax error on the line AFTER them.
+		(repo_dir / "config.yml").write_text(
+			"service:\n"
+			"  name: foo\n"
+			"  url: http://example.com\n"
+			"  api_token: sk-1234567890abcdef1234567890abcdef1234567890abcdef\n"
+			"  password: hunter2-very-secret\n"
+			"  - `bad scalar that breaks YAML\n",
+			encoding="utf-8",
+		)
+		# (a) Path denylist: secret-named file with the same syntax error.
+		(repo_dir / ".env.broken.yml").write_text(
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - gamma\n"
+			"  - delta\n"
+			"  - `bad scalar\n",
+			encoding="utf-8",
+		)
+		# Control: innocuous file with same error — should dump fully.
+		(repo_dir / "innocuous.yml").write_text(
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - gamma\n"
+			"  - delta\n"
+			"  - `bad scalar\n",
+			encoding="utf-8",
+		)
+		capture_path = repo_dir / "captured.txt"
+		env = os.environ.copy()
+		env["CAPTURE_FILE"] = str(capture_path)
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		subprocess.run(
+			["bash", str(validator)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert capture_path.exists(), "validator must produce CAPTURE_FILE"
+		captured = capture_path.read_text(encoding="utf-8")
+		# (b) Per-line redaction must hide credential values from
+		#     config.yml. The actual secrets must NOT appear in the
+		#     capture; the redaction marker must.
+		assert "sk-1234567890abcdef" not in captured, (
+			"api_token value MUST be redacted from the offending-bytes "
+			"dump — leaking it would exfiltrate the secret into prompts "
+			"and issue text. Got:\n" + captured
+		)
+		assert "hunter2-very-secret" not in captured, (
+			"password value MUST be redacted from the offending-bytes "
+			"dump. Got:\n" + captured
+		)
+		assert "<redacted: secret-like key>" in captured, (
+			"redaction marker must replace each suppressed line so the "
+			"repair model still sees the file structure (line numbers + "
+			"placeholder) without the actual credentials"
+		)
+		# (a) Path denylist must suppress the entire dump for .env*.
+		assert "Offending bytes (suppressed: file path matches secret-bearing pattern)" in captured, (
+			"secret-named files (.env*, *.pem, etc.) must produce a "
+			"path-denylist suppression marker instead of any file content. "
+			"Got:\n" + captured
+		)
+		# Innocuous file must still dump in full — the redaction must
+		# not be over-broad.
+		assert "  6:   - `bad scalar" in captured, (
+			"innocuous file (no secrets in name or content) must still "
+			"surface its offending line content — the redaction is "
+			"targeted, not an indiscriminate suppression. Got:\n" + captured
+		)
+
+
 def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:
 	noop_block = _step_block_text("Handle no-op implementation")
 	# Guard 0 must run BEFORE Guard 1 (pathspec hard-fail) and Guard 2

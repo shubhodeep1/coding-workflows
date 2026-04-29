@@ -36,14 +36,63 @@ append_checker_error() {
     # different `<file>:<line>:<col>` format and won't match this
     # regex; that's fine — the offending-bytes block just won't appear
     # for node, and the original stderr is still in the capture.
+    #
+    # SECURITY: this snippet is later embedded into prompts AND posted
+    # to GitHub issues by the diagnose fallback path. Two layered
+    # guards prevent secret exfiltration:
+    # (a) Path denylist: skip the dump entirely for files whose names
+    #     match common secret-bearing patterns (.env, *secret*, *token*,
+    #     *.pem, *credential*, *key, etc.). The original stderr (which
+    #     just names a line+column) still appears in the capture.
+    # (b) Per-line redaction: lines matching a key=value / key: value
+    #     pattern with high-entropy or known-credential markers are
+    #     emitted as "<redacted>" with the same line number, so the
+    #     repair model still sees the file structure but never the
+    #     credential.
     if [ -f "${file}" ] && [ -s "${stderr_file}" ]; then
-      local lineno start end
-      lineno="$(grep -oE 'line[[:space:]]+[0-9]+' "${stderr_file}" | tail -n 1 | grep -oE '[0-9]+' | tail -n 1 || true)"
-      if [ -n "${lineno}" ] && [[ "${lineno}" =~ ^[0-9]+$ ]] && [ "${lineno}" -gt 0 ]; then
-        start=$(( lineno > 2 ? lineno - 2 : 1 ))
-        end=$(( lineno + 2 ))
-        printf -- '----- Offending bytes (lines %d-%d; error reported at line %d) -----\n' "${start}" "${end}" "${lineno}"
-        sed -n "${start},${end}p" "${file}" | awk -v start="${start}" '{ printf "  %d: %s\n", start + NR - 1, $0 }'
+      local lineno start end basename_lc skip_dump=0
+      basename_lc="$(printf '%s' "$(basename "${file}")" | tr '[:upper:]' '[:lower:]')"
+      case "${file},${basename_lc}" in
+        *.env*|*.pem*|*.p12*|*.pfx*|*.key|*.cer|*.crt|\
+        *,*secret*|*,*credential*|*,*password*|*,*token*|\
+        *,*.envrc|*,.env*)
+          skip_dump=1
+          ;;
+      esac
+      if [ "${skip_dump}" = "0" ]; then
+        lineno="$(grep -oE 'line[[:space:]]+[0-9]+' "${stderr_file}" | tail -n 1 | grep -oE '[0-9]+' | tail -n 1 || true)"
+        if [ -n "${lineno}" ] && [[ "${lineno}" =~ ^[0-9]+$ ]] && [ "${lineno}" -gt 0 ]; then
+          start=$(( lineno > 2 ? lineno - 2 : 1 ))
+          end=$(( lineno + 2 ))
+          printf -- '----- Offending bytes (lines %d-%d; error reported at line %d) -----\n' "${start}" "${end}" "${lineno}"
+          # Per-line redaction: any line whose key contains common
+          # secret indicators (token/secret/password/credential/api[_-]?key/
+          # private[_-]?key/etc.) is replaced with "<redacted: secret-like
+          # key>" but keeps its line number. Lines that look like raw
+          # high-entropy values (>40 chars of base64/hex on a single line)
+          # also redact. Everything else passes through unchanged.
+          sed -n "${start},${end}p" "${file}" | awk -v start="${start}" '
+            BEGIN { IGNORECASE = 1 }
+            {
+              line = $0
+              # Key-name based redaction (case-insensitive)
+              if (match(line, /^[[:space:]-]*[A-Za-z0-9_.-]*(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret|bearer)[A-Za-z0-9_.-]*[[:space:]]*[:=]/)) {
+                printf "  %d: <redacted: secret-like key>\n", start + NR - 1
+                next
+              }
+              # High-entropy value redaction: a long unbroken token
+              # (>=40 chars, no whitespace) on the line — typical of
+              # base64/hex secrets even when the key is innocent.
+              if (match(line, /[A-Za-z0-9+\/=_-]{40,}/)) {
+                printf "  %d: <redacted: long opaque token>\n", start + NR - 1
+                next
+              }
+              printf "  %d: %s\n", start + NR - 1, line
+            }
+          '
+        fi
+      else
+        printf -- '----- Offending bytes (suppressed: file path matches secret-bearing pattern) -----\n'
       fi
     fi
     printf '\n'
