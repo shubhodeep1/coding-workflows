@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_changed_files_syntax.sh:53-54 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The trailing `*` on `*.key*|*.cer*|*.crt*` over-broadens the denylist so files with incidental `.key`, `.cer`, or `.crt` substrings can have their syntax-dump context suppressed.\n  WHY: Four reviewers independently reported the same overmatch behavior; the impact is limited to diagnostic suppression because the underlying syntax error still surfaces, so severity is low.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_changed_files_syntax.sh:53-54 | severity=low\n  PROBLEM: The pattern change from `*.key|*.cer|*.crt` to `*.key*|*.cer*|*.crt*` is broader than necessary and can suppress syntax-dump diagnostics for non-secret files.\n  WHY: The reviewer says the new glob form overmatches and only causes a minor diagnostic inconvenience because the base syntax error still appears.\n- scripts/validate_changed_files_syntax.sh:56\n  PROBLEM: The reviewer reports that the original `*.key|*.cer|*.crt` patterns miss backup-suffixed certificate/key files such as `server.cer.backup` and `ca-cert.cer.bak`.\n  WHY: The reviewer treats those backup-style names as a real bug in the original matching logic.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_changed_files_syntax.sh:56 | confidence=4\n  PROBLEM: The trailing `*` on `*.key*|*.cer*|*.crt*` overmatches compound extensions and can suppress syntax-dump diagnostics for non-credential files.\n  WHY: The reviewer confirmed that the new glob matches substrings like `.key`/`.cer`/`.crt` anywhere in the composite string, which reduces diagnostic precision.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/validate_changed_files_syntax.sh:54 | confidence=4\n  PROBLEM: The new trailing `*` on `*.key*|*.cer*|*.crt*` broadens matching enough to suppress syntax-dump diagnostics for unrelated files that merely contain those substrings.\n  WHY: The reviewer says the composite-string `case` test now matches compound extensions rather than exact suffixes, so non-credential files can lose error context.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/validate_changed_files_syntax.sh:53-54 | confidence=5\n  PROBLEM: The trailing `*` changed the key/cert globs from suffix-only to substring-style matching, so unrelated files with `.key`, `.cer`, or `.crt` in their names can have syntax dumps suppressed.\n  WHY: The reviewer says the new patterns match anywhere in the composite string and therefore hide diagnostics for non-secret files.\n- scripts/validate_changed_files_syntax.sh:53-54 | confidence=3\n  PROBLEM: The new `*.key*|*.cer*|*.crt*` form is overbroad compared with the earlier exact-suffix patterns.\n  WHY: The reviewer calls this a minor precision loss that suppresses harmless files the same way it suppresses real secret files.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "43b76d42eb3348e8ec6d00bf7cbe9d6cd0bf2c3905372a5fac0c22a4e7838922",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1771,
+    "run_id": "25110605857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25110605857",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429133454_60ffab62b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1771,
+    "run_id": "25110605857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T13:34:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
