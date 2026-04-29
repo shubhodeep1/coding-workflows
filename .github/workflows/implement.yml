@@ -1309,19 +1309,21 @@ jobs:
                 #   - single-line: "tokens used 12345"    (edge case)
                 #   - single-line w/ commas: "tokens used 1,234,567"
                 # Try multi-line first (matches production logs), fall
-                # back to extracting the trailing number (with optional
-                # commas) from the matching line itself when the
-                # next-line strategy doesn't yield digits. Without the
-                # fallback, single-line format would silently surface
-                # as "—" in the diagnostics table.
+                # back to extracting the FIRST number that follows
+                # "tokens used" on the matching line. The single-line
+                # form may have trailing prose (e.g. "(cached)") or
+                # a `\r` line ending — anchoring on the leading
+                # "tokens used" rather than end-of-line tolerates
+                # both. Lowercase the line first so the case-
+                # insensitive grep result still works with a case-
+                # sensitive sed.
                 a_tokens="$(grep -A1 -i 'tokens used' "${a_log}" 2>/dev/null | tail -1 | tr -d '[:space:],' || true)"
                 if ! [[ "${a_tokens}" =~ ^[0-9]+$ ]]; then
-                  # Anchor on `[^0-9,]` (any non-digit, non-comma char)
-                  # before the capture so the regex picks up the FULL
-                  # comma-grouped number, not just the trailing chunk
-                  # after the last comma.
-                  a_tokens="$(grep -i 'tokens used' "${a_log}" 2>/dev/null | tail -1 | sed -E 's/.*[^0-9,]([0-9][0-9,]*)[[:space:]]*$/\1/' | tr -d ',' || true)"
-                  [[ "${a_tokens}" =~ ^[0-9]+$ ]] || a_tokens=""
+                  match_line="$(grep -i 'tokens used' "${a_log}" 2>/dev/null | tail -1 || true)"
+                  if [ -n "${match_line}" ]; then
+                    a_tokens="$(printf '%s' "${match_line}" | tr '[:upper:]' '[:lower:]' | sed -E 's/.*tokens used[^0-9]*([0-9][0-9,]*).*/\1/' | tr -d ',\r' || true)"
+                    [[ "${a_tokens}" =~ ^[0-9]+$ ]] || a_tokens=""
+                  fi
                 fi
                 [ -n "${a_tokens}" ] || a_tokens="—"
                 a_outcome="(see tail below)"
