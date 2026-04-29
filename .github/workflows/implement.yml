@@ -1207,7 +1207,13 @@ jobs:
               # stuck/no-output failure mode as the cmd_rc==0 + empty
               # branch above; count it toward the empty-streak so a
               # series of watchdog kills also trips the Fix #2 bail.
-              if [ ! -s "${CODEX_OUTPUT_FILE}" ]; then
+              # Use the same whitespace-stripped emptiness check as the
+              # cmd_rc==0 branch (`grep -q '[^[:space:]]'`) so the
+              # streak treats both branches identically — otherwise a
+              # codex_output containing just newlines/spaces would
+              # count as "non-empty" here but as "empty" in the
+              # cmd_rc==0 branch (drift between the two paths).
+              if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                 echo "::warning::Codex exited with code $cmd_rc and returned empty output on attempt ${attempt}."
                 attempt_was_empty=true
               else
@@ -1298,7 +1304,25 @@ jobs:
                   printf '| %d | _(skipped)_ | _(no log — attempt did not run)_ |\n' "${a}"
                   continue
                 fi
-                a_tokens="$(grep -A1 'tokens used' "${a_log}" 2>/dev/null | tail -1 | tr -d '[:space:]' || true)"
+                # Codex CLI's "tokens used" output has two known formats:
+                #   - multi-line: "tokens used\n75,222"   (dominant)
+                #   - single-line: "tokens used 12345"    (edge case)
+                #   - single-line w/ commas: "tokens used 1,234,567"
+                # Try multi-line first (matches production logs), fall
+                # back to extracting the trailing number (with optional
+                # commas) from the matching line itself when the
+                # next-line strategy doesn't yield digits. Without the
+                # fallback, single-line format would silently surface
+                # as "—" in the diagnostics table.
+                a_tokens="$(grep -A1 -i 'tokens used' "${a_log}" 2>/dev/null | tail -1 | tr -d '[:space:],' || true)"
+                if ! [[ "${a_tokens}" =~ ^[0-9]+$ ]]; then
+                  # Anchor on `[^0-9,]` (any non-digit, non-comma char)
+                  # before the capture so the regex picks up the FULL
+                  # comma-grouped number, not just the trailing chunk
+                  # after the last comma.
+                  a_tokens="$(grep -i 'tokens used' "${a_log}" 2>/dev/null | tail -1 | sed -E 's/.*[^0-9,]([0-9][0-9,]*)[[:space:]]*$/\1/' | tr -d ',' || true)"
+                  [[ "${a_tokens}" =~ ^[0-9]+$ ]] || a_tokens=""
+                fi
                 [ -n "${a_tokens}" ] || a_tokens="—"
                 a_outcome="(see tail below)"
                 printf '| %d | %s | %s |\n' "${a}" "${a_tokens}" "${a_outcome}"
