@@ -161,7 +161,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `xhigh` | clarify | Reasoning effort used only when clarify runs Codex for `ai:orchestrator-managed` issues on forced human `/reclarify` |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
-| `THINKING_LEVEL_ANALYSIS` | `xhigh` | workflow-log-analysis | Reasoning effort for the deep-audit and API-redundancy Codex passes (passed via Codex `model_reasoning_effort`). |
+| `THINKING_LEVEL_ANALYSIS` | `xhigh` | workflow-log-analysis | Reasoning effort for the API-redundancy Codex pass (passed via Codex `model_reasoning_effort`). The deep-audit pass no longer reads this var — its reasoning is hardcoded at `high` in the workflow YAML to keep it inside the per-job timeout budget; edit the hardcoded value in `workflow-log-analysis.yml` if you need to override it. |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `xhigh` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
@@ -1012,7 +1012,7 @@ The analyzer is now a context-prep stage only — it loads the collector report,
 | `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `xhigh` | Clarify-only override for forced human `/reclarify` on `ai:orchestrator-managed` issues (normal clarify path auto-posts `/answer [auto-answered-by-orchestrator]` without Codex) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |
-| `THINKING_LEVEL_ANALYSIS` | `xhigh` | Reasoning effort for workflow log analysis report generation |
+| `THINKING_LEVEL_ANALYSIS` | `xhigh` | Reasoning effort for the workflow-log-analysis API-redundancy pass (deep-audit is hardcoded at `high` in the workflow YAML; edit there to override) |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `xhigh` | Reasoning effort for editor model (applying fixes) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
