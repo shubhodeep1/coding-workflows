@@ -600,7 +600,13 @@ jobs:
     needs: analyze-commit-notify
     if: success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bumped 30 → 45 after run #25088541089 cancelled at 30m 16s — the
+    # original 30m budget gave no headroom for LLM latency variance, and
+    # `api-redundancy` was skipped (`needs: deep-audit`) when the timeout
+    # tripped. 45m absorbs the observed margin and leaves room for slow
+    # codex calls without changing the watcher's overall ceiling beyond
+    # what test-and-mark-stable.yml already accommodates.
+    timeout-minutes: 45
     outputs:
       audit_status: ${{ steps.audit.outputs.audit_status }}
     env:
