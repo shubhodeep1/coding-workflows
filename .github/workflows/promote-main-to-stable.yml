@@ -163,7 +163,34 @@ jobs:
           # succeed but the remote ref didn't advance (e.g. a server-
           # side hook silently dropped the update, or an intermediate
           # cache returned a stale OK).
-          REMOTE_AFTER=$(git ls-remote origin refs/heads/stable | awk '{print $1}')
+          # Bounded retry distinguishes a transient transport failure
+          # from a real ref mismatch — without it, a network blip
+          # would surface as "origin/stable is at <empty>, expected
+          # TARGET" instead of the underlying transport error.
+          ls_attempt=1
+          REMOTE_AFTER=""
+          while [ "$ls_attempt" -le 3 ]; do
+            set +e
+            git ls-remote origin refs/heads/stable >/tmp/_ls_remote_out 2>/tmp/_ls_remote_err
+            ls_rc=$?
+            set -e
+            if [ "$ls_rc" -eq 0 ]; then
+              REMOTE_AFTER=$(awk '{print $1}' /tmp/_ls_remote_out 2>/dev/null || true)
+              if [ -n "$REMOTE_AFTER" ]; then
+                break
+              fi
+            fi
+            if [ "$ls_attempt" -eq 3 ]; then
+              echo "::error::Post-push verification failed: git ls-remote could not return a SHA for refs/heads/stable after 3 attempts (rc=${ls_rc}). Cannot confirm origin/stable advanced — re-run after the transport issue resolves."
+              cat /tmp/_ls_remote_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** ls_attempt ))
+            echo "::warning::git ls-remote failed (attempt ${ls_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_ls_remote_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            ls_attempt=$((ls_attempt + 1))
+          done
           if [ "${REMOTE_AFTER}" != "${TARGET}" ]; then
             echo "::error::Push reported success but origin/stable is at ${REMOTE_AFTER}, expected ${TARGET}. Refusing to dispatch the release on stale state."
             exit 1

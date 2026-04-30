@@ -189,10 +189,33 @@ jobs:
           # the bug fix wasn't actually propagated and the run looks
           # successful while consumers of main remain unfixed. Refresh
           # origin from the remote (don't trust local) and assert.
-          git fetch origin main stable
+          # Bounded retry on the verification fetch — propagation has
+          # already landed (the direct push succeeded); a transient
+          # transport blip on the verification fetch must not be
+          # reported as a propagation failure.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch origin main stable 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Verification fetch failed after 3 attempts (push already succeeded — re-run when transport recovers)"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::verification fetch failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
           if ! git merge-base --is-ancestor origin/stable origin/main; then
-            REMOTE_MAIN=$(git ls-remote origin refs/heads/main | awk '{print $1}')
-            REMOTE_STABLE=$(git ls-remote origin refs/heads/stable | awk '{print $1}')
+            # Use the just-fetched local origin/* refs for diagnostics
+            # rather than a fresh ls-remote — we already proved the
+            # remote is reachable in the fetch above, and rev-parse on
+            # local refs can't transiently fail and emit empty SHAs.
+            REMOTE_MAIN=$(git rev-parse origin/main 2>/dev/null || echo "?")
+            REMOTE_STABLE=$(git rev-parse origin/stable 2>/dev/null || echo "?")
             echo "::error::Push reported success but origin/main (${REMOTE_MAIN}) does not contain origin/stable (${REMOTE_STABLE}). Bug fixes may not be propagated."
             exit 1
           fi
