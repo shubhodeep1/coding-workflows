@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:492 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The dry-run summary still says \"Would tag main as ...\" even though the workflow releases from `stable`.\n  WHY: All six reviewers flagged the same operator-facing mismatch, and several explicitly called it cosmetic.\n- .github/workflows/promote-main-to-stable.yml:139 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The comment \"tags the just-fast-forwarded commit on\" is grammatically awkward.\n  WHY: The reviewer reported only wording clarity, with no runtime impact.\n- .github/workflows/mark-stable.yml:100-115 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The NEXT-bumping loop only checks `git rev-parse` locally, so a remote tag pushed concurrently can still make the chosen version collide later.\n  WHY: The reviewer said the workflow can compute a locally valid candidate and then abort on \"tag already exists\" at release time.\n- .github/workflows/mark-stable.yml:86-100 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The fetch retry warning does not preserve the underlying `git fetch` stderr, so repeated failures lack the actual cause.\n  WHY: The reviewer said operators only see retry count/backoff, making flaky fetch diagnostics harder.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/mark-stable.yml:492 | severity=low | confidence=5\n  PROBLEM: The dry-run summary still says \"Would tag main as: ${VERSION}\" even though the workflow now only releases from `stable`.\n  WHY: The operator-facing message says `main`, but the workflow enforces `stable` and creates the release from that branch.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/mark-stable.yml:492 | severity=low | confidence=5\n  PROBLEM: The dry-run summary says \"Would tag main as\" but the workflow now releases from `stable` branch.\n  WHY: In dry-run mode, operators see a misleading message that says \"main\" but the actual release logic targets `stable`.\n- .github/workflows/promote-main-to-stable.yml:139 | severity=low | confidence=2\n  PROBLEM: The comment \"tags the just-fast-forwarded commit on\" is grammatically awkward.\n  WHY: The sentence structure is unclear and reads like an incomplete phrase.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/mark-stable.yml:492 | severity=low | confidence=5\n  PROBLEM: The dry-run summary step still says \"Would tag main as: ${VERSION}\" even though the workflow now only releases from `stable` branch.\n  WHY: The `source` job rejects non-`stable` refs, the release targets `stable`, but the summary still prints `main`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/mark-stable.yml:492 | severity=low | confidence=3\n  PROBLEM: The dry-run summary hardcodes `main`, but this workflow now only releases from `stable`.\n  WHY: This is a misleading operator-facing message in dry-run output; it contradicts the stable-only release flow.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/mark-stable.yml:~492 | severity=low | confidence=5\n  PROBLEM: Summary message still reads \"Would tag main as ${NEXT}\", hardcoded despite stable-only enforcement.\n  WHY: Dry-run dispatches mislead operators by showing `main` even though the workflow targets `stable`.\n- .github/workflows/mark-stable.yml:100-115 | severity=medium | confidence=4\n  PROBLEM: Collision avoidance loop uses `git rev-parse \"refs/tags/${CANDIDATE}\"` locally only, so a concurrent remote tag push can still cause failure at the tag step.\n  WHY: The workflow can compute a valid `NEXT` locally, advance to release, then abort on \"tag already exists\" without early diagnosis.\n- .github/workflows/mark-stable.yml:86-100 | severity=low | confidence=3\n  PROBLEM: The `git fetch --tags` retry warning lacks captured stderr from the failed attempt.\n  WHY: Retry output shows only retry count/backoff, so operators lose the underlying network/auth failure cause.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/mark-stable.yml:492 | severity=low | confidence=5\n  PROBLEM: The dry-run summary message still says \"Would tag main as: ${VERSION}\" even though the workflow now only releases from the `stable` branch.\n  WHY: It is a misleading operator-facing message and contradicts the stable-only release flow.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e9c6ede989fa4faab93543eaa3571ff774dffad1d275bd739300cceb68d7af13",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1821,
+    "run_id": "25159353657",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25159353657",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430103002_63e499deda",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1821,
+    "run_id": "25159353657"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T10:30:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
