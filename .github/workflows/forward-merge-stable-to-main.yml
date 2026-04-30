@@ -98,7 +98,11 @@ jobs:
           MERGE_STATUS: ${{ steps.direct.outputs.merge_status }}
         run: |
           set -euo pipefail
-          BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}"
+          # Include GITHUB_RUN_ATTEMPT so a workflow re-run uses a fresh
+          # branch name — without it, the second `git push origin
+          # <branch>` would fail (non-fast-forward or already-exists)
+          # and abort before the PR is opened.
+          BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           if [ "${MERGE_STATUS}" = "conflict" ]; then
             # Conflict path: HEAD is back at origin/main after `merge

@@ -139,15 +139,42 @@ jobs:
           # `git tag --list` lookup.
           LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
 
+          # Ensure the local tag namespace reflects every remote tag —
+          # we'll cross-check the candidate NEXT against tags that exist
+          # anywhere in the repo, not just ones reachable from HEAD.
+          # Without this, releasing from `stable` could compute a NEXT
+          # that already exists on `main` (e.g. `main` patch-released
+          # `v1.4.3` before bumping to `v1.5.0`, while `stable` is still
+          # at `v1.4.2`) — the workflow would only fail later at the
+          # tag-push step.
+          git fetch --tags --force origin >/dev/null 2>&1 || true
+
           if [ -z "$LATEST" ]; then
             NEXT="v1.0.0"
             echo "No existing version tags reachable from ${SOURCE_BRANCH}. Defaulting to ${NEXT}"
           else
-            # Parse and increment patch
+            # Bump patch and skip any candidate that already exists in
+            # the local tag namespace (which, after the fetch above,
+            # mirrors the remote). Bounded to 1000 iterations as a
+            # belt-and-braces guard against pathological tag layouts.
             MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
             MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
             PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
-            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            i=0
+            while [ "$i" -lt 1000 ]; do
+              PATCH=$((PATCH + 1))
+              CANDIDATE="v${MAJOR}.${MINOR}.${PATCH}"
+              if ! git rev-parse "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+                NEXT="$CANDIDATE"
+                break
+              fi
+              echo "Tag ${CANDIDATE} already exists elsewhere in repo — skipping"
+              i=$((i + 1))
+            done
+            if [ -z "${NEXT:-}" ]; then
+              echo "::error::Could not find an unused patch tag after 1000 attempts starting from ${LATEST}"
+              exit 1
+            fi
             echo "Latest tag on ${SOURCE_BRANCH}: ${LATEST} → next version: ${NEXT}"
           fi
 
@@ -3602,8 +3629,13 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
-            echo "::error::Tag ${VERSION} already exists"
+          # Query the remote directly: `git rev-parse refs/tags/<V>` only
+          # checks the local tag namespace, which can race a concurrent
+          # tag push (or be incomplete depending on checkout fetch
+          # config). `git ls-remote --exit-code` returns 0 if the ref
+          # exists on origin, 2 if it does not.
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag ${VERSION} already exists on origin"
             exit 1
           fi
 
