@@ -992,7 +992,13 @@ jobs:
                     # the rate-limit log lines gh_api_safe emits to
                     # stderr — surfaces the case Grok-4.1 flagged in
                     # the claude-branch-review on PR #1798.
-                    if ! gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG_FILE" 2>/dev/null; then
+                    # Stderr is intentionally NOT redirected: gh_api_safe
+                    # writes its own rate-limit / transient-failure
+                    # diagnostics to >&2 (e.g. "⏳ Rate limited — backing
+                    # off ${RATE_LIMIT_BACKOFF}s"), and operators rely on
+                    # those lines to distinguish a genuinely-stuck review
+                    # workflow from a slow smoke run caused by API blips.
+                    if ! gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG_FILE"; then
                       : > "$LOG_FILE"
                       echo "  ⚠ Live-log fetch failed for job ${JOB_ID} — editor-noop shortcut and reviewer-count shortcut are inactive this iteration; the wait loop continues with status/conclusion polling only" >&2
                     fi

@@ -2753,8 +2753,10 @@ jobs:
             echo "::warning::AUTOFIX_INSTEP_RETRY_SLEEP_SECS must be an integer in [1, 600]; defaulting to 30."
             _instep_retry_sleep=30
           fi
-          # Detect whether the editor's just-written summary qualifies as
-          # an empty-output failure. Two signals count:
+          # Detect whether the editor's just-written summary is unusable
+          # for downstream consumers (commit step, push step, validator).
+          # Two signals count, both of which mean "no productive editor
+          # output landed":
           #   1. The summary file is missing or zero-length (the original
           #      retry condition).
           #   2. The summary file exists but contains the same fallback /
@@ -2765,13 +2767,17 @@ jobs:
           #      so the original `[ ! -s ... ]` test missed it. The marker
           #      regex must stay in lockstep with the validate step's grep
           #      (both reference "editor failed before producing" /
-          #      "unavailable (editor fallback)") — a divergence here would
+          #      "unavailable (editor fallback)") — a divergence that lets
+          #      the fallback summary slip past the validator would
           #      reintroduce the run-25126757724 cascade.
-          _instep_retry_summary_empty="false"
+          # The flag name is "unusable" rather than "empty" because case
+          # (2) leaves a non-empty summary on disk that nonetheless cannot
+          # drive a productive autofix commit.
+          _instep_retry_summary_unusable="false"
           if [ ! -s "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
-            _instep_retry_summary_empty="true"
+            _instep_retry_summary_unusable="true"
           elif grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}" 2>/dev/null; then
-            _instep_retry_summary_empty="true"
+            _instep_retry_summary_unusable="true"
             # Wording deliberately omits the literal substring
             # "Editor summary contains failure/fallback markers" — the e2e
             # poller in test-and-mark-stable.yml greps live job logs for
@@ -2779,10 +2785,10 @@ jobs:
             # phrase, and a retry-side echo carrying the same literal
             # would false-trigger the poller's early-exit before the
             # retry has had a chance to succeed (see PR #1798 review).
-            echo "::notice::Editor summary present but matched fallback-marker regex — treating as empty for in-step retry decision."
+            echo "::notice::Editor summary present but matched fallback-marker regex — treating as unusable for in-step retry decision."
           fi
           if [ "${_instep_retry_enabled}" = "true" ] \
-              && [ "${_instep_retry_summary_empty}" = "true" ]; then
+              && [ "${_instep_retry_summary_unusable}" = "true" ]; then
             # `git log` here intentionally walks HEAD on the already-
             # checked-out PR branch (the surrounding workflow checks
             # out the PR head before this step runs, see "Checkout PR
