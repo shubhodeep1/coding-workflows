@@ -71,7 +71,28 @@ REPORT_FILENAME_RE = re.compile(r"^soft-error-report-\d+-(?P<phase>.+?)\.md$")
 # analyser prompt. We extract everything from this header up to (but not
 # including) the next `## ` heading or end-of-file.
 SECTION_HEADER_RE = re.compile(r"^##\s+Soft errors\s+\(per phase\)\s*$", re.MULTILINE)
-NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
+# Stop the findings extraction at the next KNOWN top-level heading
+# emitted by `analyze_soft_errors.py`'s prompt. Matching any `##` would
+# prematurely truncate findings whose body legitimately contains a
+# `##` line (e.g. an LLM that quoted a log heading or used `##` in
+# its commentary). Anchored to the literal section names so the
+# parser can't be confused by content.
+NEXT_HEADING_RE = re.compile(
+	r"^##\s+(?:Patterns to watch|Likely benign)\b",
+	re.MULTILINE,
+)
+
+# Whole-line placeholder regex. Matches a single line whose entire
+# content (modulo leading bullet/whitespace and trailing punctuation)
+# is one of the known "no findings" sigils the analyser emits. Used to
+# distinguish "the model found nothing" from "the model found
+# something whose text happens to contain the substring 'no findings'".
+PLACEHOLDER_LINE_RE = re.compile(
+	r"^\s*[-*•]?\s*"
+	r"(?:none(?:\s+observed)?|no\s+(?:soft\s+)?(?:errors|findings|issues)|n/?a|\(\s*none\s*\))"
+	r"\s*\.?\s*$",
+	re.IGNORECASE,
+)
 
 # Header line emitted by analyze_soft_errors.py:
 # `## Soft-error analyzer (status: <code>, model: ..., reasoning: ...)`
@@ -197,18 +218,22 @@ def extract_findings_section(markdown: str) -> str:
 	if not body:
 		return ""
 	# Drop placeholder bodies the model emits when it found nothing.
-	lower = body.lower()
-	placeholder_signatures = (
-		"no soft errors",
-		"no findings",
-		"none observed",
-		"no issues",
-		"(none)",
-	)
-	stripped_punct = re.sub(r"[\s\.\-_*`]+", " ", lower).strip()
-	if stripped_punct in {"none", "n a", "na"}:
-		return ""
-	if any(sig in lower and len(body) < 160 for sig in placeholder_signatures):
+	# A previous iteration of this check matched placeholder strings
+	# as substrings against bodies under 160 chars, which incorrectly
+	# filtered out legitimate short findings like "No soft errors were
+	# found in the rate limiting module" — multiple PR reviewers
+	# reproduced the false-positive.
+	#
+	# The current logic is whole-line: if EVERY non-blank line in the
+	# body matches `PLACEHOLDER_LINE_RE` (i.e. the body consists
+	# entirely of placeholder sigils, optionally bullet-prefixed), the
+	# section is empty. A real finding that mentions "no findings" in
+	# prose passes through because that prose line won't match the
+	# anchored regex.
+	non_blank_lines = [ln for ln in body.splitlines() if ln.strip()]
+	if non_blank_lines and all(
+		PLACEHOLDER_LINE_RE.match(ln) for ln in non_blank_lines
+	):
 		return ""
 	return body
 

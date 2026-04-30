@@ -279,6 +279,65 @@ def test_placeholder_no_issues_filtered():
 	assert csr.extract_findings_section(md) == ""
 
 
+def test_findings_with_double_hash_in_body_not_truncated():
+	"""Regression: a finding whose body legitimately contains a `##`
+	line must not be truncated by `NEXT_HEADING_RE`. Multi-model PR
+	review (minimax, grok-4) reproduced premature truncation when an
+	LLM quoted a log heading inside a finding body. The fix anchors
+	the next-heading regex to the two known stop sections from the
+	analyser prompt (`## Patterns to watch`, `## Likely benign`).
+	"""
+	md = (
+		"## Soft-error analyzer (status: `ok`, model: `m`, reasoning: `r`)\n\n"
+		"## Soft errors (per phase)\n"
+		"### clarify\n"
+		"- LLM quoted a log heading verbatim:\n"
+		"  ## Rate Limit Issue (this is INSIDE the finding body)\n"
+		"- second finding line that previously got truncated\n"
+		"\n## Patterns to watch\n"
+		"- this content must NOT appear in the extracted findings\n"
+	)
+	body = csr.extract_findings_section(md)
+	assert "## Rate Limit Issue" in body, (
+		"finding body containing a `##` line must not be truncated"
+	)
+	assert "second finding line" in body, (
+		"content after the inner `##` must survive extraction"
+	)
+	assert "Patterns to watch" not in body
+	assert "this content must NOT appear" not in body
+
+
+def test_real_finding_mentioning_placeholder_phrase_preserved():
+	"""Regression: a legitimate short finding that *mentions* a
+	placeholder phrase in prose ("no soft errors", "no findings",
+	etc.) must NOT be filtered out. Five PR reviewers (deepseek,
+	minimax, kimi-k2, grok-4, glm-5) reproduced the false-positive
+	where the substring-based check dropped real findings under 160
+	chars that happened to contain placeholder substrings.
+	"""
+	md = (
+		"## Soft-error analyzer (status: `ok`, model: `m`, reasoning: `r`)\n\n"
+		"## Soft errors (per phase)\n"
+		"No soft errors were found in the rate limiting module, "
+		"but the editor reviewer logged a noop-suspicious flip.\n"
+	)
+	body = csr.extract_findings_section(md)
+	assert body != "", "real finding must not be filtered out"
+	assert "rate limiting module" in body
+	assert "noop-suspicious" in body
+
+
+def test_pure_placeholder_body_still_filtered_with_bullet():
+	"""Whole-line placeholder with a leading bullet still filtered."""
+	md = (
+		"## Soft-error analyzer (status: `ok`, model: `m`, reasoning: `r`)\n\n"
+		"## Soft errors (per phase)\n"
+		"- None observed.\n"
+	)
+	assert csr.extract_findings_section(md) == ""
+
+
 def test_missing_findings_section_returns_empty():
 	md = "## Soft-error analyzer (status: `ok`, model: `m`, reasoning: `r`)\n\nbody.\n"
 	assert csr.extract_findings_section(md) == ""
