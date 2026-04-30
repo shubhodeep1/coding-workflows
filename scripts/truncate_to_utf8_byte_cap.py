@@ -46,10 +46,14 @@ def truncate_bytes_to_utf8_cap(data: bytes, cap: int) -> bytes:
 	slice `data[:i]` then ends on a clean codepoint boundary because
 	the codepoint containing `data[cap]` is fully excluded.
 
-	Edge cases. (a) `cap == 0` returns the input unchanged; this
+	Edge cases. (a) `cap <= 0` returns the input unchanged; this
 	matches operator opt-out semantics at the consolidator level
 	(`max_bytes <= 0` → no truncation), so a CLI invocation
 	`truncate_to_utf8_byte_cap.py 0` is the same as a no-op.
+	A negative `cap` is also treated as a no-op rather than letting
+	Python's negative-index slicing (`data[:-1]`) silently strip a
+	tail byte — the helper is a library function, and library
+	functions should not surprise their callers.
 	(b) `cap >= len(data)` returns data unchanged — the input already
 	fits, no truncation needed. (c) Malformed UTF-8 input causes the
 	walk-back to step over continuation bytes until it finds a non-
@@ -64,7 +68,7 @@ def truncate_bytes_to_utf8_cap(data: bytes, cap: int) -> bytes:
 	reproduced the data-loss. The current implementation examines
 	`data[cap]` instead, so an exact-boundary cap is preserved.
 	"""
-	if cap == 0 or len(data) <= cap:
+	if cap <= 0 or len(data) <= cap:
 		return data
 	i = cap
 	while i > 0 and (data[i] & 0xC0) == 0x80:

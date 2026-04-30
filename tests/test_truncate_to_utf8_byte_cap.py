@@ -173,6 +173,25 @@ def test_helper_rejects_negative_cap():
 	assert proc.returncode == 2
 
 
+def test_library_function_treats_negative_cap_as_noop():
+	"""Direct library calls with negative cap return the input unchanged.
+
+	Without this guard, `data[:cap]` would invoke Python's negative-
+	index slicing and silently strip a tail byte (a real PR-review
+	finding from kimi-k2). The CLI wrapper rejects negative caps with
+	exit 2, but library callers go through `truncate_bytes_to_utf8_cap`
+	directly and would otherwise hit the footgun.
+	"""
+	import importlib.util
+	spec = importlib.util.spec_from_file_location("_t", SCRIPT)
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	assert mod.truncate_bytes_to_utf8_cap(b"hello", -1) == b"hello"
+	assert mod.truncate_bytes_to_utf8_cap(b"hello", -100) == b"hello"
+	# cap=0 also a no-op (operator opt-out at consolidator level).
+	assert mod.truncate_bytes_to_utf8_cap(b"hello", 0) == b"hello"
+
+
 def test_helper_rejects_non_integer_cap():
 	proc = subprocess.run(
 		[sys.executable, str(SCRIPT), "abc"],
