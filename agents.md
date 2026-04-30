@@ -782,7 +782,7 @@ Contract:
 Operational rules:
 
 - Renames of `EDITOR_NOOP_SUSPICIOUS` or the `Editor summary contains failure/fallback markers` annotation literal are breaking changes per CLAUDE.md §6. Add alongside, never in place.
-- Rollback: removing the new clauses from the three `if:` lines restores the pre-cascade-guard behaviour (the run-25126757724 cascade). The retry-gate widening can be rolled back independently by reverting `_instep_retry_summary_unusable` to the original `[ ! -s ]` test (and renaming back to `_instep_retry_summary_empty` if desired). The poller shortcut can be rolled back by deleting the `grep -qaF` block.
+- Rollback: removing the new clauses from the three `if:` lines restores the pre-cascade-guard behaviour (the run-25126757724 cascade). The retry-gate widening can be rolled back independently by reverting the `_instep_retry_summary_unusable` flag's two-signal logic back to the single `[ ! -s ]` test on `EDITOR_SUMMARY_FILE`. The poller shortcut can be rolled back by deleting the `grep -qaF` block (the `mktemp`-backed log fetch can stay — it remains an improvement over the prior `LOG_CONTENT=$(…)` capture even when the shortcut is gone).
 
 ---
 
