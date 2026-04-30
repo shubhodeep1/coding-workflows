@@ -22,7 +22,7 @@ Why this exists:
 Usage:
     python3 scripts/mcp_handshake_probe.py \\
         --name context7 \\
-        --timeout 10 \\
+        --timeout 15 \\
         --command npx -- -y @upstash/context7-mcp@2.1.8
 
 Anything after the first ``--`` is treated as the server's argv. The probe
@@ -169,11 +169,19 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 	env = os.environ.copy()
 	env.setdefault("PYTHONUNBUFFERED", "1")
 	try:
+		# Inherit stderr (don't capture). If we used `stderr=subprocess.PIPE`
+		# without an active drainer, a chatty server or wrapper (notably
+		# `npx`, which prints download progress + deprecation warnings)
+		# could fill the ~64 KiB pipe buffer and block its own write before
+		# our blocking stdout read returns — manifesting as a false probe
+		# timeout. Inheriting the parent's stderr routes the child's
+		# diagnostic output through CI logs naturally and trades a tail
+		# snapshot in the EOF branch for deadlock-immunity.
 		proc = subprocess.Popen(
 			[command, *args],
 			stdin=subprocess.PIPE,
 			stdout=subprocess.PIPE,
-			stderr=subprocess.PIPE,
+			stderr=None,
 			env=env,
 			start_new_session=True,
 		)
@@ -216,18 +224,12 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 					file=sys.stderr,
 				)
 				return 2
-			# Drain any stderr the server emitted before dying — useful for
-			# reproducing the handshake failure locally.
-			err = b""
-			try:
-				err = proc.stderr.read() or b""
-			except Exception:
-				pass
-			tail = err.decode("utf-8", errors="replace").strip().splitlines()[-5:]
-			tail_str = " | ".join(tail) if tail else "<no stderr>"
+			# stderr is inherited, so the server's own diagnostic lines have
+			# already been forwarded to the calling process's stderr by now.
 			print(
 				f"[mcp-probe:{name}] server exited before sending a response "
-				f"(returncode={proc.returncode}); stderr tail: {tail_str}",
+				f"(returncode={proc.returncode}); see inherited stderr for the "
+				"server's own diagnostic output",
 				file=sys.stderr,
 			)
 			return 3
@@ -282,8 +284,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 	parser.add_argument(
 		"--timeout",
 		type=float,
-		default=10.0,
-		help="Seconds to wait for the initialize response (default: 10).",
+		default=15.0,
+		help=(
+			"Seconds to wait for the initialize response (default: 15, "
+			"matching MCP_HANDSHAKE_PROBE_TIMEOUT in setup_serena.sh)."
+		),
 	)
 	parser.add_argument(
 		"server_args",
