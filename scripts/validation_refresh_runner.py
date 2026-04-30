@@ -246,15 +246,16 @@ class ValidationRefreshRunner:
 		self.executor.run(["gh", "repo", "clone", repository, str(repo_dir)])
 
 	def _checkout_refresh_branch(self, repo_dir: Path, default_branch: str) -> None:
-		remote_branch = self.executor.run(
-			["git", "ls-remote", "--heads", "origin", f"refs/heads/{self.branch_name}"],
+		# Drift monitoring always compares the rendered output against the
+		# consumer repo's default branch. We deliberately ignore any existing
+		# `origin/<branch_name>` that may linger from the previous PR-based
+		# flow — otherwise drift against the default branch can be hidden by
+		# a stale refresh branch. `branch_name` is now only a local label.
+		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir)
+		self.executor.run(
+			["git", "checkout", "-B", self.branch_name, f"origin/{default_branch}"],
 			cwd=repo_dir,
 		)
-		start_ref = f"origin/{self.branch_name}" if (remote_branch.stdout or "").strip() else f"origin/{default_branch}"
-		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir)
-		if start_ref == f"origin/{self.branch_name}":
-			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir)
-		self.executor.run(["git", "checkout", "-B", self.branch_name, start_ref], cwd=repo_dir)
 
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
 		diagnostics: list[str] = []

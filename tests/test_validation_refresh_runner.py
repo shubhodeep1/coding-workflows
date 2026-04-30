@@ -137,10 +137,8 @@ def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 			[
 				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
 				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
-				PlannedCall(("git", "ls-remote"), stdout="abc refs/heads/ai/validation-refresh\n"),
 				PlannedCall(("git", "fetch", "origin", "main")),
-				PlannedCall(("git", "fetch", "origin", branch)),
-				PlannedCall(("git", "checkout", "-B", branch, f"origin/{branch}")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
 				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
@@ -156,10 +154,18 @@ def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 		assert "validation_assets_drifted_no_push" in result.diagnostics
 		assert result.pr_number is None
 		assert result.pr_url is None
-		# Confirm we never invoked any gh pr / git commit / git push commands.
+		# Confirm we never invoked any gh pr / git commit / git push commands,
+		# and never consulted the remote `<branch_name>` ref (drift monitoring
+		# always baselines on the default branch, ignoring any leftover refresh
+		# branch from the previous PR-based flow).
 		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check, _env in executor.seen)
 		assert all(cmd[:2] != ["git", "commit"] for cmd, _cwd, _check, _env in executor.seen)
 		assert all(cmd[:2] != ["git", "push"] for cmd, _cwd, _check, _env in executor.seen)
+		assert all(cmd[:2] != ["git", "ls-remote"] for cmd, _cwd, _check, _env in executor.seen)
+		assert not any(
+			cmd[:3] == ["git", "fetch", "origin"] and len(cmd) > 3 and cmd[3] == branch
+			for cmd, _cwd, _check, _env in executor.seen
+		)
 		executor.assert_consumed()
 
 
@@ -178,7 +184,6 @@ def test_process_repository_red_pipeline_failure_with_drift_records_no_push() ->
 			[
 				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
 				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
-				PlannedCall(("git", "ls-remote"), stdout=""),
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
@@ -220,7 +225,6 @@ def test_process_repository_no_changes_skips_pr_operations() -> None:
 			[
 				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
 				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
-				PlannedCall(("git", "ls-remote"), stdout=""),
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
@@ -256,7 +260,6 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 			[
 				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
 				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
-				PlannedCall(("git", "ls-remote"), stdout=""),
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
@@ -306,7 +309,6 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 			[
 				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
 				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
-				PlannedCall(("git", "ls-remote"), stdout=""),
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
