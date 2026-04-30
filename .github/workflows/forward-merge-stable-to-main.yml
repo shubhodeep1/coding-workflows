@@ -139,12 +139,30 @@ jobs:
           Triggered by: forward-merge-stable-to-main.yml"
           fi
 
-          gh pr create \
+          # The fallback PR is the safety net for stable→main propagation
+          # — silently treating any `gh pr create` failure as a benign
+          # warning could lose the bug fix. Only the "PR already exists"
+          # case is genuinely benign (re-run / concurrent push); every
+          # other failure (auth, scope, API outage) must hard-fail so
+          # the run is retryable and the operator notices.
+          set +e
+          PR_OUTPUT=$(gh pr create \
             --base main \
             --head "${BRANCH}" \
             --title "chore: forward-merge stable into main" \
-            --body "${BODY}" \
-            || echo "::warning::PR creation failed (existing PR for this run?)"
+            --body "${BODY}" 2>&1)
+          PR_RC=$?
+          set -e
+          if [ "${PR_RC}" -eq 0 ]; then
+            echo "${PR_OUTPUT}"
+          elif printf '%s' "${PR_OUTPUT}" | grep -qiE 'pull request already exists|a pull request for branch'; then
+            echo "::warning::PR already exists for ${BRANCH} — treating as benign"
+            echo "${PR_OUTPUT}"
+          else
+            echo "::error::Failed to create fallback PR for ${BRANCH} (rc=${PR_RC})"
+            echo "${PR_OUTPUT}" >&2
+            exit "${PR_RC}"
+          fi
 
       - name: Summary
         if: always()

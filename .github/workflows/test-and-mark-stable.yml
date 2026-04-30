@@ -128,6 +128,16 @@ jobs:
             exit 0
           fi
 
+          # Refresh tags from origin BEFORE computing LATEST. If a new
+          # tag was pushed after checkout, computing LATEST first would
+          # pick an outdated base version and lean on the collision-
+          # skip loop below to catch up. Failing loudly on fetch error
+          # is preferable to running on stale tag data.
+          if ! git fetch --tags --force origin; then
+            echo "::error::Failed to fetch remote tags from origin — refusing to compute next version on potentially stale tag data"
+            exit 1
+          fi
+
           # Find the latest vX.Y.Z tag reachable from the source branch's
           # HEAD. `--merged HEAD` is critical for the stable-branch path:
           # if main is on v1.5.0 and stable is on v1.4.2, releasing from
@@ -145,21 +155,6 @@ jobs:
           LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
             | head -n1)
-
-          # Ensure the local tag namespace reflects every remote tag —
-          # we'll cross-check the candidate NEXT against tags that exist
-          # anywhere in the repo, not just ones reachable from HEAD.
-          # Without this, releasing from `stable` could compute a NEXT
-          # that already exists on `main` (e.g. `main` patch-released
-          # `v1.4.3` before bumping to `v1.5.0`, while `stable` is still
-          # at `v1.4.2`) — the workflow would only fail later at the
-          # tag-push step. Failing loudly here is preferable to running
-          # the bump loop on stale tag data and choosing a colliding
-          # version.
-          if ! git fetch --tags --force origin; then
-            echo "::error::Failed to fetch remote tags from origin — refusing to compute next version on potentially stale tag data"
-            exit 1
-          fi
 
           NEXT=""
           if [ -z "$LATEST" ]; then
@@ -3720,14 +3715,20 @@ jobs:
           #      policy above).
           #   3. API returned a real state — fail only on explicit
           #      "failure" / "error".
+          # Note on stderr: `_gh_retry` already redirects the wrapped
+          # command's stderr to /tmp/_gh_rl_err internally (see helper
+          # above). An outer `2>/tmp/_gh_state_err` here would only
+          # capture _gh_retry's own warnings, not the actual `gh api`
+          # error — so on rc != 0 we surface /tmp/_gh_rl_err for the
+          # real diagnostic.
           set +e
           STATE=$(_gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
-            --jq '.state' 2>/tmp/_gh_state_err)
+            --jq '.state')
           rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
             echo "::error::Failed to query CI status after retries (rc=${rc}). Refusing to release without a confirmed CI signal."
-            cat /tmp/_gh_state_err >&2 2>/dev/null || true
+            cat /tmp/_gh_rl_err >&2 2>/dev/null || true
             exit 1
           fi
           if [ -z "$STATE" ]; then
