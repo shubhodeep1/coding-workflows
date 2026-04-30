@@ -2497,68 +2497,41 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
-          # Source the central label catalog (label_helpers.sh) for
-          # `force-review` so this workflow cannot drift from
-          # .github/ai/label_contract.v1.json (`force-review` is
-          # color `fbca04`, not `d93f0b`). `e2e-smoke-test` is NOT in
-          # the catalog (smoke-test infra label) so we ensure it
-          # inline.
-          if [ -f scripts/label_helpers.sh ]; then
-            # shellcheck disable=SC1091
-            source scripts/label_helpers.sh
+          # Both `force-review` and `e2e-smoke-test` are now in the
+          # central catalog (scripts/label_helpers.sh +
+          # .github/ai/label_contract.v1.json), so a single
+          # `ensure_label_exists` call gives us the correct
+          # color/description for each. The helper internally
+          # treats GitHub's "already_exists" response as success,
+          # killing the GET/POST race the earlier inline ensure
+          # pattern was vulnerable to (consensus claude-branch-
+          # review finding on this PR). If the helper isn't
+          # available — e.g., the support-source checkout in this
+          # job didn't land scripts/label_helpers.sh — fail loud
+          # rather than reinventing the catalog inline; the next
+          # `gh pr create --label` would fail anyway and we'd
+          # rather surface "label_helpers missing" than have a
+          # parallel inline catalog drift over time (Copilot review
+          # comment #4 on this PR).
+          if [ ! -f scripts/label_helpers.sh ]; then
+            echo "::error::scripts/label_helpers.sh not present in checkout; cannot ensure smoke-test labels via the catalog. Aborting smoke-test PR creation."
+            exit 1
+          fi
+          # shellcheck disable=SC1091
+          source scripts/label_helpers.sh
+          if ! type ensure_label_exists >/dev/null 2>&1; then
+            echo "::error::scripts/label_helpers.sh did not export ensure_label_exists; aborting smoke-test PR creation (catalog drift risk)."
+            exit 1
           fi
 
-          # Inline POST-only ensure that treats GitHub's HTTP 422
-          # `already_exists` response as success. The earlier
-          # GET-then-POST pattern had a race: a transient blip on the
-          # GET could fail through to the POST, which would return
-          # 422 because the label DID exist, and the surrounding
-          # `||` chain treated that as failure — blocking smoke-test
-          # PR creation despite the desired state already being met
-          # (consensus finding from the multi-reviewer
-          # claude-branch-review). Mirrors the `already[_- ]exists`
-          # detection in `ensure_label_exists` from
-          # scripts/label_helpers.sh.
-          ensure_label_inline() {
-            local name="$1" color="$2" desc="$3"
-            local err_file
-            err_file="$(mktemp 2>/dev/null || echo /dev/null)"
-            if gh_retry gh api "repos/${REPOSITORY}/labels" \
-                 -f name="${name}" -f color="${color}" -f description="${desc}" \
-                 >/dev/null 2>"${err_file}"; then
-              [ "${err_file}" = /dev/null ] || rm -f "${err_file}"
-              return 0
-            fi
-            local err
-            err="$(cat "${err_file}" 2>/dev/null || true)"
-            [ "${err_file}" = /dev/null ] || rm -f "${err_file}"
-            if printf '%s' "${err}" | grep -Eqi 'already[ _-]*exists|already_exists'; then
-              return 0
-            fi
-            printf '%s\n' "${err}" >&2
-            return 1
+          ensure_label_exists "force-review" "${REPOSITORY}" || {
+            echo "::error::Could not ensure 'force-review' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
+            exit 1
           }
-
-          if type ensure_label_exists >/dev/null 2>&1; then
-            ensure_label_exists "force-review" "${REPOSITORY}" || {
-              echo "::error::Could not ensure 'force-review' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
-              exit 1
-            }
-          else
-            # Catalog values mirrored from
-            # .github/ai/label_contract.v1.json so the fallback path
-            # doesn't drift either.
-            ensure_label_inline "force-review" "fbca04" \
-              "Force a full review_autofix cycle, bypassing the deterministic pre-review skip" || {
-                echo "::error::Could not ensure 'force-review' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
-                exit 1
-              }
-          fi
-          ensure_label_inline "e2e-smoke-test" "5319e7" \
-            "E2E smoke test PR — review_autofix skips auto-merge" || {
-              echo "::error::Could not ensure 'e2e-smoke-test' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
-              exit 1
-            }
+          ensure_label_exists "e2e-smoke-test" "${REPOSITORY}" || {
+            echo "::error::Could not ensure 'e2e-smoke-test' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
+            exit 1
+          }
 
       - name: Create Pull Request
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
@@ -2652,47 +2625,24 @@ jobs:
           fi
 
           # Re-use the central catalog so the backstop never drifts
-          # from .github/ai/label_contract.v1.json. The earlier
-          # `Ensure E2E smoke-test labels exist on repo` step has
-          # already created/verified both labels for this run; the
-          # ensure call here is cheap belt-and-braces.
+          # from .github/ai/label_contract.v1.json. Both labels are
+          # cataloged, so a single `ensure_label_exists` call per
+          # label is enough. Failures here are non-fatal because
+          # this is the backstop — the atomic `--label` path on
+          # `Create Pull Request` is the source of truth on the
+          # happy path; the `Ensure E2E smoke-test labels exist on
+          # repo` step has already aborted the run if the catalog
+          # source itself is missing.
           if [ -f scripts/label_helpers.sh ]; then
             # shellcheck disable=SC1091
             source scripts/label_helpers.sh
           fi
-
-          # Same POST-with-422-as-success ensure helper used by the
-          # earlier ensure step. Idempotent. Failures here are
-          # non-fatal because this is the backstop — the atomic
-          # `--label` path on `Create Pull Request` is the source of
-          # truth on the happy path.
-          ensure_label_inline() {
-            local name="$1" color="$2" desc="$3"
-            local err_file
-            err_file="$(mktemp 2>/dev/null || echo /dev/null)"
-            if gh_retry gh api "repos/${REPOSITORY}/labels" \
-                 -f name="${name}" -f color="${color}" -f description="${desc}" \
-                 >/dev/null 2>"${err_file}"; then
-              [ "${err_file}" = /dev/null ] || rm -f "${err_file}"
-              return 0
-            fi
-            local err
-            err="$(cat "${err_file}" 2>/dev/null || true)"
-            [ "${err_file}" = /dev/null ] || rm -f "${err_file}"
-            if printf '%s' "${err}" | grep -Eqi 'already[ _-]*exists|already_exists'; then
-              return 0
-            fi
-            return 1
-          }
-
           if type ensure_label_exists >/dev/null 2>&1; then
             ensure_label_exists "force-review" "${REPOSITORY}" >/dev/null 2>&1 || true
+            ensure_label_exists "e2e-smoke-test" "${REPOSITORY}" >/dev/null 2>&1 || true
           else
-            ensure_label_inline "force-review" "fbca04" \
-              "Force a full review_autofix cycle, bypassing the deterministic pre-review skip" || true
+            echo "::warning::scripts/label_helpers.sh did not export ensure_label_exists; skipping non-fatal label backstop ensure (atomic --label path remains the source of truth)"
           fi
-          ensure_label_inline "e2e-smoke-test" "5319e7" \
-            "E2E smoke test PR — review_autofix skips auto-merge" || true
 
           if ! gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
               -f "labels[]=force-review" \

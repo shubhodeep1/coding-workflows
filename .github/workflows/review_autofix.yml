@@ -3953,10 +3953,20 @@ jobs:
           # up. This trade is asymmetric in our favour: a missed
           # auto-merge on a non-e2e PR is recoverable; an e2e PR that
           # auto-merges mid-test is not.
+          # `--paginate ?per_page=100` so a PR carrying many labels
+          # (e.g., orchestrator-managed PRs that accumulate phase
+          # labels + review-blocked + e2e-smoke-test, easily >30) can
+          # still surface `e2e-smoke-test` on page ≥2. Without the
+          # override this endpoint defaults to 30/page and a label on
+          # page 2 is silently dropped, allowing auto-merge — the
+          # exact race this guard prevents (Copilot review #3 on
+          # PR #1823). With `--paginate`, gh emits one JSON array per
+          # page; `--jq '.[].name'` flattens to one label per line so
+          # the downstream `grep -qx` works regardless of page count.
           _label_err_file="$(mktemp 2>/dev/null || echo /dev/null)"
-          if PR_LABELS_RAW="$(gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" --jq '[.[].name] | join(",")' 2>"${_label_err_file}")"; then
+          if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
             [ "${_label_err_file}" = /dev/null ] || rm -f "${_label_err_file}"
-            if printf '%s' "${PR_LABELS_RAW}" | tr ',' '\n' | grep -qx 'e2e-smoke-test'; then
+            if printf '%s\n' "${PR_LABELS_RAW}" | grep -qx 'e2e-smoke-test'; then
               echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
               exit 0
             fi
