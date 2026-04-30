@@ -66,9 +66,38 @@ permissions:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
+  # Job -1: Resolve source branch — auto-detect from dispatch ref
+  #
+  # When this workflow is dispatched from `stable`, the release path
+  # tags from the `stable` branch (a "stable patch release" — old
+  # stable + cherry-picked bug fix). When dispatched from `main` (or
+  # anything else), the default `main` path is used. Threaded into
+  # `resolve-version`, `validate`, and `release` via `needs.source`.
+  # ──────────────────────────────────────────────────────────────────
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      branch: ${{ steps.detect.outputs.branch }}
+    steps:
+      - name: Detect source branch
+        id: detect
+        run: |
+          set -euo pipefail
+          REF="${{ github.ref_name }}"
+          if [ "$REF" = "stable" ]; then
+            BRANCH="stable"
+          else
+            BRANCH="main"
+          fi
+          echo "Dispatched from ref '${REF}' → source branch '${BRANCH}'"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+  # ──────────────────────────────────────────────────────────────────
   # Job 0: Resolve version — auto-increment patch if not provided
   # ──────────────────────────────────────────────────────────────────
   resolve-version:
+    needs: [source]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -77,12 +106,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
           fetch-tags: true
 
       - name: Resolve version tag
         id: resolve
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           INPUT_VERSION="${{ inputs.version_tag }}"
@@ -97,19 +128,27 @@ jobs:
             exit 0
           fi
 
-          # Find the latest vX.Y.Z tag reachable from main
-          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          # Find the latest vX.Y.Z tag reachable from the source branch's
+          # HEAD. `--merged HEAD` is critical for the stable-branch path:
+          # if main is on v1.5.0 and stable is on v1.4.2, releasing from
+          # stable must bump from v1.4.2 (→ v1.4.3), not from main's v1.5.0.
+          # When releasing from main, `--merged HEAD` returns every tag
+          # reachable from main (which, given the stable→main forward-
+          # merge workflow, includes all stable-line tags too) so the
+          # main-path bump behaves identically to the previous global
+          # `git tag --list` lookup.
+          LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
 
           if [ -z "$LATEST" ]; then
             NEXT="v1.0.0"
-            echo "No existing version tags found. Defaulting to ${NEXT}"
+            echo "No existing version tags reachable from ${SOURCE_BRANCH}. Defaulting to ${NEXT}"
           else
             # Parse and increment patch
             MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
             MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
             PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
             NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-            echo "Latest tag: ${LATEST} → next version: ${NEXT}"
+            echo "Latest tag on ${SOURCE_BRANCH}: ${LATEST} → next version: ${NEXT}"
           fi
 
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
@@ -3530,7 +3569,7 @@ jobs:
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   validate:
-    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test]
+    needs: [source, resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test]
     if: >-
       always() &&
       needs.resolve-version.result == 'success' &&
@@ -3556,7 +3595,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
 
       - name: Ensure tag does not already exist
@@ -3568,17 +3607,18 @@ jobs:
             exit 1
           fi
 
-      - name: Verify CI passed on main
+      - name: Verify CI passed on source branch
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           SHA=$(git rev-parse HEAD)
-          echo "Checking CI status for $SHA ..."
+          echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
           STATE=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
             --jq '.state' 2>/dev/null || echo "pending")
           if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
-            echo "::error::CI is failing on main ($STATE). Fix before releasing."
+            echo "::error::CI is failing on ${SOURCE_BRANCH} ($STATE). Fix before releasing."
             exit 1
           fi
           echo "CI state: $STATE — OK"
@@ -3592,14 +3632,14 @@ jobs:
   # Job 3: Create release (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   release:
-    needs: [resolve-version, validate]
+    needs: [source, resolve-version, validate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout main
+      - name: Checkout source branch
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
 
       - name: Extract changelog for this version
@@ -3644,13 +3684,14 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
           gh release create "${VERSION}" \
             --title "${VERSION}" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            --target main
+            --target "${SOURCE_BRANCH}"
 
       - name: Notify consumer repos via repository_dispatch
         if: ${{ !inputs.dry_run }}
@@ -3682,10 +3723,12 @@ jobs:
 
       - name: Dry-run summary
         if: ${{ inputs.dry_run }}
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           echo "=== DRY RUN ==="
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          echo "Would tag main as: ${VERSION}"
+          echo "Would tag ${SOURCE_BRANCH} as: ${VERSION}"
           echo "Would update pointers: stable, $(echo "${VERSION}" | cut -d. -f1)"
           echo ""
           echo "Changelog notes:"

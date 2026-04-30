@@ -1,0 +1,141 @@
+---
+name: Forward-merge stable to main
+
+# After a bug fix lands on `stable` (the long-lived branch that backs the
+# moving `stable` git tag), forward-merge `stable` into `main` so the same
+# fix is also present on `main`. Without this, the next stable-from-main
+# release would re-introduce bugs that were already fixed on `stable`.
+#
+# Behaviour:
+#   - If `stable` has no commits ahead of `main`, exit 0 (no-op).
+#   - If the merge is clean, push directly to `main`.
+#   - If the push is rejected (branch protection) OR the merge has
+#     conflicts, open a PR for manual resolution. The PR is the audit
+#     trail and the safety net: as long as it exists, the fix can't be
+#     silently lost.
+#
+# Trigger: push to `stable` and manual dispatch.
+
+"on":
+  push:
+    branches: [stable]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: forward-merge-stable-to-main
+  cancel-in-progress: false
+
+jobs:
+  forward-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Configure git
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check whether forward-merge is needed
+        id: check
+        run: |
+          set -euo pipefail
+          git fetch origin stable
+          AHEAD=$(git rev-list --count main..origin/stable)
+          echo "ahead=${AHEAD}" >> "$GITHUB_OUTPUT"
+          if [ "${AHEAD}" = "0" ]; then
+            echo "stable is fully merged into main — nothing to do"
+          else
+            echo "stable is ${AHEAD} commit(s) ahead of main"
+          fi
+
+      - name: Attempt direct merge into main
+        id: direct
+        if: steps.check.outputs.ahead != '0'
+        run: |
+          set -euo pipefail
+          MSG="chore: forward-merge stable into main
+
+          Auto-merged by forward-merge-stable-to-main.yml so that
+          bug fixes on the stable branch are also present on main.
+          Source SHA: ${GITHUB_SHA}"
+
+          if ! git merge --no-ff origin/stable -m "${MSG}"; then
+            echo "merge_status=conflict" >> "$GITHUB_OUTPUT"
+            git merge --abort || true
+            exit 0
+          fi
+
+          # Push directly. If branch protection rejects the push, fall
+          # back to opening a PR.
+          if git push origin main; then
+            echo "merge_status=pushed" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge_status=push_rejected" >> "$GITHUB_OUTPUT"
+            # Reset local main so the PR-fallback step starts from a
+            # clean state matching origin/main.
+            git fetch origin main
+            git reset --hard origin/main
+          fi
+
+      - name: Fallback — open PR for manual merge
+        if: >-
+          steps.check.outputs.ahead != '0' &&
+          (steps.direct.outputs.merge_status == 'conflict' ||
+           steps.direct.outputs.merge_status == 'push_rejected')
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          MERGE_STATUS: ${{ steps.direct.outputs.merge_status }}
+        run: |
+          set -euo pipefail
+          BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}"
+          git checkout -b "${BRANCH}"
+          git push origin "${BRANCH}"
+
+          if [ "${MERGE_STATUS}" = "conflict" ]; then
+            BODY="Automated forward-merge of \`stable\` into \`main\` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on \`stable\` is also present on \`main\`.
+
+          Source SHA: \`${GITHUB_SHA}\`
+          Triggered by: forward-merge-stable-to-main.yml"
+          else
+            BODY="Automated forward-merge of \`stable\` into \`main\` could not push directly (branch protection). Merge this PR so the bug fix on \`stable\` is also present on \`main\`.
+
+          Source SHA: \`${GITHUB_SHA}\`
+          Triggered by: forward-merge-stable-to-main.yml"
+          fi
+
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore: forward-merge stable into main" \
+            --body "${BODY}" \
+            || echo "::warning::PR creation failed (existing PR for this run?)"
+
+      - name: Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          AHEAD="${{ steps.check.outputs.ahead }}"
+          STATUS="${{ steps.direct.outputs.merge_status }}"
+          if [ "${AHEAD}" = "0" ]; then
+            echo "Result: no-op (stable already merged into main)"
+          elif [ "${STATUS}" = "pushed" ]; then
+            echo "Result: forward-merged ${AHEAD} commit(s) directly to main"
+          elif [ "${STATUS}" = "conflict" ]; then
+            echo "Result: PR opened for manual conflict resolution"
+          elif [ "${STATUS}" = "push_rejected" ]; then
+            echo "Result: PR opened (direct push rejected)"
+          else
+            echo "Result: unknown — see job logs"
+          fi
