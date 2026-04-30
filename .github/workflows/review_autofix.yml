@@ -3929,6 +3929,20 @@ jobs:
             exit 0
           fi
 
+          # Scoped opt-out for the e2e smoke test. The implement workflow
+          # tags PRs born from `[E2E Smoke Test]` issues with the
+          # `e2e-smoke-test` label. Without this guard the editor's
+          # bait-removal commit would race the e2e gate's verify-bait-
+          # removed step: auto-merge could fire the moment the editor
+          # commit lands, closing the PR before the e2e gate has read
+          # the post-edit canary blob. Repo-wide ENABLE_AUTO_MERGE stays
+          # untouched so non-e2e PRs keep auto-merging as before.
+          PR_LABELS_RAW="$(gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" --jq '[.[].name] | join(",")' 2>/dev/null || echo "")"
+          if printf '%s' "${PR_LABELS_RAW}" | tr ',' '\n' | grep -qx 'e2e-smoke-test'; then
+            echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
+            exit 0
+          fi
+
           echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
           if gh_retry gh pr merge "${PR_NUMBER}" --repo "${{ github.repository }}" --squash --auto; then
             echo "Auto-merge enabled. PR will merge once all required checks pass."

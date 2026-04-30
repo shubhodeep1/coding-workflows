@@ -552,9 +552,16 @@ jobs:
           # the smoke-test fixture so the gate isn't drowned in
           # start/progress/finish notifications. SILENT > CRITICAL so
           # all callers' levels filter to no-op.
+          # Also export IS_SMOKE_TEST so the post-PR-creation step can
+          # auto-apply force-review + e2e-smoke-test labels — required
+          # because the canary edit is doc-only and the deterministic-
+          # skip-merge job in review_autofix.yml will otherwise enable
+          # auto-merge before the e2e gate's bait-injection phase has
+          # a chance to push (race observed in run 25150961704).
           if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
             echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+            echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
           fi
 
       - name: Fetch issue comments
@@ -2470,6 +2477,42 @@ jobs:
 
           exit 1
 
+      - name: Ensure E2E smoke-test labels exist on repo
+        # Pre-creates the labels referenced by `Create Pull Request`'s
+        # conditional `--label` flags below. `gh pr create --label`
+        # requires the label to already exist on the repo or the whole
+        # PR creation fails — so this idempotent ensure step runs FIRST
+        # and only when IS_SMOKE_TEST=true (no work for non-smoke runs).
+        if: env.SKIP_IMPLEMENT != 'true' && env.IS_SMOKE_TEST == 'true' && steps.commit_changes.outputs.did_commit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+
+          # Color/description for `force-review` mirror the inline
+          # creation in test-and-mark-stable.yml; for `e2e-smoke-test`
+          # they're new (purple = test-infra convention). Both are
+          # idempotent — `gh api .../labels/<name>` returns 200 when
+          # present, otherwise we POST to create. Failures are non-fatal
+          # because the PR still gets created; the gate just won't see
+          # the labels and will run the production path.
+          gh_retry gh api "repos/${{ github.repository }}/labels/force-review" >/dev/null 2>&1 || \
+            gh_retry gh api "repos/${{ github.repository }}/labels" \
+              -f name="force-review" \
+              -f color="d93f0b" \
+              -f description="Bypass review_autofix deterministic skip" \
+              >/dev/null 2>&1 || \
+            echo "::warning::Could not ensure 'force-review' label exists; smoke-test PR may auto-merge"
+          gh_retry gh api "repos/${{ github.repository }}/labels/e2e-smoke-test" >/dev/null 2>&1 || \
+            gh_retry gh api "repos/${{ github.repository }}/labels" \
+              -f name="e2e-smoke-test" \
+              -f color="5319e7" \
+              -f description="E2E smoke test PR — review_autofix skips auto-merge" \
+              >/dev/null 2>&1 || \
+            echo "::warning::Could not ensure 'e2e-smoke-test' label exists; smoke-test PR may auto-merge"
+
       - name: Create Pull Request
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
         id: create_pr
@@ -2478,12 +2521,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! gh pr create \
-            --repo "${{ github.repository }}" \
-            --base "${PR_BASE_BRANCH}" \
-            --head "${TARGET_BRANCH}" \
-            --title "AI implementation for issue #${ISSUE_NUMBER}" \
-            --body "Automated implementation. Closes ${ISSUE_URL}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
+          # Atomically apply force-review + e2e-smoke-test labels at PR
+          # creation time when this is a smoke-test run. Applying them
+          # post-creation would race the `pull_request: opened` event
+          # that fires `internal-review.yml` → `review_autofix.yml` gate
+          # — the gate snapshots labels and the wrapper does NOT trigger
+          # on `labeled`, so a label added afterwards cannot rewind the
+          # gate decision. Race observed in run 25150961704: doc-only
+          # canary PR auto-merged 50s after creation, before the e2e
+          # gate's Phase 3b1 force-review-label step ran. See
+          # `Ensure E2E smoke-test labels exist on repo` step above —
+          # `--label` here requires those labels to exist.
+          PR_CREATE_ARGS=(
+            --repo "${{ github.repository }}"
+            --base "${PR_BASE_BRANCH}"
+            --head "${TARGET_BRANCH}"
+            --title "AI implementation for issue #${ISSUE_NUMBER}"
+            --body "Automated implementation. Closes ${ISSUE_URL}"
+          )
+          if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
+            PR_CREATE_ARGS+=(--label "force-review" --label "e2e-smoke-test")
+          fi
+
+          if ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
             echo "PR creation failed. This may indicate a PR was created by another process during execution."
             if [ -s "${RUNTIME_DIR}/created_pr_url.err" ]; then
               cat "${RUNTIME_DIR}/created_pr_url.err"
@@ -2506,6 +2566,68 @@ jobs:
             exit 1
           fi
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Apply E2E smoke-test labels to PR
+        # Applied at PR creation (not later) because the
+        # `pull_request: opened` event fires `internal-review.yml`
+        # immediately, and the gate decision in `review_autofix.yml`
+        # uses whatever labels are present at that moment. The wrapper
+        # does NOT trigger on `labeled`, so a label added after `opened`
+        # cannot retrigger the gate — by the time the e2e workflow's
+        # Phase 3b1 force-review-label step runs, the deterministic-
+        # skip-merge job has already auto-merged a doc-only canary PR
+        # (race observed in run 25150961704: PR merged at +50s, e2e
+        # bait push at +113s, then 30 min wait-review timeout).
+        #
+        # Two labels are applied:
+        #   * `force-review`     — bypasses gate's deterministic_skip
+        #     so the codex-agent path runs (reviewers + editor + commit
+        #     + push), giving the bait commit something to react to.
+        #   * `e2e-smoke-test`   — marker checked by review_autofix.yml's
+        #     `Enable auto-merge on PR` step to skip auto-merge for
+        #     this PR specifically (scoped opt-out, so the repo-wide
+        #     ENABLE_AUTO_MERGE var stays untouched and non-e2e PRs
+        #     keep auto-merging as before).
+        if: env.SKIP_IMPLEMENT != 'true' && env.IS_SMOKE_TEST == 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PR_URL: ${{ steps.create_pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+
+          PR_NUMBER="$(printf '%s\n' "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
+          if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not extract PR number from URL '${PR_URL}'; skipping E2E label application"
+            exit 0
+          fi
+
+          # Label colors/descriptions mirror those in
+          # test-and-mark-stable.yml (force-review) and the catalog
+          # convention used by review_autofix.yml's
+          # deterministic-skip-merge job. ensure_label_exists pattern
+          # inlined to avoid a heavyweight label_helpers.sh source.
+          gh_retry gh api "repos/${{ github.repository }}/labels/force-review" >/dev/null 2>&1 || \
+            gh_retry gh api "repos/${{ github.repository }}/labels" \
+              -f name="force-review" \
+              -f color="d93f0b" \
+              -f description="Bypass review_autofix deterministic skip" \
+              >/dev/null 2>&1 || true
+          gh_retry gh api "repos/${{ github.repository }}/labels/e2e-smoke-test" >/dev/null 2>&1 || \
+            gh_retry gh api "repos/${{ github.repository }}/labels" \
+              -f name="e2e-smoke-test" \
+              -f color="5319e7" \
+              -f description="E2E smoke test PR — review_autofix skips auto-merge" \
+              >/dev/null 2>&1 || true
+
+          if ! gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" \
+              -f "labels[]=force-review" \
+              -f "labels[]=e2e-smoke-test" >/dev/null 2>&1; then
+            echo "::warning::Could not apply E2E smoke-test labels to PR #${PR_NUMBER}; review_autofix may auto-merge before the e2e bait phase runs"
+          else
+            echo "✓ Applied force-review + e2e-smoke-test labels to PR #${PR_NUMBER}"
+          fi
 
       - name: Refetch memory helpers after commit cleanup
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''

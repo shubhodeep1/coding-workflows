@@ -830,6 +830,37 @@ jobs:
             echo "  … PR head SHA still moving (${HEAD_A:0:7} -> ${HEAD_B:0:7}); attempt ${stability_attempt}/5"
           done
 
+          # Fail-fast guard: if the PR is already closed/merged, the
+          # bait push will land on the branch but `pull_request:
+          # synchronize` does NOT fire for closed PRs, so no
+          # review_autofix run will ever see the bait commit. Without
+          # this guard, wait-review (Phase 4) sits for the full
+          # REVIEW_TIMEOUT (30m) before exiting with the misleading
+          # `no_review_triggered` status — which sends investigators
+          # chasing a fan-out bug instead of the real cause.
+          #
+          # Run 25150961704 was the canonical failure: PR auto-merged
+          # at +50s by the deterministic-skip-merge job, bait pushed
+          # at +113s, then 30 minutes of polling for a workflow that
+          # could never come. The implement workflow now stamps E2E
+          # PRs with `force-review` + `e2e-smoke-test` at creation
+          # time to suppress that auto-merge — this guard exists as
+          # defense-in-depth in case (a) the labels fail to apply,
+          # (b) someone manually merges the PR mid-test, or (c) a
+          # future auto-merge path is added that doesn't honor the
+          # e2e-smoke-test label.
+          PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo "")
+          PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""' 2>/dev/null || echo "")
+          PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false' 2>/dev/null || echo "false")
+          if [ "${PR_STATE}" = "closed" ] || [ "${PR_MERGED}" = "true" ]; then
+            PR_MERGED_AT=$(printf '%s' "${PR_META}" | jq -r '.merged_at // ""' 2>/dev/null || echo "")
+            PR_CLOSED_AT=$(printf '%s' "${PR_META}" | jq -r '.closed_at // ""' 2>/dev/null || echo "")
+            echo "::error::PR #${PR_NUMBER} is already ${PR_STATE} (merged=${PR_MERGED}, merged_at=${PR_MERGED_AT}, closed_at=${PR_CLOSED_AT}) before bait could be injected — pushes to the head branch will not fan out a pull_request synchronize event, so no review_autofix run will be triggered. Likely cause: review_autofix.yml's deterministic-skip-merge job auto-merged the PR before the e2e gate's force-review/e2e-smoke-test labels took effect (see implement.yml 'Apply E2E smoke-test labels to PR' step and review_autofix.yml 'Enable auto-merge on PR' step's e2e-smoke-test guard)."
+            echo "status=pr_already_closed" >> "$GITHUB_OUTPUT"
+            echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           echo "Fetching current canary blob on branch ${BRANCH}..."
           # The implementer should have set the canary to exactly 3 lines.
           # We fetch its SHA + decoded content so we can PUT a 4-line
@@ -2250,6 +2281,14 @@ jobs:
           BAIT_VERIFIED="${{ steps.verify-bait-removed.outputs.status }}"
           if [ "$BAIT_INJECTED" = "skipped" ]; then
             echo "  - Editor Bait. SKIPPED (could not inject — non-blocking)"
+          elif [ "$BAIT_INJECTED" = "pr_already_closed" ]; then
+            # Phase 3c's fail-fast guard: PR was already closed/merged
+            # before the bait could be injected (almost certainly the
+            # deterministic-skip-merge auto-merge race). Distinct from
+            # a generic editor failure — the editor never had a chance
+            # to run because the test setup itself was sabotaged.
+            echo "  ✗ Editor Bait. FAILED (pr_already_closed) — PR was merged/closed before bait injection; editor never invoked. See Phase 3c log."
+            PASSED=false
           elif [ "$BAIT_VERIFIED" = "success" ]; then
             echo "  ✓ Editor Bait. PASSED (editor removed bait + pushed fix commit)"
           else
