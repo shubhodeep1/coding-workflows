@@ -989,7 +989,19 @@ jobs:
                     # failure-25126757724.md (a rename in
                     # review_autofix.yml is a breaking change per
                     # CLAUDE.md §6, so this literal is safe to depend on).
-                    if printf '%s' "$LOG_CONTENT" | grep -qF 'Editor summary contains failure/fallback markers'; then
+                    #
+                    # The `::warning::` prefix is part of the literal so
+                    # this only matches the validator's annotation, not
+                    # any other log line that happens to mention the
+                    # phrase (e.g. the in-step retry's own `::notice::`
+                    # before its widened gate fix landed — see PR #1798
+                    # review). The validator emits exactly this prefix
+                    # (`echo "::warning::Editor summary contains
+                    # failure/fallback markers — editor never completed
+                    # a validated review."`); GitHub Actions preserves
+                    # workflow-command prefixes verbatim in the raw log
+                    # bytes returned by /actions/jobs/{id}/logs.
+                    if printf '%s' "$LOG_CONTENT" | grep -qF '::warning::Editor summary contains failure/fallback markers'; then
                       echo "  ⚠ Editor noop marker detected in live log — editor never produced a validated commit; aborting wait early"
                       echo "::warning::Review workflow editor produced no validated summary (EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
                       echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"

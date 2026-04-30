@@ -2772,7 +2772,14 @@ jobs:
             _instep_retry_summary_empty="true"
           elif grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}" 2>/dev/null; then
             _instep_retry_summary_empty="true"
-            echo "::notice::Editor summary contains failure/fallback markers — treating as empty for in-step retry decision."
+            # Wording deliberately omits the literal substring
+            # "Editor summary contains failure/fallback markers" — the e2e
+            # poller in test-and-mark-stable.yml greps live job logs for
+            # the validator's `::warning::` annotation that uses that
+            # phrase, and a retry-side echo carrying the same literal
+            # would false-trigger the poller's early-exit before the
+            # retry has had a chance to succeed (see PR #1798 review).
+            echo "::notice::Editor summary present but matched fallback-marker regex — treating as empty for in-step retry decision."
           fi
           if [ "${_instep_retry_enabled}" = "true" ] \
               && [ "${_instep_retry_summary_empty}" = "true" ]; then
