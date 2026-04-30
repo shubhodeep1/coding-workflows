@@ -143,17 +143,22 @@ jobs:
           # transient network/auth flakes; persistent failure is a
           # hard error since running on stale tag data could pick a
           # colliding version.
+          # Capture each attempt's stderr to /tmp/_git_fetch_err so the
+          # underlying transport/auth failure cause is visible in logs
+          # instead of being swallowed by the retry warning.
           fetch_attempt=1
           while [ "$fetch_attempt" -le 3 ]; do
-            if git fetch --tags --force origin; then
+            if git fetch --tags --force origin 2>/tmp/_git_fetch_err; then
               break
             fi
             if [ "$fetch_attempt" -eq 3 ]; then
               echo "::error::Failed to fetch remote tags from origin after 3 attempts — refusing to compute next version on potentially stale tag data"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
               exit 1
             fi
             backoff=$(( 2 ** fetch_attempt ))
             echo "::warning::git fetch --tags failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
             sleep "${backoff}"
             fetch_attempt=$((fetch_attempt + 1))
           done
