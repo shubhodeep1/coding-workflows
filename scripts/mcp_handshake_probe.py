@@ -123,13 +123,12 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 
 	Returns 0 on success and a non-zero code (1..6) on failure. The exit code
 	maps to the failure reason so callers can distinguish them in logs:
-
-	    1 — spawn failed (file not found / not executable)
-	    2 — timeout waiting for the initialize response
-	    3 — server closed stdout before sending a complete response
-	    4 — response is not valid JSON
-	    5 — response is JSON-RPC but is missing ``result`` or carries ``error``
-	    6 — response id does not match the request id
+	1 spawn failed (file not found / not executable),
+	2 timeout waiting for the initialize response,
+	3 server closed stdout before sending a complete response,
+	4 response is not valid JSON,
+	5 response is JSON-RPC but is missing ``result`` or carries ``error``,
+	6 response id does not match the request id.
 	"""
 	request_id = 1
 	request = _build_initialize_request(request_id)
