@@ -900,7 +900,7 @@ jobs:
           Restrictions:
 
           - Do not ask clarification questions.
-          - Do not change CI workflows.
+          {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md or codex_system_instructions.md.
 
           Your output should be repository changes only.
