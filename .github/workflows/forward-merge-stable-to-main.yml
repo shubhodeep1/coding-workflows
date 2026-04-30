@@ -77,16 +77,15 @@ jobs:
             exit 0
           fi
 
-          # Push directly. If branch protection rejects the push, fall
-          # back to opening a PR.
+          # Push directly. If branch protection rejects the push, keep
+          # the local merge commit on HEAD so the PR-fallback step can
+          # push that commit to a dedicated branch — resetting here
+          # would discard the merge and the fallback PR would be a
+          # no-op.
           if git push origin main; then
             echo "merge_status=pushed" >> "$GITHUB_OUTPUT"
           else
             echo "merge_status=push_rejected" >> "$GITHUB_OUTPUT"
-            # Reset local main so the PR-fallback step starts from a
-            # clean state matching origin/main.
-            git fetch origin main
-            git reset --hard origin/main
           fi
 
       - name: Fallback — open PR for manual merge
@@ -100,15 +99,24 @@ jobs:
         run: |
           set -euo pipefail
           BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}"
-          git checkout -b "${BRANCH}"
-          git push origin "${BRANCH}"
 
           if [ "${MERGE_STATUS}" = "conflict" ]; then
+            # Conflict path: HEAD is back at origin/main after `merge
+            # --abort`, so push a branch rooted at origin/stable. With
+            # base=main, head=BRANCH, GitHub will surface the conflicts
+            # for manual resolution and the PR will contain the ahead
+            # commits from stable.
+            git push origin "refs/remotes/origin/stable:refs/heads/${BRANCH}"
             BODY="Automated forward-merge of \`stable\` into \`main\` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on \`stable\` is also present on \`main\`.
 
           Source SHA: \`${GITHUB_SHA}\`
           Triggered by: forward-merge-stable-to-main.yml"
           else
+            # push_rejected path: HEAD already has the local merge
+            # commit (we did NOT reset). Push it to a dedicated branch
+            # so the PR contains the merge that branch protection
+            # rejected on `main`.
+            git push origin "HEAD:refs/heads/${BRANCH}"
             BODY="Automated forward-merge of \`stable\` into \`main\` could not push directly (branch protection). Merge this PR so the bug fix on \`stable\` is also present on \`main\`.
 
           Source SHA: \`${GITHUB_SHA}\`
