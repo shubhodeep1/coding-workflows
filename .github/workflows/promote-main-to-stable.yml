@@ -136,8 +136,8 @@ jobs:
           set -euo pipefail
           # test-and-mark-stable.yml hard-rejects any dispatch ref
           # other than `stable`, so we MUST pass `--ref stable` here.
-          # Releasing tags the just-fast-forwarded commit on stable
-          # and `gh release create` targets the stable branch.
+          # The release job tags the just-fast-forwarded commit on
+          # stable and `gh release create` targets the stable branch.
           gh workflow run test-and-mark-stable.yml \
             --ref stable \
             -f version_tag="${{ inputs.version_tag }}" \
