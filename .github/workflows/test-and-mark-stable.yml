@@ -66,9 +66,46 @@ permissions:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
+  # Job -1: Validate dispatch ref — must be `stable`
+  #
+  # This workflow only releases from the long-lived `stable` branch.
+  # Dispatching from `main` (or any other ref) is rejected so an
+  # operator cannot accidentally tag main as stable and drag in
+  # untested in-flight work. To promote `main` to the new stable
+  # baseline (typical for minor/major bumps), run
+  # promote-main-to-stable.yml — it fast-forwards stable to main and
+  # then dispatches this workflow on stable automatically. For
+  # bug-fix patch releases on the existing stable line, dispatch
+  # this workflow directly with `--ref stable`.
+  #
+  # The `branch` output is preserved (always `stable`) so downstream
+  # jobs that reference `needs.source.outputs.branch` keep working
+  # without per-job edits.
+  # ──────────────────────────────────────────────────────────────────
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      branch: ${{ steps.detect.outputs.branch }}
+    steps:
+      - name: Validate dispatch ref
+        id: detect
+        run: |
+          set -euo pipefail
+          REF="${{ github.ref_name }}"
+          if [ "$REF" != "stable" ]; then
+            echo "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
+            echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches this workflow on stable automatically."
+            exit 1
+          fi
+          echo "Dispatched from 'stable' — proceeding with stable-source release path"
+          echo "branch=stable" >> "$GITHUB_OUTPUT"
+
+  # ──────────────────────────────────────────────────────────────────
   # Job 0: Resolve version — auto-increment patch if not provided
   # ──────────────────────────────────────────────────────────────────
   resolve-version:
+    needs: [source]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -77,12 +114,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
           fetch-tags: true
 
       - name: Resolve version tag
         id: resolve
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           INPUT_VERSION="${{ inputs.version_tag }}"
@@ -97,19 +136,81 @@ jobs:
             exit 0
           fi
 
-          # Find the latest vX.Y.Z tag reachable from main
-          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          # Refresh tags from origin BEFORE computing LATEST. If a new
+          # tag was pushed after checkout, computing LATEST first would
+          # pick an outdated base version and lean on the collision-
+          # skip loop below to catch up. Bounded retry tolerates
+          # transient network/auth flakes; persistent failure is a
+          # hard error since running on stale tag data could pick a
+          # colliding version.
+          # Capture each attempt's stderr to /tmp/_git_fetch_err so the
+          # underlying transport/auth failure cause is visible in logs
+          # instead of being swallowed by the retry warning.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch --tags --force origin 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch remote tags from origin after 3 attempts — refusing to compute next version on potentially stale tag data"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch --tags failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
 
+          # Find the latest vX.Y.Z tag reachable from `stable`'s HEAD.
+          # `--merged HEAD` is critical: if main is on v1.5.0 and stable
+          # is on v1.4.2, the next stable patch must bump from v1.4.2
+          # (→ v1.4.3), not from main's v1.5.0. Restricting the lookup
+          # to tags reachable from the checked-out branch avoids
+          # computing the next version from unrelated newer tags
+          # elsewhere in the repo.
+          #
+          # The shell glob `v[0-9]*.[0-9]*.[0-9]*` also matches prerelease
+          # tags (e.g. `v1.4.2-beta.1`) which would later break patch
+          # arithmetic on `cut -d. -f3` under `set -euo pipefail`. Filter
+          # to strict semver with grep so only release tags survive.
+          # `{ grep ... || true; }` keeps the pipeline exit status at 0
+          # when no semver tags exist (grep returns 1 on no-match, which
+          # under pipefail would abort the step before the empty-LATEST
+          # fallback below can run).
+          LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+            | head -n1)
+
+          NEXT=""
           if [ -z "$LATEST" ]; then
             NEXT="v1.0.0"
-            echo "No existing version tags found. Defaulting to ${NEXT}"
+            echo "No existing version tags reachable from ${SOURCE_BRANCH}. Defaulting to ${NEXT}"
           else
-            # Parse and increment patch
+            # Bump patch and skip any candidate that already exists in
+            # the local tag namespace (which, after the fetch above,
+            # mirrors the remote). Bounded to 1000 iterations as a
+            # belt-and-braces guard against pathological tag layouts.
             MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
             MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
             PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
-            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-            echo "Latest tag: ${LATEST} → next version: ${NEXT}"
+            i=0
+            while [ "$i" -lt 1000 ]; do
+              PATCH=$((PATCH + 1))
+              CANDIDATE="v${MAJOR}.${MINOR}.${PATCH}"
+              if ! git rev-parse "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+                NEXT="$CANDIDATE"
+                break
+              fi
+              echo "Tag ${CANDIDATE} already exists elsewhere in repo — skipping"
+              i=$((i + 1))
+            done
+            if [ -z "$NEXT" ]; then
+              echo "::error::Could not find an unused patch tag after 1000 attempts starting from ${LATEST}"
+              exit 1
+            fi
+            echo "Latest tag on ${SOURCE_BRANCH}: ${LATEST} → next version: ${NEXT}"
           fi
 
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
@@ -2455,14 +2556,14 @@ jobs:
   # Job 1b: Script correctness validation — runs parallel with E2E
   # ──────────────────────────────────────────────────────────────────
   validate-scripts:
-    needs: [resolve-version]
+    needs: [source, resolve-version]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -3666,7 +3767,7 @@ jobs:
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   validate:
-    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test]
+    needs: [source, resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test]
     if: >-
       always() &&
       needs.resolve-version.result == 'success' &&
@@ -3692,32 +3793,115 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
 
       - name: Ensure tag does not already exist
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
-            echo "::error::Tag ${VERSION} already exists"
-            exit 1
-          fi
+          # Query the remote directly: `git rev-parse refs/tags/<V>` only
+          # checks the local tag namespace, which can race a concurrent
+          # tag push (or be incomplete depending on checkout fetch
+          # config). `git ls-remote --exit-code` returns 0 if the ref
+          # exists on origin, 2 if it does not, and any other non-zero
+          # value for transport / auth / repo errors. Distinguish those
+          # so a transient failure can't silently look like "tag absent"
+          # and let the workflow advance to a duplicate-tag push.
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1
+          rc=$?
+          set -e
+          case "$rc" in
+            0)
+              echo "::error::Tag ${VERSION} already exists on origin"
+              exit 1
+              ;;
+            2)
+              # Tag absent — this is what we want.
+              echo "Tag ${VERSION} does not yet exist on origin — OK"
+              ;;
+            *)
+              echo "::error::git ls-remote failed with exit code ${rc} (transport/auth/repo error). Refusing to proceed without a confirmed tag-absent signal."
+              exit 1
+              ;;
+          esac
 
-      - name: Verify CI passed on main
+      - name: Verify CI passed on source branch
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           SHA=$(git rev-parse HEAD)
-          echo "Checking CI status for $SHA ..."
-          STATE=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
-            --jq '.state' 2>/dev/null || echo "pending")
-          if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
-            echo "::error::CI is failing on main ($STATE). Fix before releasing."
+          echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
+          # Allow the release even if no CI status is reported (repos
+          # with no required checks). Fail only on explicit failure.
+          # Rate-limit-aware gh retry so transient 429 / abuse-detection /
+          # secondary-rate errors aren't silently coerced to "pending"
+          # — same wrapper as in mark-stable.yml.
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
+          _gh_retry() {
+            local attempt=1
+            while [ "${attempt}" -le 5 ]; do
+              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
+              else
+                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
+                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
+                sleep "${w}"; attempt=$((attempt + 1))
+              fi
+            done; return 1
+          }
+          # Distinguish three failure modes:
+          #   1. API call itself failed (transport / auth / repeated 5xx
+          #      / rate-limit retries exhausted) → hard error. The old
+          #      `|| echo "pending"` coerced this into a synthetic
+          #      "pending" that bypassed the gate.
+          #   2. API returned an empty state (repo has no required
+          #      checks configured) → proceed (preserves the documented
+          #      "Allow the release even if no CI status is reported"
+          #      policy above).
+          #   3. API returned a real state — fail only on explicit
+          #      "failure" / "error".
+          # Note on stderr: `_gh_retry` already redirects the wrapped
+          # command's stderr to /tmp/_gh_rl_err internally (see helper
+          # above). An outer `2>/tmp/_gh_state_err` here would only
+          # capture _gh_retry's own warnings, not the actual `gh api`
+          # error — so on rc != 0 we surface /tmp/_gh_rl_err for the
+          # real diagnostic.
+          set +e
+          STATE=$(_gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
+            --jq '.state')
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Failed to query CI status after retries (rc=${rc}). Refusing to release without a confirmed CI signal."
+            cat /tmp/_gh_rl_err >&2 2>/dev/null || true
             exit 1
           fi
-          echo "CI state: $STATE — OK"
+          if [ -z "$STATE" ]; then
+            echo "CI state: (empty — no required checks configured?) — proceeding"
+          elif [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
+            echo "::error::CI is failing on ${SOURCE_BRANCH} ($STATE). Fix before releasing."
+            exit 1
+          else
+            echo "CI state: $STATE — OK"
+          fi
 
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
@@ -3728,14 +3912,14 @@ jobs:
   # Job 3: Create release (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   release:
-    needs: [resolve-version, validate]
+    needs: [source, resolve-version, validate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout main
+      - name: Checkout source branch
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
 
       - name: Extract changelog for this version
@@ -3780,13 +3964,14 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
           gh release create "${VERSION}" \
             --title "${VERSION}" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            --target main
+            --target "${SOURCE_BRANCH}"
 
       - name: Notify consumer repos via repository_dispatch
         if: ${{ !inputs.dry_run }}
@@ -3818,10 +4003,12 @@ jobs:
 
       - name: Dry-run summary
         if: ${{ inputs.dry_run }}
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           echo "=== DRY RUN ==="
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          echo "Would tag main as: ${VERSION}"
+          echo "Would tag ${SOURCE_BRANCH} as: ${VERSION}"
           echo "Would update pointers: stable, $(echo "${VERSION}" | cut -d. -f1)"
           echo ""
           echo "Changelog notes:"
@@ -3833,10 +4020,42 @@ jobs:
       - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
+  # Job 3.5: Sync stable bug fixes back to main
+  #
+  # After a successful stable release, dispatch
+  # `forward-merge-stable-to-main.yml` so the just-released bug fixes
+  # are propagated to `main`. This is belt-and-braces — the
+  # forward-merge workflow already runs on every push to `stable`
+  # (typically via the bug-fix PR merge), but explicitly dispatching
+  # here guarantees the sync is tied to the release event itself, so
+  # `main` can never silently drift behind a tagged stable release.
+  #
+  # Skipped on dry runs (no real release happened).
+  # ──────────────────────────────────────────────────────────────────
+  sync-to-main:
+    needs: [release]
+    if: >-
+      !inputs.dry_run &&
+      needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch forward-merge-stable-to-main
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run forward-merge-stable-to-main.yml --ref stable
+          echo "Dispatched forward-merge-stable-to-main.yml on stable branch."
+          echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/forward-merge-stable-to-main.yml"
+
+  # ──────────────────────────────────────────────────────────────────
   # Job 4: Combined Telegram notification (runs after ALL jobs)
   # ──────────────────────────────────────────────────────────────────
   notify:
-    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release]
+    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release, sync-to-main]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
