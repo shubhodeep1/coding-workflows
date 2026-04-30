@@ -9,11 +9,22 @@
 #   --context CONTEXT Serena context: "codex" (default), "agent", "claude-code"
 #
 # Environment variables (optional overrides):
-#   SERENA_VERSION         Git ref to install (default: "main")
-#   SERENA_LANGUAGES       Space-separated list of languages to force (e.g. "typescript python")
-#   SERENA_DISABLED        Set to "true" to skip Serena setup entirely
-#   CONTEXT7_DISABLED      Set to "true" to skip Context7 MCP setup (default: "true")
-#   GIT_MCP_DISABLED       Set to "true" to skip Git MCP setup (default: "true")
+#   SERENA_VERSION                Git ref to install (default: "main")
+#   SERENA_LANGUAGES              Space-separated list of languages to force (e.g. "typescript python")
+#   SERENA_DISABLED               Set to "true" to skip Serena setup entirely
+#   CONTEXT7_DISABLED             Set to "true" to skip Context7 MCP setup (default: "true")
+#   GIT_MCP_DISABLED              Set to "true" to skip Git MCP setup (default: "true")
+#   MCP_HANDSHAKE_PROBE_ENABLED   When "true" (default), each optional MCP server
+#                                 (Context7, Git) is probed via a JSON-RPC
+#                                 ``initialize`` exchange before its config block
+#                                 is written to ~/.codex/config.toml. Servers that
+#                                 fail the probe are skipped to prevent Codex from
+#                                 emitting malformed tool entries that some
+#                                 OpenRouter back-ends (notably Azure) reject with
+#                                 HTTP 400. Set to "false" to skip probing and
+#                                 unconditionally write the blocks.
+#   MCP_HANDSHAKE_PROBE_TIMEOUT   Seconds to wait for the probe response
+#                                 (default: 15).
 #
 # This script:
 #   1. Installs uv if not present
@@ -90,6 +101,47 @@ warn_and_exit() {
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
 	exit 0
+}
+
+# ── Pre-flight MCP handshake probe ──────────────────────────────────────────
+#
+# Spawns the candidate MCP server briefly and exchanges a single JSON-RPC
+# ``initialize`` message. Returns 0 if the server returns a well-formed
+# result, non-zero otherwise.
+#
+# This protects Codex from emitting a malformed tool list when an MCP server
+# crashes during its handshake. The crash leaves Codex with an entry whose
+# ``function`` field is undefined; some OpenRouter back-ends (notably Azure)
+# reject the request with HTTP 400 ("7.function: Invalid input: expected
+# object, received undefined"), causing implement.yml / validate.yml /
+# review_autofix.yml retries to fail.
+#
+# Usage: probe_mcp_handshake <name> <command> [args...]
+probe_mcp_handshake() {
+	local _name="$1"
+	local _command="$2"
+	shift 2
+	local _timeout="${MCP_HANDSHAKE_PROBE_TIMEOUT:-15}"
+	if [ "${MCP_HANDSHAKE_PROBE_ENABLED:-true}" != "true" ]; then
+		return 0
+	fi
+	if ! command -v python3 >/dev/null 2>&1; then
+		echo "::warning::python3 not available — skipping MCP handshake probe for '${_name}'."
+		return 0
+	fi
+	local _probe_script
+	_probe_script="$(dirname "${BASH_SOURCE[0]:-$0}")/mcp_handshake_probe.py"
+	if [ ! -f "${_probe_script}" ]; then
+		echo "::warning::Probe script ${_probe_script} not found — skipping MCP handshake probe for '${_name}'."
+		return 0
+	fi
+	# Forward the server's argv after `--` so that flags such as `-y` are
+	# passed to the server, not to the probe.
+	python3 "${_probe_script}" \
+		--name "${_name}" \
+		--timeout "${_timeout}" \
+		--command "${_command}" \
+		-- "$@"
 }
 
 # Remove one MCP server table and all its sub-tables (e.g. [mcp_servers.<name>.env]).
@@ -566,17 +618,26 @@ CONTEXT7_CONFIG_TOUCHED="true"
 remove_mcp_server_blocks "context7" "${CODEX_CONFIG}" || echo "::warning::Failed to clean existing Context7 MCP config; continuing without updating Context7 MCP config." >&2
 
 if [ "${CONTEXT7_DISABLED:-true}" != "true" ]; then
-	if cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF
+	# Defense-in-depth: pin context7 to a known-good version (PR #1705) AND
+	# probe its handshake before committing the config block. The pin
+	# prevents the regression we already saw; the probe catches future
+	# regressions or environment-specific failures (e.g. npx cache miss in
+	# air-gapped runners) so Codex never sees a half-initialised tool entry.
+	if probe_mcp_handshake context7 npx -y "@upstash/context7-mcp@2.1.8"; then
+		if cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF
 
 [mcp_servers.context7]
 command = "npx"
 args = ["-y", "@upstash/context7-mcp@2.1.8"]
 required = false
 CONTEXT7_MCP_EOF
-	then
-		echo "Context7 MCP server appended to ${CODEX_CONFIG}"
+		then
+			echo "Context7 MCP server appended to ${CODEX_CONFIG}"
+		else
+			echo "::warning::Failed to append Context7 MCP config; continuing without Context7 MCP setup." >&2
+		fi
 	else
-		echo "::warning::Failed to append Context7 MCP config; continuing without Context7 MCP setup." >&2
+		echo "::warning::Context7 MCP handshake probe failed — skipping [mcp_servers.context7] block to avoid malformed Codex tool list."
 	fi
 else
 	echo "Context7 MCP setup skipped (CONTEXT7_DISABLED=true)."
@@ -597,7 +658,8 @@ if [ "${GIT_MCP_DISABLED:-true}" != "true" ]; then
 			GIT_MCP_BIN="$(find "${HOME}/.cache/uv" -name "mcp-server-git" -type f -executable 2>/dev/null | head -1 || true)"
 		fi
 		if [ -n "${GIT_MCP_BIN}" ] && [ -x "${GIT_MCP_BIN}" ]; then
-			if cat >> "${CODEX_CONFIG}" <<GIT_MCP_EOF
+			if probe_mcp_handshake git "${GIT_MCP_BIN}" --repository "${PROJECT_ROOT}"; then
+				if cat >> "${CODEX_CONFIG}" <<GIT_MCP_EOF
 
 [mcp_servers.git]
 command = "${GIT_MCP_BIN}"
@@ -608,10 +670,13 @@ required = false
 HOME = "${HOME}"
 PATH = "${PATH}"
 GIT_MCP_EOF
-			then
-				echo "Git MCP server appended to ${CODEX_CONFIG}"
+				then
+					echo "Git MCP server appended to ${CODEX_CONFIG}"
+				else
+					echo "::warning::Failed to append Git MCP config; continuing without Git MCP setup." >&2
+				fi
 			else
-				echo "::warning::Failed to append Git MCP config; continuing without Git MCP setup." >&2
+				echo "::warning::Git MCP handshake probe failed — skipping [mcp_servers.git] block to avoid malformed Codex tool list."
 			fi
 		else
 			echo "::warning::Could not resolve mcp-server-git binary; skipping Git MCP setup." >&2
