@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:992-1003 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: A failed live-log fetch leaves the poller without the shortcut markers for that iteration.\n  WHY: `gh_api_safe` failure truncates the tempfile and the loop falls back to status/conclusion polling only.\n- .github/workflows/test-and-mark-stable.yml:1031-1032 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `grep -caE \"Reviewer .* succeeded\"` can match unintended log lines and miscount reviewer successes.\n  WHY: The pattern is loose enough to over-match structured or diagnostic output, which can affect the early-exit threshold.\n- .github/workflows/test-and-mark-stable.yml:~1053-1054 | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `grep -caE \"Reviewer .* succeeded\"` can match unintended log lines and miscount reviewer successes.\n  WHY: The pattern is loose enough to over-match structured or diagnostic output, which can affect the early-exit threshold.\n- agents.md:776-785 | confidence=2\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The rollback note mentions `_instep_retry_summary_empty`, which can mislead maintainers about the current retry-summary name.\n  WHY: The guidance mixes the new `_instep_retry_summary_unusable` name with the old name in rollback text, which both reviewers flagged as confusing.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:~992-1003 | confidence=4\n  PROBLEM: A failed `gh_api_safe` fetch empties the live-log buffer and disables both early-exit shortcuts for that iteration.\n  WHY: When the API call fails, the poller truncates the tempfile and continues with status/conclusion polling only, so transient API errors can extend the wait loop.\n- .github/workflows/test-and-mark-stable.yml:~1053-1054 | confidence=3\n  PROBLEM: `grep -caE \"Reviewer .* succeeded\"` can match unintended log lines and miscount reviewer successes.\n  WHY: The regex is not tightly anchored to the structured completion line, so unrelated log text could affect the early-exit threshold.\n- agents.md:~785 | confidence=2\n  PROBLEM: The rollback guidance mentions `_instep_retry_summary_empty`, which can mislead maintainers about the current retry-summary name.\n  WHY: The rollback note mixes the new `_instep_retry_summary_unusable` name with the old name in the same instruction.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:992-1003 | confidence=5\n  PROBLEM: A failed `gh_api_safe` fetch empties the live-log buffer and disables both early-exit shortcuts for that iteration.\n  WHY: The poller truncates the tempfile on API failure and then falls back to status/conclusion polling only, so rate-limit or transient API errors can extend the wait loop.\n- .github/workflows/test-and-mark-stable.yml:1031-1032 | confidence=3\n  PROBLEM: `grep -caE \"Reviewer .* succeeded\"` can match unintended log lines and miscount reviewer successes.\n  WHY: The pattern can over-match lines that merely mention reviewer success, which could skew the success counter.\n- agents.md:776-785 | confidence=2\n  PROBLEM: The rollback guidance mentions `_instep_retry_summary_empty`, which can mislead maintainers about the current retry-summary name.\n  WHY: The rollback note combines the new `_instep_retry_summary_unusable` wording with the old name in a way that reviewers flagged as confusing.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "519a3112757cf69cb4956bdfcbfb0d3d4ea821c82b6517dae7af8467b30f77fd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1798,
+    "run_id": "25145477481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25145477481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430034557_b0e31868bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1798,
+    "run_id": "25145477481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T03:45:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
