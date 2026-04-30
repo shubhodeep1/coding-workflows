@@ -43,8 +43,9 @@ def _write_per_phase_report(
 	flatten: bool = False,
 ) -> Path:
 	"""Materialise a per-phase soft-error report under `root` in the
-	chosen `actions/download-artifact@v6` layout. Returns the directory
-	the consolidator should be pointed at.
+	chosen `actions/download-artifact@v6` layout. Returns the markdown
+	file path that was written (callers point the consolidator at
+	`root` itself, not at the returned path).
 	"""
 	artifact_name = f"soft-error-report-{run_id}-{phase}"
 	if flatten:
@@ -237,6 +238,32 @@ def test_summary_respects_byte_cap_with_unicode():
 				f"cap={cap} but summary is {len(summary.encode('utf-8'))} bytes"
 			)
 			# Round-trip decode must succeed (no replacement chars introduced).
+			summary.encode("utf-8").decode("utf-8")
+
+
+def test_summary_byte_cap_is_absolute_even_when_head_overflows():
+	"""Degenerate: cap so small the status pill alone exceeds it.
+
+	The contract `len(summary.encode('utf-8')) <= max_bytes` must hold
+	absolutely — Telegram will reject the message otherwise. Earlier
+	iterations of the truncation logic returned `head + marker` even
+	when that combination already exceeded `max_bytes`.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		# Spread findings across many canonical phases so the status
+		# pill itself becomes long.
+		long_phase_set = ("clarify", "plan", "implement", "review_autofix", "orchestrate_poll", "cancel_on_pr_close")
+		for phase in long_phase_set:
+			_write_per_phase_report(root, run_id="9", phase=phase, findings=f"### {phase}\nminor.")
+		# Cap below the pill+marker combined size to exercise the
+		# last-resort truncation guard.
+		for cap in (50, 80, 120):
+			_, summary = _run_consolidator(root, max_bytes=cap)
+			assert len(summary.encode("utf-8")) <= cap, (
+				f"cap={cap} but summary is {len(summary.encode('utf-8'))} bytes"
+			)
+			# Round-trip must still be valid UTF-8.
 			summary.encode("utf-8").decode("utf-8")
 
 

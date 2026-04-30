@@ -157,6 +157,26 @@ def extract_findings_section(markdown: str) -> str:
 	return body
 
 
+def _truncate_bytes_at_utf8_boundary(text: str, cap: int) -> str:
+	"""Truncate `text` so its UTF-8 byte length is `<= cap`, on a codepoint
+	boundary. Returns "" when `cap <= 0`. Used as a last-resort guard
+	when the assembled summary head alone would exceed `max_bytes`
+	(degenerate but possible if an operator passes a tiny cap or the
+	status pill explodes for an unusually large run).
+	"""
+	if cap <= 0:
+		return ""
+	encoded = text.encode("utf-8")
+	if len(encoded) <= cap:
+		return text
+	i = cap
+	# Walk back over UTF-8 continuation bytes (top two bits == 0b10) so
+	# the slice never lands inside a multi-byte codepoint.
+	while i > 0 and (encoded[i] & 0xC0) == 0x80:
+		i -= 1
+	return encoded[:i].decode("utf-8", errors="ignore")
+
+
 def parse_status(markdown: str) -> str:
 	m = ANALYSER_HEADER_RE.search(markdown)
 	return m.group("status") if m else "unknown"
@@ -298,16 +318,19 @@ def build_summary(
 				- marker_bytes
 			)
 			if budget > 0 and finding_blocks:
-				encoded_block = finding_blocks[0].encode("utf-8")
-				if len(encoded_block) > budget:
-					i = budget
-					while i > 0 and (encoded_block[i] & 0xC0) == 0x80:
-						i -= 1
-					encoded_block = encoded_block[:i]
-				inline = encoded_block.decode("utf-8", errors="ignore")
+				inline = _truncate_bytes_at_utf8_boundary(finding_blocks[0], budget)
 				summary = head + "\n" + inline + truncation_marker
 			else:
 				summary = head + truncation_marker
+
+	# Last-resort cap guard: if the assembled `head + marker` (or even
+	# `head` alone, on a tiny cap) still overflows `max_bytes`, truncate
+	# the whole summary on a UTF-8 boundary. This keeps the contract
+	# `len(summary.encode('utf-8')) <= max_bytes` an absolute invariant
+	# rather than a best-effort claim, so the Telegram send step can
+	# rely on it without re-checking.
+	if max_bytes > 0 and len(summary.encode("utf-8")) > max_bytes:
+		summary = _truncate_bytes_at_utf8_boundary(summary, max_bytes)
 	return summary
 
 

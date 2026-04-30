@@ -3790,11 +3790,27 @@ jobs:
             exit 0
           fi
 
+          # Sanitize SOFT_ERROR_TELEGRAM_BYTES in shell before passing
+          # to Python. `set -euo pipefail` is in effect, so a non-integer
+          # repo-var value (empty string, whitespace, "abc", etc.) would
+          # otherwise make argparse exit non-zero and abort the step
+          # before it writes report_path/summary_path — undermining the
+          # documented fail-open intent. Coerce invalid input to the
+          # default (2800) and emit a workflow warning so misconfiguration
+          # is visible without breaking the release-status notification.
+          SOFT_ERROR_BYTES_RAW="${SOFT_ERROR_TELEGRAM_BYTES:-2800}"
+          if [[ "${SOFT_ERROR_BYTES_RAW}" =~ ^[0-9]+$ ]] && [ "${SOFT_ERROR_BYTES_RAW}" -gt 0 ]; then
+            SOFT_ERROR_BYTES="${SOFT_ERROR_BYTES_RAW}"
+          else
+            echo "::warning::Invalid SOFT_ERROR_TELEGRAM_BYTES='${SOFT_ERROR_BYTES_RAW}'; falling back to 2800."
+            SOFT_ERROR_BYTES=2800
+          fi
+
           python3 scripts/consolidate_soft_error_reports.py \
             --input-dir /tmp/soft-error-artifacts \
             --output-full "${REPORT}" \
             --output-summary "${SUMMARY}" \
-            --max-summary-bytes "${SOFT_ERROR_TELEGRAM_BYTES}" \
+            --max-summary-bytes "${SOFT_ERROR_BYTES}" \
             --download-status "${DOWNLOAD_OUTCOME:-unknown}"
           echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
           echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
