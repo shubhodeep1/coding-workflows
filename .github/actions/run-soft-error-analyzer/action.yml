@@ -71,11 +71,14 @@ runs:
         WAIT_SECS: ${{ inputs.wait_for_completion_secs }}
       run: |
         set -euo pipefail
-        # Poll each phase run until status=completed or the cap elapses.
+        # Poll each phase run until status=completed or its per-run
+        # deadline elapses. The deadline is set INSIDE the outer loop
+        # so each phase gets its own ${WAIT_SECS}-second budget — a
+        # global deadline across all phases would short-change the
+        # last phase if earlier phases burned most of the budget.
         # Fail-open: if a run never completes we still invoke the
         # analyser; the script's existing fallback returns a stub for
         # unreadable runs rather than crashing the workflow.
-        DEADLINE=$(( $(date +%s) + WAIT_SECS ))
         while IFS= read -r LINE; do
           [ -n "${LINE}" ] || continue
           PHASE="${LINE%%=*}"
@@ -84,6 +87,7 @@ runs:
           RID="${RID// }"
           [ -n "${PHASE}" ] && [ -n "${RID}" ] || continue
           [[ "${RID}" =~ ^[0-9]+$ ]] || continue
+          DEADLINE=$(( $(date +%s) + WAIT_SECS ))
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             STATUS=$(gh api "repos/${REPO}/actions/runs/${RID}" --jq '.status // ""' 2>/dev/null || echo "")
             if [ "${STATUS}" = "completed" ]; then
@@ -93,15 +97,16 @@ runs:
             echo "  ⏳ ${PHASE} (run #${RID}) status=${STATUS:-unknown}; waiting ..."
             sleep 5
           done
-          # If the deadline lapsed before this run completed, log a
-          # warning and continue. The analyser will get a stub for
-          # this phase but won't crash.
+          # If the per-run deadline lapsed before this run completed,
+          # log a warning and continue with the NEXT phase run. The
+          # analyser will get a stub for this phase but won't crash,
+          # and subsequent phases still get their full status check.
           if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
             FINAL_STATUS=$(gh api "repos/${REPO}/actions/runs/${RID}" --jq '.status // "unknown"' 2>/dev/null || echo "unknown")
             if [ "${FINAL_STATUS}" != "completed" ]; then
               echo "::warning::Soft-error analyser wait deadline elapsed for ${PHASE} (run #${RID}, status=${FINAL_STATUS}); analyser will see partial logs."
             fi
-            break
+            continue
           fi
         done <<< "${PHASE_RUNS}"
 

@@ -114,7 +114,7 @@ SOFT_ERROR_EXCLUDE_RE = re.compile("|".join(SOFT_ERROR_EXCLUDE_PATTERNS), re.IGN
 #      `\033[36;1m` (handles malformed/nested groups).
 GROUP_RUN_START_RE = re.compile(r"##\[group\]Run\b")
 GROUP_END_RE = re.compile(r"##\[endgroup\]")
-ANSI_CYAN_BOLD_RE = re.compile(r"\x1b?\[36;1m")
+ANSI_CYAN_BOLD_RE = re.compile(r"\x1b\[36;1m")
 
 
 def strip_source_echo(text: str) -> str:
