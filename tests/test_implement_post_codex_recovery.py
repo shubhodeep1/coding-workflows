@@ -1182,10 +1182,16 @@ def test_codex_success_detection_uses_baseline_diff() -> None:
 	# Phrases added after observed Codex outputs ("No repository changes
 	# made.", "already satisfied.") on issue #1768 — keep them covered so
 	# a future regex tightening can't silently regress them.
-	for phrase in ("satisfied", "no repository changes", "no file changes made"):
+	for phrase in (
+		"satisfied",
+		"no repository changes",
+		"no file changes made",
+		"no repository changes (were )?required",
+		"no files (were )?modified",
+	):
 		assert phrase in codex_block, (
 			f"Success-no-op regex should include the '{phrase}' completion signal "
-			f"(observed Codex phrasing on issue #1768)"
+			f"(observed Codex phrasing on issues #1768 and #1816)"
 		)
 
 
