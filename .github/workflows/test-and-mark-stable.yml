@@ -3615,7 +3615,39 @@ jobs:
           set -euo pipefail
           SHA=$(git rev-parse HEAD)
           echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
-          STATE=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
+          # Allow the release even if no CI status is reported (repos
+          # with no required checks). Fail only on explicit failure.
+          # Rate-limit-aware gh retry so transient 429 / abuse-detection /
+          # secondary-rate errors aren't silently coerced to "pending"
+          # — same wrapper as in mark-stable.yml.
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
+          _gh_retry() {
+            local attempt=1
+            while [ "${attempt}" -le 5 ]; do
+              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
+              else
+                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
+                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
+                sleep "${w}"; attempt=$((attempt + 1))
+              fi
+            done; return 1
+          }
+          STATE=$(_gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
             --jq '.state' 2>/dev/null || echo "pending")
           if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
             echo "::error::CI is failing on ${SOURCE_BRANCH} ($STATE). Fix before releasing."
