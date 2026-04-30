@@ -294,7 +294,6 @@ jobs:
       cancel-in-progress: true
     outputs:
       test_passed: ${{ steps.verify.outputs.passed }}
-      soft_error_summary: ${{ steps.soft-error-analyser.outputs.soft_error_summary }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -303,16 +302,18 @@ jobs:
       POLL_INTERVAL: 10
 
     steps:
-      # Checkout repo at the start so `if: always()` steps (Phase 8 soft-error
-      # analyser, Cleanup test artifacts) can find scripts/ even when an
-      # earlier phase exits non-zero. The original "Checkout repository for
-      # integration tests" step (Phase 5, ~line 1100) is skipped on early
-      # failure, leaving downstream `if: always()` steps with no scripts/
-      # on disk — observed in run 25115169454 where Phase 4b's bait failure
-      # cascaded into `python3: can't open file '...scripts/analyze_soft_errors.py'`
-      # and `_safe_gh_jq: command not found` in cleanup. The Phase 5 checkout
-      # is left in place (idempotent re-checkout against `ref: main`).
-      - name: Checkout repository (early — needed by Phase 8 & Cleanup on early failure)
+      # Checkout repo at the start so `if: always()` steps (per-phase
+      # soft-error analyser invocations, Cleanup test artifacts) can find
+      # scripts/ even when an earlier phase exits non-zero. The original
+      # "Checkout repository for integration tests" step (Phase 5,
+      # ~line 1100) is skipped on early failure, leaving downstream
+      # `if: always()` steps with no scripts/ on disk — observed in
+      # run 25115169454 where Phase 4b's bait failure cascaded into
+      # `python3: can't open file '...scripts/analyze_soft_errors.py'`
+      # and `_safe_gh_jq: command not found` in cleanup. The Phase 5
+      # checkout is left in place (idempotent re-checkout against
+      # `ref: main`).
+      - name: Checkout repository (early — needed by analyser & cleanup on early failure)
         uses: actions/checkout@v5
         with:
           ref: main
@@ -1815,8 +1816,9 @@ jobs:
 
             CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
 
-            # Capture the latest poller run id (used by Phase 8's soft-error
-            # analyser to ingest the poller's logs alongside other phases).
+            # Capture the latest poller run id (used by the per-phase
+            # soft-error analyser invocation below to ingest the poller's
+            # logs as the `orchestrate_poll` phase artifact).
             if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
               POLLER_LATEST_ID=$(echo "${POLLER_RUN}" | jq -r '.id // empty')
               if [ -n "${POLLER_LATEST_ID}" ]; then
@@ -2231,118 +2233,14 @@ jobs:
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
-      # ── Phase 8: Soft-error analyser (non-blocking) ─────────────
-      # Pulls logs from every triggered phase run, filters to high-signal
-      # lines, and asks gpt-5.4-mini @ medium reasoning to summarise soft
-      # failures (rate-limit recoveries, codex fallbacks, summariser hard
-      # fails, etc.). The report is exposed as a job output so the notify
-      # job can attach it to the Telegram release message. Hard exits are
-      # avoided — analyser problems must never block a release.
-      # Wait briefly for every captured phase run to reach
-      # status=completed. The previous Phase 8 fired the moment Phase 7
-      # finished; on run 25126757724 that raced review_autofix's tail
-      # cleanup steps, so `gh run view --log` returned HTTP 404 ("run is
-      # still in progress") and the resulting report had no review_autofix
-      # signal at all (the phase that actually contained the root cause).
-      # The wait below caps at 5 minutes — long enough for review_autofix's
-      # cleanup tail (~40s on the failing run) and any orchestrate-poll /
-      # cancel-on-pr-close trailers to settle, short enough that a
-      # genuinely hung run does not block the release-gate Telegram
-      # notification indefinitely.
-      - name: "Phase 8a: Wait for all phase runs to complete"
-        id: phase8_wait
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
-          PLAN_RUN_ID: ${{ steps.wait-plan.outputs.run_id }}
-          IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
-          REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
-          RBSIM_POLLER_RUN_ID: ${{ steps.review-blocked-sim.outputs.poller_run_id }}
-          CANCEL_RUN_ID: ${{ steps.verify-cancel-on-close.outputs.cancel_run_id }}
-        run: |
-          set -euo pipefail
-          DEADLINE=$(( $(date +%s) + 300 ))
-          for KV in \
-            "clarify:${CLARIFY_RUN_ID:-}" \
-            "plan:${PLAN_RUN_ID:-}" \
-            "implement:${IMPL_RUN_ID:-}" \
-            "review_autofix:${REVIEW_RUN_ID:-}" \
-            "orchestrate_poll:${RBSIM_POLLER_RUN_ID:-}" \
-            "cancel_on_pr_close:${CANCEL_RUN_ID:-}"; do
-            PHASE="${KV%%:*}"
-            RID="${KV#*:}"
-            [ -n "${RID}" ] && [[ "${RID}" =~ ^[0-9]+$ ]] || continue
-            while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-              STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${RID}" --jq '.status // ""' 2>/dev/null || echo "")
-              if [ "${STATUS}" = "completed" ]; then
-                echo "  ✓ ${PHASE} (run #${RID}) completed"
-                break
-              fi
-              echo "  ⏳ ${PHASE} (run #${RID}) status=${STATUS:-unknown}; waiting ..."
-              sleep 5
-            done
-          done
-
-      - name: "Phase 8: Soft-error log analyser"
-        id: soft-error-analyser
-        if: always()
-        continue-on-error: true
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          LOG_ANALYZER_MODEL: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          LOG_ANALYZER_REASONING: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
-          CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
-          PLAN_RUN_ID: ${{ steps.wait-plan.outputs.run_id }}
-          IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
-          REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
-          RBSIM_POLLER_RUN_ID: ${{ steps.review-blocked-sim.outputs.poller_run_id }}
-          CANCEL_RUN_ID: ${{ steps.verify-cancel-on-close.outputs.cancel_run_id }}
-        run: |
-          set -euo pipefail
-          REPORT="/tmp/soft_error_report.md"
-          ARGS=(--repo "${TEST_REPO}" --output "${REPORT}")
-          [ -n "${CLARIFY_RUN_ID:-}" ] && ARGS+=(--run "clarify=${CLARIFY_RUN_ID}")
-          [ -n "${PLAN_RUN_ID:-}" ] && ARGS+=(--run "plan=${PLAN_RUN_ID}")
-          [ -n "${IMPL_RUN_ID:-}" ] && ARGS+=(--run "implement=${IMPL_RUN_ID}")
-          [ -n "${REVIEW_RUN_ID:-}" ] && ARGS+=(--run "review_autofix=${REVIEW_RUN_ID}")
-          [ -n "${RBSIM_POLLER_RUN_ID:-}" ] && ARGS+=(--run "orchestrate_poll=${RBSIM_POLLER_RUN_ID}")
-          [ -n "${CANCEL_RUN_ID:-}" ] && ARGS+=(--run "cancel_on_pr_close=${CANCEL_RUN_ID}")
-
-          if [ "${#ARGS[@]}" -le 4 ]; then
-            echo "No phase runs captured; skipping analyser." > "${REPORT}"
-            echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          python3 scripts/analyze_soft_errors.py "${ARGS[@]}" || {
-            echo "::warning::Soft-error analyser exited non-zero — keeping fallback report"
-          }
-          echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
-
-          # Truncate the report for downstream consumers (Telegram caps
-          # message bodies at 4096 chars; we leave headroom for the rest of
-          # the release-status text). The full untruncated report is uploaded
-          # as an artifact below.
-          if [ -f "${REPORT}" ]; then
-            head -c 2800 "${REPORT}" > /tmp/soft_error_report_short.md
-            {
-              echo 'soft_error_summary<<SOFT_ERR_EOF'
-              cat /tmp/soft_error_report_short.md
-              echo
-              echo 'SOFT_ERR_EOF'
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload soft-error report artifact
-        if: always() && steps.soft-error-analyser.outputs.report_path != ''
-        uses: actions/upload-artifact@v6
-        with:
-          name: soft-error-report-${{ github.run_id }}
-          path: /tmp/soft_error_report.md
-          if-no-files-found: ignore
-          retention-days: 30
+      # The previous Phase 8 in this job re-ran the LLM analyser across
+      # the 6 captured phases to produce a single combined report and
+      # truncated it byte-wise for the Telegram summary. That step was
+      # removed in favour of a deterministic concat performed in the
+      # `notify` job (see `Consolidate per-phase soft-error reports`),
+      # which can see every smoke-test sibling job's per-phase
+      # artifacts — not just this job's six. The per-phase analyser
+      # invocations above remain the source of truth.
 
       # ── Verification summary ───────────────────────────────────
       # if: always() so the consolidated pass/fail table runs even when
@@ -4058,10 +3956,227 @@ jobs:
     needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release, sync-to-main]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
+      # ── Consolidated soft-error report ─────────────────────────
+      # Replaces the historical Phase 8 LLM re-summarisation that lived
+      # inside `e2e-smoke-test`. Two reasons for moving this here:
+      #   1. Coverage: `notify` `needs:` every smoke-test job, so it can
+      #      see the per-phase artifacts emitted by orphan-workflows-test
+      #      (workflow_log_analysis, validation_refresh, update_workflows,
+      #      memory_maintenance), orchestrate-decompose-test,
+      #      validate-standalone-test, clarify-rejects-unsolvable-test,
+      #      and e2e-alt-model-test (alt_*). Phase 8 only saw the 6 e2e
+      #      phases.
+      #   2. Fidelity: pure-concat instead of an LLM second-pass means
+      #      every per-phase finding is preserved verbatim. The previous
+      #      flow re-ran the analyser model with an "<800 words" prompt
+      #      cap, which silently dropped findings during consolidation.
+      # The notify job runs `if: always()` to deliver a Telegram message
+      # even when earlier jobs fail. Each setup step below is marked
+      # fail-open so a transient checkout/setup-python/download outage
+      # cannot suppress the release-status notification — the
+      # consolidation step degrades gracefully (empty-input stub) and
+      # the Telegram send step itself is `if: always()`.
+      - name: Checkout repository
+        id: checkout_repo
+        if: always()
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        id: setup_python
+        if: always()
+        continue-on-error: true
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download per-phase soft-error reports
+        id: download_soft_errors
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          # `actions/download-artifact@v6` accepts a glob in `pattern`
+          # and downloads matching artifacts from the *current* workflow
+          # run. Each artifact lands in its own subdirectory (default
+          # behaviour); the consolidation script tolerates both that
+          # layout and the flattened `merge-multiple` layout.
+          pattern: soft-error-report-${{ github.run_id }}-*
+          path: /tmp/soft-error-artifacts
+          merge-multiple: false
+
+      - name: Consolidate per-phase soft-error reports
+        id: consolidate_soft_errors
+        if: always()
+        continue-on-error: true
+        env:
+          # Surface the download step's outcome so the consolidator can
+          # emit a clearly-marked "download failed" stub if the input
+          # directory is empty for that reason — without this, a
+          # transient download outage would silently produce a "no
+          # findings" stub identical to a clean run, masking real
+          # per-phase findings that exist upstream.
+          DOWNLOAD_OUTCOME: ${{ steps.download_soft_errors.outcome }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout_repo.outcome || 'success' }}
+          SETUP_PYTHON_OUTCOME: ${{ steps.setup_python.outcome || 'success' }}
+          # Tunable Telegram-summary byte cap. Default 2800 leaves
+          # headroom under Telegram's 4096-char body cap for the rest
+          # of the release-status text (job-status pill, run URL, etc.);
+          # operators can override via repo var `SOFT_ERROR_TELEGRAM_BYTES`
+          # if the rest of the message body changes shape (e.g. more
+          # smoke-test sibling jobs are added). Pattern matches the
+          # other tunables in this workflow (`vars.LOG_ANALYZER_MODEL`
+          # / `vars.LOG_ANALYZER_REASONING`).
+          SOFT_ERROR_TELEGRAM_BYTES: ${{ vars.SOFT_ERROR_TELEGRAM_BYTES || '2800' }}
+        run: |
+          set -euo pipefail
+          REPORT="/tmp/soft_error_report.md"
+          SUMMARY="/tmp/soft_error_summary.md"
+          mkdir -p /tmp/soft-error-artifacts
+
+          # Fail-open shell fallback: if the upstream Checkout or
+          # Setup-Python steps failed (both are `continue-on-error: true`),
+          # python3 and/or one of the consolidation scripts may not be on
+          # disk. Without this guard, the `python3 scripts/...` invocation
+          # below would `set -e` exit the step before writing stub files,
+          # and the Telegram step would have nothing to attach.
+          #
+          # We check BOTH helper scripts because the consolidator imports
+          # `truncate_to_utf8_byte_cap` as a sibling module — if that
+          # helper is missing or renamed (e.g. partial checkout, future
+          # refactor), the python invocation would `ImportError` before
+          # writing stubs. Belt-and-braces: also wrap the python call in
+          # an `||` fallback so any *other* unanticipated failure (env
+          # var corruption, missing system dep, etc.) still yields stub
+          # outputs rather than aborting the step.
+          if ! command -v python3 >/dev/null 2>&1 \
+             || [ ! -f scripts/consolidate_soft_error_reports.py ] \
+             || [ ! -f scripts/truncate_to_utf8_byte_cap.py ]; then
+            REASON="checkout=${CHECKOUT_OUTCOME} setup_python=${SETUP_PYTHON_OUTCOME}"
+            echo "::warning::Consolidator unavailable (${REASON}); writing fallback stub."
+            # Lead with the actual diagnostic — the failed step is the
+            # primary failure here, NOT a missing soft-error artifact.
+            # An earlier draft suggested inspecting per-phase artifacts
+            # first, but reviewers flagged that as misleading because it
+            # can send operators chasing the wrong cause; the per-phase
+            # artifacts may exist (they are uploaded by their own
+            # parent jobs, independent of this notify-job checkout) but
+            # the fix lives in the notify-job logs, not the artifacts.
+            {
+              echo "# Consolidated soft-error report"
+              echo
+              echo "**CONSOLIDATOR UNAVAILABLE.** The notify job's"
+              echo "Checkout / Setup-Python step failed (${REASON}); the"
+              echo "consolidation script could not be executed. To"
+              echo "diagnose, open this workflow run and inspect the"
+              echo "failed step's logs in the notify job — the per-phase"
+              echo "soft-error artifacts (uploaded by their own parent"
+              echo "jobs) are unrelated to this failure path."
+            } > "${REPORT}"
+            {
+              echo "## Soft-error consolidation"
+              echo "_CONSOLIDATOR UNAVAILABLE (${REASON}); see the notify"
+              echo "job's failed step logs for the root cause._"
+            } > "${SUMMARY}"
+            echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+            echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Sanitize SOFT_ERROR_TELEGRAM_BYTES in shell before passing
+          # to Python. `set -euo pipefail` is in effect, so a non-integer
+          # repo-var value (whitespace, "abc", etc.) would otherwise make
+          # argparse exit non-zero and abort the step before it writes
+          # report_path/summary_path — undermining the documented
+          # fail-open intent.
+          #
+          # Trimming first means a repo-var saved as `" 3000 "` (with
+          # incidental whitespace) is treated equivalently to `"3000"`
+          # rather than silently falling back to the default. The
+          # subsequent regex accepts any integer (incl. negatives like
+          # `-1`); both `0` and any negative value flow through to the
+          # Python consolidator's `max_bytes <= 0` branch which disables
+          # truncation entirely. Operators who set
+          # `SOFT_ERROR_TELEGRAM_BYTES=0` (or `-1`, by historical
+          # convention from other helpers in this repo) to opt out of
+          # the cap have their intent honoured rather than overridden.
+          SOFT_ERROR_BYTES_RAW="${SOFT_ERROR_TELEGRAM_BYTES:-2800}"
+          SOFT_ERROR_BYTES_TRIMMED="${SOFT_ERROR_BYTES_RAW#"${SOFT_ERROR_BYTES_RAW%%[![:space:]]*}"}"
+          SOFT_ERROR_BYTES_TRIMMED="${SOFT_ERROR_BYTES_TRIMMED%"${SOFT_ERROR_BYTES_TRIMMED##*[![:space:]]}"}"
+          if [[ "${SOFT_ERROR_BYTES_TRIMMED}" =~ ^-?[0-9]+$ ]]; then
+            SOFT_ERROR_BYTES="${SOFT_ERROR_BYTES_TRIMMED}"
+          else
+            echo "::warning::Invalid SOFT_ERROR_TELEGRAM_BYTES='${SOFT_ERROR_BYTES_RAW}' (must be an integer); falling back to 2800."
+            SOFT_ERROR_BYTES=2800
+          fi
+
+          # `||` fallback: any unanticipated failure (system Python
+          # missing a stdlib module, OS-level error before argparse
+          # runs, etc.) still yields stub outputs so the Telegram
+          # step has something to attach. The script itself is
+          # already non-blocking for the documented failure modes
+          # (missing inputs, decode errors, OpenRouter outages),
+          # so this branch only fires for genuinely unexpected
+          # crashes.
+          if ! python3 scripts/consolidate_soft_error_reports.py \
+              --input-dir /tmp/soft-error-artifacts \
+              --output-full "${REPORT}" \
+              --output-summary "${SUMMARY}" \
+              --max-summary-bytes "${SOFT_ERROR_BYTES}" \
+              --download-status "${DOWNLOAD_OUTCOME:-unknown}"; then
+            # The script is documented as non-blocking for every known
+            # failure mode (missing inputs, decode errors, OpenRouter
+            # outages), so any non-zero exit reaching this branch is
+            # unexpected — could be a traceback, an argparse failure
+            # from a future arg-format change, an environment-level
+            # OS error, etc. We don't pretend to know which; the stub
+            # just says "exited non-zero" and points at the notify-job
+            # logs.
+            echo "::warning::Consolidator exited non-zero unexpectedly; writing fallback stub."
+            {
+              echo "# Consolidated soft-error report"
+              echo
+              echo "**CONSOLIDATOR EXITED NON-ZERO.**"
+              echo "\`scripts/consolidate_soft_error_reports.py\` returned a"
+              echo "non-zero exit code. The script is documented as non-blocking,"
+              echo "so any non-zero exit is itself a bug worth surfacing —"
+              echo "inspect the notify-job logs for the actual error (traceback,"
+              echo "argparse error, OS-level failure, etc.). Per-phase"
+              echo "artifacts may still be available as separate"
+              echo "\`soft-error-report-<run_id>-<phase>\` entries."
+            } > "${REPORT}"
+            {
+              echo "## Soft-error consolidation"
+              echo "_CONSOLIDATOR EXITED NON-ZERO; see notify-job logs for the actual error_"
+            } > "${SUMMARY}"
+          fi
+          echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+          echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload consolidated soft-error report
+        if: always() && steps.consolidate_soft_errors.outputs.report_path != ''
+        uses: actions/upload-artifact@v6
+        with:
+          # Artifact name preserved for backward compatibility with any
+          # operator tooling that fetches `soft-error-report-<run_id>`.
+          name: soft-error-report-${{ github.run_id }}
+          path: /tmp/soft_error_report.md
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Send Telegram notification
         id: tg_send
+        # Always send the release-status notification, even if any of the
+        # upstream consolidation steps (checkout / setup-python / download
+        # / consolidate) failed. Without `if: always()` a single failure
+        # in those steps would suppress the notification entirely; the
+        # Telegram body simply omits the soft-error summary when its
+        # source file is missing.
+        if: always()
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4123,18 +4238,81 @@ jobs:
           fi
           MSG+=$'\n'"Run: ${RUN_URL}"
 
-          # Append the soft-error analyser report (truncated upstream to fit
-          # comfortably within Telegram's 4096-char body cap). Non-blocking
-          # by design: any soft-failure findings are surfaced here so the
-          # release engineer sees them inline with the release notification.
-          SOFT_ERR='${{ needs.e2e-smoke-test.outputs.soft_error_summary }}'
+          # Append the consolidated soft-error summary built by the
+          # `Consolidate per-phase soft-error reports` step above. The
+          # script does section-aware truncation (it drops whole findings
+          # blocks rather than slicing mid-finding) and emits a status
+          # pill listing every phase's analyser status code so the
+          # release engineer can spot analyser failures (call_failed /
+          # api_skipped) at a glance even when there are no findings.
+          # Non-blocking by design: a missing summary file means the
+          # consolidation step itself failed, in which case the
+          # release-status header is still delivered.
+          SOFT_ERR=""
+          if [ -f /tmp/soft_error_summary.md ]; then
+            SOFT_ERR=$(cat /tmp/soft_error_summary.md)
+          fi
           if [ -n "${SOFT_ERR}" ]; then
             MSG+=$'\n\n'"---"$'\n'"${SOFT_ERR}"
           fi
 
           # Telegram caps message bodies at 4096 chars; trim if necessary.
-          if [ "${#MSG}" -gt 4000 ]; then
-            MSG="${MSG:0:3950}"$'\n'"…[truncated; see artifact 'soft-error-report-${{ github.run_id }}']"
+          # The consolidator already does section-aware truncation up to
+          # 2800 bytes, and the typical release-status header (job-status
+          # pills + run URL) is ~300–500 bytes — so the combined message
+          # is normally well under 4096. This block is the fallback for
+          # the rare overflow case (large header, multi-line failure
+          # status, or operator-raised SOFT_ERROR_TELEGRAM_BYTES).
+          #
+          # Using bash's `${MSG:0:3950}` here can mid-byte-split a
+          # multi-byte UTF-8 sequence — the consolidated summary
+          # routinely contains ✓/✗/⏳/em-dashes, and the consolidator's
+          # status pill uses backticks plus phase names. A mid-codepoint
+          # slice corrupts the rendered Telegram message and (worse)
+          # makes the byte-count diverge from the visible character
+          # count. Hand off to scripts/truncate_to_utf8_byte_cap.py
+          # for codepoint-boundary-aware truncation. python3 is always
+          # preinstalled at /usr/bin/python3 on `ubuntu-latest`, even
+          # when `actions/setup-python` fails. If the helper script is
+          # itself unavailable (checkout failed), fall back to the
+          # legacy byte-slice — best-effort defence-in-depth so the
+          # notification still goes out.
+          # `wc -c` output may include leading whitespace on some
+          # implementations (BSD-derived `wc` pads with spaces; GNU
+          # `wc` on `ubuntu-latest` typically does not). Under
+          # `set -euo pipefail`, a non-integer `MSG_BYTES` would make
+          # `[ -gt 4000 ]` exit with a numeric-comparison error,
+          # aborting the Telegram step before the send. Strip
+          # whitespace defensively, then validate the result is
+          # actually numeric — if any future `wc` impl emits
+          # genuinely non-numeric padding (unlikely but cheap to guard
+          # against), skip truncation and let the message go through.
+          # Erring on the side of "send the message" matches the
+          # documented fail-open intent of the notify job.
+          MSG_BYTES=$(printf '%s' "${MSG}" | wc -c | tr -d '[:space:]')
+          if ! [[ "${MSG_BYTES}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::wc -c produced non-integer output '${MSG_BYTES}'; skipping truncation."
+            MSG_BYTES=0
+          fi
+          if [ "${MSG_BYTES}" -gt 4000 ]; then
+            if command -v python3 >/dev/null 2>&1 \
+               && [ -f scripts/truncate_to_utf8_byte_cap.py ]; then
+              MSG=$(printf '%s' "${MSG}" | python3 scripts/truncate_to_utf8_byte_cap.py 3950)
+            else
+              # Fallback when checkout/setup-python failed and the helper
+              # script isn't on disk. `${MSG:0:3950}` is char-oriented under
+              # bash's UTF-8 locale (the default in `ubuntu-latest` runners),
+              # so it could char-slice and still leave the message > 3950
+              # BYTES — exactly the case that trips Telegram's body cap.
+              # `head -c` is byte-oriented (POSIX), so the resulting message
+              # is guaranteed to fit even though we may mid-byte-split a
+              # codepoint (Telegram renders that as a U+FFFD glyph at the
+              # tail; not great, but better than message rejection).
+              # The python3 path above is preferred; this is defence-in-
+              # depth for the rare case where it's unavailable.
+              MSG=$(printf '%s' "${MSG}" | head -c 3950)
+            fi
+            MSG+=$'\n'"…[truncated; see artifact 'soft-error-report-${{ github.run_id }}']"
           fi
 
           # Send notification (persists — not auto-deleted)
