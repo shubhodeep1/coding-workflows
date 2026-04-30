@@ -286,8 +286,17 @@ def build_summary(
 			# character boundary so we never split a multi-byte codepoint
 			# (release-gate logs contain ✓/✗/⏳/—/etc.). Walking back over
 			# any continuation bytes (top two bits == 0b10) lands `i` on
-			# the start of the next codepoint.
-			budget = max_bytes - len(head.encode("utf-8")) - marker_bytes
+			# the start of the next codepoint. The `+1` accounts for the
+			# `"\n"` separator we'll insert between `head` and `inline`
+			# when assembling the final string — without it we would
+			# overflow `max_bytes` by one byte.
+			separator_bytes = len("\n".encode("utf-8"))
+			budget = (
+				max_bytes
+				- len(head.encode("utf-8"))
+				- separator_bytes
+				- marker_bytes
+			)
 			if budget > 0 and finding_blocks:
 				encoded_block = finding_blocks[0].encode("utf-8")
 				if len(encoded_block) > budget:
@@ -332,6 +341,20 @@ def main() -> int:
 			"body cap for the rest of the release-status message."
 		),
 	)
+	parser.add_argument(
+		"--download-status",
+		default="success",
+		help=(
+			"Outcome of the upstream `actions/download-artifact` step "
+			"(e.g. `success`, `failure`, `cancelled`, `skipped`). When "
+			"the input directory is empty, this lets the stub artifact "
+			"distinguish 'no per-phase analyser ran' (download succeeded "
+			"but produced nothing) from 'download step itself failed' "
+			"(real findings exist upstream but were not retrievable). "
+			"Operators reading the consolidated artifact would otherwise "
+			"see the same empty stub in both cases."
+		),
+	)
 	args = parser.parse_args()
 
 	args.output_full.parent.mkdir(parents=True, exist_ok=True)
@@ -339,21 +362,48 @@ def main() -> int:
 
 	reports = discover_reports(args.input_dir)
 	if not reports:
-		print(
-			f"::warning::consolidate_soft_error_reports: no per-phase reports "
-			f"found in {args.input_dir}; emitting empty consolidation.",
-			file=sys.stderr,
-		)
-		args.output_full.write_text(
-			"# Consolidated soft-error report\n\n"
-			"_No per-phase soft-error artifacts were downloaded._\n",
-			encoding="utf-8",
-		)
-		args.output_summary.write_text(
-			"## Soft-error consolidation\n"
-			"_No per-phase soft-error artifacts were downloaded._\n",
-			encoding="utf-8",
-		)
+		download_failed = args.download_status not in ("", "success")
+		if download_failed:
+			print(
+				f"::warning::consolidate_soft_error_reports: no per-phase "
+				f"reports found in {args.input_dir} AND download step "
+				f"reported `{args.download_status}`; emitting "
+				f"download-failure stub. Real findings may exist upstream.",
+				file=sys.stderr,
+			)
+			full_body = (
+				"# Consolidated soft-error report\n\n"
+				f"**DOWNLOAD FAILED.** The upstream "
+				f"`actions/download-artifact` step reported "
+				f"`{args.download_status}`, so no per-phase soft-error "
+				"artifacts could be retrieved for consolidation. Real "
+				"findings may exist upstream — inspect the individual "
+				"`soft-error-report-<run_id>-<phase>` artifacts directly "
+				"in the run summary.\n"
+			)
+			summary_body = (
+				"## Soft-error consolidation\n"
+				f"_DOWNLOAD FAILED (`{args.download_status}`); per-phase "
+				"artifacts could not be retrieved. Inspect them "
+				"individually in the run's artifact list._\n"
+			)
+		else:
+			print(
+				f"::warning::consolidate_soft_error_reports: no per-phase "
+				f"reports found in {args.input_dir}; emitting empty "
+				f"consolidation.",
+				file=sys.stderr,
+			)
+			full_body = (
+				"# Consolidated soft-error report\n\n"
+				"_No per-phase soft-error artifacts were downloaded._\n"
+			)
+			summary_body = (
+				"## Soft-error consolidation\n"
+				"_No per-phase soft-error artifacts were downloaded._\n"
+			)
+		args.output_full.write_text(full_body, encoding="utf-8")
+		args.output_summary.write_text(summary_body, encoding="utf-8")
 		return 0
 
 	ordered = order_reports(reports)

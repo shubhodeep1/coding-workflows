@@ -3721,6 +3721,14 @@ jobs:
         id: consolidate_soft_errors
         if: always()
         continue-on-error: true
+        env:
+          # Surface the download step's outcome so the consolidator can
+          # emit a clearly-marked "download failed" stub if the input
+          # directory is empty for that reason — without this, a
+          # transient download outage would silently produce a "no
+          # findings" stub identical to a clean run, masking real
+          # per-phase findings that exist upstream.
+          DOWNLOAD_OUTCOME: ${{ steps.download_soft_errors.outcome }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/soft-error-artifacts
@@ -3728,7 +3736,8 @@ jobs:
             --input-dir /tmp/soft-error-artifacts \
             --output-full /tmp/soft_error_report.md \
             --output-summary /tmp/soft_error_summary.md \
-            --max-summary-bytes 2800
+            --max-summary-bytes 2800 \
+            --download-status "${DOWNLOAD_OUTCOME:-unknown}"
           echo "report_path=/tmp/soft_error_report.md" >> "$GITHUB_OUTPUT"
           echo "summary_path=/tmp/soft_error_summary.md" >> "$GITHUB_OUTPUT"
 
