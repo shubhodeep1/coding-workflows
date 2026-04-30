@@ -2420,14 +2420,14 @@ jobs:
   # Job 1b: Script correctness validation — runs parallel with E2E
   # ──────────────────────────────────────────────────────────────────
   validate-scripts:
-    needs: [resolve-version]
+    needs: [source, resolve-version]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
