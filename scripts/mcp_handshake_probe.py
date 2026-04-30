@@ -37,6 +37,7 @@ stderr) on any of:
     * response is not valid JSON
     * response is missing ``result`` or carries an ``error``
     * response id does not match the request id
+    * response exceeds the buffered-bytes cap before a newline arrives
 """
 
 from __future__ import annotations
@@ -60,8 +61,21 @@ CLIENT_INFO = {"name": "coding-workflows-mcp-probe", "version": "1.0.0"}
 # larger than this without a newline indicates a misbehaving or malicious
 # server, and unbounded buffering would let it grow process memory until the
 # probe timeout fires. 1 MiB leaves comfortable headroom for legitimate
-# servers while bounding worst-case allocation.
-_MAX_RESPONSE_BYTES = 1024 * 1024
+# servers while bounding worst-case allocation. Overridable via env var so
+# tests can exercise the cap deterministically without flooding megabytes.
+def _resolve_max_response_bytes() -> int:
+	raw = os.environ.get("MCP_PROBE_MAX_RESPONSE_BYTES")
+	if not raw:
+		return 1024 * 1024
+	try:
+		value = int(raw)
+	except ValueError:
+		return 1024 * 1024
+	# Reject non-positive values; a zero/negative cap would always trip.
+	return value if value > 0 else 1024 * 1024
+
+
+_MAX_RESPONSE_BYTES = _resolve_max_response_bytes()
 
 
 class _ResponseTooLargeError(Exception):
@@ -138,14 +152,15 @@ def _terminate(proc: subprocess.Popen) -> None:
 def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 	"""Run a single ``initialize`` exchange against *command* + *args*.
 
-	Returns 0 on success and a non-zero code (1..6) on failure. The exit code
+	Returns 0 on success and a non-zero code (1..7) on failure. The exit code
 	maps to the failure reason so callers can distinguish them in logs:
 	1 spawn failed (file not found / not executable),
 	2 timeout waiting for the initialize response,
 	3 server closed stdout before sending a complete response,
 	4 response is not valid JSON,
 	5 response is JSON-RPC but is missing ``result`` or carries ``error``,
-	6 response id does not match the request id.
+	6 response id does not match the request id,
+	7 response exceeded the buffered-bytes cap before a newline arrived.
 	"""
 	request_id = 1
 	request = _build_initialize_request(request_id)
@@ -188,10 +203,10 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 			print(
 				f"[mcp-probe:{name}] response exceeded {_MAX_RESPONSE_BYTES} "
 				f"bytes without a newline (got {exc.args[0]} bytes); "
-				"treating as invalid response",
+				"giving up to bound memory growth",
 				file=sys.stderr,
 			)
-			return 4
+			return 7
 		if line is None:
 			# Distinguish timeout vs early EOF for clearer diagnostics.
 			if proc.poll() is None:

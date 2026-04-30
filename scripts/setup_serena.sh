@@ -129,13 +129,13 @@ probe_mcp_handshake() {
 		# Fail closed: without python3 we cannot verify handshake health,
 		# and writing the [mcp_servers.<name>] block anyway would re-introduce
 		# the malformed-tool-list failure mode this probe exists to prevent.
-		echo "::warning::python3 not available — MCP handshake probe for '${_name}' cannot run; treating as probe failure."
+		echo "::warning::python3 not available — MCP handshake probe for '${_name}' cannot run; treating as probe failure." >&2
 		return 1
 	fi
 	local _probe_script
 	_probe_script="$(dirname "${BASH_SOURCE[0]:-$0}")/mcp_handshake_probe.py"
 	if [ ! -f "${_probe_script}" ]; then
-		echo "::warning::Probe script ${_probe_script} not found — MCP handshake probe for '${_name}' cannot run; treating as probe failure."
+		echo "::warning::Probe script ${_probe_script} not found — MCP handshake probe for '${_name}' cannot run; treating as probe failure." >&2
 		return 1
 	fi
 	# Forward the server's argv after `--` so that flags such as `-y` are

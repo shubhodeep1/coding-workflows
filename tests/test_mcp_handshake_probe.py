@@ -181,10 +181,15 @@ def test_probe_rejects_response_with_null_error_field() -> None:
 
 def test_probe_rejects_oversized_response_without_newline() -> None:
 	"""A misbehaving server that streams bytes without a newline must not be
-	able to grow the probe's buffer indefinitely. The probe enforces a cap
-	(``_MAX_RESPONSE_BYTES``, 1 MiB) and returns exit 4 (invalid response)
-	when exceeded so the optional MCP block is still skipped without the
-	probe itself blowing up on memory."""
+	able to grow the probe's buffer indefinitely. The probe enforces a
+	configurable cap (``_MAX_RESPONSE_BYTES``, default 1 MiB, override via
+	``MCP_PROBE_MAX_RESPONSE_BYTES``) and returns exit 7 ("response too
+	large") when exceeded so the optional MCP block is still skipped
+	without the probe itself blowing up on memory.
+
+	The test sets the cap to 4 KiB and has the mock server send a single
+	8 KiB write — no flooding, no time loops, no scheduling assumptions.
+	The cap fires on the first read regardless of runner speed."""
 	with tempfile.TemporaryDirectory() as td:
 		flood_server = Path(td) / "flood.py"
 		flood_server.write_text(
@@ -192,24 +197,36 @@ def test_probe_rejects_oversized_response_without_newline() -> None:
 				"""
 				import sys, time
 				sys.stdin.readline()
-				# Stream 2 MiB of non-newline bytes so the probe's 1 MiB cap
-				# trips before any newline-delimited frame arrives.
-				chunk = b"x" * 65536
-				written = 0
-				while written < 2 * 1024 * 1024:
-					try:
-						sys.stdout.buffer.write(chunk)
-						sys.stdout.buffer.flush()
-					except BrokenPipeError:
-						break
-					written += len(chunk)
-				time.sleep(1)
+				# One write of 8 KiB — already past the test's 4 KiB cap.
+				try:
+					sys.stdout.buffer.write(b"x" * 8192)
+					sys.stdout.buffer.flush()
+				except BrokenPipeError:
+					pass
+				# Idle long enough for the probe's cap-detection to win the
+				# race against the --timeout deadline. The probe should
+				# raise on the next read after the 8 KiB chunk arrives.
+				time.sleep(2)
 				"""
 			)
 		)
-		result = _run_probe("flood", sys.executable, str(flood_server), timeout=10.0)
-	assert result.returncode == 4, (
-		f"expected exit 4 (response too large), got {result.returncode}\n"
+		env = os.environ.copy()
+		env["MCP_PROBE_MAX_RESPONSE_BYTES"] = "4096"
+		cmd = [
+			sys.executable,
+			str(PROBE),
+			"--name",
+			"flood",
+			"--timeout",
+			"5",
+			"--command",
+			sys.executable,
+			"--",
+			str(flood_server),
+		]
+		result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env=env)
+	assert result.returncode == 7, (
+		f"expected exit 7 (response too large), got {result.returncode}\n"
 		f"stderr: {result.stderr}"
 	)
 	assert "exceeded" in result.stderr
