@@ -155,7 +155,11 @@ jobs:
           set -e
           if [ "${PR_RC}" -eq 0 ]; then
             echo "${PR_OUTPUT}"
-          elif printf '%s' "${PR_OUTPUT}" | grep -qiE 'pull request already exists|a pull request for branch'; then
+          elif printf '%s' "${PR_OUTPUT}" | grep -qiE 'pull request for branch .* already exists'; then
+            # Anchored to gh CLI's canonical phrasing: "a pull request
+            # for branch <name> into branch <base> already exists". The
+            # earlier looser pattern could match unrelated errors that
+            # happened to mention "pull request" or "already exists".
             echo "::warning::PR already exists for ${BRANCH} — treating as benign"
             echo "${PR_OUTPUT}"
           else

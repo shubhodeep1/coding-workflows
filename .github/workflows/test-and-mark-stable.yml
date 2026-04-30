@@ -131,12 +131,24 @@ jobs:
           # Refresh tags from origin BEFORE computing LATEST. If a new
           # tag was pushed after checkout, computing LATEST first would
           # pick an outdated base version and lean on the collision-
-          # skip loop below to catch up. Failing loudly on fetch error
-          # is preferable to running on stale tag data.
-          if ! git fetch --tags --force origin; then
-            echo "::error::Failed to fetch remote tags from origin — refusing to compute next version on potentially stale tag data"
-            exit 1
-          fi
+          # skip loop below to catch up. Bounded retry tolerates
+          # transient network/auth flakes; persistent failure is a
+          # hard error since running on stale tag data could pick a
+          # colliding version.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch --tags --force origin; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch remote tags from origin after 3 attempts — refusing to compute next version on potentially stale tag data"
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch --tags failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
 
           # Find the latest vX.Y.Z tag reachable from the source branch's
           # HEAD. `--merged HEAD` is critical for the stable-branch path:
