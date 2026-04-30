@@ -2753,8 +2753,29 @@ jobs:
             echo "::warning::AUTOFIX_INSTEP_RETRY_SLEEP_SECS must be an integer in [1, 600]; defaulting to 30."
             _instep_retry_sleep=30
           fi
+          # Detect whether the editor's just-written summary qualifies as
+          # an empty-output failure. Two signals count:
+          #   1. The summary file is missing or zero-length (the original
+          #      retry condition).
+          #   2. The summary file exists but contains the same fallback /
+          #      failure markers that the downstream "Validate editor no-op
+          #      disposition" step greps for to set EDITOR_NOOP_SUSPICIOUS.
+          #      `scripts/review_apply_fixes.sh` writes a ~600-byte fallback
+          #      summary when all editor attempts fail — non-empty on disk,
+          #      so the original `[ ! -s ... ]` test missed it. The marker
+          #      regex must stay in lockstep with the validate step's grep
+          #      (both reference "editor failed before producing" /
+          #      "unavailable (editor fallback)") — a divergence here would
+          #      reintroduce the run-25126757724 cascade.
+          _instep_retry_summary_empty="false"
+          if [ ! -s "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
+            _instep_retry_summary_empty="true"
+          elif grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}" 2>/dev/null; then
+            _instep_retry_summary_empty="true"
+            echo "::notice::Editor summary contains failure/fallback markers — treating as empty for in-step retry decision."
+          fi
           if [ "${_instep_retry_enabled}" = "true" ] \
-              && [ ! -s "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
+              && [ "${_instep_retry_summary_empty}" = "true" ]; then
             # `git log` here intentionally walks HEAD on the already-
             # checked-out PR branch (the surrounding workflow checks
             # out the PR head before this step runs, see "Checkout PR
@@ -3267,7 +3288,17 @@ jobs:
         # deferred), and HEAD is up to date, so the merge-base check is valid.
         # Actual
         # resolution is gated separately below.
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        #
+        # Skip when EDITOR_NOOP_SUSPICIOUS=true: the editor never produced a
+        # validated commit, so even a successful conflict resolver run would
+        # have nothing fix-related to push. Running merge detection here
+        # otherwise wastes ~30s and — if the defensive fallback at the
+        # end of this step trips on an unrelated git issue — sets
+        # MERGE_CONFLICT=true, which in turn fires the (futile) Codex
+        # resolver and produces a `FAILED_STEPS=1` cascade that the e2e
+        # poller treats as the proximate failure (analysis: e2e-smoke-
+        # failure-25126757724.md §B/D).
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3534,7 +3565,14 @@ jobs:
         # resolution is not an autofix iteration and should not be blocked by
         # the iteration cap.  Also runs when did_commit is true since the push
         # is deferred — both autofix and conflict resolution are pushed together.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        #
+        # The EDITOR_NOOP_SUSPICIOUS != 'true' clause mirrors the gate on
+        # "Detect merge conflicts" above: if the editor never produced a
+        # validated commit, MERGE_CONFLICT cannot legitimately be true here
+        # (the prior step is skipped and leaves the env var unset), but we
+        # repeat the guard for defence-in-depth in case future code paths set
+        # MERGE_CONFLICT outside that step.
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3557,7 +3595,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
         timeout-minutes: 60
         env:
           GH_PAT: ${{ secrets.GH_PAT }}

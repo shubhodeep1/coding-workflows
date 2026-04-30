@@ -769,6 +769,21 @@ Operational rules:
 - Renames of `CHECK_RUNS_AUTOFIX_ENABLED`, `CHECK_RUNS_WAIT_TIMEOUT_SECS`, `CHECK_RUNS_POLL_INTERVAL_SECS`, `${PR_CHECK_RUNS_CONTEXT_FILE}`, the `PR_CHECK_RUNS_CONTEXT` header literal, the `collection_status` value set, or the `failed[i].*` / `incomplete[i].*` field-name layout are **breaking changes** per CLAUDE.md §6. Reviewer + editor prompts depend on the field-name layout; update both prompt scripts in lockstep with any schema change.
 - Disabling the feature (`CHECK_RUNS_AUTOFIX_ENABLED=false`) keeps the file present with `collection_status: disabled` (and zero counts, per the uniform header schema) so the preflight check still passes. Do not gate the preflight on `collection_status: ready`.
 
+### 20.10 Editor-NoOp Suspicious Skip (`EDITOR_NOOP_SUSPICIOUS` cascade guard)
+
+`Validate editor no-op disposition` in `.github/workflows/review_autofix.yml` sets `EDITOR_NOOP_SUSPICIOUS=true` whenever the editor either produced no summary at all or wrote the fallback markers (`editor failed before producing` / `unavailable (editor fallback)`) that `scripts/review_apply_fixes.sh` emits when every editor attempt fails. In that state no autofix commit can be pushed, so the merge-conflict detect/resolver chain has nothing fix-related to land — running it anyway burns ~3.5 minutes of runner time and (when the defensive merge-fail fallback at `Detect merge conflicts` trips on an unrelated git issue) sets `MERGE_CONFLICT=true`, which then fires the Codex resolver, which exits non-zero, which the e2e poller misreads as the proximate failure (analysis/`e2e-smoke-failure-25126757724.md`).
+
+Contract:
+
+- Three steps in `review_autofix.yml` carry `&& env.EDITOR_NOOP_SUSPICIOUS != 'true'` in their `if:` chain alongside the existing `CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'` clauses: `Detect merge conflicts`, `Prepare merge-conflict resolver prompt and pre-snapshot`, and `Run Codex resolver, validate, stage, commit`. The two resolver halves must keep identical `if:` lines per the existing split-step contract (§ "Review autofix `run:` block extractions") — any change to one must be mirrored to the other.
+- The `Apply fixes with editor model` step's in-step retry (`AUTOFIX_INSTEP_RETRY_ENABLED`, default `true`) now treats both signals as "empty editor output": (a) the original `[ ! -s "${EDITOR_SUMMARY_FILE}" ]` zero-length test, and (b) the same `editor failed before producing|unavailable \(editor fallback\)` regex the validate step uses. The marker regex MUST stay in lockstep between `Apply fixes with editor model` (in-step retry decision) and `Validate editor no-op disposition` (sets `EDITOR_NOOP_SUSPICIOUS`); a divergence would let the fallback summary slip past the retry while still tripping the validator, reproducing the run-25126757724 cascade. The retry is still gated on `_prior_autofix_count == 0` (first-iteration only) — an empty editor output on iteration ≥ 2 is a legitimate convergence signal.
+- The e2e poller in `.github/workflows/test-and-mark-stable.yml` (`Phase 4: Wait for review & autofix to complete`, `if [ "$ELAPSED" -ge 600 ]` block) greps the live job log for the literal substring `Editor summary contains failure/fallback markers` and exits the wait with `status=completed_with_findings` the moment it appears. The annotation text is the public contract: a rename in `Validate editor no-op disposition` is breaking per CLAUDE.md §6 and would break this shortcut. The shortcut adds zero new GitHub API calls — it reuses the `LOG_CONTENT` already fetched for the reviewer-success counter.
+
+Operational rules:
+
+- Renames of `EDITOR_NOOP_SUSPICIOUS` or the `Editor summary contains failure/fallback markers` annotation literal are breaking changes per CLAUDE.md §6. Add alongside, never in place.
+- Rollback: removing the new clauses from the three `if:` lines restores the pre-cascade-guard behaviour (the run-25126757724 cascade). The retry-gate widening can be rolled back independently by reverting `_instep_retry_summary_empty` to the original `[ ! -s ]` test. The poller shortcut can be rolled back by deleting the `grep -qF` block.
+
 ---
 
 ## FINAL REMINDER

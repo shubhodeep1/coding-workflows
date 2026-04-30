@@ -958,10 +958,45 @@ jobs:
                 fi
 
                 # Check live logs for reviewer progress (majority-pass shortcut)
+                # and for the editor-noop fallback marker (early-exit shortcut).
+                # Both are gated behind ELAPSED >= 600 so we only pay the live-
+                # log API cost after the editor step is plausibly running —
+                # reviewers + editor together take well over 10 minutes in
+                # every observed run, so anything earlier is wasted I/O.
                 if [ "$ELAPSED" -ge 600 ]; then
                   JOB_ID=$(echo "$JOBS_JSON" | jq -r '.jobs[0].id // empty' 2>/dev/null || echo "")
                   if [ -n "$JOB_ID" ]; then
                     LOG_CONTENT=$(gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" || echo "")
+
+                    # Editor-noop fallback marker shortcut.
+                    #
+                    # When `Validate editor no-op disposition` in
+                    # review_autofix.yml emits the literal warning
+                    # "Editor summary contains failure/fallback markers",
+                    # the editor never produced a validated summary and the
+                    # downstream merge-conflict / resolver / push steps
+                    # (now gated on EDITOR_NOOP_SUSPICIOUS != 'true') will
+                    # all skip — there is nothing left for the e2e bait
+                    # check to verify, so we can short-circuit the wait
+                    # loop the moment the marker appears in the live log
+                    # rather than waiting for the cleanup steps to wind
+                    # down (which can take another ~3.5 minutes and was
+                    # the proximate cause of the run-25126757724 cascade
+                    # masking the real editor failure).
+                    #
+                    # `grep -qF` for an exact substring match — the
+                    # annotation text is stable per analysis/e2e-smoke-
+                    # failure-25126757724.md (a rename in
+                    # review_autofix.yml is a breaking change per
+                    # CLAUDE.md §6, so this literal is safe to depend on).
+                    if printf '%s' "$LOG_CONTENT" | grep -qF 'Editor summary contains failure/fallback markers'; then
+                      echo "  ⚠ Editor noop marker detected in live log — editor never produced a validated commit; aborting wait early"
+                      echo "::warning::Review workflow editor produced no validated summary (EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
+                      echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
+                      echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+                      exit 0
+                    fi
+
                     SUCCEEDED=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* succeeded" || true)
                     FAILED_R=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* failed after" || true)
                     SUCCEEDED="${SUCCEEDED:-0}"; SUCCEEDED="${SUCCEEDED##*$'\n'}"
