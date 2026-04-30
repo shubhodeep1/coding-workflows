@@ -55,6 +55,19 @@ from typing import List, Optional
 PROTOCOL_VERSION = "2024-11-05"
 CLIENT_INFO = {"name": "coding-workflows-mcp-probe", "version": "1.0.0"}
 
+# Cap the size of a single response we will buffer waiting for a newline.
+# A well-behaved MCP `initialize` response is well under a kilobyte; anything
+# larger than this without a newline indicates a misbehaving or malicious
+# server, and unbounded buffering would let it grow process memory until the
+# probe timeout fires. 1 MiB leaves comfortable headroom for legitimate
+# servers while bounding worst-case allocation.
+_MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+class _ResponseTooLargeError(Exception):
+	"""Raised by ``_read_line_with_timeout`` when the server has written more
+	than ``_MAX_RESPONSE_BYTES`` bytes without emitting a newline."""
+
 
 def _build_initialize_request(request_id: int) -> bytes:
 	payload = {
@@ -97,6 +110,10 @@ def _read_line_with_timeout(stream, deadline: float) -> Optional[bytes]:
 		newline = buffer.find(b"\n")
 		if newline != -1:
 			return bytes(buffer[:newline])
+		# Bound buffer growth so a misbehaving server cannot exhaust process
+		# memory by streaming bytes without ever sending a newline.
+		if len(buffer) > _MAX_RESPONSE_BYTES:
+			raise _ResponseTooLargeError(len(buffer))
 
 
 def _terminate(proc: subprocess.Popen) -> None:
@@ -165,7 +182,16 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 			)
 			return 3
 
-		line = _read_line_with_timeout(proc.stdout, deadline)
+		try:
+			line = _read_line_with_timeout(proc.stdout, deadline)
+		except _ResponseTooLargeError as exc:
+			print(
+				f"[mcp-probe:{name}] response exceeded {_MAX_RESPONSE_BYTES} "
+				f"bytes without a newline (got {exc.args[0]} bytes); "
+				"treating as invalid response",
+				file=sys.stderr,
+			)
+			return 4
 		if line is None:
 			# Distinguish timeout vs early EOF for clearer diagnostics.
 			if proc.poll() is None:

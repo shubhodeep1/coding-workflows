@@ -640,7 +640,7 @@ CONTEXT7_MCP_EOF
 			echo "::warning::Failed to append Context7 MCP config; continuing without Context7 MCP setup." >&2
 		fi
 	else
-		echo "::warning::Context7 MCP handshake probe failed — skipping [mcp_servers.context7] block to avoid malformed Codex tool list."
+		echo "::warning::Context7 MCP handshake probe failed — skipping [mcp_servers.context7] block to avoid malformed Codex tool list." >&2
 	fi
 else
 	echo "Context7 MCP setup skipped (CONTEXT7_DISABLED=true)."
@@ -679,7 +679,7 @@ GIT_MCP_EOF
 					echo "::warning::Failed to append Git MCP config; continuing without Git MCP setup." >&2
 				fi
 			else
-				echo "::warning::Git MCP handshake probe failed — skipping [mcp_servers.git] block to avoid malformed Codex tool list."
+				echo "::warning::Git MCP handshake probe failed — skipping [mcp_servers.git] block to avoid malformed Codex tool list." >&2
 			fi
 		else
 			echo "::warning::Could not resolve mcp-server-git binary; skipping Git MCP setup." >&2

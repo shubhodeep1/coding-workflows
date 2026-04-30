@@ -179,6 +179,42 @@ def test_probe_rejects_response_with_null_error_field() -> None:
 	)
 
 
+def test_probe_rejects_oversized_response_without_newline() -> None:
+	"""A misbehaving server that streams bytes without a newline must not be
+	able to grow the probe's buffer indefinitely. The probe enforces a cap
+	(``_MAX_RESPONSE_BYTES``, 1 MiB) and returns exit 4 (invalid response)
+	when exceeded so the optional MCP block is still skipped without the
+	probe itself blowing up on memory."""
+	with tempfile.TemporaryDirectory() as td:
+		flood_server = Path(td) / "flood.py"
+		flood_server.write_text(
+			textwrap.dedent(
+				"""
+				import sys, time
+				sys.stdin.readline()
+				# Stream 2 MiB of non-newline bytes so the probe's 1 MiB cap
+				# trips before any newline-delimited frame arrives.
+				chunk = b"x" * 65536
+				written = 0
+				while written < 2 * 1024 * 1024:
+					try:
+						sys.stdout.buffer.write(chunk)
+						sys.stdout.buffer.flush()
+					except BrokenPipeError:
+						break
+					written += len(chunk)
+				time.sleep(1)
+				"""
+			)
+		)
+		result = _run_probe("flood", sys.executable, str(flood_server), timeout=10.0)
+	assert result.returncode == 4, (
+		f"expected exit 4 (response too large), got {result.returncode}\n"
+		f"stderr: {result.stderr}"
+	)
+	assert "exceeded" in result.stderr
+
+
 def test_probe_rejects_mismatched_response_id() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		bad_id_server = Path(td) / "bad_id.py"
@@ -342,6 +378,8 @@ def test_probe_helper_definition_is_present_in_setup_serena() -> None:
 	driver would silently keep passing while production stops probing.
 	This guard fails loudly in that scenario.
 	"""
+	import re
+
 	source = SETUP_SERENA.read_text()
 	assert "probe_mcp_handshake()" in source, (
 		"probe_mcp_handshake() helper missing from setup_serena.sh — "
@@ -351,11 +389,27 @@ def test_probe_helper_definition_is_present_in_setup_serena() -> None:
 	# Both optional servers must be gated by the probe.
 	assert "probe_mcp_handshake context7" in source
 	assert "probe_mcp_handshake git" in source
-	# Fail-closed contract: missing python3 / probe script must not silently
-	# pass through. Catches accidental reverts to "return 0" warning-only.
-	assert "treating as probe failure" in source, (
-		"probe_mcp_handshake must fail closed when python3 or the probe "
-		"script is missing; got a silent-pass implementation instead."
+	# Fail-closed contract: missing python3 / probe script must trigger
+	# `return 1` from the helper, not silent `return 0`. Match against the
+	# structural shape of the fail-closed branches so this guard is robust
+	# to wording changes in the human-facing warning text.
+	python_check_pattern = re.compile(
+		r"if\s+!\s+command\s+-v\s+python3.*?return\s+1",
+		re.DOTALL,
+	)
+	probe_script_check_pattern = re.compile(
+		r"if\s+\[\s+!\s+-f\s+\"\$\{_probe_script\}\"\s+\].*?return\s+1",
+		re.DOTALL,
+	)
+	assert python_check_pattern.search(source), (
+		"fail-closed `command -v python3` guard with `return 1` not found in "
+		"setup_serena.sh — probe_mcp_handshake may silently pass when python3 "
+		"is unavailable, re-introducing the malformed-tool-list failure mode."
+	)
+	assert probe_script_check_pattern.search(source), (
+		"fail-closed probe-script-presence guard with `return 1` not found in "
+		"setup_serena.sh — probe_mcp_handshake may silently pass when "
+		"mcp_handshake_probe.py is missing."
 	)
 
 
@@ -371,6 +425,7 @@ def _all_tests():
 		test_probe_rejects_invalid_json_response,
 		test_probe_rejects_jsonrpc_error_response,
 		test_probe_rejects_response_with_null_error_field,
+		test_probe_rejects_oversized_response_without_newline,
 		test_probe_rejects_mismatched_response_id,
 		test_setup_serena_skips_block_when_probe_fails,
 		test_setup_serena_writes_block_when_probe_passes,
