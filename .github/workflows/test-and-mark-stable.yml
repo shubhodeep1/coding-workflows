@@ -1001,12 +1001,106 @@ jobs:
                 fi
 
                 # Check live logs for reviewer progress (majority-pass shortcut)
+                # and for the editor-noop fallback marker (early-exit shortcut).
+                # Both are gated behind ELAPSED >= 600 so we only pay the live-
+                # log API cost after the editor step is plausibly running —
+                # reviewers + editor together take well over 10 minutes in
+                # every observed run, so anything earlier is wasted I/O.
                 if [ "$ELAPSED" -ge 600 ]; then
                   JOB_ID=$(echo "$JOBS_JSON" | jq -r '.jobs[0].id // empty' 2>/dev/null || echo "")
                   if [ -n "$JOB_ID" ]; then
-                    LOG_CONTENT=$(gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" || echo "")
-                    SUCCEEDED=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* succeeded" || true)
-                    FAILED_R=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* failed after" || true)
+                    # Stream the job log to a tempfile rather than capturing
+                    # into a shell variable. `gh_api_safe .../actions/jobs/
+                    # {id}/logs` returns the raw log bytes (multi-MB on long
+                    # autofix runs) and bash command-substitution `$(...)`
+                    # silently drops NUL bytes from the captured output —
+                    # which can occur when an inner tool (codex, jq, gh)
+                    # emits binary content into stderr/stdout. Dropped NULs
+                    # could merge adjacent lines and cause both the editor-
+                    # noop grep and the reviewer-success counter to silently
+                    # miss otherwise-valid matches. Writing once to a
+                    # tempfile and grepping the file is byte-exact and uses
+                    # no more API calls than before. See PR #1798 review by
+                    # copilot-pull-request-reviewer.
+                    LOG_FILE="$(mktemp)"
+                    # On API failure (rate-limit or transient blip),
+                    # gh_api_safe writes nothing to stdout and returns
+                    # non-zero. Truncate LOG_FILE to zero bytes so the
+                    # downstream greps see "no matches" rather than
+                    # stale content from a previous iteration's mktemp
+                    # collision (mktemp returns a fresh path so this is
+                    # belt-and-braces, not strictly required). Emit a
+                    # diagnostic so operators can spot API blips without
+                    # having to correlate the missing shortcuts against
+                    # the rate-limit log lines gh_api_safe emits to
+                    # stderr — surfaces the case Grok-4.1 flagged in
+                    # the claude-branch-review on PR #1798.
+                    # Stderr is intentionally NOT redirected: gh_api_safe
+                    # writes its own rate-limit / transient-failure
+                    # diagnostics to >&2 (e.g. "⏳ Rate limited — backing
+                    # off ${RATE_LIMIT_BACKOFF}s"), and operators rely on
+                    # those lines to distinguish a genuinely-stuck review
+                    # workflow from a slow smoke run caused by API blips.
+                    if ! gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG_FILE"; then
+                      : > "$LOG_FILE"
+                      echo "  ⚠ Live-log fetch failed for job ${JOB_ID} — editor-noop shortcut and reviewer-count shortcut are inactive this iteration; the wait loop continues with status/conclusion polling only" >&2
+                    fi
+
+                    # Editor-noop fallback marker shortcut.
+                    #
+                    # When `Validate editor no-op disposition` in
+                    # review_autofix.yml emits the literal warning
+                    # "Editor summary contains failure/fallback markers",
+                    # the editor never produced a validated summary and the
+                    # downstream merge-conflict / resolver / push steps
+                    # (now gated on EDITOR_NOOP_SUSPICIOUS != 'true') will
+                    # all skip — there is nothing left for the e2e bait
+                    # check to verify, so we can short-circuit the wait
+                    # loop the moment the marker appears in the live log
+                    # rather than waiting for the cleanup steps to wind
+                    # down (which can take another ~3.5 minutes and was
+                    # the proximate cause of the run-25126757724 cascade
+                    # masking the real editor failure).
+                    #
+                    # `grep -qaF` for an exact substring match — the
+                    # annotation text is stable per analysis/e2e-smoke-
+                    # failure-25126757724.md (a rename in
+                    # review_autofix.yml is a breaking change per
+                    # CLAUDE.md §6, so this literal is safe to depend on).
+                    # The `-a` flag forces grep to treat the input as text
+                    # even if a NUL byte in the streamed log would
+                    # otherwise make grep classify it as binary and
+                    # short-circuit to "Binary file ... matches" without
+                    # honouring `-q`'s quiet exit-code-only contract; do
+                    # not drop `-a` when editing this block.
+                    #
+                    # The `::warning::` prefix is part of the literal so
+                    # this only matches the validator's annotation, not
+                    # any other log line that happens to mention the
+                    # phrase (e.g. the in-step retry's own `::notice::`
+                    # before its widened gate fix landed — see PR #1798
+                    # review). The validator emits exactly this prefix
+                    # (`echo "::warning::Editor summary contains
+                    # failure/fallback markers — editor never completed
+                    # a validated review."`); GitHub Actions preserves
+                    # workflow-command prefixes verbatim in the raw log
+                    # bytes returned by /actions/jobs/{id}/logs.
+                    if grep -qaF '::warning::Editor summary contains failure/fallback markers' "$LOG_FILE"; then
+                      echo "  ⚠ Editor noop marker detected in live log — editor never produced a validated commit; aborting wait early"
+                      echo "::warning::Review workflow editor produced no validated summary (EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
+                      echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
+                      echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+                      rm -f "$LOG_FILE"
+                      exit 0
+                    fi
+
+                    # `-a` treats the input as text even if grep otherwise
+                    # heuristically classified it as binary (any NUL byte
+                    # would normally make grep fall through to "Binary file
+                    # ... matches" instead of printing/counting matches).
+                    SUCCEEDED=$(grep -caE "Reviewer .* succeeded" "$LOG_FILE" || true)
+                    FAILED_R=$(grep -caE "Reviewer .* failed after" "$LOG_FILE" || true)
+                    rm -f "$LOG_FILE"
                     SUCCEEDED="${SUCCEEDED:-0}"; SUCCEEDED="${SUCCEEDED##*$'\n'}"
                     FAILED_R="${FAILED_R:-0}"; FAILED_R="${FAILED_R##*$'\n'}"
                     [[ "$SUCCEEDED" =~ ^[0-9]+$ ]] || SUCCEEDED=0
