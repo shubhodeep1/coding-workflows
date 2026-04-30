@@ -3924,8 +3924,35 @@ jobs:
           fi
 
           # Telegram caps message bodies at 4096 chars; trim if necessary.
-          if [ "${#MSG}" -gt 4000 ]; then
-            MSG="${MSG:0:3950}"$'\n'"…[truncated; see artifact 'soft-error-report-${{ github.run_id }}']"
+          # The consolidator already does section-aware truncation up to
+          # 2800 bytes, and the typical release-status header (job-status
+          # pills + run URL) is ~300–500 bytes — so the combined message
+          # is normally well under 4096. This block is the fallback for
+          # the rare overflow case (large header, multi-line failure
+          # status, or operator-raised SOFT_ERROR_TELEGRAM_BYTES).
+          #
+          # Using bash's `${MSG:0:3950}` here can mid-byte-split a
+          # multi-byte UTF-8 sequence — the consolidated summary
+          # routinely contains ✓/✗/⏳/em-dashes, and the consolidator's
+          # status pill uses backticks plus phase names. A mid-codepoint
+          # slice corrupts the rendered Telegram message and (worse)
+          # makes the byte-count diverge from the visible character
+          # count. Hand off to scripts/truncate_to_utf8_byte_cap.py
+          # for codepoint-boundary-aware truncation. python3 is always
+          # preinstalled at /usr/bin/python3 on `ubuntu-latest`, even
+          # when `actions/setup-python` fails. If the helper script is
+          # itself unavailable (checkout failed), fall back to the
+          # legacy byte-slice — best-effort defence-in-depth so the
+          # notification still goes out.
+          MSG_BYTES=$(printf '%s' "${MSG}" | wc -c)
+          if [ "${MSG_BYTES}" -gt 4000 ]; then
+            if command -v python3 >/dev/null 2>&1 \
+               && [ -f scripts/truncate_to_utf8_byte_cap.py ]; then
+              MSG=$(printf '%s' "${MSG}" | python3 scripts/truncate_to_utf8_byte_cap.py 3950)
+            else
+              MSG="${MSG:0:3950}"
+            fi
+            MSG+=$'\n'"…[truncated; see artifact 'soft-error-report-${{ github.run_id }}']"
           fi
 
           # Send notification (persists — not auto-deleted)
