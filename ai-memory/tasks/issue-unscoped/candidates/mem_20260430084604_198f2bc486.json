@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:139 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `git fetch --tags --force origin >/dev/null 2>&1` hides stderr diagnostics for the fetch retry loop.\n  WHY: Transient network/auth warnings are lost, reducing observability during fetch retries.\n- .github/workflows/test-and-mark-stable.yml:149-170 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `git fetch --tags --force origin >/dev/null 2>&1 || true` suppresses fetch failures, so LATEST can run against stale or incomplete remote tags.\n  WHY: A partial fetch can lead to a later duplicate-tag push failure without an earlier diagnosis.\n- .github/workflows/test-and-mark-stable.yml:3627-3639 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `git ls-remote --exit-code --tags origin \"refs/tags/${VERSION}\"` treats transport/auth/network errors as \"tag missing\".\n  WHY: A transient failure can make the workflow skip an increment and proceed blindly without diagnostics.\n- .github/workflows/test-and-mark-stable.yml:3682-3685 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `STATE=$(_gh_retry gh api ... || echo \"pending\")` converts retry exhaustion into synthetic `pending`.\n  WHY: Sustained GitHub API failure can bypass the CI gate and release without a confirmed source-branch status.\n- .github/workflows/forward-merge-stable-to-main.yml:70-133 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast, qwen_qwen3_6-plus]\n  PROBLEM: On merge conflict, the workflow aborts back to a clean tree and creates the fallback PR from `origin/stable`, so the PR omits the attempted merge context/conflict hunks.\n  WHY: Reviewers only see the raw stable-to-main diff and the conflict files list, and must reproduce the merge locally to understand the real conflict shape.\n- .github/workflows/forward-merge-stable-to-main.yml:147-165 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `set +e; gh pr create ...` with the benign-warning handling in the old path swallows non-benign PR creation failures.\n  WHY: Auth/scope/rate-limit/repo-permission errors can prevent PR creation and the job can still appear successful.\n- .github/workflows/forward-merge-stable-to-main.yml:1-25,117-187 | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: With `concurrency.group: forward-merge-stable-to-main` and `cancel-in-progress: false`, successive pushes to `stable` can create multiple fallback PRs for the same forward-merge target.\n  WHY: Each run uses a unique `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`, so the existing-PR check misses prior fallback PRs and operators can end up with overlapping PRs.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:139 | confidence=2\n  PROBLEM: The `git fetch --tags --force origin >/dev/null 2>&1` redirection hides stderr diagnostics for the retry loop.\n  WHY: Transient network/auth warnings are lost, reducing observability during fetch retries.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/forward-merge-stable-to-main.yml:74-88,119-133 | confidence=3\n  PROBLEM: On merge conflict, `git merge --abort || true` resets HEAD to `origin/main` (the pre-merge state), discarding the merge attempt and the working tree's conflict state, and the fallback PR is then pushed from `origin/stable` directly.\n  WHY: Reviewers see a clean stable-to-main diff with conflicts surfacing only when they attempt to merge the PR; the conflict files list is included in the PR body, but the actual conflict context is lost.\n- .github/workflows/forward-merge-stable-to-main.yml:1-25,117-187 | confidence=3\n  PROBLEM: With `concurrency.group: forward-merge-stable-to-main` and `cancel-in-progress: false`, rapid successive pushes to `stable` produce serially-queued runs that can open a SECOND fallback PR from a different branch even though Run 1's PR already covers the same commit set.\n  WHY: The \"already exists\" check only matches the same branch name, but each run uses a unique `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`, so operators can end up with multiple PRs for overlapping commit sets.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:149-170 | confidence=5\n  PROBLEM: `git fetch --tags --force origin >/dev/null 2>&1 || true` continues to suppress all fetch errors (network, auth, rate-limit, transport failures), even post-grep tolerance fix.\n  WHY: LATEST and collision loop then run against potentially stale/missing remote tags; if fetch partially fails, the job can later fail on duplicate tag push without diagnosing tag-sync failure.\n- .github/workflows/test-and-mark-stable.yml:3627-3639 | confidence=4\n  PROBLEM: `git ls-remote --exit-code --tags origin \"refs/tags/${VERSION}\"` treats *all* non-zero exits as \"tag missing\", including transient transport/auth/network errors (no retry wrapper like _gh_retry).\n  WHY: Ephemeral failure can skip increment or later fail on duplicate tag push; no early warning, so the workflow proceeds blindly.\n- .github/workflows/test-and-mark-stable.yml:3682-3685 | confidence=5\n  PROBLEM: `|| echo \"pending\"` converts `_gh_retry` exhaustion (repeated 5xx/rate-limit/malformed response) to synthetic \"pending\", bypassing CI gate.\n  WHY: Sustained GH API failure can let release cuts proceed without source-branch CI verification, violating the release safety invariant.\n- .github/workflows/forward-merge-stable-to-main.yml:70-113 | confidence=4\n  PROBLEM: Merge conflict aborts and resets to `origin/stable`, and the fallback PR from a clean `origin/stable` lacks the attempted merge commit/conflict hunks.\n  WHY: Manual reviewers see the raw stable\u2192main diff, not resolution context (what conflicted, proposed merge state), which makes triage harder.\n- .github/workflows/forward-merge-stable-to-main.yml:147-165 | confidence=4\n  PROBLEM: Loose `|| echo \"::warning::\"` swallows non-benign `gh pr create` failures (auth/scope outage, rate-limit, repo perms), succeeding the job silently.\n  WHY: Propagation drops with no PR created and no alert, so stable fixes can be lost until manual detection.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d2773da995d3859ddee8166785389d6afc1e92ecffb845154555a724bde4ca30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1821,
+    "run_id": "25155080855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25155080855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430084604_198f2bc486",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1821,
+    "run_id": "25155080855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T08:46:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
