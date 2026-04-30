@@ -102,7 +102,25 @@ jobs:
           # main advanced concurrently, merging on stale main would
           # produce a non-fast-forward push that wastes a fallback PR
           # for a race that a fresh merge would resolve.
-          git fetch origin stable main
+          # Bounded retry mirrors the check-step fetch so a transient
+          # transport/auth blip here can't drop the propagation cycle
+          # either — both fetches are equally resilient.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch origin stable main 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to refresh origin/stable + origin/main after 3 attempts"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
           git checkout -B main origin/main
 
           if ! git merge --no-ff origin/stable -m "${MSG}"; then
