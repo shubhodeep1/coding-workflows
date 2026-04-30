@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:983 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The fail-open `|| : > \"$LOG_FILE\"` on API failure creates an empty log file, causing the poller to treat GitHub API failures as zero matches and wait for the full timeout instead of surfacing the transient failure.\n  WHY: On GitHub API blips, the step silently degrades to no signal and burns the full wait budget; severity/confidence reflect the source review.\n- .github/workflows/test-and-mark-stable.yml:1031-1032 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `.*` patterns in the reviewer-count greps can over-match unrelated log text and miscount reviewer success or failure lines.\n  WHY: Incorrect counts could cause a premature pass or an unnecessary wait; severity/confidence reflect the source review.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:983 | severity=medium | confidence=4\n  PROBLEM: The fail-open `|| : > \"$LOG_FILE\"` on API failure creates an empty log file, causing all subsequent greps to report zero matches and silently force the full ELAPSED wait timeout instead of surfacing the transient API failure.\n  WHY: On GitHub API blips (rate-limit, network flake), the e2e poller always burns the full ~10+ min budget per smoke run without diagnostic, inflating release gate wall time; no early classification even when reviewers/editor already succeeded.\n- .github/workflows/test-and-mark-stable.yml:1031-1032 | severity=medium | confidence=3\n  PROBLEM: The `.*` anchors in grep -E patterns risk over-matching lines containing the substring outside reviewer context.\n  WHY: Over/under-counting reviewers could cause premature \"pass\" early-exit or infinite wait, blocking or misclassifying the release gate.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "71a2864c41f1696fcdcaa5685fd7cbadb31cd67123c012dd6e6b4050a1f52fa3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1798,
+    "run_id": "25144519095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25144519095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430030757_63c5f8b606",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1798,
+    "run_id": "25144519095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-30T03:07:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
