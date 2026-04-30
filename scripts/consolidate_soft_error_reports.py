@@ -163,6 +163,12 @@ def _truncate_bytes_at_utf8_boundary(text: str, cap: int) -> str:
 	when the assembled summary head alone would exceed `max_bytes`
 	(degenerate but possible if an operator passes a tiny cap or the
 	status pill explodes for an unusually large run).
+
+	Decodes with `errors="replace"` (mirroring `_read_report_safe`) so
+	any malformed UTF-8 bytes that survived an upstream `errors="replace"`
+	read are still surfaced as visible U+FFFD characters rather than
+	silently dropped — keeps diagnostic behaviour consistent across the
+	two read paths.
 	"""
 	if cap <= 0:
 		return ""
@@ -174,7 +180,7 @@ def _truncate_bytes_at_utf8_boundary(text: str, cap: int) -> str:
 	# the slice never lands inside a multi-byte codepoint.
 	while i > 0 and (encoded[i] & 0xC0) == 0x80:
 		i -= 1
-	return encoded[:i].decode("utf-8", errors="ignore")
+	return encoded[:i].decode("utf-8", errors="replace")
 
 
 def parse_status(markdown: str) -> str:

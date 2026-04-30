@@ -3792,17 +3792,26 @@ jobs:
 
           # Sanitize SOFT_ERROR_TELEGRAM_BYTES in shell before passing
           # to Python. `set -euo pipefail` is in effect, so a non-integer
-          # repo-var value (empty string, whitespace, "abc", etc.) would
-          # otherwise make argparse exit non-zero and abort the step
-          # before it writes report_path/summary_path — undermining the
-          # documented fail-open intent. Coerce invalid input to the
-          # default (2800) and emit a workflow warning so misconfiguration
-          # is visible without breaking the release-status notification.
+          # repo-var value (whitespace, "abc", etc.) would otherwise make
+          # argparse exit non-zero and abort the step before it writes
+          # report_path/summary_path — undermining the documented
+          # fail-open intent.
+          #
+          # Trimming first means a repo-var saved as `" 3000 "` (with
+          # incidental whitespace) is treated equivalently to `"3000"`
+          # rather than silently falling back to the default. The
+          # subsequent regex accepts any non-negative integer including
+          # `0`, which the Python consolidator interprets as "disable
+          # truncation" via its `max_bytes <= 0` branch — operators
+          # who set `SOFT_ERROR_TELEGRAM_BYTES=0` to opt out of the
+          # cap have their intent honoured rather than overridden.
           SOFT_ERROR_BYTES_RAW="${SOFT_ERROR_TELEGRAM_BYTES:-2800}"
-          if [[ "${SOFT_ERROR_BYTES_RAW}" =~ ^[0-9]+$ ]] && [ "${SOFT_ERROR_BYTES_RAW}" -gt 0 ]; then
-            SOFT_ERROR_BYTES="${SOFT_ERROR_BYTES_RAW}"
+          SOFT_ERROR_BYTES_TRIMMED="${SOFT_ERROR_BYTES_RAW#"${SOFT_ERROR_BYTES_RAW%%[![:space:]]*}"}"
+          SOFT_ERROR_BYTES_TRIMMED="${SOFT_ERROR_BYTES_TRIMMED%"${SOFT_ERROR_BYTES_TRIMMED##*[![:space:]]}"}"
+          if [[ "${SOFT_ERROR_BYTES_TRIMMED}" =~ ^[0-9]+$ ]]; then
+            SOFT_ERROR_BYTES="${SOFT_ERROR_BYTES_TRIMMED}"
           else
-            echo "::warning::Invalid SOFT_ERROR_TELEGRAM_BYTES='${SOFT_ERROR_BYTES_RAW}'; falling back to 2800."
+            echo "::warning::Invalid SOFT_ERROR_TELEGRAM_BYTES='${SOFT_ERROR_BYTES_RAW}' (must be a non-negative integer); falling back to 2800."
             SOFT_ERROR_BYTES=2800
           fi
 

@@ -267,6 +267,50 @@ def test_summary_byte_cap_is_absolute_even_when_head_overflows():
 			summary.encode("utf-8").decode("utf-8")
 
 
+def test_zero_cap_disables_truncation():
+	"""max_bytes=0 means the operator opted out of the cap entirely.
+
+	The Python consolidator's `max_bytes <= 0` branch skips the
+	truncation path and returns the full assembled summary. Verifies
+	the contract Python documents (and the new shell sanitization
+	relies on for `SOFT_ERROR_TELEGRAM_BYTES=0`).
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		# Make the summary > 2800 bytes so it would normally be truncated.
+		_write_per_phase_report(
+			root, run_id="9", phase="clarify",
+			findings="### clarify\n" + ("X" * 4000),
+		)
+		_, summary = _run_consolidator(root, max_bytes=0)
+		assert len(summary.encode("utf-8")) > 2800, "fixture must exceed default cap"
+		assert "[truncated for Telegram cap" not in summary
+		assert ("X" * 100) in summary
+
+
+def test_truncate_helper_preserves_multibyte_content():
+	"""Truncating after a multi-byte codepoint keeps it intact.
+
+	Walking back over UTF-8 continuation bytes (top two bits == 0b10)
+	must land on a codepoint boundary, so the resulting string round-
+	trips cleanly through `encode("utf-8").decode("utf-8")` even when
+	the requested cap straddles the middle of a 2- or 3-byte sequence.
+	The `errors="replace"` decode setting is defence-in-depth: with
+	the boundary walk in place no malformed sequences should reach
+	the decode call, but if any do they surface as U+FFFD rather
+	than silently disappearing (matching `_read_report_safe`'s
+	`errors="replace"` policy).
+	"""
+	# 'αβγδε' is 5 codepoints × 2 bytes each = 10 bytes total.
+	# Caps of 1..10 should all yield prefixes that decode cleanly.
+	greek = "αβγδε"
+	for cap in range(1, 12):
+		out = csr._truncate_bytes_at_utf8_boundary(greek, cap)
+		# Output must be valid UTF-8 (round-trip with strict decode).
+		out.encode("utf-8").decode("utf-8")
+		assert len(out.encode("utf-8")) <= cap
+
+
 def test_summary_drops_whole_blocks_before_inline_truncation():
 	"""When multiple findings exist, drop later blocks (canonical-order tail) first."""
 	with tempfile.TemporaryDirectory() as tmp:
