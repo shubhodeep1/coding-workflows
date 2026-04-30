@@ -346,13 +346,11 @@ def main() -> int:
 		default="success",
 		help=(
 			"Outcome of the upstream `actions/download-artifact` step "
-			"(e.g. `success`, `failure`, `cancelled`, `skipped`). When "
-			"the input directory is empty, this lets the stub artifact "
-			"distinguish 'no per-phase analyser ran' (download succeeded "
-			"but produced nothing) from 'download step itself failed' "
-			"(real findings exist upstream but were not retrievable). "
-			"Operators reading the consolidated artifact would otherwise "
-			"see the same empty stub in both cases."
+			"(`success`, `failure`, `cancelled`, or `skipped`). Only "
+			"`failure` and `cancelled` trigger the DOWNLOAD FAILED stub; "
+			"any other value (including `unknown` from broken env "
+			"plumbing) falls through to the neutral 'no artifacts' "
+			"stub so a miswired pipeline cannot fabricate a fake outage."
 		),
 	)
 	args = parser.parse_args()
@@ -362,7 +360,16 @@ def main() -> int:
 
 	reports = discover_reports(args.input_dir)
 	if not reports:
-		download_failed = args.download_status not in ("", "success")
+		# Only escalate to a "DOWNLOAD FAILED" stub for the genuinely
+		# negative GitHub Actions step outcomes — `failure` (the
+		# download step failed under `continue-on-error`) and
+		# `cancelled`. Anything else (`success`, `skipped`, `""`,
+		# `unknown`, or a typo from broken env plumbing) falls through
+		# to the neutral "no artifacts" stub. Default-deny on every
+		# non-success token would make a routine env-var miswire look
+		# identical to a real download outage in the consolidated
+		# artifact, drowning real outage signal in noise.
+		download_failed = args.download_status in ("failure", "cancelled")
 		if download_failed:
 			print(
 				f"::warning::consolidate_soft_error_reports: no per-phase "
