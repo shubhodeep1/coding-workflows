@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context\n\n- `git rev-parse HEAD`: `0459b230fcbdcce0b1062ce9341bbca76e057480`\n- Resolved checkout ref: `orchestrator/project-1790`\n- Integration metadata: `orchestrator/project-1790`\n- Integration mismatch: `false`\n- Clarification mapping: no `Q1/Qn` questions were issued; `/answer [auto-answered-by-orchestrator]` means proceed with the issue body as-is.\n\nFiles likely to change\n\n- `.github/workflows/review_autofix.yml`\n- `tests/test_review_autofix_editor_noop_guards.py` as the preferred dedicated regression test file, or `tests/test_overlap_validation_fallback.py` if the hidden `files_touched` set only allows an already-CI-wired test file\n- `.github/workflows/ci.yml` only if a new standalone test file is introduced\n\nImplementation plan\n\n1. In `Apply fixes with editor model`, widen the first-iteration in-step retry gate so it retries when `EDITOR_SUMMARY_FILE` is empty or when the summary already contains the fallback/failure markers that later make the run `EDITOR_NOOP_SUSPICIOUS=true`. Keep the retry first-iteration-only, and keep `AUTOFIX_INSTEP_RETRY_ENABLED` and `AUTOFIX_INSTEP_RETRY_SLEEP_SECS` unchanged.\n2. Keep `Validate editor no-op disposition` as the authoritative classifier for `EDITOR_NOOP_SUSPICIOUS`, but make the retry block use the same fallback-marker contract so the retry path and the suspicious-noop path cannot drift apart again.\n3. Add `env.EDITOR_NOOP_SUSPICIOUS != 'true'` to the `if:` guards for `Detect merge conflicts`, `Prepare merge-conflict resolver prompt and pre-snapshot`, and `Run Codex resolver, validate, stage, commit`. Preserve the existing `CAN_PUSH`, `PR_CLOSED`, `AUTOFIX_STALE_BASE_SKIP`, `CLAUDE_BRANCH_REVIEW_MODE`, and resolver `MERGE_CONFLICT == 'true'` guards exactly.\n4. Leave the merge-precheck body, merge diagnostics, and resolver scripts untouched. The scope here is only the retry predicate plus the workflow step short-circuits.\n5. Add regression coverage in the repo\u2019s existing workflow-contract style. The test should prove that first-iteration retry now triggers for empty summaries and fallback-marker summaries, and that all three conflict-related steps short-circuit on `EDITOR_NOOP_SUSPICIOUS=true`. Representative pattern: `tests/test_overlap_validation_fallback.py` already codifies fallback-marker contracts for `review_autofix`.\n\nData structures / interfaces affected\n\n- No DB contracts, API payloads, CLI flags, or public env vars change.\n- Runtime state touched is limited to existing workflow env vars and files: `EDITOR_NOOP_SUSPICIOUS`, `MERGE_CONFLICT`, `CONFLICT_RESOLVED`, and `EDITOR_SUMMARY_FILE`.\n- Existing step names remain unchanged.\n\nRisks and edge cases\n\n- The widened retry must stay first-iteration-only; later no-op iterations can be legitimate convergence and should not be retried.\n- The fallback-marker matcher must stay aligned with the no-op-suspicious classifier; otherwise the retry and guard paths will diverge again.\n- Skipping `Detect merge conflicts` means suspicious-noop runs may never initialize `MERGE_CONFLICT` or `CONFLICT_RESOLVED`; downstream `if:` clauses already treat unset as non-true, so avoid broader initialization changes.\n- Do not alter unrelated merge-precheck behavior or the existing push/closed/stale-base/Claude-branch guards.\n\nTesting considerations\n\n- Run the dedicated regression test that covers the retry predicate and the three noop-suspicious guards.\n- Run `python3 tests/test_overlap_validation_fallback.py` if that file is reused or if marker literals are mirrored from it.\n- If a new standalone regression test file is added, wire it into `.github/workflows/ci.yml`; otherwise place the assertions into an already-executed `review_autofix` contract test file.\n\nConflicts / assumptions\n\n- The issue says to stay inside the orchestrator `files_touched` list, but that list is not present in the planning context. This plan assumes the allowed scope includes `review_autofix.yml` and the minimal regression-test surface above.\n- No codebase mismatch was found: the referenced step names and flags exist exactly as described in `.github/workflows/review_autofix.yml`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a3bef7b46bf717efee971aee8be89315c82edbd0522905631f55059a4022eefb",
+  "lineage": {
+    "issue_number": 1792,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25142990686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25142990686",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1792"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260430015240_1789a624b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1792,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25142990686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1792",
+  "timestamps": {
+    "created_at": "2026-04-30T01:52:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
