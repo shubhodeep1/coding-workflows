@@ -3733,6 +3733,15 @@ jobs:
           DOWNLOAD_OUTCOME: ${{ steps.download_soft_errors.outcome }}
           CHECKOUT_OUTCOME: ${{ steps.checkout_repo.outcome || 'success' }}
           SETUP_PYTHON_OUTCOME: ${{ steps.setup_python.outcome || 'success' }}
+          # Tunable Telegram-summary byte cap. Default 2800 leaves
+          # headroom under Telegram's 4096-char body cap for the rest
+          # of the release-status text (job-status pill, run URL, etc.);
+          # operators can override via repo var `SOFT_ERROR_TELEGRAM_BYTES`
+          # if the rest of the message body changes shape (e.g. more
+          # smoke-test sibling jobs are added). Pattern matches the
+          # other tunables in this workflow (`vars.LOG_ANALYZER_MODEL`
+          # / `vars.LOG_ANALYZER_REASONING`).
+          SOFT_ERROR_TELEGRAM_BYTES: ${{ vars.SOFT_ERROR_TELEGRAM_BYTES || '2800' }}
         run: |
           set -euo pipefail
           REPORT="/tmp/soft_error_report.md"
@@ -3752,20 +3761,29 @@ jobs:
              || [ ! -f scripts/consolidate_soft_error_reports.py ]; then
             REASON="checkout=${CHECKOUT_OUTCOME} setup_python=${SETUP_PYTHON_OUTCOME}"
             echo "::warning::Consolidator unavailable (${REASON}); writing fallback stub."
+            # Lead with the actual diagnostic — the failed step is the
+            # primary failure here, NOT a missing soft-error artifact.
+            # An earlier draft suggested inspecting per-phase artifacts
+            # first, but reviewers flagged that as misleading because it
+            # can send operators chasing the wrong cause; the per-phase
+            # artifacts may exist (they are uploaded by their own
+            # parent jobs, independent of this notify-job checkout) but
+            # the fix lives in the notify-job logs, not the artifacts.
             {
               echo "# Consolidated soft-error report"
               echo
               echo "**CONSOLIDATOR UNAVAILABLE.** The notify job's"
-              echo "Checkout / Setup-Python step failed (${REASON}), so the"
-              echo "consolidation script could not be executed. Per-phase"
-              echo "soft-error artifacts may still exist upstream — inspect"
-              echo "the run's artifact list for"
-              echo "\`soft-error-report-<run_id>-<phase>\` entries."
+              echo "Checkout / Setup-Python step failed (${REASON}); the"
+              echo "consolidation script could not be executed. To"
+              echo "diagnose, open this workflow run and inspect the"
+              echo "failed step's logs in the notify job — the per-phase"
+              echo "soft-error artifacts (uploaded by their own parent"
+              echo "jobs) are unrelated to this failure path."
             } > "${REPORT}"
             {
               echo "## Soft-error consolidation"
-              echo "_CONSOLIDATOR UNAVAILABLE (${REASON}); inspect per-phase"
-              echo "artifacts directly in the run summary._"
+              echo "_CONSOLIDATOR UNAVAILABLE (${REASON}); see the notify"
+              echo "job's failed step logs for the root cause._"
             } > "${SUMMARY}"
             echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
             echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
@@ -3776,7 +3794,7 @@ jobs:
             --input-dir /tmp/soft-error-artifacts \
             --output-full "${REPORT}" \
             --output-summary "${SUMMARY}" \
-            --max-summary-bytes 2800 \
+            --max-summary-bytes "${SOFT_ERROR_TELEGRAM_BYTES}" \
             --download-status "${DOWNLOAD_OUTCOME:-unknown}"
           echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
           echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
