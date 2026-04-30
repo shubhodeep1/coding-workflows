@@ -24,7 +24,38 @@ permissions:
   contents: write
 
 jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Job -1: Validate dispatch ref — must be `stable`
+  #
+  # Mirrors the lockdown applied to test-and-mark-stable.yml. This
+  # workflow only releases from the long-lived `stable` branch.
+  # Dispatching from `main` (or any other ref) is rejected so an
+  # operator cannot accidentally tag main as stable. To promote `main`
+  # to the new stable baseline, run promote-main-to-stable.yml — it
+  # fast-forwards stable to main and then dispatches the full release
+  # gate (test-and-mark-stable.yml) on stable automatically.
+  # ──────────────────────────────────────────────────────────────────
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      branch: ${{ steps.detect.outputs.branch }}
+    steps:
+      - name: Validate dispatch ref
+        id: detect
+        run: |
+          set -euo pipefail
+          REF="${{ github.ref_name }}"
+          if [ "$REF" != "stable" ]; then
+            echo "::error::mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
+            echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches the full release gate on stable automatically."
+            exit 1
+          fi
+          echo "Dispatched from 'stable' — proceeding"
+          echo "branch=stable" >> "$GITHUB_OUTPUT"
+
   resolve-version:
+    needs: [source]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -33,7 +64,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -74,14 +105,14 @@ jobs:
   # Script correctness validation — gates the release
   # ──────────────────────────────────────────────────────────────────
   validate-scripts:
-    needs: [resolve-version]
+    needs: [source, resolve-version]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -158,7 +189,7 @@ jobs:
           echo "All referenced scripts exist."
 
   validate:
-    needs: [resolve-version]
+    needs: [source, resolve-version]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -174,7 +205,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
 
       - name: Ensure tag does not already exist
@@ -186,13 +217,14 @@ jobs:
             exit 1
           fi
 
-      - name: Verify CI passed on main
+      - name: Verify CI passed on stable
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           SHA=$(git rev-parse HEAD)
-          echo "Checking CI status for $SHA ..."
+          echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
           # Allow the release even if no CI status is reported (repos
           # with no required checks). Fail only on explicit failure.
           # Rate-limit-aware gh retry
@@ -226,20 +258,20 @@ jobs:
           STATE=$(_gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
             --jq '.state' 2>/dev/null || echo "pending")
           if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
-            echo "::error::CI is failing on main ($STATE). Fix before releasing."
+            echo "::error::CI is failing on ${SOURCE_BRANCH} ($STATE). Fix before releasing."
             exit 1
           fi
           echo "CI state: $STATE — OK"
 
   release:
-    needs: [resolve-version, validate, validate-scripts]
+    needs: [source, resolve-version, validate, validate-scripts]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout main
+      - name: Checkout source branch
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
 
       - name: Extract changelog for this version
@@ -286,13 +318,14 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
           gh release create "${VERSION}" \
             --title "${VERSION}" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            --target main
+            --target "${SOURCE_BRANCH}"
 
       - name: Notify consumer repos via repository_dispatch
         if: ${{ !inputs.dry_run }}
