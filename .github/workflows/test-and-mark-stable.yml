@@ -193,7 +193,6 @@ jobs:
       cancel-in-progress: true
     outputs:
       test_passed: ${{ steps.verify.outputs.passed }}
-      soft_error_summary: ${{ steps.soft-error-analyser.outputs.soft_error_summary }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -202,16 +201,18 @@ jobs:
       POLL_INTERVAL: 10
 
     steps:
-      # Checkout repo at the start so `if: always()` steps (Phase 8 soft-error
-      # analyser, Cleanup test artifacts) can find scripts/ even when an
-      # earlier phase exits non-zero. The original "Checkout repository for
-      # integration tests" step (Phase 5, ~line 1100) is skipped on early
-      # failure, leaving downstream `if: always()` steps with no scripts/
-      # on disk — observed in run 25115169454 where Phase 4b's bait failure
-      # cascaded into `python3: can't open file '...scripts/analyze_soft_errors.py'`
-      # and `_safe_gh_jq: command not found` in cleanup. The Phase 5 checkout
-      # is left in place (idempotent re-checkout against `ref: main`).
-      - name: Checkout repository (early — needed by Phase 8 & Cleanup on early failure)
+      # Checkout repo at the start so `if: always()` steps (per-phase
+      # soft-error analyser invocations, Cleanup test artifacts) can find
+      # scripts/ even when an earlier phase exits non-zero. The original
+      # "Checkout repository for integration tests" step (Phase 5,
+      # ~line 1100) is skipped on early failure, leaving downstream
+      # `if: always()` steps with no scripts/ on disk — observed in
+      # run 25115169454 where Phase 4b's bait failure cascaded into
+      # `python3: can't open file '...scripts/analyze_soft_errors.py'`
+      # and `_safe_gh_jq: command not found` in cleanup. The Phase 5
+      # checkout is left in place (idempotent re-checkout against
+      # `ref: main`).
+      - name: Checkout repository (early — needed by analyser & cleanup on early failure)
         uses: actions/checkout@v5
         with:
           ref: main
@@ -1665,8 +1666,9 @@ jobs:
 
             CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
 
-            # Capture the latest poller run id (used by Phase 8's soft-error
-            # analyser to ingest the poller's logs alongside other phases).
+            # Capture the latest poller run id (used by the per-phase
+            # soft-error analyser invocation below to ingest the poller's
+            # logs as the `orchestrate_poll` phase artifact).
             if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
               POLLER_LATEST_ID=$(echo "${POLLER_RUN}" | jq -r '.id // empty')
               if [ -n "${POLLER_LATEST_ID}" ]; then
@@ -2081,118 +2083,14 @@ jobs:
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
-      # ── Phase 8: Soft-error analyser (non-blocking) ─────────────
-      # Pulls logs from every triggered phase run, filters to high-signal
-      # lines, and asks gpt-5.4-mini @ medium reasoning to summarise soft
-      # failures (rate-limit recoveries, codex fallbacks, summariser hard
-      # fails, etc.). The report is exposed as a job output so the notify
-      # job can attach it to the Telegram release message. Hard exits are
-      # avoided — analyser problems must never block a release.
-      # Wait briefly for every captured phase run to reach
-      # status=completed. The previous Phase 8 fired the moment Phase 7
-      # finished; on run 25126757724 that raced review_autofix's tail
-      # cleanup steps, so `gh run view --log` returned HTTP 404 ("run is
-      # still in progress") and the resulting report had no review_autofix
-      # signal at all (the phase that actually contained the root cause).
-      # The wait below caps at 5 minutes — long enough for review_autofix's
-      # cleanup tail (~40s on the failing run) and any orchestrate-poll /
-      # cancel-on-pr-close trailers to settle, short enough that a
-      # genuinely hung run does not block the release-gate Telegram
-      # notification indefinitely.
-      - name: "Phase 8a: Wait for all phase runs to complete"
-        id: phase8_wait
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
-          PLAN_RUN_ID: ${{ steps.wait-plan.outputs.run_id }}
-          IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
-          REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
-          RBSIM_POLLER_RUN_ID: ${{ steps.review-blocked-sim.outputs.poller_run_id }}
-          CANCEL_RUN_ID: ${{ steps.verify-cancel-on-close.outputs.cancel_run_id }}
-        run: |
-          set -euo pipefail
-          DEADLINE=$(( $(date +%s) + 300 ))
-          for KV in \
-            "clarify:${CLARIFY_RUN_ID:-}" \
-            "plan:${PLAN_RUN_ID:-}" \
-            "implement:${IMPL_RUN_ID:-}" \
-            "review_autofix:${REVIEW_RUN_ID:-}" \
-            "orchestrate_poll:${RBSIM_POLLER_RUN_ID:-}" \
-            "cancel_on_pr_close:${CANCEL_RUN_ID:-}"; do
-            PHASE="${KV%%:*}"
-            RID="${KV#*:}"
-            [ -n "${RID}" ] && [[ "${RID}" =~ ^[0-9]+$ ]] || continue
-            while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-              STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${RID}" --jq '.status // ""' 2>/dev/null || echo "")
-              if [ "${STATUS}" = "completed" ]; then
-                echo "  ✓ ${PHASE} (run #${RID}) completed"
-                break
-              fi
-              echo "  ⏳ ${PHASE} (run #${RID}) status=${STATUS:-unknown}; waiting ..."
-              sleep 5
-            done
-          done
-
-      - name: "Phase 8: Soft-error log analyser"
-        id: soft-error-analyser
-        if: always()
-        continue-on-error: true
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          LOG_ANALYZER_MODEL: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          LOG_ANALYZER_REASONING: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
-          CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
-          PLAN_RUN_ID: ${{ steps.wait-plan.outputs.run_id }}
-          IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
-          REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
-          RBSIM_POLLER_RUN_ID: ${{ steps.review-blocked-sim.outputs.poller_run_id }}
-          CANCEL_RUN_ID: ${{ steps.verify-cancel-on-close.outputs.cancel_run_id }}
-        run: |
-          set -euo pipefail
-          REPORT="/tmp/soft_error_report.md"
-          ARGS=(--repo "${TEST_REPO}" --output "${REPORT}")
-          [ -n "${CLARIFY_RUN_ID:-}" ] && ARGS+=(--run "clarify=${CLARIFY_RUN_ID}")
-          [ -n "${PLAN_RUN_ID:-}" ] && ARGS+=(--run "plan=${PLAN_RUN_ID}")
-          [ -n "${IMPL_RUN_ID:-}" ] && ARGS+=(--run "implement=${IMPL_RUN_ID}")
-          [ -n "${REVIEW_RUN_ID:-}" ] && ARGS+=(--run "review_autofix=${REVIEW_RUN_ID}")
-          [ -n "${RBSIM_POLLER_RUN_ID:-}" ] && ARGS+=(--run "orchestrate_poll=${RBSIM_POLLER_RUN_ID}")
-          [ -n "${CANCEL_RUN_ID:-}" ] && ARGS+=(--run "cancel_on_pr_close=${CANCEL_RUN_ID}")
-
-          if [ "${#ARGS[@]}" -le 4 ]; then
-            echo "No phase runs captured; skipping analyser." > "${REPORT}"
-            echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          python3 scripts/analyze_soft_errors.py "${ARGS[@]}" || {
-            echo "::warning::Soft-error analyser exited non-zero — keeping fallback report"
-          }
-          echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
-
-          # Truncate the report for downstream consumers (Telegram caps
-          # message bodies at 4096 chars; we leave headroom for the rest of
-          # the release-status text). The full untruncated report is uploaded
-          # as an artifact below.
-          if [ -f "${REPORT}" ]; then
-            head -c 2800 "${REPORT}" > /tmp/soft_error_report_short.md
-            {
-              echo 'soft_error_summary<<SOFT_ERR_EOF'
-              cat /tmp/soft_error_report_short.md
-              echo
-              echo 'SOFT_ERR_EOF'
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload soft-error report artifact
-        if: always() && steps.soft-error-analyser.outputs.report_path != ''
-        uses: actions/upload-artifact@v6
-        with:
-          name: soft-error-report-${{ github.run_id }}
-          path: /tmp/soft_error_report.md
-          if-no-files-found: ignore
-          retention-days: 30
+      # The previous Phase 8 in this job re-ran the LLM analyser across
+      # the 6 captured phases to produce a single combined report and
+      # truncated it byte-wise for the Telegram summary. That step was
+      # removed in favour of a deterministic concat performed in the
+      # `notify` job (see `Consolidate per-phase soft-error reports`),
+      # which can see every smoke-test sibling job's per-phase
+      # artifacts — not just this job's six. The per-phase analyser
+      # invocations above remain the source of truth.
 
       # ── Verification summary ───────────────────────────────────
       - name: Verify all phases passed
@@ -3768,8 +3666,73 @@ jobs:
     needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
+      # ── Consolidated soft-error report ─────────────────────────
+      # Replaces the historical Phase 8 LLM re-summarisation that lived
+      # inside `e2e-smoke-test`. Two reasons for moving this here:
+      #   1. Coverage: `notify` `needs:` every smoke-test job, so it can
+      #      see the per-phase artifacts emitted by orphan-workflows-test
+      #      (workflow_log_analysis, validation_refresh, update_workflows,
+      #      memory_maintenance), orchestrate-decompose-test,
+      #      validate-standalone-test, clarify-rejects-unsolvable-test,
+      #      and e2e-alt-model-test (alt_*). Phase 8 only saw the 6 e2e
+      #      phases.
+      #   2. Fidelity: pure-concat instead of an LLM second-pass means
+      #      every per-phase finding is preserved verbatim. The previous
+      #      flow re-ran the analyser model with an "<800 words" prompt
+      #      cap, which silently dropped findings during consolidation.
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download per-phase soft-error reports
+        id: download_soft_errors
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          # `actions/download-artifact@v6` accepts a glob in `pattern`
+          # and downloads matching artifacts from the *current* workflow
+          # run. Each artifact lands in its own subdirectory (default
+          # behaviour); the consolidation script tolerates both that
+          # layout and the flattened `merge-multiple` layout.
+          pattern: soft-error-report-${{ github.run_id }}-*
+          path: /tmp/soft-error-artifacts
+          merge-multiple: false
+
+      - name: Consolidate per-phase soft-error reports
+        id: consolidate_soft_errors
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/soft-error-artifacts
+          python3 scripts/consolidate_soft_error_reports.py \
+            --input-dir /tmp/soft-error-artifacts \
+            --output-full /tmp/soft_error_report.md \
+            --output-summary /tmp/soft_error_summary.md \
+            --max-summary-bytes 2800
+          echo "report_path=/tmp/soft_error_report.md" >> "$GITHUB_OUTPUT"
+          echo "summary_path=/tmp/soft_error_summary.md" >> "$GITHUB_OUTPUT"
+
+      - name: Upload consolidated soft-error report
+        if: always() && steps.consolidate_soft_errors.outputs.report_path != ''
+        uses: actions/upload-artifact@v6
+        with:
+          # Artifact name preserved for backward compatibility with any
+          # operator tooling that fetches `soft-error-report-<run_id>`.
+          name: soft-error-report-${{ github.run_id }}
+          path: /tmp/soft_error_report.md
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Send Telegram notification
         id: tg_send
         env:
@@ -3833,11 +3796,20 @@ jobs:
           fi
           MSG+=$'\n'"Run: ${RUN_URL}"
 
-          # Append the soft-error analyser report (truncated upstream to fit
-          # comfortably within Telegram's 4096-char body cap). Non-blocking
-          # by design: any soft-failure findings are surfaced here so the
-          # release engineer sees them inline with the release notification.
-          SOFT_ERR='${{ needs.e2e-smoke-test.outputs.soft_error_summary }}'
+          # Append the consolidated soft-error summary built by the
+          # `Consolidate per-phase soft-error reports` step above. The
+          # script does section-aware truncation (it drops whole findings
+          # blocks rather than slicing mid-finding) and emits a status
+          # pill listing every phase's analyser status code so the
+          # release engineer can spot analyser failures (call_failed /
+          # api_skipped) at a glance even when there are no findings.
+          # Non-blocking by design: a missing summary file means the
+          # consolidation step itself failed, in which case the
+          # release-status header is still delivered.
+          SOFT_ERR=""
+          if [ -f /tmp/soft_error_summary.md ]; then
+            SOFT_ERR=$(cat /tmp/soft_error_summary.md)
+          fi
           if [ -n "${SOFT_ERR}" ]; then
             MSG+=$'\n\n'"---"$'\n'"${SOFT_ERR}"
           fi
