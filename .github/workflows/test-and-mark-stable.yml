@@ -3990,12 +3990,20 @@ jobs:
           # `wc -c` output may include leading whitespace on some
           # implementations (BSD-derived `wc` pads with spaces; GNU
           # `wc` on `ubuntu-latest` typically does not). Under
-          # `set -euo pipefail`, a non-integer `MSG_BYTES` like
-          # `"  4500"` would make `[ -gt 4000 ]` exit with a numeric-
-          # comparison error, aborting the Telegram step before the
-          # send. Strip whitespace defensively so the comparison is
-          # robust to any future runner image change.
+          # `set -euo pipefail`, a non-integer `MSG_BYTES` would make
+          # `[ -gt 4000 ]` exit with a numeric-comparison error,
+          # aborting the Telegram step before the send. Strip
+          # whitespace defensively, then validate the result is
+          # actually numeric — if any future `wc` impl emits
+          # genuinely non-numeric padding (unlikely but cheap to guard
+          # against), skip truncation and let the message go through.
+          # Erring on the side of "send the message" matches the
+          # documented fail-open intent of the notify job.
           MSG_BYTES=$(printf '%s' "${MSG}" | wc -c | tr -d '[:space:]')
+          if ! [[ "${MSG_BYTES}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::wc -c produced non-integer output '${MSG_BYTES}'; skipping truncation."
+            MSG_BYTES=0
+          fi
           if [ "${MSG_BYTES}" -gt 4000 ]; then
             if command -v python3 >/dev/null 2>&1 \
                && [ -f scripts/truncate_to_utf8_byte_cap.py ]; then
