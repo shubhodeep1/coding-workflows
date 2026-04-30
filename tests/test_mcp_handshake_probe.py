@@ -83,7 +83,7 @@ def test_probe_detects_close_on_initialize() -> None:
 		f"expected exit 3 (server closed before responding), got {result.returncode}\n"
 		f"stderr: {result.stderr}"
 	)
-	assert "exited before sending a response" in result.stderr or "[mcp-probe:ctx7-mock]" in result.stderr
+	assert "closed stdout before sending" in result.stderr or "[mcp-probe:ctx7-mock]" in result.stderr
 
 
 def test_probe_times_out_on_unresponsive_server() -> None:
@@ -230,6 +230,91 @@ def test_probe_rejects_oversized_response_without_newline() -> None:
 		f"stderr: {result.stderr}"
 	)
 	assert "exceeded" in result.stderr
+
+
+def test_probe_distinguishes_eof_from_timeout_when_child_still_alive() -> None:
+	"""A server that closes stdout but stays alive must map to exit 3 (EOF),
+	not exit 2 (timeout). The previous implementation used ``proc.poll()``
+	to discriminate, which is racy: between the read returning None and the
+	caller checking ``poll()``, a still-alive child appears as a timeout.
+	The fix raises ``_TimeoutError`` only on actual deadline expiry inside
+	``_read_line_with_timeout`` and returns ``None`` only on EOF, so this
+	branch is now exact regardless of child-process lifecycle."""
+	with tempfile.TemporaryDirectory() as td:
+		closer = Path(td) / "close_stdout_alive.py"
+		closer.write_text(
+			textwrap.dedent(
+				"""
+				import os, sys, time
+				sys.stdin.readline()
+				# Close FD 1 directly so the probe's pipe-read returns EOF.
+				# `sys.stdout.close()` on its own can leave the underlying
+				# file descriptor open in some Python startup configurations,
+				# so close the FD explicitly.
+				try:
+					sys.stdout.flush()
+				except Exception:
+					pass
+				os.close(1)
+				# Stay alive past the probe's deadline so proc.poll() would
+				# return None at the moment the probe sees EOF on stdout.
+				time.sleep(30)
+				"""
+			)
+		)
+		# Probe timeout is short (3s); the child sleeps 30s so it is still
+		# alive when EOF arrives. The exit code must be 3 (EOF), not 2.
+		result = _run_probe("eof-alive", sys.executable, str(closer), timeout=3.0)
+	assert result.returncode == 3, (
+		f"expected exit 3 (EOF), got {result.returncode}\n"
+		f"stderr: {result.stderr}"
+	)
+	assert "closed stdout" in result.stderr
+
+
+def test_probe_returns_64_on_invalid_timeout() -> None:
+	"""Argparse parse errors and ``--timeout <= 0`` must exit 64, not 2.
+	Code 2 is reserved for handshake timeout — overlap would make exit-
+	code-driven log analysis ambiguous."""
+	# Negative --timeout: caught by main()'s explicit check.
+	cmd_neg = [
+		sys.executable,
+		str(PROBE),
+		"--name",
+		"x",
+		"--command",
+		"/bin/true",
+		"--timeout",
+		"-1",
+	]
+	r1 = subprocess.run(cmd_neg, capture_output=True, text=True, timeout=10)
+	assert r1.returncode == 64, (
+		f"expected 64 for non-positive timeout, got {r1.returncode}\n"
+		f"stderr: {r1.stderr}"
+	)
+	# Missing required arg: caught by argparse via _ProbeArgParser.
+	cmd_missing = [sys.executable, str(PROBE), "--name", "x"]
+	r2 = subprocess.run(cmd_missing, capture_output=True, text=True, timeout=10)
+	assert r2.returncode == 64, (
+		f"expected 64 for missing --command, got {r2.returncode}\n"
+		f"stderr: {r2.stderr}"
+	)
+	# Non-numeric --timeout: caught by argparse type=float coercion.
+	cmd_nan = [
+		sys.executable,
+		str(PROBE),
+		"--name",
+		"x",
+		"--command",
+		"/bin/true",
+		"--timeout",
+		"abc",
+	]
+	r3 = subprocess.run(cmd_nan, capture_output=True, text=True, timeout=10)
+	assert r3.returncode == 64, (
+		f"expected 64 for non-numeric timeout, got {r3.returncode}\n"
+		f"stderr: {r3.stderr}"
+	)
 
 
 def test_probe_rejects_mismatched_response_id() -> None:
@@ -443,6 +528,8 @@ def _all_tests():
 		test_probe_rejects_jsonrpc_error_response,
 		test_probe_rejects_response_with_null_error_field,
 		test_probe_rejects_oversized_response_without_newline,
+		test_probe_distinguishes_eof_from_timeout_when_child_still_alive,
+		test_probe_returns_64_on_invalid_timeout,
 		test_probe_rejects_mismatched_response_id,
 		test_setup_serena_skips_block_when_probe_fails,
 		test_setup_serena_writes_block_when_probe_passes,

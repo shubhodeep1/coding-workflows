@@ -38,6 +38,20 @@ stderr) on any of:
     * response is missing ``result`` or carries an ``error``
     * response id does not match the request id
     * response exceeds the buffered-bytes cap before a newline arrives
+
+Exit-code contract (callers can rely on these being distinct):
+
+    0    handshake succeeded
+    1    spawn failure
+    2    timeout waiting for the initialize response
+    3    server closed stdout before sending a complete response
+    4    response is not valid JSON
+    5    response is JSON-RPC but is missing ``result`` or carries ``error``
+    6    response id does not match the request id
+    7    response exceeded the buffered-bytes cap before a newline arrived
+    64   invalid argv (e.g. missing required flag, non-numeric --timeout,
+         non-positive --timeout) — argparse parse errors are routed here
+         instead of argparse's default 2 so they don't collide with code 2.
 """
 
 from __future__ import annotations
@@ -83,6 +97,13 @@ class _ResponseTooLargeError(Exception):
 	than ``_MAX_RESPONSE_BYTES`` bytes without emitting a newline."""
 
 
+class _TimeoutError(Exception):
+	"""Raised by ``_read_line_with_timeout`` when the read deadline expires
+	before any newline arrives. Distinct from EOF (which returns ``None``)
+	so the caller can map the two to different exit codes regardless of
+	whether the child process is still alive after closing stdout."""
+
+
 def _build_initialize_request(request_id: int) -> bytes:
 	payload = {
 		"jsonrpc": "2.0",
@@ -102,17 +123,28 @@ def _read_line_with_timeout(stream, deadline: float) -> Optional[bytes]:
 	"""Read a single newline-terminated line from *stream* before *deadline*.
 
 	Returns the raw bytes (without the trailing newline) on success, or
-	None if EOF or timeout is hit first.
+	``None`` on EOF (the server closed stdout before sending a complete
+	line, which is the most common handshake-failure shape).
+
+	Raises:
+		_TimeoutError: the deadline expired before any newline or EOF.
+		_ResponseTooLargeError: the server streamed more than
+			``_MAX_RESPONSE_BYTES`` bytes without emitting a newline.
+
+	Distinguishing timeout (raise) from EOF (return None) at the read
+	site avoids relying on ``proc.poll()`` in the caller, which is racy:
+	a child that closes stdout but remains alive briefly would otherwise
+	be misclassified as a timeout.
 	"""
 	buffer = bytearray()
 	fd = stream.fileno()
 	while True:
 		remaining = deadline - time.monotonic()
 		if remaining <= 0:
-			return None
+			raise _TimeoutError()
 		ready, _, _ = select.select([fd], [], [], remaining)
 		if not ready:
-			return None
+			raise _TimeoutError()
 		chunk = os.read(fd, 4096)
 		if not chunk:
 			# EOF — the server closed its stdout (often the symptom we are
@@ -209,6 +241,13 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 
 		try:
 			line = _read_line_with_timeout(proc.stdout, deadline)
+		except _TimeoutError:
+			print(
+				f"[mcp-probe:{name}] timed out after {timeout:.1f}s "
+				"waiting for initialize response",
+				file=sys.stderr,
+			)
+			return 2
 		except _ResponseTooLargeError as exc:
 			print(
 				f"[mcp-probe:{name}] response exceeded {_MAX_RESPONSE_BYTES} "
@@ -218,20 +257,20 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 			)
 			return 7
 		if line is None:
-			# Distinguish timeout vs early EOF for clearer diagnostics.
-			if proc.poll() is None:
-				print(
-					f"[mcp-probe:{name}] timed out after {timeout:.1f}s "
-					"waiting for initialize response",
-					file=sys.stderr,
-				)
-				return 2
-			# stderr is inherited, so the server's own diagnostic lines have
-			# already been forwarded to the calling process's stderr by now.
+			# EOF: server closed stdout before sending a complete response.
+			# We deliberately do *not* consult proc.poll() here — a child
+			# can close stdout while remaining alive briefly, and that
+			# race used to misclassify EOF as a timeout. stderr is
+			# inherited, so the server's own diagnostic output has
+			# already been forwarded to the calling process's stderr.
+			rc_field = (
+				f"returncode={proc.returncode}" if proc.poll() is not None
+				else "child still alive at EOF"
+			)
 			print(
-				f"[mcp-probe:{name}] server exited before sending a response "
-				f"(returncode={proc.returncode}); see inherited stderr for the "
-				"server's own diagnostic output",
+				f"[mcp-probe:{name}] server closed stdout before sending a "
+				f"complete response ({rc_field}); see inherited stderr for "
+				"the server's own diagnostic output",
 				file=sys.stderr,
 			)
 			return 3
@@ -275,8 +314,20 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 		_terminate(proc)
 
 
+class _ProbeArgParser(argparse.ArgumentParser):
+	"""Override the default argparse exit status (2) so that argument-parsing
+	failures don't collide with the probe's own exit code 2 (timeout).
+	Routes all parse errors through exit code 64 so the documented
+	exit-code mapping (0 success, 1..7 probe failures, 64 invalid argv)
+	stays unambiguous."""
+
+	def error(self, message: str) -> None:  # type: ignore[override]
+		self.print_usage(sys.stderr)
+		self.exit(64, f"[mcp-probe] {self.prog}: error: {message}\n")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
-	parser = argparse.ArgumentParser(
+	parser = _ProbeArgParser(
 		description="MCP initialize handshake probe.",
 		# Keep argv after `--` intact so callers can pass server flags.
 		allow_abbrev=False,
