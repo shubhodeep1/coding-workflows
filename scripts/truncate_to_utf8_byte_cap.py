@@ -26,7 +26,19 @@ import sys
 
 
 def truncate_bytes_to_utf8_cap(data: bytes, cap: int) -> bytes:
-	"""Return the maximal valid-UTF-8 prefix of `data` whose length is `<= cap`.
+	"""Return a prefix of `data` whose byte length is `<= cap`, ending on
+	a UTF-8 codepoint boundary when the input is valid UTF-8.
+
+	**Contract.** Callers MUST pass valid UTF-8 input. Under that
+	assumption, the returned prefix is the maximal valid-UTF-8 prefix
+	whose length is `<= cap`. For malformed input the function still
+	returns a byte-level prefix obtained by walking back over
+	continuation bytes, but the result is not guaranteed to decode
+	cleanly — that case is out of scope for the release-gate use sites
+	(both the Telegram MSG and the consolidator's per-phase reports
+	originate from `errors="replace"` reads, which always re-encode to
+	valid UTF-8). Adding strict-decode validation here would cost a
+	full decode on every call without benefiting any real call site.
 
 	If `data[cap]` (the first byte beyond the cap) is a continuation
 	byte (top two bits == 0b10), the cap fell inside a multi-byte
@@ -34,13 +46,15 @@ def truncate_bytes_to_utf8_cap(data: bytes, cap: int) -> bytes:
 	slice `data[:i]` then ends on a clean codepoint boundary because
 	the codepoint containing `data[cap]` is fully excluded.
 
-	Edge cases. (a) `cap == 0` returns data unchanged, mirroring the
-	consolidator's `max_bytes <= 0` operator opt-out semantic.
+	Edge cases. (a) `cap == 0` returns the input unchanged; this
+	matches operator opt-out semantics at the consolidator level
+	(`max_bytes <= 0` → no truncation), so a CLI invocation
+	`truncate_to_utf8_byte_cap.py 0` is the same as a no-op.
 	(b) `cap >= len(data)` returns data unchanged — the input already
 	fits, no truncation needed. (c) Malformed UTF-8 input causes the
 	walk-back to step over continuation bytes until it finds a non-
 	continuation or hits i=0, returning at most an empty bytes object
-	rather than corrupted output.
+	rather than crashing.
 
 	An earlier version of this helper examined `data[i-1]` and
 	unconditionally dropped any leader byte at the boundary. That

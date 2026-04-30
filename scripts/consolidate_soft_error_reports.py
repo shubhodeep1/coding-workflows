@@ -168,18 +168,22 @@ def extract_findings_section(markdown: str) -> str:
 
 def _truncate_bytes_at_utf8_boundary(text: str, cap: int) -> str:
 	"""Truncate `text` so its UTF-8 byte length is `<= cap`, on a codepoint
-	boundary. Returns "" when `cap <= 0` (per the consolidator's
-	`max_bytes <= 0` opt-out semantic). Wraps the canonical
-	`truncate_bytes_to_utf8_cap` helper so both scripts share boundary
-	handling — see that module's docstring for the algorithm.
+	boundary. Wraps the canonical `truncate_bytes_to_utf8_cap` helper so
+	both scripts share boundary handling — see that module's docstring
+	for the algorithm.
+
+	Callers in this module always invoke this wrapper under
+	`if max_bytes > 0` guards in `build_summary`, so `cap <= 0` is not
+	a reachable path here. The `max_bytes <= 0` operator opt-out
+	("no truncation, return everything") is implemented one level up
+	in `build_summary` itself by skipping the truncation block
+	entirely — this wrapper does not need to mirror that semantic.
 
 	Decodes with `errors="replace"` so any malformed UTF-8 that survived
 	an upstream `errors="replace"` read surfaces as visible U+FFFD
 	characters rather than silently dropped — diagnostic behaviour stays
 	consistent with `_read_report_safe`.
 	"""
-	if cap <= 0:
-		return ""
 	truncated = truncate_bytes_to_utf8_cap(text.encode("utf-8"), cap)
 	return truncated.decode("utf-8", errors="replace")
 
