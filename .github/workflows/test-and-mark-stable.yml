@@ -3317,7 +3317,7 @@ jobs:
           # clarify/plan run on `main` so the post-creation id ordering
           # is the only available filter.
           BRANCH="ai/issue-${ISSUE_NUMBER}"
-          for spec in "clarify:${PRE_CLARIFY:-0}::main" "plan:${PRE_PLAN:-0}::main" "implement:${PRE_IMPLEMENT:-0}:${BRANCH}" "review_autofix:${PRE_REVIEW:-0}:${BRANCH}"; do
+          for spec in "clarify:${PRE_CLARIFY:-0}:main" "plan:${PRE_PLAN:-0}:main" "implement:${PRE_IMPLEMENT:-0}:${BRANCH}" "review_autofix:${PRE_REVIEW:-0}:${BRANCH}"; do
             WF="${spec%%:*}"
             REST="${spec#*:}"
             PRE="${REST%%:*}"
