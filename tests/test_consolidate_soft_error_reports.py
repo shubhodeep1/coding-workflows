@@ -109,17 +109,25 @@ def test_discover_missing_dir_returns_empty():
 	assert csr.discover_reports(Path("/tmp/this-path-does-not-exist-xyz")) == []
 
 
-def test_discover_oserror_on_iterdir_falls_through_to_layout2():
-	"""Permission-denied / transient FS errors during layout-1 walk
-	must not crash the consolidator. Layout-2 (flat) results should
-	still be returned. Matches the docstring's fail-open contract.
+def test_discover_oserror_on_top_level_iterdir_returns_empty():
+	"""If the top-level `iterdir()` raises OSError, layout-1 discovery
+	is skipped. Layout-2 then runs `glob("*.md")` independently — its
+	own try/except handles glob failures. Combined with no flat-layout
+	files, this returns [].
+
+	Regression: an earlier version of this test used a `Path.iterdir`
+	monkeypatch and asserted that layout-2 still recovered a flat file.
+	That assertion happened to pass because CPython's `Path.glob` does
+	NOT call `Path.iterdir()` internally — the patch only broke
+	layout-1. To avoid testing CPython internals, this test now
+	exercises the simpler invariant: when iterdir fails AND no
+	flat-layout files exist, discovery returns empty (not crash).
+	The per-child OSError path is covered by
+	`test_discover_oserror_on_child_glob_skips_subdir` below.
 	"""
 	import unittest.mock as mock
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
-		# Drop a flat-layout report so layout-2 has something to find.
-		_write_per_phase_report(root, run_id="9", phase="clarify", findings="x", flatten=True)
-		# Patch iterdir to raise OSError, simulating a transient FS issue.
 		original_iterdir = Path.iterdir
 
 		def _broken_iterdir(self):
@@ -129,8 +137,38 @@ def test_discover_oserror_on_iterdir_falls_through_to_layout2():
 
 		with mock.patch.object(Path, "iterdir", _broken_iterdir):
 			found = csr.discover_reports(root)
-		# Layout-1 walk failed cleanly; layout-2 still picked up clarify.
-		assert [p for p, _ in found] == ["clarify"]
+		assert found == []
+
+
+def test_discover_oserror_on_child_glob_skips_subdir():
+	"""Per-child OSError on layout-1's `child.glob("*.md")` must skip
+	that subdir without aborting the whole walk — sibling subdirs and
+	the layout-2 path keep working.
+	"""
+	import unittest.mock as mock
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		# Two layout-1 subdirs: one will simulate a glob OSError,
+		# the other should be discovered cleanly.
+		_write_per_phase_report(root, run_id="9", phase="clarify", findings="x", flatten=False)
+		_write_per_phase_report(root, run_id="9", phase="plan", findings="y", flatten=False)
+		clarify_dir = root / "soft-error-report-9-clarify"
+
+		original_glob = Path.glob
+
+		def _broken_glob(self, *args, **kwargs):
+			if self == clarify_dir:
+				raise OSError("simulated permission denied on subdir glob")
+			return original_glob(self, *args, **kwargs)
+
+		with mock.patch.object(Path, "glob", _broken_glob):
+			found = csr.discover_reports(root)
+		# The clarify subdir was skipped; plan was still discovered.
+		phases = sorted(p for p, _ in found)
+		assert phases == ["plan"], (
+			f"expected ['plan'], got {phases!r} (clarify should have been "
+			"skipped due to glob OSError)"
+		)
 
 
 def test_discover_oserror_on_is_dir_returns_empty():
@@ -143,6 +181,35 @@ def test_discover_oserror_on_is_dir_returns_empty():
 		with mock.patch.object(Path, "is_dir", side_effect=OSError("stale handle")):
 			found = csr.discover_reports(root)
 		assert found == []
+
+
+def test_discover_oserror_on_per_child_is_dir_skips_child():
+	"""Per-child `is_dir()` OSError must skip that child without
+	crashing — covers the inner `try/except` distinct from the outer
+	one tested in `test_discover_oserror_on_is_dir_returns_empty`.
+	"""
+	import unittest.mock as mock
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		_write_per_phase_report(root, run_id="9", phase="clarify", findings="x", flatten=False)
+		_write_per_phase_report(root, run_id="9", phase="plan", findings="y", flatten=False)
+		clarify_dir = root / "soft-error-report-9-clarify"
+
+		original_is_dir = Path.is_dir
+
+		def _selective_is_dir_raise(self):
+			if self == clarify_dir:
+				raise OSError("simulated stat failure on child")
+			return original_is_dir(self)
+
+		with mock.patch.object(Path, "is_dir", _selective_is_dir_raise):
+			found = csr.discover_reports(root)
+		# clarify skipped due to per-child is_dir failure; plan recovered.
+		phases = sorted(p for p, _ in found)
+		assert phases == ["plan"], (
+			f"expected ['plan'], got {phases!r} (clarify should have been "
+			"skipped due to per-child is_dir OSError)"
+		)
 
 
 # ---------------------------------------------------------------------------

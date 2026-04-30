@@ -3807,18 +3807,20 @@ jobs:
           # Trimming first means a repo-var saved as `" 3000 "` (with
           # incidental whitespace) is treated equivalently to `"3000"`
           # rather than silently falling back to the default. The
-          # subsequent regex accepts any non-negative integer including
-          # `0`, which the Python consolidator interprets as "disable
-          # truncation" via its `max_bytes <= 0` branch — operators
-          # who set `SOFT_ERROR_TELEGRAM_BYTES=0` to opt out of the
-          # cap have their intent honoured rather than overridden.
+          # subsequent regex accepts any integer (incl. negatives like
+          # `-1`); both `0` and any negative value flow through to the
+          # Python consolidator's `max_bytes <= 0` branch which disables
+          # truncation entirely. Operators who set
+          # `SOFT_ERROR_TELEGRAM_BYTES=0` (or `-1`, by historical
+          # convention from other helpers in this repo) to opt out of
+          # the cap have their intent honoured rather than overridden.
           SOFT_ERROR_BYTES_RAW="${SOFT_ERROR_TELEGRAM_BYTES:-2800}"
           SOFT_ERROR_BYTES_TRIMMED="${SOFT_ERROR_BYTES_RAW#"${SOFT_ERROR_BYTES_RAW%%[![:space:]]*}"}"
           SOFT_ERROR_BYTES_TRIMMED="${SOFT_ERROR_BYTES_TRIMMED%"${SOFT_ERROR_BYTES_TRIMMED##*[![:space:]]}"}"
-          if [[ "${SOFT_ERROR_BYTES_TRIMMED}" =~ ^[0-9]+$ ]]; then
+          if [[ "${SOFT_ERROR_BYTES_TRIMMED}" =~ ^-?[0-9]+$ ]]; then
             SOFT_ERROR_BYTES="${SOFT_ERROR_BYTES_TRIMMED}"
           else
-            echo "::warning::Invalid SOFT_ERROR_TELEGRAM_BYTES='${SOFT_ERROR_BYTES_RAW}' (must be a non-negative integer); falling back to 2800."
+            echo "::warning::Invalid SOFT_ERROR_TELEGRAM_BYTES='${SOFT_ERROR_BYTES_RAW}' (must be an integer); falling back to 2800."
             SOFT_ERROR_BYTES=2800
           fi
 
@@ -3836,19 +3838,30 @@ jobs:
               --output-summary "${SUMMARY}" \
               --max-summary-bytes "${SOFT_ERROR_BYTES}" \
               --download-status "${DOWNLOAD_OUTCOME:-unknown}"; then
+            # The script is documented as non-blocking for every known
+            # failure mode (missing inputs, decode errors, OpenRouter
+            # outages), so any non-zero exit reaching this branch is
+            # unexpected — could be a traceback, an argparse failure
+            # from a future arg-format change, an environment-level
+            # OS error, etc. We don't pretend to know which; the stub
+            # just says "exited non-zero" and points at the notify-job
+            # logs.
             echo "::warning::Consolidator exited non-zero unexpectedly; writing fallback stub."
             {
               echo "# Consolidated soft-error report"
               echo
-              echo "**CONSOLIDATOR CRASHED.** \`scripts/consolidate_soft_error_reports.py\`"
-              echo "exited non-zero. The script is documented as non-blocking,"
-              echo "so this is unexpected — inspect the notify-job logs for"
-              echo "the traceback. Per-phase artifacts may still be available"
-              echo "as separate \`soft-error-report-<run_id>-<phase>\` entries."
+              echo "**CONSOLIDATOR EXITED NON-ZERO.**"
+              echo "\`scripts/consolidate_soft_error_reports.py\` returned a"
+              echo "non-zero exit code. The script is documented as non-blocking,"
+              echo "so any non-zero exit is itself a bug worth surfacing —"
+              echo "inspect the notify-job logs for the actual error (traceback,"
+              echo "argparse error, OS-level failure, etc.). Per-phase"
+              echo "artifacts may still be available as separate"
+              echo "\`soft-error-report-<run_id>-<phase>\` entries."
             } > "${REPORT}"
             {
               echo "## Soft-error consolidation"
-              echo "_CONSOLIDATOR CRASHED unexpectedly; see notify-job logs_"
+              echo "_CONSOLIDATOR EXITED NON-ZERO; see notify-job logs for the actual error_"
             } > "${SUMMARY}"
           fi
           echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
