@@ -28,8 +28,10 @@ env:
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 permissions:
-  contents: write
-  pull-requests: write
+  # Read-only: this workflow renders + self-tests validation assets in a temp
+  # clone of each consumer repo for drift monitoring only. It does not commit,
+  # push, or open pull requests in this repo or any consumer repo.
+  contents: read
 
 concurrency:
   group: validation-refresh-${{ github.repository }}

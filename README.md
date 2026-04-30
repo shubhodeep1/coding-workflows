@@ -1700,13 +1700,13 @@ self-heal patches cannot be merged without explicit human action.
   - Manual dispatch (`workflow_dispatch`) with optional `repos_file` and `branch_name` inputs
 - Runtime:
   - Reads target repositories from `.github/ai/consumer_repos.json`
-  - For each target repo, clones the repo, checks out/creates `ai/validation-refresh` (or configured branch), and ensures validation onboarding assets exist. If `.ai/validate.yml` is missing, refresh bootstraps it from `examples/validation-fixtures/python-repo-checks.yml` and ensures executable `scripts/run_validation_repo_checks.sh` exists (diagnostics include `manifest_bootstrapped_from`, `repo_check_entry_seeded`, and `repo_check_entry_preserved_existing`). It then renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`), and pushes refresh commits when files changed.
-- PR behavior:
-  - Green path (render/lint/self-test pass): opens/updates a non-draft PR and enables existing repo auto-merge via `gh pr merge --squash --auto`. If auto-merge enablement fails on an existing PR, the workflow preserves the PR's prior draft state instead of forcing it back to draft.
-  - Red path (any refresh stage failure with file changes): opens/updates a draft PR including diagnostics in the body.
+  - For each target repo, clones the repo into a temporary workspace and checks out the `ai/validation-refresh` branch locally (the local branch is never pushed back to the remote). If `.ai/validate.yml` is missing, refresh bootstraps it from `examples/validation-fixtures/python-repo-checks.yml` and ensures executable `scripts/run_validation_repo_checks.sh` exists (diagnostics include `manifest_bootstrapped_from`, `repo_check_entry_seeded`, and `repo_check_entry_preserved_existing`). It then renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`).
+- Drift reporting only — no PRs:
+  - This workflow does NOT commit, push, or open pull requests in consumer repos. Consumers are expected to render validation assets on demand inside their own validation flow, so there is no need to ship a `chore(validation): refresh validation assets` PR ahead of time.
+  - When the rendered output differs from what is checked into the consumer repo, the result includes a `validation_assets_drifted_no_push` diagnostic. The outcome is `green` when render/lint/self-test all pass and `red` when any stage fails.
 - Failure/no-op behavior:
-  - Manifest-less repos are bootstrapped (not skipped), but the seeded `.ai/validate.yml` and `scripts/run_validation_repo_checks.sh` are onboarding stubs. Repo owners still need to replace placeholder checks/values with real repository-specific validation logic.
-  - Pipeline failure with no file diff: records error and does not create a no-op PR.
+  - Manifest-less repos are bootstrapped in the temp clone (not skipped), but the seeded `.ai/validate.yml` and `scripts/run_validation_repo_checks.sh` are onboarding stubs. Repo owners still need to replace placeholder checks/values with real repository-specific validation logic and commit them in their own repo.
+  - Pipeline failure with no file diff: records error (`pipeline_failed_without_changes`).
   - Workflow writes machine-readable summary JSON, appends a human summary to `$GITHUB_STEP_SUMMARY`, and sends Telegram failure notification (`TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID`) on workflow failure.
 
 ### Nightly Validation Self-Test Status

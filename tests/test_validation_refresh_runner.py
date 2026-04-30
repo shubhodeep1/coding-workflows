@@ -86,6 +86,14 @@ slots:
 	)
 
 
+def _make_runner(executor: FakeExecutor, branch: str) -> "refresh_runner.ValidationRefreshRunner":
+	return refresh_runner.ValidationRefreshRunner(
+		source_root=REPO_ROOT,
+		branch_name=branch,
+		executor=executor,
+	)
+
+
 def test_load_target_repositories_deduplicates_and_validates() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-refresh-load-") as td:
 		repos_path = Path(td) / "consumer_repos.json"
@@ -114,7 +122,7 @@ def test_load_target_repositories_deduplicates_and_validates() -> None:
 			raise AssertionError("expected ValueError for malformed JSON")
 
 
-def test_process_repository_green_existing_pr_promotes_and_enables_auto_merge() -> None:
+def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-refresh-green-") as td:
 		workspace = Path(td) / "work"
 		workspace.mkdir(parents=True, exist_ok=True)
@@ -137,41 +145,25 @@ def test_process_repository_green_existing_pr_promotes_and_enables_auto_merge() 
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
 				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
 				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "config", "user.name")),
-				PlannedCall(("git", "config", "user.email")),
-				PlannedCall(("gh", "auth", "setup-git")),
-				PlannedCall(("git", "add", "-A")),
-				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
-				PlannedCall(
-					("gh", "pr", "list"),
-					stdout='[{"number":42,"url":"https://github.com/octo/demo-repo/pull/42","isDraft":true}]',
-				),
-				PlannedCall(("gh", "pr", "edit", "42")),
-				PlannedCall(("gh", "pr", "ready", "42"), check=False),
-				PlannedCall(("gh", "pr", "merge", "42")),
 			]
 		)
 
-		runner = refresh_runner.ValidationRefreshRunner(
-			source_root=REPO_ROOT,
-			branch_name=branch,
-			commit_message="chore(validation): refresh validation assets",
-			pr_title="chore(validation): refresh validation assets",
-			executor=executor,
-		)
+		runner = _make_runner(executor, branch)
 		result = runner.process_repository(repository, workspace)
 
 		assert result.outcome == "green"
 		assert result.changed is True
-		assert result.pr_number == 42
-		assert result.pr_url == "https://github.com/octo/demo-repo/pull/42"
-		assert result.diagnostics == []
+		assert "validation_assets_drifted_no_push" in result.diagnostics
+		assert result.pr_number is None
+		assert result.pr_url is None
+		# Confirm we never invoked any gh pr / git commit / git push commands.
+		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check, _env in executor.seen)
+		assert all(cmd[:2] != ["git", "commit"] for cmd, _cwd, _check, _env in executor.seen)
+		assert all(cmd[:2] != ["git", "push"] for cmd, _cwd, _check, _env in executor.seen)
 		executor.assert_consumed()
 
 
-def test_process_repository_red_new_draft_pr_with_diagnostics() -> None:
+def test_process_repository_red_pipeline_failure_with_drift_records_no_push() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-refresh-red-") as td:
 		workspace = Path(td) / "work"
 		workspace.mkdir(parents=True, exist_ok=True)
@@ -196,149 +188,20 @@ def test_process_repository_red_new_draft_pr_with_diagnostics() -> None:
 					stderr="lint failed",
 				),
 				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "config", "user.name")),
-				PlannedCall(("git", "config", "user.email")),
-				PlannedCall(("gh", "auth", "setup-git")),
-				PlannedCall(("git", "add", "-A")),
-				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
-				PlannedCall(("gh", "pr", "list"), stdout="[]"),
-				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/52\n"),
 			]
 		)
 
-		runner = refresh_runner.ValidationRefreshRunner(
-			source_root=REPO_ROOT,
-			branch_name=branch,
-			commit_message="chore(validation): refresh validation assets",
-			pr_title="chore(validation): refresh validation assets",
-			executor=executor,
-		)
+		runner = _make_runner(executor, branch)
 		result = runner.process_repository(repository, workspace)
 
 		assert result.outcome == "red"
 		assert result.changed is True
-		assert result.pr_number == 52
 		assert any("lint_failed" in line for line in result.diagnostics)
-		create_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "create"]]
-		assert len(create_commands) == 1
-		assert "--draft" in create_commands[0]
-		executor.assert_consumed()
-
-
-def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None:
-	with tempfile.TemporaryDirectory(prefix="validation-refresh-merge-") as td:
-		workspace = Path(td) / "work"
-		workspace.mkdir(parents=True, exist_ok=True)
-		repository = "octo/demo-repo"
-		repo_dir = workspace / "octo__demo-repo"
-		branch = "ai/validation-refresh"
-
-		def on_clone(_command: list[str], _cwd: Path | None) -> None:
-			_write_manifest(repo_dir)
-
-		executor = FakeExecutor(
-			[
-				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
-				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
-				PlannedCall(("git", "ls-remote"), stdout=""),
-				PlannedCall(("git", "fetch", "origin", "main")),
-				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
-				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
-				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
-				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "config", "user.name")),
-				PlannedCall(("git", "config", "user.email")),
-				PlannedCall(("gh", "auth", "setup-git")),
-				PlannedCall(("git", "add", "-A")),
-				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
-				PlannedCall(
-					("gh", "pr", "list"),
-					stdout='[{"number":77,"url":"https://github.com/octo/demo-repo/pull/77","isDraft":false}]',
-				),
-				PlannedCall(("gh", "pr", "edit", "77")),
-				PlannedCall(("gh", "pr", "merge", "77"), returncode=1, stderr="auto-merge unavailable"),
-				PlannedCall(("gh", "pr", "edit", "77")),
-			]
-		)
-
-		runner = refresh_runner.ValidationRefreshRunner(
-			source_root=REPO_ROOT,
-			branch_name=branch,
-			commit_message="chore(validation): refresh validation assets",
-			pr_title="chore(validation): refresh validation assets",
-			executor=executor,
-		)
-		result = runner.process_repository(repository, workspace)
-
-		assert result.outcome == "red"
-		assert result.pr_number == 77
-		assert any("auto_merge_failed" in line for line in result.diagnostics)
-		assert "auto_merge_enable_failed_fallback_to_draft" not in result.diagnostics
-		assert result.diagnostics
-		edit_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "edit"]]
-		assert len(edit_commands) == 2
-		ready_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "ready"]]
-		assert len(ready_commands) == 0
-		executor.assert_consumed()
-
-
-def test_process_repository_green_new_pr_auto_merge_failure_falls_back_to_red_draft() -> None:
-	with tempfile.TemporaryDirectory(prefix="validation-refresh-new-merge-") as td:
-		workspace = Path(td) / "work"
-		workspace.mkdir(parents=True, exist_ok=True)
-		repository = "octo/demo-repo"
-		repo_dir = workspace / "octo__demo-repo"
-		branch = "ai/validation-refresh"
-
-		def on_clone(_command: list[str], _cwd: Path | None) -> None:
-			_write_manifest(repo_dir)
-
-		executor = FakeExecutor(
-			[
-				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
-				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
-				PlannedCall(("git", "ls-remote"), stdout=""),
-				PlannedCall(("git", "fetch", "origin", "main")),
-				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
-				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
-				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
-				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "config", "user.name")),
-				PlannedCall(("git", "config", "user.email")),
-				PlannedCall(("gh", "auth", "setup-git")),
-				PlannedCall(("git", "add", "-A")),
-				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
-				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
-				PlannedCall(("gh", "pr", "list"), stdout="[]"),
-				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/88\n"),
-				PlannedCall(("gh", "pr", "merge", "88"), returncode=1, stderr="auto-merge unavailable"),
-				PlannedCall(("gh", "pr", "ready", "--undo", "88"), check=False),
-				PlannedCall(("gh", "pr", "edit", "88")),
-			]
-		)
-
-		runner = refresh_runner.ValidationRefreshRunner(
-			source_root=REPO_ROOT,
-			branch_name=branch,
-			commit_message="chore(validation): refresh validation assets",
-			pr_title="chore(validation): refresh validation assets",
-			executor=executor,
-		)
-		result = runner.process_repository(repository, workspace)
-
-		assert result.outcome == "red"
-		assert result.pr_number == 88
-		assert result.pr_url == "https://github.com/octo/demo-repo/pull/88"
-		assert "auto_merge_enable_failed_fallback_to_draft" in result.diagnostics
-		ready_commands = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "ready"]]
-		assert len(ready_commands) == 1
+		assert "validation_assets_drifted_no_push" in result.diagnostics
+		assert result.pr_number is None
+		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check, _env in executor.seen)
+		assert all(cmd[:2] != ["git", "commit"] for cmd, _cwd, _check, _env in executor.seen)
+		assert all(cmd[:2] != ["git", "push"] for cmd, _cwd, _check, _env in executor.seen)
 		executor.assert_consumed()
 
 
@@ -367,18 +230,13 @@ def test_process_repository_no_changes_skips_pr_operations() -> None:
 			]
 		)
 
-		runner = refresh_runner.ValidationRefreshRunner(
-			source_root=REPO_ROOT,
-			branch_name=branch,
-			commit_message="chore(validation): refresh validation assets",
-			pr_title="chore(validation): refresh validation assets",
-			executor=executor,
-		)
+		runner = _make_runner(executor, branch)
 		result = runner.process_repository(repository, workspace)
 
 		assert result.outcome == "skipped"
 		assert result.changed is False
 		assert "no_changes_detected" in result.diagnostics
+		assert "validation_assets_drifted_no_push" not in result.diagnostics
 		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check, _env in executor.seen)
 		executor.assert_consumed()
 
@@ -408,13 +266,7 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 			]
 		)
 
-		runner = refresh_runner.ValidationRefreshRunner(
-			source_root=REPO_ROOT,
-			branch_name=branch,
-			commit_message="chore(validation): refresh validation assets",
-			pr_title="chore(validation): refresh validation assets",
-			executor=executor,
-		)
+		runner = _make_runner(executor, branch)
 		runner.process_repository(repository, workspace)
 
 		pipeline_commands = {
@@ -446,7 +298,6 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 			.strip()
 		)
 		bootstrapped_untracked_status = "?? .ai/validate.yml\n?? scripts/run_validation_repo_checks.sh\n"
-		bootstrapped_staged_status = "A  .ai/validate.yml\nA  scripts/run_validation_repo_checks.sh\n"
 
 		def on_clone(_command: list[str], _cwd: Path | None) -> None:
 			repo_dir.mkdir(parents=True, exist_ok=True)
@@ -462,34 +313,18 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
 				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
 				PlannedCall(("git", "status"), stdout=bootstrapped_untracked_status),
-				PlannedCall(("git", "config", "user.name")),
-				PlannedCall(("git", "config", "user.email")),
-				PlannedCall(("gh", "auth", "setup-git")),
-				PlannedCall(("git", "add", "-A")),
-				PlannedCall(("git", "status"), stdout=bootstrapped_staged_status),
-				PlannedCall(("git", "commit", "-m")),
-				PlannedCall(("git", "push", "--force-with-lease", "--set-upstream", "origin", branch)),
-				PlannedCall(("gh", "pr", "list"), stdout="[]"),
-				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/99\n"),
-				PlannedCall(("gh", "pr", "merge", "99")),
 			]
 		)
 
-		runner = refresh_runner.ValidationRefreshRunner(
-			source_root=REPO_ROOT,
-			branch_name=branch,
-			commit_message="chore(validation): refresh validation assets",
-			pr_title="chore(validation): refresh validation assets",
-			executor=executor,
-		)
+		runner = _make_runner(executor, branch)
 		result = runner.process_repository(repository, workspace)
 
 		assert result.outcome == "green"
 		assert result.changed is True
-		assert result.pr_number == 99
-		assert result.pr_url == "https://github.com/octo/demo-repo/pull/99"
-		assert f"manifest_bootstrapped_from: examples/validation-fixtures/python-repo-checks.yml" in result.diagnostics
-		assert f"repo_check_entry_seeded: scripts/run_validation_repo_checks.sh" in result.diagnostics
+		assert "validation_assets_drifted_no_push" in result.diagnostics
+		assert result.pr_number is None
+		assert "manifest_bootstrapped_from: examples/validation-fixtures/python-repo-checks.yml" in result.diagnostics
+		assert "repo_check_entry_seeded: scripts/run_validation_repo_checks.sh" in result.diagnostics
 		assert "no_changes_detected" not in result.diagnostics
 
 		bootstrapped_manifest = (repo_dir / ".ai" / "validate.yml").read_text(encoding="utf-8").strip()
@@ -497,6 +332,12 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 		entry_script = repo_dir / "scripts" / "run_validation_repo_checks.sh"
 		assert entry_script.is_file()
 		assert os.access(entry_script, os.X_OK)
+		# No commit/push/PR commands should be issued — onboarding stubs are
+		# rendered into the temp clone for monitoring only; the consumer repo
+		# pulls them in during its own validation flow.
+		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check, _env in executor.seen)
+		assert all(cmd[:2] != ["git", "commit"] for cmd, _cwd, _check, _env in executor.seen)
+		assert all(cmd[:2] != ["git", "push"] for cmd, _cwd, _check, _env in executor.seen)
 		executor.assert_consumed()
 
 
