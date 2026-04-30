@@ -89,8 +89,10 @@ def _read_line_with_timeout(stream, deadline: float) -> Optional[bytes]:
 		chunk = os.read(fd, 4096)
 		if not chunk:
 			# EOF — the server closed its stdout (often the symptom we are
-			# trying to detect: handshake-time crash).
-			return bytes(buffer) if buffer else None
+			# trying to detect: handshake-time crash). Drop any partial
+			# buffer: MCP framing requires newline-terminated JSON, so a
+			# fragment without a newline is not a valid response.
+			return None
 		buffer.extend(chunk)
 		newline = buffer.find(b"\n")
 		if newline != -1:
@@ -201,7 +203,7 @@ def probe(name: str, command: str, args: List[str], timeout: float) -> int:
 			)
 			return 4
 
-		if not isinstance(message, dict) or "result" not in message or message.get("error"):
+		if not isinstance(message, dict) or "result" not in message or "error" in message:
 			print(
 				f"[mcp-probe:{name}] initialize did not return a result: "
 				f"{json.dumps(message)[:300]}",

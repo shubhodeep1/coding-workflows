@@ -17,18 +17,22 @@ Suite:
 * spawn-failure path                — non-existent binary returns exit 1.
 * setup_serena.sh integration       — a failed probe omits the
   ``[mcp_servers.context7]`` block from the generated config.toml.
+
+Self-contained: runs as ``python3 tests/test_mcp_handshake_probe.py`` (no
+pytest dependency) so it slots into the project's existing CI harness in
+``.github/workflows/ci.yml`` alongside the other ``python3 tests/X.py``
+invocations.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
+import traceback
 from pathlib import Path
-
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -100,63 +104,96 @@ def test_probe_reports_spawn_failure_for_missing_binary() -> None:
 	assert "spawn failed" in result.stderr
 
 
-def test_probe_rejects_invalid_json_response(tmp_path: Path) -> None:
-	junk_server = tmp_path / "junk.py"
-	junk_server.write_text(
-		textwrap.dedent(
-			"""
-			import sys
-			sys.stdin.readline()
-			sys.stdout.write("not-json-at-all\\n")
-			sys.stdout.flush()
-			"""
+def test_probe_rejects_invalid_json_response() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		junk_server = Path(td) / "junk.py"
+		junk_server.write_text(
+			textwrap.dedent(
+				"""
+				import sys
+				sys.stdin.readline()
+				sys.stdout.write("not-json-at-all\\n")
+				sys.stdout.flush()
+				"""
+			)
 		)
-	)
-	result = _run_probe("junk", sys.executable, str(junk_server), timeout=5.0)
+		result = _run_probe("junk", sys.executable, str(junk_server), timeout=5.0)
 	assert result.returncode == 4, (
 		f"expected exit 4 (invalid JSON), got {result.returncode}\n"
 		f"stderr: {result.stderr}"
 	)
 
 
-def test_probe_rejects_jsonrpc_error_response(tmp_path: Path) -> None:
-	err_server = tmp_path / "err.py"
-	err_server.write_text(
-		textwrap.dedent(
-			"""
-			import json, sys
-			req = json.loads(sys.stdin.readline())
-			resp = {
-				"jsonrpc": "2.0",
-				"id": req.get("id"),
-				"error": {"code": -32600, "message": "boom"},
-			}
-			sys.stdout.write(json.dumps(resp) + "\\n")
-			sys.stdout.flush()
-			"""
+def test_probe_rejects_jsonrpc_error_response() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		err_server = Path(td) / "err.py"
+		err_server.write_text(
+			textwrap.dedent(
+				"""
+				import json, sys
+				req = json.loads(sys.stdin.readline())
+				resp = {
+					"jsonrpc": "2.0",
+					"id": req.get("id"),
+					"error": {"code": -32600, "message": "boom"},
+				}
+				sys.stdout.write(json.dumps(resp) + "\\n")
+				sys.stdout.flush()
+				"""
+			)
 		)
-	)
-	result = _run_probe("err", sys.executable, str(err_server), timeout=5.0)
+		result = _run_probe("err", sys.executable, str(err_server), timeout=5.0)
 	assert result.returncode == 5, (
 		f"expected exit 5 (error response), got {result.returncode}\n"
 		f"stderr: {result.stderr}"
 	)
 
 
-def test_probe_rejects_mismatched_response_id(tmp_path: Path) -> None:
-	bad_id_server = tmp_path / "bad_id.py"
-	bad_id_server.write_text(
-		textwrap.dedent(
-			"""
-			import json, sys
-			sys.stdin.readline()
-			resp = {"jsonrpc": "2.0", "id": 999, "result": {}}
-			sys.stdout.write(json.dumps(resp) + "\\n")
-			sys.stdout.flush()
-			"""
+def test_probe_rejects_response_with_null_error_field() -> None:
+	"""Per JSON-RPC spec a response has `result` XOR `error` — but a buggy
+	server might still emit `"error": null`. The probe must reject that
+	(via key-presence check, not truthiness) so a malformed tool entry can
+	never slip through."""
+	with tempfile.TemporaryDirectory() as td:
+		nullerr_server = Path(td) / "nullerr.py"
+		nullerr_server.write_text(
+			textwrap.dedent(
+				"""
+				import json, sys
+				req = json.loads(sys.stdin.readline())
+				resp = {
+					"jsonrpc": "2.0",
+					"id": req.get("id"),
+					"result": {"protocolVersion": "2024-11-05"},
+					"error": None,
+				}
+				sys.stdout.write(json.dumps(resp) + "\\n")
+				sys.stdout.flush()
+				"""
+			)
 		)
+		result = _run_probe("nullerr", sys.executable, str(nullerr_server), timeout=5.0)
+	assert result.returncode == 5, (
+		f"expected exit 5 (error key present even though null), got {result.returncode}\n"
+		f"stderr: {result.stderr}"
 	)
-	result = _run_probe("badid", sys.executable, str(bad_id_server), timeout=5.0)
+
+
+def test_probe_rejects_mismatched_response_id() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		bad_id_server = Path(td) / "bad_id.py"
+		bad_id_server.write_text(
+			textwrap.dedent(
+				"""
+				import json, sys
+				sys.stdin.readline()
+				resp = {"jsonrpc": "2.0", "id": 999, "result": {}}
+				sys.stdout.write(json.dumps(resp) + "\\n")
+				sys.stdout.flush()
+				"""
+			)
+		)
+		result = _run_probe("badid", sys.executable, str(bad_id_server), timeout=5.0)
 	assert result.returncode == 6, (
 		f"expected exit 6 (id mismatch), got {result.returncode}\n"
 		f"stderr: {result.stderr}"
@@ -172,20 +209,23 @@ def test_probe_rejects_mismatched_response_id(tmp_path: Path) -> None:
 
 
 def _write_helper_script(tmp_path: Path, mock: Path) -> Path:
-	"""Render a minimal driver that loads setup_serena.sh's helpers and
-	calls them against the supplied mock server. Avoids running the full
-	setup_serena.sh (which would download uv, spawn Serena, etc.).
+	"""Render a minimal driver that exercises the same probe wiring as
+	``scripts/setup_serena.sh`` — without sourcing the whole script.
+	``setup_serena.sh`` has top-level ``set -euo pipefail``, argument parsing,
+	and uvx calls that would side-effect the test environment, so we redefine
+	a minimal ``probe_mcp_handshake`` inline that calls the same
+	``mcp_handshake_probe.py`` script the production code calls. Drift is
+	caught by ``test_probe_helper_definition_is_present_in_setup_serena``.
 	"""
 	driver = tmp_path / "drive_probe.sh"
 	driver.write_text(
 		textwrap.dedent(
 			f"""\
 			#!/usr/bin/env bash
-			# Source just the probe + remove helpers from setup_serena.sh by
-			# extracting them with awk. We can't `source` the whole file —
-			# it has top-level `set -euo pipefail`, argument parsing, and
-			# uvx calls. Instead, redefine a minimal probe_mcp_handshake
-			# inline that calls the same script under test.
+			# Don't `source` the whole setup_serena.sh file here — it has
+			# top-level `set -euo pipefail`, argument parsing, and uvx
+			# calls. Instead, define a minimal inline probe_mcp_handshake
+			# helper that invokes the same probe script under test.
 			set -euo pipefail
 			REPO_ROOT="{REPO_ROOT}"
 			MCP_HANDSHAKE_PROBE_ENABLED="${{MCP_HANDSHAKE_PROBE_ENABLED:-true}}"
@@ -193,7 +233,7 @@ def _write_helper_script(tmp_path: Path, mock: Path) -> Path:
 			BASH_SOURCE_DIR="${{REPO_ROOT}}/scripts"
 
 			# Inline copy of probe_mcp_handshake from setup_serena.sh —
-			# kept byte-equivalent in spirit so this test catches drift.
+			# kept in sync via the drift guard test below.
 			probe_mcp_handshake() {{
 				local _name="$1"
 				local _command="$2"
@@ -229,60 +269,66 @@ def _write_helper_script(tmp_path: Path, mock: Path) -> Path:
 	return driver
 
 
-def test_setup_serena_skips_block_when_probe_fails(tmp_path: Path) -> None:
+def test_setup_serena_skips_block_when_probe_fails() -> None:
 	"""End-to-end: a server that fails handshake produces NO config block.
 
 	This is the contract: ``[mcp_servers.context7]`` must be absent from
 	~/.codex/config.toml whenever the probe fails, otherwise Codex will
 	emit a malformed tool entry and the Azure HTTP 400 returns.
 	"""
-	cfg = tmp_path / "config.toml"
-	driver = _write_helper_script(tmp_path, MOCK_CLOSE)
-	result = subprocess.run(
-		["bash", str(driver), str(cfg)],
-		capture_output=True,
-		text=True,
-		timeout=20,
-	)
-	assert result.returncode == 0, f"driver failed: {result.stderr}"
-	assert "skipped block" in result.stdout
-	assert "[mcp_servers.context7]" not in cfg.read_text()
+	with tempfile.TemporaryDirectory() as td:
+		tmp_path = Path(td)
+		cfg = tmp_path / "config.toml"
+		driver = _write_helper_script(tmp_path, MOCK_CLOSE)
+		result = subprocess.run(
+			["bash", str(driver), str(cfg)],
+			capture_output=True,
+			text=True,
+			timeout=20,
+		)
+		assert result.returncode == 0, f"driver failed: {result.stderr}"
+		assert "skipped block" in result.stdout
+		assert "[mcp_servers.context7]" not in cfg.read_text()
 
 
-def test_setup_serena_writes_block_when_probe_passes(tmp_path: Path) -> None:
-	cfg = tmp_path / "config.toml"
-	driver = _write_helper_script(tmp_path, MOCK_OK)
-	result = subprocess.run(
-		["bash", str(driver), str(cfg)],
-		capture_output=True,
-		text=True,
-		timeout=20,
-	)
-	assert result.returncode == 0, f"driver failed: {result.stderr}"
-	assert "wrote block" in result.stdout
-	assert "[mcp_servers.context7]" in cfg.read_text()
+def test_setup_serena_writes_block_when_probe_passes() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp_path = Path(td)
+		cfg = tmp_path / "config.toml"
+		driver = _write_helper_script(tmp_path, MOCK_OK)
+		result = subprocess.run(
+			["bash", str(driver), str(cfg)],
+			capture_output=True,
+			text=True,
+			timeout=20,
+		)
+		assert result.returncode == 0, f"driver failed: {result.stderr}"
+		assert "wrote block" in result.stdout
+		assert "[mcp_servers.context7]" in cfg.read_text()
 
 
-def test_setup_serena_probe_disabled_writes_block_unconditionally(tmp_path: Path) -> None:
+def test_setup_serena_probe_disabled_writes_block_unconditionally() -> None:
 	"""The MCP_HANDSHAKE_PROBE_ENABLED=false escape hatch preserves old behaviour.
 
 	Even though the mock would fail handshake, the block must still be
 	written when the operator opts out — this is the documented config knob.
 	"""
-	cfg = tmp_path / "config.toml"
-	driver = _write_helper_script(tmp_path, MOCK_CLOSE)
-	env = os.environ.copy()
-	env["MCP_HANDSHAKE_PROBE_ENABLED"] = "false"
-	result = subprocess.run(
-		["bash", str(driver), str(cfg)],
-		capture_output=True,
-		text=True,
-		timeout=20,
-		env=env,
-	)
-	assert result.returncode == 0, f"driver failed: {result.stderr}"
-	assert "wrote block" in result.stdout
-	assert "[mcp_servers.context7]" in cfg.read_text()
+	with tempfile.TemporaryDirectory() as td:
+		tmp_path = Path(td)
+		cfg = tmp_path / "config.toml"
+		driver = _write_helper_script(tmp_path, MOCK_CLOSE)
+		env = os.environ.copy()
+		env["MCP_HANDSHAKE_PROBE_ENABLED"] = "false"
+		result = subprocess.run(
+			["bash", str(driver), str(cfg)],
+			capture_output=True,
+			text=True,
+			timeout=20,
+			env=env,
+		)
+		assert result.returncode == 0, f"driver failed: {result.stderr}"
+		assert "wrote block" in result.stdout
+		assert "[mcp_servers.context7]" in cfg.read_text()
 
 
 # ── Drift guard: keep the inline driver in sync with setup_serena.sh ────────
@@ -305,3 +351,50 @@ def test_probe_helper_definition_is_present_in_setup_serena() -> None:
 	# Both optional servers must be gated by the probe.
 	assert "probe_mcp_handshake context7" in source
 	assert "probe_mcp_handshake git" in source
+	# Fail-closed contract: missing python3 / probe script must not silently
+	# pass through. Catches accidental reverts to "return 0" warning-only.
+	assert "treating as probe failure" in source, (
+		"probe_mcp_handshake must fail closed when python3 or the probe "
+		"script is missing; got a silent-pass implementation instead."
+	)
+
+
+# ── Standalone runner (CI uses `python3 tests/<file>.py`, not pytest) ───────
+
+
+def _all_tests():
+	return [
+		test_probe_succeeds_against_well_behaved_mock_server,
+		test_probe_detects_close_on_initialize,
+		test_probe_times_out_on_unresponsive_server,
+		test_probe_reports_spawn_failure_for_missing_binary,
+		test_probe_rejects_invalid_json_response,
+		test_probe_rejects_jsonrpc_error_response,
+		test_probe_rejects_response_with_null_error_field,
+		test_probe_rejects_mismatched_response_id,
+		test_setup_serena_skips_block_when_probe_fails,
+		test_setup_serena_writes_block_when_probe_passes,
+		test_setup_serena_probe_disabled_writes_block_unconditionally,
+		test_probe_helper_definition_is_present_in_setup_serena,
+	]
+
+
+def main() -> int:
+	failures = []
+	for fn in _all_tests():
+		try:
+			fn()
+			print(f"  ok  {fn.__name__}")
+		except Exception:  # pylint: disable=broad-except
+			failures.append(fn.__name__)
+			print(f"FAIL  {fn.__name__}")
+			traceback.print_exc()
+	if failures:
+		print(f"\n{len(failures)} test(s) failed: {', '.join(failures)}")
+		return 1
+	print(f"\nPASS — {len(_all_tests())} tests")
+	return 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())
