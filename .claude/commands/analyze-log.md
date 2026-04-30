@@ -4,7 +4,10 @@ $ARGUMENTS
 
 ## Steps
 
-1. **Download the log** — Use `curl -sL` to download the raw log content from the provided URL. Save it to a temporary file in `/tmp/` so you can reference it throughout the analysis. If the download fails with a transient error, retry according to the **Retry Rule** in the Rules section. For hard failures (401, 403, 404, 410), record the URL under **Inaccessible Resources** in the final output.
+1. **Download the log** — Use `curl --fail-with-body -sSL -o <path> -w '%{http_code}\n' <url>` (or capture the status with `-w '%{http_code}'` separately) so HTTP errors are detected reliably; plain `curl -sL` exits 0 on 4xx/5xx and will silently download the server's error page. Save the body to a temporary file in `/tmp/` and verify the status code before treating the file as a log:
+   - `2xx` → proceed.
+   - `5xx`, `429`, network/timeout/connection-reset/DNS errors → transient; retry per the **Retry Rule** in the Rules section.
+   - `401`, `403`, `404`, `410` → hard failure; record the URL under **Inaccessible Resources** and follow the **Inaccessible resources** rule.
 
 2. **Read the full log carefully** — Do not skim or summarize. Read the entire log from start to finish. Pay attention to:
    - Error messages, stack traces, exceptions
@@ -60,12 +63,12 @@ $ARGUMENTS
 
 - Always download the complete log. Never truncate or skip sections.
 - **Retry Rule**: For transient HTTP/GitHub errors (5xx, 429, timeouts, connection resets, DNS failures), retry with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before declaring failure. This applies to the initial log download **and** to every follow-up fetch (PRs, issues, workflow files, artifacts, related runs).
-- **Inaccessible resources** — If a resource is still unreachable after retries, or returns a hard failure (401, 403, 404, 410), or is auth-walled / expired / private, record the following under **Inaccessible Resources** and continue the investigation with other available evidence:
+- **Inaccessible resources** — If a resource is still unreachable after retries, or returns a hard failure (401, 403, 404, 410), or is auth-walled / expired / private, record it under **Inaccessible Resources**:
   - The exact URL
   - What is needed from it
   - What conclusion is blocked without it
 
-  Do not propose a fix whose correctness depends on guessed content from an inaccessible resource — surface that gap under **Open Questions** instead.
+  Stop that specific line of inquiry, but continue the broader analysis if the primary log is accessible and the root cause / proposed fix is still supported by available evidence. Do not make claims or propose fixes that depend on the inaccessible content — surface those gaps under **Open Questions** instead. Abort the analysis only if (a) the primary log itself is inaccessible, or (b) the missing resource blocks the root-cause conclusion.
 - **Use the GitHub MCP tools (`mcp__github__*`) for all GitHub interactions.** The `gh` CLI is not available in this environment. Repo scope is restricted to `shubhodeep1/coding-workflows`.
 - Prioritize the root cause — the first meaningful error in the log — over cascading failures.
 - If the log contains multiple independent failures, address each separately.
