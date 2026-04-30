@@ -22,8 +22,12 @@ def test_validation_refresh_workflow_invokes_runner_with_auth() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "scripts/validation_refresh_runner.py" in content
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in content
-	assert "pull-requests: write" in content
-	assert "contents: write" in content
+	# The runner is read-only against consumer repos: no commits, pushes, or
+	# pull requests are produced, so the workflow must NOT request write perms
+	# that imply otherwise.
+	assert "pull-requests: write" not in content
+	assert "contents: write" not in content
+	assert "contents: read" in content
 	assert "--summary-json" in content
 
 

@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Refresh validation assets across consumer repositories and open/update PRs."""
+"""Render and self-test validation assets against consumer repositories.
+
+Runs the validation template render + lint + self-test pipeline against each
+configured consumer repo in a temporary clone for monitoring purposes only.
+This runner deliberately does NOT commit, push, or open pull requests in the
+consumer repositories — consumers are expected to render the validation assets
+on demand inside their own validation flow. The summary reports drift so the
+operator can see when consumer repos are out of sync.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +34,6 @@ except ModuleNotFoundError:
 
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-PR_NUMBER_RE = re.compile(r"/pull/(?P<number>\d+)(?:/|$|#|\?)")
 
 
 @dataclass(frozen=True)
@@ -113,19 +120,22 @@ class RefreshResult:
 
 
 class ValidationRefreshRunner:
-	"""Runs refresh flow for a set of repositories."""
+	"""Renders validation assets in a temp clone and reports drift; never pushes."""
 
 	def __init__(
 		self,
 		*,
 		source_root: Path,
 		branch_name: str,
-		commit_message: str,
-		pr_title: str,
+		commit_message: str = "",
+		pr_title: str = "",
 		executor: CommandExecutor | None = None,
 	) -> None:
 		self.source_root = source_root
 		self.branch_name = branch_name
+		# `commit_message` and `pr_title` are accepted for backward compatibility
+		# with the previous PR-creating runner; this runner no longer commits,
+		# pushes, or opens pull requests, so the values are ignored.
 		self.commit_message = commit_message
 		self.pr_title = pr_title
 		self.executor = executor or CommandExecutor()
@@ -148,7 +158,6 @@ class ValidationRefreshRunner:
 	def process_repository(self, repository: str, workspace_root: Path) -> RefreshResult:
 		result = RefreshResult(repository=repository, outcome="error", branch=self.branch_name)
 		repo_dir = workspace_root / repository.replace("/", "__")
-		owner = repository.split("/", 1)[0]
 
 		if not REPO_NAME_RE.match(repository):
 			result.diagnostics.append(f"invalid_repository_name: {repository}")
@@ -179,7 +188,10 @@ class ValidationRefreshRunner:
 		pipeline_green, diagnostics = self._run_refresh_pipeline(repo_dir, manifest_path)
 		result.diagnostics.extend(diagnostics)
 
-		if not self._repository_has_changes(repo_dir):
+		has_changes = self._repository_has_changes(repo_dir)
+		result.changed = has_changes
+
+		if not has_changes:
 			if pipeline_green:
 				result.outcome = "skipped"
 				result.diagnostics.append("no_changes_detected")
@@ -188,34 +200,12 @@ class ValidationRefreshRunner:
 				result.diagnostics.append("pipeline_failed_without_changes")
 			return result
 
-		result.changed = True
-		try:
-			self._commit_and_push(repo_dir)
-		except CommandFailure as exc:
-			result.diagnostics.append(_format_command_failure("commit_push", exc))
-			return result
-
-		pr_green = pipeline_green
-		if default_branch_diag and pr_green:
-			pr_green = False
-			result.diagnostics.append("default_branch_lookup_degraded_forced_red")
-		try:
-			pr_number, pr_url, auto_merge_enabled = self._upsert_refresh_pr(
-				repository=repository,
-				owner=owner,
-				default_branch=default_branch,
-				green=pr_green,
-				diagnostics=result.diagnostics,
-			)
-			result.pr_number = pr_number
-			result.pr_url = pr_url
-			if pr_green and not auto_merge_enabled:
-				pr_green = False
-		except CommandFailure as exc:
-			result.diagnostics.append(_format_command_failure("pull_request", exc))
-			return result
-
-		result.outcome = "green" if pr_green else "red"
+		# Drift detected: consumer repo's checked-in validation assets diverge
+		# from what the current templates would render. The runner intentionally
+		# does NOT push or open a PR — consumer repos render assets on demand
+		# during their own validation flow. The drift is recorded for monitoring.
+		result.diagnostics.append("validation_assets_drifted_no_push")
+		result.outcome = "green" if pipeline_green else "red"
 		return result
 
 	def _resolve_default_branch(self, repository: str) -> tuple[str, str | None]:
@@ -256,15 +246,16 @@ class ValidationRefreshRunner:
 		self.executor.run(["gh", "repo", "clone", repository, str(repo_dir)])
 
 	def _checkout_refresh_branch(self, repo_dir: Path, default_branch: str) -> None:
-		remote_branch = self.executor.run(
-			["git", "ls-remote", "--heads", "origin", f"refs/heads/{self.branch_name}"],
+		# Drift monitoring always compares the rendered output against the
+		# consumer repo's default branch. We deliberately ignore any existing
+		# `origin/<branch_name>` that may linger from the previous PR-based
+		# flow — otherwise drift against the default branch can be hidden by
+		# a stale refresh branch. `branch_name` is now only a local label.
+		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir)
+		self.executor.run(
+			["git", "checkout", "-B", self.branch_name, f"origin/{default_branch}"],
 			cwd=repo_dir,
 		)
-		start_ref = f"origin/{self.branch_name}" if (remote_branch.stdout or "").strip() else f"origin/{default_branch}"
-		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir)
-		if start_ref == f"origin/{self.branch_name}":
-			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir)
-		self.executor.run(["git", "checkout", "-B", self.branch_name, start_ref], cwd=repo_dir)
 
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
 		diagnostics: list[str] = []
@@ -316,163 +307,6 @@ class ValidationRefreshRunner:
 			cwd=repo_dir,
 		)
 		return bool((proc.stdout or "").strip())
-
-	def _commit_and_push(self, repo_dir: Path) -> None:
-		self.executor.run(["git", "config", "user.name", "coding-workflows[bot]"], cwd=repo_dir)
-		self.executor.run(["git", "config", "user.email", "coding-workflows-bot@users.noreply.github.com"], cwd=repo_dir)
-		self.executor.run(["gh", "auth", "setup-git"], cwd=repo_dir)
-		self.executor.run(["git", "add", "-A"], cwd=repo_dir)
-		if not self._repository_has_changes(repo_dir):
-			raise CommandFailure(
-				command=("git", "commit", "-m", self.commit_message),
-				cwd=str(repo_dir),
-				returncode=1,
-				stdout="",
-				stderr="nothing_to_commit",
-			)
-		self.executor.run(["git", "commit", "-m", self.commit_message], cwd=repo_dir)
-		self.executor.run(["git", "push", "--force-with-lease", "--set-upstream", "origin", self.branch_name], cwd=repo_dir)
-
-	def _upsert_refresh_pr(
-		self,
-		*,
-		repository: str,
-		owner: str,
-		default_branch: str,
-		green: bool,
-		diagnostics: list[str],
-	) -> tuple[int, str, bool]:
-		pr_body = _build_pr_body(green=green, branch_name=self.branch_name, diagnostics=diagnostics)
-		head_ref = f"{owner}:{self.branch_name}"
-		list_proc = self.executor.run(
-			[
-				"gh",
-				"pr",
-				"list",
-				"--repo",
-				repository,
-				"--state",
-				"open",
-				"--head",
-				head_ref,
-				"--json",
-				"number,url,isDraft",
-				"--limit",
-				"1",
-			]
-		)
-		existing_prs = _load_json_list(list_proc.stdout)
-		existing_was_draft = False
-		created_new_pr = False
-
-		if existing_prs:
-			existing = existing_prs[0]
-			pr_number_value = existing.get("number")
-			if pr_number_value is None:
-				raise CommandFailure(
-					command=("gh", "pr", "list", "--repo", repository),
-					cwd=None,
-					returncode=1,
-					stdout=list_proc.stdout,
-					stderr="missing_pr_number",
-				)
-			pr_number = int(pr_number_value)
-			pr_url = str(existing.get("url") or "")
-			is_draft = bool(existing.get("isDraft"))
-			self.executor.run(
-				[
-					"gh",
-					"pr",
-					"edit",
-					str(pr_number),
-					"--repo",
-					repository,
-					"--title",
-					self.pr_title,
-					"--body",
-					pr_body,
-				]
-			)
-			if green and is_draft:
-				self.executor.run(["gh", "pr", "ready", str(pr_number), "--repo", repository], check=False)
-			elif (not green) and (not is_draft):
-				self.executor.run(["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository], check=False)
-			existing_was_draft = is_draft
-		else:
-			created_new_pr = True
-			create_command = [
-				"gh",
-				"pr",
-				"create",
-				"--repo",
-				repository,
-				"--base",
-				default_branch,
-				"--head",
-				head_ref,
-				"--title",
-				self.pr_title,
-				"--body",
-				pr_body,
-			]
-			if not green:
-				create_command.append("--draft")
-			create_proc = self.executor.run(create_command)
-			pr_url = _extract_url(create_proc.stdout)
-			pr_number = _extract_pr_number(pr_url)
-			if pr_number is None:
-				raise CommandFailure(
-					command=tuple(create_command),
-					cwd=None,
-					returncode=1,
-					stdout=create_proc.stdout,
-					stderr="unable_to_parse_pr_number",
-				)
-
-		auto_merge_enabled = False
-		if green:
-			try:
-				self.executor.run(
-					[
-						"gh",
-						"pr",
-						"merge",
-						str(pr_number),
-						"--repo",
-						repository,
-						"--squash",
-						"--auto",
-					]
-				)
-				auto_merge_enabled = True
-			except CommandFailure as exc:
-				diagnostics.append(_format_command_failure("auto_merge", exc))
-				undo_ready = created_new_pr or existing_was_draft
-				if undo_ready:
-					self.executor.run(
-						["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository],
-						check=False,
-					)
-					diagnostics.append("auto_merge_enable_failed_fallback_to_draft")
-
-		if green and not auto_merge_enabled:
-			final_pr_body = _build_pr_body(green=False, branch_name=self.branch_name, diagnostics=diagnostics)
-			self.executor.run(
-				[
-					"gh",
-					"pr",
-					"edit",
-					str(pr_number),
-					"--repo",
-					repository,
-					"--title",
-					self.pr_title,
-					"--body",
-					final_pr_body,
-				]
-			)
-
-		return pr_number, pr_url, auto_merge_enabled
 
 
 def load_target_repositories(repos_file: Path) -> list[str]:
@@ -551,17 +385,17 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument(
 		"--branch-name",
 		default="ai/validation-refresh",
-		help="Branch name used for refresh commits",
+		help="Local branch name used inside the temp clone during render/lint/self-test",
 	)
 	parser.add_argument(
 		"--commit-message",
 		default="chore(validation): refresh validation assets",
-		help="Commit message used for refresh commits",
+		help="Deprecated, no-op: kept for backward compatibility with prior runner CLI",
 	)
 	parser.add_argument(
 		"--pr-title",
 		default="chore(validation): refresh validation assets",
-		help="Pull request title for refresh updates",
+		help="Deprecated, no-op: kept for backward compatibility with prior runner CLI",
 	)
 	return parser.parse_args()
 
@@ -606,53 +440,6 @@ def main() -> int:
 			temporary_root.cleanup()
 
 	return 1 if any(result.outcome == "error" for result in results) else 0
-
-
-def _extract_url(stdout_text: str) -> str:
-	for line in (stdout_text or "").splitlines():
-		candidate = line.strip()
-		if candidate.startswith("http://") or candidate.startswith("https://"):
-			return candidate
-	return (stdout_text or "").strip()
-
-
-def _extract_pr_number(pr_url: str) -> int | None:
-	match = PR_NUMBER_RE.search(pr_url.strip())
-	if match is None:
-		return None
-	return int(match.group("number"))
-
-
-def _build_pr_body(*, green: bool, branch_name: str, diagnostics: list[str]) -> str:
-	lines = [
-		"## Validation Refresh",
-		"",
-		f"- Branch: `{branch_name}`",
-		"- Source: validation-refresh workflow in this repository",
-	]
-	if green:
-		lines.append("- Status: green (render, lint, and self-test passed)")
-	else:
-		lines.append("- Status: red (one or more refresh checks failed)")
-
-	if diagnostics:
-		lines.extend(["", "### Diagnostics"])
-		for item in diagnostics:
-			lines.append(f"- {item}")
-	return "\n".join(lines) + "\n"
-
-
-def _load_json_list(stdout_text: str) -> list[dict[str, Any]]:
-	text = (stdout_text or "").strip()
-	if not text:
-		return []
-	try:
-		payload = json.loads(text)
-	except json.JSONDecodeError:
-		return []
-	if not isinstance(payload, list):
-		return []
-	return [item for item in payload if isinstance(item, dict)]
 
 
 def _format_command_failure(stage: str, failure: CommandFailure) -> str:
