@@ -1,0 +1,166 @@
+name: Run soft-error analyser
+description: >-
+  Wait for one or more sub-workflow runs to finish, then invoke
+  scripts/analyze_soft_errors.py against them and upload the resulting
+  markdown report as an artifact. Designed to be called from any release-
+  gate smoke-test job (e2e-smoke-test, orchestrate-decompose-test,
+  validate-standalone-test, orphan-workflows-test, clarify-rejects-
+  unsolvable-test, e2e-alt-model-test) immediately after each phase's
+  run id becomes available, so each phase gets its own per-run report
+  instead of the single end-of-job sweep that races completion.
+
+inputs:
+  phase_runs:
+    description: >-
+      Multi-line list of `phase=run_id` pairs (one per line).
+      Empty / blank lines are ignored. At least one valid pair is
+      required; if none parse, the analyser is skipped fail-open.
+    required: true
+  repo:
+    description: owner/repo of the runs being analysed.
+    required: true
+  artifact_name:
+    description: >-
+      Name of the uploaded artifact. The full markdown report is
+      written to /tmp/${artifact_name}.md inside the runner.
+    required: true
+  wait_for_completion_secs:
+    description: >-
+      Maximum seconds to wait for each phase run to reach
+      `status=completed` before invoking the analyser. The previous
+      single end-of-job analyser raced review_autofix's tail and
+      hit HTTP 404 fetching its still-in-progress logs; per-phase
+      callers typically only need a few seconds because the wait-*
+      step has already polled to completion, but cumulative callers
+      (Phase 8) want a longer cap to cover the slowest phase.
+    required: false
+    default: "120"
+  model:
+    description: OpenRouter model id (LOG_ANALYZER_MODEL).
+    required: false
+    default: openai/gpt-5.4-mini
+  reasoning:
+    description: OpenRouter reasoning effort (LOG_ANALYZER_REASONING).
+    required: false
+    default: medium
+  openrouter_api_key:
+    description: OpenRouter API key. If empty, analyser writes a `api_skipped` stub.
+    required: false
+    default: ""
+  gh_token:
+    description: GitHub token used for `gh run view --log` and run-status polling.
+    required: true
+
+outputs:
+  report_path:
+    description: Absolute path to the generated markdown report on the runner.
+    value: ${{ steps.run-analyser.outputs.report_path }}
+  status_code:
+    description: Parsed status code from the report header (`ok` / `call_failed` / etc).
+    value: ${{ steps.run-analyser.outputs.status_code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for phase runs to reach completed state
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh_token }}
+        REPO: ${{ inputs.repo }}
+        PHASE_RUNS: ${{ inputs.phase_runs }}
+        WAIT_SECS: ${{ inputs.wait_for_completion_secs }}
+      run: |
+        set -euo pipefail
+        # Poll each phase run until status=completed or its per-run
+        # deadline elapses. The deadline is set INSIDE the outer loop
+        # so each phase gets its own ${WAIT_SECS}-second budget — a
+        # global deadline across all phases would short-change the
+        # last phase if earlier phases burned most of the budget.
+        # Fail-open: if a run never completes we still invoke the
+        # analyser; the script's existing fallback returns a stub for
+        # unreadable runs rather than crashing the workflow.
+        while IFS= read -r LINE; do
+          [ -n "${LINE}" ] || continue
+          PHASE="${LINE%%=*}"
+          RID="${LINE#*=}"
+          PHASE="${PHASE// }"
+          RID="${RID// }"
+          [ -n "${PHASE}" ] && [ -n "${RID}" ] || continue
+          [[ "${RID}" =~ ^[0-9]+$ ]] || continue
+          DEADLINE=$(( $(date +%s) + WAIT_SECS ))
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            STATUS=$(gh api "repos/${REPO}/actions/runs/${RID}" --jq '.status // ""' 2>/dev/null || echo "")
+            if [ "${STATUS}" = "completed" ]; then
+              echo "  ✓ ${PHASE} (run #${RID}) completed"
+              break
+            fi
+            echo "  ⏳ ${PHASE} (run #${RID}) status=${STATUS:-unknown}; waiting ..."
+            sleep 5
+          done
+          # If the per-run deadline lapsed before this run completed,
+          # log a warning and continue with the NEXT phase run. The
+          # analyser will get a stub for this phase but won't crash,
+          # and subsequent phases still get their full status check.
+          if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+            FINAL_STATUS=$(gh api "repos/${REPO}/actions/runs/${RID}" --jq '.status // "unknown"' 2>/dev/null || echo "unknown")
+            if [ "${FINAL_STATUS}" != "completed" ]; then
+              echo "::warning::Soft-error analyser wait deadline elapsed for ${PHASE} (run #${RID}, status=${FINAL_STATUS}); analyser will see partial logs."
+            fi
+            continue
+          fi
+        done <<< "${PHASE_RUNS}"
+
+    - name: Invoke analyser
+      id: run-analyser
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh_token }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
+        REPO: ${{ inputs.repo }}
+        PHASE_RUNS: ${{ inputs.phase_runs }}
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        LOG_ANALYZER_MODEL: ${{ inputs.model }}
+        LOG_ANALYZER_REASONING: ${{ inputs.reasoning }}
+      run: |
+        set -euo pipefail
+        REPORT="/tmp/${ARTIFACT_NAME}.md"
+        ARGS=(--repo "${REPO}" --output "${REPORT}" --model "${LOG_ANALYZER_MODEL}" --reasoning "${LOG_ANALYZER_REASONING}")
+        ADDED=0
+        while IFS= read -r LINE; do
+          [ -n "${LINE}" ] || continue
+          PHASE="${LINE%%=*}"
+          RID="${LINE#*=}"
+          PHASE="${PHASE// }"
+          RID="${RID// }"
+          [ -n "${PHASE}" ] && [ -n "${RID}" ] || continue
+          [[ "${RID}" =~ ^[0-9]+$ ]] || continue
+          ARGS+=(--run "${PHASE}=${RID}")
+          ADDED=$((ADDED + 1))
+        done <<< "${PHASE_RUNS}"
+        if [ "${ADDED}" -eq 0 ]; then
+          echo "No valid phase=run_id pairs supplied; skipping analyser."
+          {
+            echo "## Soft-error analyzer (status: \`no_runs\`, model: \`${LOG_ANALYZER_MODEL}\`, reasoning: \`${LOG_ANALYZER_REASONING}\`)"
+            echo
+            echo "Composite action received no parseable phase_runs entries."
+          } > "${REPORT}"
+          echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+          echo "status_code=no_runs" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        python3 scripts/analyze_soft_errors.py "${ARGS[@]}" || {
+          echo "::warning::Soft-error analyser exited non-zero — keeping fallback report"
+        }
+        echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+        STATUS_LINE=$(head -n1 "${REPORT}" 2>/dev/null || echo "")
+        STATUS_CODE=$(printf '%s' "${STATUS_LINE}" | sed -nE 's/.*status:\s*`([^`]+)`.*/\1/p')
+        echo "status_code=${STATUS_CODE:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload soft-error report artifact
+      if: always() && steps.run-analyser.outputs.report_path != ''
+      uses: actions/upload-artifact@v6
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ steps.run-analyser.outputs.report_path }}
+        if-no-files-found: ignore
+        retention-days: 30

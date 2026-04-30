@@ -388,6 +388,20 @@ jobs:
             sleep "$POLL_INTERVAL"
           done
 
+      # Per-phase soft-error analysis: clarify
+      - name: "Phase 1b: Soft-error analyser (clarify)"
+        if: always() && steps.wait-clarify.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            clarify=${{ steps.wait-clarify.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-clarify
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       # ── Phase 2: Wait for Plan to complete ──────────────────────
       - name: "Phase 2: Wait for plan to complete"
         id: wait-plan
@@ -544,6 +558,20 @@ jobs:
             echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — plan_run: ${PLAN_RUN_STATUS}, labels: ${LABELS:-none}"
             sleep "$POLL_INTERVAL"
           done
+
+      # Per-phase soft-error analysis: plan
+      - name: "Phase 2b: Soft-error analyser (plan)"
+        if: always() && steps.wait-plan.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            plan=${{ steps.wait-plan.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-plan
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 3: Approve and wait for implementation ────────────
       - name: "Phase 3a: Approve the plan"
@@ -736,6 +764,21 @@ jobs:
       # the PR so the gate's override path kicks in and the full reviewer
       # → editor pipeline runs. Without this label, the gate would skip
       # review and the bait would never be removed.
+
+      # Per-phase soft-error analysis: implement
+      - name: "Phase 3b2: Soft-error analyser (implement)"
+        if: always() && steps.wait-implement.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            implement=${{ steps.wait-implement.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-implement
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       - name: "Phase 3b1: Apply force-review label to smoke PR"
         id: force-review-label
         if: steps.wait-implement.outputs.pr_number != ''
@@ -1046,6 +1089,26 @@ jobs:
             sleep "$POLL_INTERVAL"
             ELAPSED=$((ELAPSED + POLL_INTERVAL))
           done
+
+      # Per-phase soft-error analysis: review_autofix.
+      # Wait cap is bumped to 300s here because the previous single
+      # end-of-job analyser raced review_autofix's tail (it exited
+      # right when wait-review's FAILED_STEPS shortcut tripped and
+      # the review run still had ~40s of cleanup steps to run),
+      # producing the HTTP 404 report we observed on run 25126757724.
+      - name: "Phase 4c: Soft-error analyser (review_autofix)"
+        if: always() && steps.wait-review.outputs.review_run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            review_autofix=${{ steps.wait-review.outputs.review_run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-review_autofix
+          wait_for_completion_secs: "300"
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 4b: Verify the editor removed the bait commit ───
       # Closes the loop on Phase 3c: confirms the reviewer→editor→commit
@@ -1747,6 +1810,20 @@ jobs:
           fi
           echo "═══════════════════════════════════════════"
 
+      # Per-phase soft-error analysis: orchestrate-poll (RBSIM)
+      - name: "Phase 6b: Soft-error analyser (orchestrate-poll)"
+        if: always() && steps.review-blocked-sim.outputs.poller_run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            orchestrate_poll=${{ steps.review-blocked-sim.outputs.poller_run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-orchestrate_poll
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       # ── Phase 7: Verify cancel_on_pr_close fires on PR close ───
       # Closes the smoke-test PR and watches internal-cancel-on-pr-close.yml
       # complete successfully. This is the only path through the
@@ -1831,6 +1908,20 @@ jobs:
           echo "status=success" >> "$GITHUB_OUTPUT"
           echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
 
+      # Per-phase soft-error analysis: cancel-on-pr-close
+      - name: "Phase 7b: Soft-error analyser (cancel-on-pr-close)"
+        if: always() && steps.verify-cancel-on-close.outputs.cancel_run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            cancel_on_pr_close=${{ steps.verify-cancel-on-close.outputs.cancel_run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-cancel_on_pr_close
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       # ── Phase 8: Soft-error analyser (non-blocking) ─────────────
       # Pulls logs from every triggered phase run, filters to high-signal
       # lines, and asks gpt-5.4-mini @ medium reasoning to summarise soft
@@ -1838,6 +1929,53 @@ jobs:
       # fails, etc.). The report is exposed as a job output so the notify
       # job can attach it to the Telegram release message. Hard exits are
       # avoided — analyser problems must never block a release.
+      # Wait briefly for every captured phase run to reach
+      # status=completed. The previous Phase 8 fired the moment Phase 7
+      # finished; on run 25126757724 that raced review_autofix's tail
+      # cleanup steps, so `gh run view --log` returned HTTP 404 ("run is
+      # still in progress") and the resulting report had no review_autofix
+      # signal at all (the phase that actually contained the root cause).
+      # The wait below caps at 5 minutes — long enough for review_autofix's
+      # cleanup tail (~40s on the failing run) and any orchestrate-poll /
+      # cancel-on-pr-close trailers to settle, short enough that a
+      # genuinely hung run does not block the release-gate Telegram
+      # notification indefinitely.
+      - name: "Phase 8a: Wait for all phase runs to complete"
+        id: phase8_wait
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
+          PLAN_RUN_ID: ${{ steps.wait-plan.outputs.run_id }}
+          IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
+          REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
+          RBSIM_POLLER_RUN_ID: ${{ steps.review-blocked-sim.outputs.poller_run_id }}
+          CANCEL_RUN_ID: ${{ steps.verify-cancel-on-close.outputs.cancel_run_id }}
+        run: |
+          set -euo pipefail
+          DEADLINE=$(( $(date +%s) + 300 ))
+          for KV in \
+            "clarify:${CLARIFY_RUN_ID:-}" \
+            "plan:${PLAN_RUN_ID:-}" \
+            "implement:${IMPL_RUN_ID:-}" \
+            "review_autofix:${REVIEW_RUN_ID:-}" \
+            "orchestrate_poll:${RBSIM_POLLER_RUN_ID:-}" \
+            "cancel_on_pr_close:${CANCEL_RUN_ID:-}"; do
+            PHASE="${KV%%:*}"
+            RID="${KV#*:}"
+            [ -n "${RID}" ] && [[ "${RID}" =~ ^[0-9]+$ ]] || continue
+            while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+              STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${RID}" --jq '.status // ""' 2>/dev/null || echo "")
+              if [ "${STATUS}" = "completed" ]; then
+                echo "  ✓ ${PHASE} (run #${RID}) completed"
+                break
+              fi
+              echo "  ⏳ ${PHASE} (run #${RID}) status=${STATUS:-unknown}; waiting ..."
+              sleep 5
+            done
+          done
+
       - name: "Phase 8: Soft-error log analyser"
         id: soft-error-analyser
         if: always()
@@ -2252,6 +2390,13 @@ jobs:
             exit 1
           fi
 
+      # Required for the run-soft-error-analyzer composite action below.
+      - name: Checkout repository (for soft-error analyser)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
       # Generic helper: dispatch a workflow_dispatch workflow by file name
       # and capture the resulting run id, then wait for completion. Each
       # invocation runs in its own step so failures attribute to the
@@ -2336,6 +2481,19 @@ jobs:
           echo "::error::workflow-log-analysis run #${NEW_ID} timed out"
           exit 1
 
+      - name: "Soft-error analyser (workflow-log-analysis)"
+        if: always() && steps.dispatch_log_analysis.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            workflow_log_analysis=${{ steps.dispatch_log_analysis.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-workflow_log_analysis
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
         timeout-minutes: 42
@@ -2380,6 +2538,19 @@ jobs:
           done
           echo "::error::validation-refresh run #${NEW_ID} timed out"
           exit 1
+
+      - name: "Soft-error analyser (validation-refresh)"
+        if: always() && steps.dispatch_validation_refresh.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            validation_refresh=${{ steps.dispatch_validation_refresh.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-validation_refresh
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
@@ -2433,6 +2604,19 @@ jobs:
           echo "::error::update_workflows run #${NEW_ID} timed out"
           exit 1
 
+      - name: "Soft-error analyser (update_workflows)"
+        if: always() && steps.dispatch_update_workflows.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            update_workflows=${{ steps.dispatch_update_workflows.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-update_workflows
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
         timeout-minutes: 25
@@ -2479,6 +2663,19 @@ jobs:
           echo "::error::internal-memory-maintenance run #${NEW_ID} timed out"
           exit 1
 
+      - name: "Soft-error analyser (memory_maintenance)"
+        if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            memory_maintenance=${{ steps.dispatch_memory_maintenance.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-memory_maintenance
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1d: Orchestrate decompose end-to-end test
   # Exercises the orchestrate root: project-description → tracking issue
@@ -2500,6 +2697,15 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${GH_TOKEN}" ] || { echo "::error::GH_PAT required"; exit 1; }
+
+      # Required for the run-soft-error-analyzer composite action below;
+      # the action invokes scripts/analyze_soft_errors.py from the repo
+      # checkout root.
+      - name: Checkout repository (for soft-error analyser)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
 
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
@@ -2607,6 +2813,19 @@ jobs:
           fi
           echo "✓ Decomposition produced ${CHILD_COUNT} child issues: ${CHILDREN}"
 
+      - name: "Soft-error analyser (orchestrate-decompose)"
+        if: always() && steps.dispatch.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            orchestrate=${{ steps.dispatch.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-orchestrate_decompose
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       - name: Cleanup orchestrate test issues
         if: always()
         env:
@@ -2684,6 +2903,13 @@ jobs:
           set -euo pipefail
           [ -n "${GH_TOKEN}" ] || { echo "::error::GH_PAT required"; exit 1; }
 
+      # Required for the run-soft-error-analyzer composite action below.
+      - name: Checkout repository (for soft-error analyser)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
         run: |
@@ -2733,6 +2959,19 @@ jobs:
           echo "::error::validate run #${NEW_ID} timed out"
           exit 1
 
+      - name: "Soft-error analyser (validate-standalone)"
+        if: always() && steps.dispatch.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            validate=${{ steps.dispatch.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-validate_standalone
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1f: Clarify-rejects-unsolvable negative test
   # Files an issue that is intentionally under-specified and asserts
@@ -2748,16 +2987,54 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
+      # Required for the run-soft-error-analyzer composite action below.
+      - name: Checkout repository (for soft-error analyser)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
       - name: Create unsolvable issue
         id: create
         run: |
           set -euo pipefail
+          # Capture the latest clarify.yml run id BEFORE creating the
+          # issue so the post-create capture step can find the new
+          # run via `id > PRE_CLARIFY_RUN_ID`.
+          PRE_CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo "0")
+          echo "pre_clarify_run_id=${PRE_CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
           TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
           BODY="Make it better."
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
           echo "issue_number=${NUMBER}" >> "$GITHUB_OUTPUT"
           echo "Created issue #${NUMBER}"
+
+      - name: Capture clarify run id (negative test)
+        id: capture_clarify_run
+        if: steps.create.outputs.issue_number != ''
+        env:
+          PRE: ${{ steps.create.outputs.pre_clarify_run_id }}
+        run: |
+          set -euo pipefail
+          # Poll up to 90s for clarify.yml to register a new run id
+          # past the pre-create snapshot. Fail-open: emits empty
+          # output when no new run is observed; the analyser step
+          # below skips (its `if:` gates on non-empty output).
+          DEADLINE=$(( $(date +%s) + 90 ))
+          NEW_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=10" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE:-0})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            [ -n "${NEW_ID}" ] && break
+            sleep 5
+          done
+          if [ -n "${NEW_ID}" ]; then
+            echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+            echo "✓ Captured negative-test clarify run #${NEW_ID}"
+          else
+            echo "::warning::Could not capture clarify run id for negative-test issue (analyser will be skipped)"
+          fi
 
       - name: Wait for clarify to flag for clarification
         id: wait
@@ -2862,6 +3139,19 @@ jobs:
           echo "::error::Clarify did not act on the under-specified issue within timeout"
           exit 1
 
+      - name: "Soft-error analyser (clarify negative test)"
+        if: always() && steps.capture_clarify_run.outputs.run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            clarify_negative=${{ steps.capture_clarify_run.outputs.run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-clarify_negative
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
       - name: Cleanup negative-test issue
         if: always() && steps.create.outputs.issue_number != ''
         env:
@@ -2913,6 +3203,13 @@ jobs:
       # internal-implement.yml via the WORKFLOW_EDITOR_MODEL repo var.
       ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'anthropic/claude-sonnet-4-6' }}
     steps:
+      # Required for the run-soft-error-analyzer composite action below.
+      - name: Checkout repository (for soft-error analyser)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -2944,6 +3241,13 @@ jobs:
         id: create
         run: |
           set -euo pipefail
+          # Capture the latest run id of each phase workflow BEFORE creating
+          # the issue. The post-wait capture step uses these as anchors to
+          # find the new alt-model phase runs (id > pre_<phase>_run_id).
+          for WF in clarify plan implement review_autofix; do
+            LATEST=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo "0")
+            echo "pre_${WF}_run_id=${LATEST}" >> "$GITHUB_OUTPUT"
+          done
           TITLE="[E2E Smoke Test alt-model] update canary (run ${GITHUB_RUN_ID})"
           # Same canary task as the main e2e job so we exercise the full
           # implement→review path; only the editor model varies. Body is
@@ -2993,6 +3297,98 @@ jobs:
           done
           echo "::error::Alt-model run timed out before reaching review stage"
           exit 1
+
+      - name: Capture alt-model phase run ids
+        id: capture_alt_runs
+        if: always() && steps.create.outputs.issue_number != ''
+        env:
+          ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
+          PRE_CLARIFY: ${{ steps.create.outputs.pre_clarify_run_id }}
+          PRE_PLAN: ${{ steps.create.outputs.pre_plan_run_id }}
+          PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}
+          PRE_REVIEW: ${{ steps.create.outputs.pre_review_autofix_run_id }}
+        run: |
+          set -euo pipefail
+          # For each phase, find the most recent workflow run with an id
+          # greater than the snapshot taken before the issue was created.
+          # We additionally filter by `head_branch == ai/issue-${ISSUE_NUMBER}`
+          # for implement/review (those run on the PR branch, so the
+          # branch name disambiguates collisions with concurrent runs);
+          # clarify/plan run on `main` so the post-creation id ordering
+          # is the only available filter.
+          BRANCH="ai/issue-${ISSUE_NUMBER}"
+          for spec in "clarify:${PRE_CLARIFY:-0}:main" "plan:${PRE_PLAN:-0}:main" "implement:${PRE_IMPLEMENT:-0}:${BRANCH}" "review_autofix:${PRE_REVIEW:-0}:${BRANCH}"; do
+            WF="${spec%%:*}"
+            REST="${spec#*:}"
+            PRE="${REST%%:*}"
+            REST="${REST#*:}"
+            BRANCH_FILTER="${REST}"
+            if [ -n "${BRANCH_FILTER}" ]; then
+              QUERY="repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=20&branch=${BRANCH_FILTER}"
+            else
+              QUERY="repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=20"
+            fi
+            NEW_ID=$(gh api "${QUERY}" --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            if [ -n "${NEW_ID}" ]; then
+              echo "${WF}_run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+              echo "  ✓ alt-model ${WF} run #${NEW_ID}"
+            else
+              echo "  ⚠ alt-model ${WF} run not found (analyser will skip this phase)"
+            fi
+          done
+
+      - name: "Soft-error analyser (alt-model clarify)"
+        if: always() && steps.capture_alt_runs.outputs.clarify_run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            clarify=${{ steps.capture_alt_runs.outputs.clarify_run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-alt_clarify
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
+      - name: "Soft-error analyser (alt-model plan)"
+        if: always() && steps.capture_alt_runs.outputs.plan_run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            plan=${{ steps.capture_alt_runs.outputs.plan_run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-alt_plan
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
+      - name: "Soft-error analyser (alt-model implement)"
+        if: always() && steps.capture_alt_runs.outputs.implement_run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            implement=${{ steps.capture_alt_runs.outputs.implement_run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-alt_implement
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
+      - name: "Soft-error analyser (alt-model review_autofix)"
+        if: always() && steps.capture_alt_runs.outputs.review_autofix_run_id != ''
+        uses: ./.github/actions/run-soft-error-analyzer
+        with:
+          phase_runs: |
+            review_autofix=${{ steps.capture_alt_runs.outputs.review_autofix_run_id }}
+          repo: ${{ env.TEST_REPO }}
+          artifact_name: soft-error-report-${{ github.run_id }}-alt_review_autofix
+          wait_for_completion_secs: "300"
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          gh_token: ${{ secrets.GH_PAT }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Cleanup alt-model artifacts
         if: always() && steps.create.outputs.issue_number != ''

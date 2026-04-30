@@ -25,16 +25,17 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Per-run cap on the *filtered* log payload sent to the analyser. With ~6
-# phase runs (clarify, plan, implement, review_autofix, orchestrate_poll,
-# cancel_on_pr_close) this caps the user-message body at ≤240K chars
-# (≈80K tokens at 3 chars/token), leaving the system prompt, per-run
-# framing, and model-specific tokenization slack a large headroom inside
-# gpt-5.4-mini's 200K-token window. Lowered from the initial 60000 after
-# review feedback to keep total prompt size firmly under the model's
-# context limit even when reviewer/codex log lines balloon under
-# rate-limit retries.
-PER_RUN_CHAR_BUDGET = 40000
+# Per-run cap on the *filtered* log payload sent to the analyser.
+#
+# Set to `None` to disable input-side truncation entirely — the
+# release-gate operator chose this so per-phase analyser invocations
+# get the complete soft-error signal even when reviewer/codex log
+# volume is high. The downstream OpenRouter call still has its own
+# context-window limit (gpt-5.4-mini = 200K tokens); on overflow the
+# existing `call_failed` fallback path in `main()` writes a stub
+# report rather than crashing the workflow, so the operator can
+# safely opt for "no truncation" without breaking the release gate.
+PER_RUN_CHAR_BUDGET: int | None = None
 
 # Patterns that mark soft-error candidates worth surfacing. Matched
 # case-insensitively. Everything else gets dropped from the per-run payload to
@@ -91,6 +92,56 @@ SOFT_ERROR_EXCLUDE_PATTERNS = [
 	r"\bSTATUS=completed\b.*\bCONCLUSION=success\b",
 ]
 SOFT_ERROR_EXCLUDE_RE = re.compile("|".join(SOFT_ERROR_EXCLUDE_PATTERNS), re.IGNORECASE)
+
+
+# GitHub Actions step source preamble.
+#
+# When a `run:` step starts, the runner emits a `##[group]Run …` header,
+# echoes every line of the shell script source bracketed by ANSI cyan-bold
+# (`\033[36;1m...\033[0m`) plus the `shell:` and `env:` blocks, then closes
+# with `##[endgroup]` *before* the actual step output begins. None of those
+# preamble lines are real workflow events — they are verbatim copies of the
+# step source. Without filtering them out the SOFT_ERROR_RE matcher trips
+# on every literal `echo "::warning::Codex returned empty output on attempt
+# ${attempt}"` etc. inside the script source, producing false-positive
+# findings for retries that never fired (the unexpanded `${attempt}` /
+# `$rc` shell variable references in the matched lines are the giveaway).
+#
+# `strip_source_echo` runs over `gh run view --log` output (which
+# preserves the `\033[36;1m` color sequences) and removes:
+#   1. Everything between `##[group]Run …` and the matching `##[endgroup]`.
+#   2. As a defensive second pass, any line whose body still contains
+#      `\033[36;1m` (handles malformed/nested groups).
+GROUP_RUN_START_RE = re.compile(r"##\[group\]Run\b")
+GROUP_END_RE = re.compile(r"##\[endgroup\]")
+ANSI_CYAN_BOLD_RE = re.compile(r"\x1b\[36;1m")
+
+
+def strip_source_echo(text: str) -> str:
+	"""Drop GH Actions step source preamble lines from log text.
+
+	Removes the `##[group]Run … ##[endgroup]` block (script source +
+	`shell:` + `env:` echo) so SOFT_ERROR_RE does not match against
+	echoed `echo "...failed..."` strings inside step source code.
+	"""
+	if not text:
+		return text
+	out: list[str] = []
+	in_group_run = False
+	for line in text.splitlines():
+		if in_group_run:
+			if GROUP_END_RE.search(line):
+				in_group_run = False
+			continue
+		if GROUP_RUN_START_RE.search(line):
+			in_group_run = True
+			continue
+		if ANSI_CYAN_BOLD_RE.search(line):
+			# Defensive: catches stray cyan-bold echoes outside a
+			# detected ##[group]Run … ##[endgroup] envelope.
+			continue
+		out.append(line)
+	return "\n".join(out)
 
 
 def _gh_api(path: str, *, accept: str = "application/vnd.github+json") -> bytes:
@@ -153,10 +204,23 @@ def fetch_run_logs(repo: str, run_id: str) -> str:
 		return f"[soft-error-analyzer] could not fetch logs for run {run_id}: {exc}"
 
 
-def filter_soft_error_lines(text: str, char_budget: int) -> str:
-	"""Keep only lines that look like soft-error signal, plus 1 line of context."""
+def filter_soft_error_lines(text: str, char_budget: int | None) -> str:
+	"""Keep only lines that look like soft-error signal, plus 1 line of context.
+
+	`char_budget=None` disables truncation entirely (operator opt-in for
+	complete signal at the cost of larger OpenRouter payloads). The
+	caller-supplied integer cap, when set, truncates from the middle so
+	both the head (early-pipeline failures) and tail (post-mortem
+	fallbacks) survive.
+	"""
 	if not text:
 		return ""
+	# Drop GH Actions step source preamble first so SOFT_ERROR_RE does
+	# not match against echoed `echo "...failed..."` strings inside the
+	# step source. The unexpanded `${attempt}` / `$rc` variables in
+	# such echoes were producing false-positive "retry fired" findings
+	# even when no retry actually happened.
+	text = strip_source_echo(text)
 	lines = text.splitlines()
 	keep = [False] * len(lines)
 	for i, line in enumerate(lines):
@@ -186,12 +250,9 @@ def filter_soft_error_lines(text: str, char_budget: int) -> str:
 		last_emitted = i
 
 	joined = "\n".join(out)
-	if len(joined) <= char_budget:
+	if char_budget is None or len(joined) <= char_budget:
 		return joined
 
-	# Truncate from the middle so the head (early-pipeline failures) and tail
-	# (post-mortem fallbacks) both survive — those are the highest-signal
-	# regions for soft-error triage.
 	half = char_budget // 2
 	head = joined[: half - 50]
 	tail = joined[-(half - 50):]
@@ -242,11 +303,15 @@ def call_openrouter(
 	api_key: str,
 ) -> str:
 	url = "https://openrouter.ai/api/v1/chat/completions"
+	# `max_tokens` deliberately omitted — release-gate operator opted out
+	# of an output cap. OpenRouter / the underlying model uses its
+	# default response limit, which is sufficient for the bounded
+	# markdown report this prompt requests (system prompt enforces
+	# "<800 words" and three-section structure).
 	body = {
 		"model": model,
 		"messages": messages,
 		"reasoning": {"effort": reasoning},
-		"max_tokens": 1500,
 	}
 	data = json.dumps(body).encode("utf-8")
 	req = urllib.request.Request(
