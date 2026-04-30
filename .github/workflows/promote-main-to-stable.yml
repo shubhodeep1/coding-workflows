@@ -1,0 +1,162 @@
+---
+name: Promote main to stable
+
+# Use this workflow when `main` is ready to become the new stable
+# baseline (typically a minor or major version bump). It does two
+# things in one run:
+#
+#   1. Fast-forwards the long-lived `stable` branch to `main`.
+#   2. Dispatches `test-and-mark-stable.yml` on the freshly-updated
+#      `stable` branch, which runs the release gate, tags the commit,
+#      moves the `stable` and `vN` git tags, creates a GitHub Release,
+#      and fires the `coding-workflows-stable-released` dispatch to
+#      every consumer repo.
+#
+# For BUG-FIX patch releases on the existing stable line, do NOT use
+# this workflow — dispatch `test-and-mark-stable.yml` directly from
+# the `stable` branch with `--ref stable`.
+#
+# Pre-condition: `stable` must be an ancestor of (or equal to) `main`.
+# The `forward-merge-stable-to-main.yml` workflow normally guarantees
+# this. If `--ff-only` would refuse, this workflow refuses too — fix
+# the divergence first instead of force-pushing stable.
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: >
+          Semantic version tag (e.g. v1.5.0). Almost always required
+          for a promotion (since the typical case is a minor/major
+          bump). Leave blank to fall back to patch auto-increment
+          from the latest stable-reachable tag.
+        required: false
+        type: string
+        default: ""
+      test_repo:
+        description: >
+          Forwarded to test-and-mark-stable.yml. Repository to run
+          E2E smoke test on (owner/repo). Defaults to this repo.
+        required: false
+        type: string
+        default: ""
+      skip_e2e:
+        description: Forwarded to test-and-mark-stable.yml.
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: >
+          Validate only. Still fast-forwards `stable` to `main` (so
+          you can verify the move), but the downstream release gate
+          runs in dry_run mode — no tags pushed, no GitHub Release
+          created, no consumer dispatches.
+        required: false
+        type: boolean
+        default: false
+      phase_timeout:
+        description: Forwarded to test-and-mark-stable.yml.
+        required: false
+        type: number
+        default: 30
+      review_timeout:
+        description: Forwarded to test-and-mark-stable.yml.
+        required: false
+        type: number
+        default: 30
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: promote-main-to-stable
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout stable (full history)
+        uses: actions/checkout@v5
+        with:
+          ref: stable
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Configure git
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch latest main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+
+      - name: Validate stable is fast-forwardable to main
+        run: |
+          set -euo pipefail
+          # `stable` must be an ancestor of `origin/main` (or equal). If
+          # it isn't, stable has commits not present on main — most
+          # likely a forward-merge PR that wasn't merged, or a direct
+          # push to stable that bypassed the forward-merge workflow.
+          # Refuse rather than silently force-pushing or merging — the
+          # operator should investigate first.
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            ahead=$(git rev-list --count origin/main..HEAD)
+            echo "::error::stable has ${ahead} commit(s) not present on main — refusing to promote."
+            echo "::error::Forward-merge those commits via forward-merge-stable-to-main.yml first, then re-run."
+            exit 1
+          fi
+
+      - name: Fast-forward stable to main
+        id: ff
+        run: |
+          set -euo pipefail
+          BEFORE=$(git rev-parse HEAD)
+          TARGET=$(git rev-parse origin/main)
+          if [ "${BEFORE}" = "${TARGET}" ]; then
+            echo "stable already at main's HEAD (${TARGET}) — no-op"
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+          else
+            git merge --ff-only origin/main
+            git push origin stable
+            echo "Fast-forwarded stable: ${BEFORE} → ${TARGET}"
+            echo "moved=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch test-and-mark-stable on stable
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          # `--ref stable` makes test-and-mark-stable.yml's source-job
+          # auto-detect resolve to `stable`, so the release tags from
+          # the just-fast-forwarded commit and `gh release create`
+          # targets the stable branch.
+          gh workflow run test-and-mark-stable.yml \
+            --ref stable \
+            -f version_tag="${{ inputs.version_tag }}" \
+            -f test_repo="${{ inputs.test_repo }}" \
+            -f skip_e2e="${{ inputs.skip_e2e }}" \
+            -f dry_run="${{ inputs.dry_run }}" \
+            -f phase_timeout="${{ inputs.phase_timeout }}" \
+            -f review_timeout="${{ inputs.review_timeout }}"
+          echo "Dispatched test-and-mark-stable.yml on stable branch."
+          echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml"
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          echo "Promotion summary:"
+          echo "  stable now at: ${{ steps.ff.outputs.sha }}"
+          echo "  fast-forward moved: ${{ steps.ff.outputs.moved }}"
+          echo "  release pipeline dispatched on stable branch (see link above)"
+          echo ""
+          echo "The release run will tag, move the stable/vN pointers, create a"
+          echo "GitHub Release, and dispatch coding-workflows-stable-released"
+          echo "to every consumer repo. Watch its status for completion."

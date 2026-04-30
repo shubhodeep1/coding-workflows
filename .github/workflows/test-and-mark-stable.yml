@@ -3873,10 +3873,44 @@ jobs:
       - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
+  # Job 3.5: Sync stable bug fixes back to main (stable releases only)
+  #
+  # When a stable patch release succeeds, dispatch
+  # `forward-merge-stable-to-main.yml` so the just-released bug fixes
+  # are propagated to `main`. This is belt-and-braces — the
+  # forward-merge workflow already runs on every push to `stable`
+  # (typically via the bug-fix PR merge), but explicitly dispatching
+  # here guarantees the sync is tied to the release event itself, so
+  # `main` can never silently drift behind a tagged stable release.
+  #
+  # Skipped when releasing from `main` (no sync needed) and on
+  # dry runs (no real release happened).
+  # ──────────────────────────────────────────────────────────────────
+  sync-to-main:
+    needs: [source, release]
+    if: >-
+      needs.source.outputs.branch == 'stable' &&
+      !inputs.dry_run &&
+      needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch forward-merge-stable-to-main
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run forward-merge-stable-to-main.yml --ref stable
+          echo "Dispatched forward-merge-stable-to-main.yml on stable branch."
+          echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/forward-merge-stable-to-main.yml"
+
+  # ──────────────────────────────────────────────────────────────────
   # Job 4: Combined Telegram notification (runs after ALL jobs)
   # ──────────────────────────────────────────────────────────────────
   notify:
-    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release]
+    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release, sync-to-main]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
