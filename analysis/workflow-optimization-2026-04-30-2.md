@@ -739,3 +739,149 @@ If you want, I can turn this into a **prioritized implementation backlog** with 
 | Code modularization | 6 | Medium |
 | Expression size reduction | 4 | Medium |
 | Medium/Low fixes | 9 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-04-30)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the static evidence is strong enough that the consolidation/elimination can be applied directly without changing observable behavior. `NEEDS_VERIFICATION` means the overlap is real, but retry behavior, fail-open semantics, or step-boundary behavior must be checked by a human before implementation. `RISKY_SKIP` means the opportunity is visible, but it sits in a retry/poll/race-defense/paginated path that this audit pass must not auto-authorize.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001
+- **Safety tag:** RISKY_SKIP
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:5218-5219`, `scripts/orchestrate_poll_process.sh:6920-6921`, `scripts/orchestrate_poll_process.sh:10258-10259`
+- **Current call count / proposed call count:** `6 → 3` across the three reissue paths (`2` issue GETs per site down to `1` per site)
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  The same adjacent title/body pair is repeated again in the standalone reissue path and the implementation-failed reissue path:
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  ```bash
+  IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+  IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+  ```
+- **Proposed fix:** In `scripts/orchestrate_poll_process.sh`, replace each title/body pair with one `_safe_gh_jq` object fetch per site, e.g. `--jq '{title:(.title // ""), body:(.body // "")}'`, then split fields locally. Do **not** try to cross-cache between the three sites; just collapse each adjacent pair into one call.
+- **Safety rationale:** This lives inside `orchestrate_poll_process.sh` reissue/stall-recovery code, which the audit policy explicitly treats as a `RISKY_SKIP` zone even when the overlap is obvious.
+- **Downstream signal:** Do not auto-implement; a human must review the three recovery paths end-to-end to confirm that consolidating these GETs does not alter stall-recovery timing, comments, or label/close behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001
+- **Safety tag:** NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/orchestrate_clarify_respond.yml:61-63`, `.github/workflows/orchestrate_clarify_respond.yml:74-76`, `.github/workflows/orchestrate_clarify_respond.yml:418-420`, `.github/workflows/orchestrate_clarify_respond.yml:423-429`
+- **Current call count / proposed call count:** `4 → 2` on the orchestrator-managed path when `TRACKING_NUM` resolves (`issue` fetched twice, `tracking issue` fetched twice)
+- **Endpoint(s):** `GET /repos/{repo}/issues/{ISSUE_NUMBER}`; `GET /repos/{repo}/issues/{TRACKING_NUM}`
+- **Evidence:**
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+  Later in the same job:
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+- **Proposed fix:** Extend `Check orchestrator metadata` to cache the child-issue JSON in `$RUNNER_TEMP` and export its path; when `TRACKING_NUM` exists, cache the full tracking-issue JSON once there as well. Update `Fetch issue and tracking context` to read those cache files first and only fall back to its current `gh_retry` calls on cache miss.
+- **Safety rationale:** The resources are identical and there is no repo mutation between the two steps, but the later step currently uses `gh_retry` while the earlier step is a plain `gh api`, so the fail/retry contract must be preserved explicitly.
+- **Downstream signal:** Verify on an orchestrator-managed `issue_comment` run that cached child/tracking JSON still supplies body/title/tracking-number data and that E2E parent-title alert suppression (`ALERT_MSG_LEVEL=SILENT`) still triggers correctly when the tracking issue title matches the smoke-test pattern.
+
+#### REUSE-002
+- **Safety tag:** NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/issue_pr_status.yml:297-330`, `.github/workflows/issue_pr_status.yml:503-512`
+- **Current call count / proposed call count:** `up to N → 0` additional alert-step issue GETs after the earlier classification step has already fetched/classified the same linked issues
+- **Endpoint(s):** GraphQL `repository { issue(number: ...) { labels body } }`; `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:**
+  Earlier classification already fetches labels/body to decide managed vs tracking:
+  ```bash
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ...
+  select(
+    ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+    or
+    ((.body // "") | contains("Managed by: AI Orchestrator"))
+  ) | .number
+  ```
+  And on fallback it re-fetches the same body/labels per issue:
+  ```bash
+  _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
+  ```
+  But the later Telegram step fetches bodies again:
+  ```bash
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+  ```
+- **Proposed fix:** In `Update linked issue labels when PR closes`, export a tri-state env/output such as `HAS_ORCHESTRATED_LINKED_ISSUE=true|false|unknown` (or export `MANAGED_ISSUES`/`TRACKING_ISSUES`) after classification. In `Send PR merged Telegram alert`, skip the per-issue body loop when that earlier classification is definitive; keep the current body fetch only for the `unknown` path.
+- **Safety rationale:** The data is already available earlier in the same job, but the earlier step is GraphQL-first with conservative fallback behavior, so the alert step must retain a safe fallback when classification is incomplete.
+- **Downstream signal:** Verify three cases before changing it: a merged PR linked to a managed child, a merged PR linked only to standalone issues, and a forced GraphQL/fallback-degraded run where classification is incomplete; confirm Telegram suppression still matches current behavior in all three.
+
+#### REUSE-003
+- **Safety tag:** NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/review_autofix.yml:1381-1403`, `.github/workflows/review_autofix.yml:1832-1836`
+- **Current call count / proposed call count:** `2 → 1` on the linked-issue smoke-detection path (`closingIssuesReferences` already fetched, then linked issue title is fetched again)
+- **Endpoint(s):** GraphQL `pullRequest(number: ...) { closingIssuesReferences(first:50) { nodes { number title body } } }`; `GET /repos/{repo}/issues/{ISSUE_NUM}`
+- **Evidence:**
+  Early metadata collection already fetches linked issue title/body:
+  ```bash
+  if gh_retry "${_linked_tmp}" api graphql \
+    ...
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+  ```
+  Later smoke detection re-fetches the linked issue title:
+  ```bash
+  ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '...' || true)
+  if [ -n "${ISSUE_NUM:-}" ]; then
+    ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+  ```
+- **Proposed fix:** Persist the full `_linked_raw` payload (or at least the first linked issue’s `number/title`) to a runtime JSON file during `Collect PR metadata`, then make `Detect smoke test and tune LLM settings` consult that cache first and only fall back to the current `_safe_gh_jq` issue-title GET when the cache is absent or non-matching.
+- **Safety rationale:** The later step only needs title data already fetched earlier, but the current smoke-detection GET is an independent fail-open probe, so cache-miss fallback behavior must be kept intact.
+- **Downstream signal:** Verify smoke detection still works for all four cases: smoke marker in PR title, smoke marker in PR body, smoke marker only in the linked issue title, and an early GraphQL failure path where the late REST fallback must still run.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001
+- **Safety tag:** SAFE_TO_MERGE
+- **File path and line ranges:** `.github/workflows/test-and-mark-stable.yml:1310-1311`
+- **Current call count / proposed call count:** `1 → 0`
+- **Endpoint(s):** `GET /repos/{TEST_REPO}/commits?sha={branch}&per_page=20`
+- **Evidence:**
+  ```bash
+  COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
+    --jq "[.[] | select(.sha != \"${BAIT_SHA}\") | .sha] | length" 2>/dev/null || echo "0")
+  PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
+  ```
+  `COMMITS_AFTER` is assigned but never read afterward in the file; the step’s decision path uses only `PR_HEAD`.
+- **Proposed fix:** Delete the `COMMITS_AFTER` assignment only; keep the `PR_HEAD` check as the live editor-commit proof.
+- **Safety rationale:** This is a side-effect-free GET whose result is never consumed, and removing it does not alter retry behavior, outputs, or any logged key used downstream.
+- **Downstream signal:** Delete the unused `COMMITS_AFTER` `gh api` call at `.github/workflows/test-and-mark-stable.yml:1310-1311`.
+
+### Cross-References to Deep Audit Section
+- API-006: NEEDS_VERIFICATION — same linked-issue data is fetched early and later, but the later refresh is far enough downstream that PR-body mutation and fail-open behavior should be checked before removal.
+- API-007: NEEDS_VERIFICATION — extending the initial GraphQL query to include issue body/title is directionally correct, but the judge’s fallback context assembly must be verified for parity.
+- API-008: RISKY_SKIP — this is inside `scripts/orchestrate_poll_process.sh` standalone stall recovery, which the policy treats as a race-defense path requiring manual review.
+- API-009: RISKY_SKIP — the repeated child-workflow dispatch/watch blocks are polling-heavy orchestration code, so consolidation must preserve timeout, conclusion, and log-key semantics manually.
+- API-010: NEEDS_VERIFICATION — batching the degraded-path issue classification is sensible, but partial GraphQL failure handling must be proven equivalent before replacing the per-issue fallback loop.
+- API-011: RISKY_SKIP — this helper’s fallback is explicitly pagination-driven, so changing it risks large-PR page-boundary behavior and should not be auto-implemented.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+- DEAD-API-001
