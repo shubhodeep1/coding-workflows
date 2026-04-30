@@ -51,8 +51,34 @@ jobs:
         id: check
         run: |
           set -euo pipefail
-          git fetch origin stable
-          AHEAD=$(git rev-list --count main..origin/stable)
+          # Bounded retry on `git fetch` so a transient transport/auth
+          # blip can't drop the bug-fix propagation cycle. Stable→main
+          # propagation is the safety net for stable-only patches; if
+          # this workflow silently fails on a network flake, the next
+          # main-source release re-introduces already-fixed bugs.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch origin stable main 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch origin/stable + origin/main after 3 attempts"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
+
+          # Compute ahead-count against `origin/main`, not local `main`.
+          # The checkout step pinned local main to whatever it was at
+          # workflow start; if main advanced concurrently between
+          # checkout and now, ahead-count off local main would be
+          # stale. origin/main was just refreshed by the fetch above.
+          AHEAD=$(git rev-list --count origin/main..origin/stable)
           echo "ahead=${AHEAD}" >> "$GITHUB_OUTPUT"
           if [ "${AHEAD}" = "0" ]; then
             echo "stable is fully merged into main — nothing to do"
@@ -71,6 +97,14 @@ jobs:
           bug fixes on the stable branch are also present on main.
           Source SHA: ${GITHUB_SHA}"
 
+          # Reset local main to origin/main right before merging.
+          # The checkout left local main at workflow-start state; if
+          # main advanced concurrently, merging on stale main would
+          # produce a non-fast-forward push that wastes a fallback PR
+          # for a race that a fresh merge would resolve.
+          git fetch origin stable main
+          git checkout -B main origin/main
+
           if ! git merge --no-ff origin/stable -m "${MSG}"; then
             echo "merge_status=conflict" >> "$GITHUB_OUTPUT"
             # Capture the conflicting file list BEFORE aborting so the
@@ -85,16 +119,66 @@ jobs:
             exit 0
           fi
 
-          # Push directly. If branch protection rejects the push, keep
-          # the local merge commit on HEAD so the PR-fallback step can
-          # push that commit to a dedicated branch — resetting here
-          # would discard the merge and the fallback PR would be a
-          # no-op.
-          if git push origin main; then
-            echo "merge_status=pushed" >> "$GITHUB_OUTPUT"
-          else
-            echo "merge_status=push_rejected" >> "$GITHUB_OUTPUT"
+          # Push directly with bounded retry. Distinguish three failure
+          # modes by inspecting stderr:
+          #   - branch-protection rejection → real push_rejected,
+          #     fall through to PR fallback (operator review needed).
+          #   - non-fast-forward (concurrent main push raced us) → the
+          #     local merge is now stale; classify as push_rejected so
+          #     the fallback PR opens against fresh main rather than
+          #     looping here. The PR will surface what diverged.
+          #   - transient transport/auth/5xx → retry with backoff.
+          # If branch protection rejects the push, keep the local
+          # merge commit on HEAD so the PR-fallback step can push it
+          # to a dedicated branch — resetting here would discard the
+          # merge and the fallback PR would be a no-op.
+          push_attempt=1
+          while [ "$push_attempt" -le 3 ]; do
+            set +e
+            git push origin main 2>/tmp/_git_push_err
+            push_rc=$?
+            set -e
+            if [ "$push_rc" -eq 0 ]; then
+              echo "merge_status=pushed" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if grep -qiE 'protected branch|non-fast-forward|\[rejected\]|! \[remote rejected\]' /tmp/_git_push_err 2>/dev/null; then
+              cat /tmp/_git_push_err >&2 2>/dev/null || true
+              echo "merge_status=push_rejected" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat /tmp/_git_push_err >&2 2>/dev/null || true
+            if [ "$push_attempt" -eq 3 ]; then
+              # Persistent non-classifiable failure — fall through to
+              # PR fallback rather than hard-failing the run, so the
+              # bug fix can still propagate via manual review.
+              echo "::warning::git push failed 3 times with non-classifiable error; falling back to PR"
+              echo "merge_status=push_rejected" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            backoff=$(( 2 ** push_attempt ))
+            echo "::warning::git push failed (attempt ${push_attempt}/3), retrying in ${backoff}s…"
+            sleep "${backoff}"
+            push_attempt=$((push_attempt + 1))
+          done
+
+      - name: Verify forward-merge landed on main
+        if: steps.direct.outputs.merge_status == 'pushed'
+        run: |
+          set -euo pipefail
+          # Defensive post-condition check. After a successful direct
+          # push, origin/main MUST contain origin/stable — otherwise
+          # the bug fix wasn't actually propagated and the run looks
+          # successful while consumers of main remain unfixed. Refresh
+          # origin from the remote (don't trust local) and assert.
+          git fetch origin main stable
+          if ! git merge-base --is-ancestor origin/stable origin/main; then
+            REMOTE_MAIN=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+            REMOTE_STABLE=$(git ls-remote origin refs/heads/stable | awk '{print $1}')
+            echo "::error::Push reported success but origin/main (${REMOTE_MAIN}) does not contain origin/stable (${REMOTE_STABLE}). Bug fixes may not be propagated."
+            exit 1
           fi
+          echo "Verified: origin/main contains origin/stable — propagation complete"
 
       - name: Fallback — open PR for manual merge
         if: >-
