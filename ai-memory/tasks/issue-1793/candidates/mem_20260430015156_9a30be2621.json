@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context\n\n- HEAD: `0459b230fcbdcce0b1062ce9341bbca76e057480`\n- Checked-out branch: `orchestrator/project-1790`\n- Integration branch metadata: `orchestrator/project-1790`\n- Integration branch mismatch: `false`\n- Clarification mapping: no `Q1+` items were issued; `/answer [auto-answered-by-orchestrator]` means the original scope stands as written.\n\nConflict check\n\n- No factual conflicts found.\n- The editor-fallback marker already exists in `.github/workflows/review_autofix.yml`; the missing behavior is only the Phase 4a wait-loop shortcut in `.github/workflows/test-and-mark-stable.yml`.\n\n1. Files likely to change\n\n- `.github/workflows/test-and-mark-stable.yml` for the Phase 4a wait-review poll loop around the current `RUN_STATUS=in_progress` / `FAILED_STEPS` shortcut.\n- `tests/test_test_and_mark_stable_review_wait_guard.py` as a preferred new dedicated regression test, following the same workflow-text assertion pattern used by `tests/test_test_and_mark_stable_plan_polling_guard.py`.\n\n2. Functions or modules to implement\n\n- In the existing `RUN_STATUS=in_progress` branch, reuse the current `JOBS_JSON` fetch and the same first-job lookup already used later in the loop.\n- Fetch the live job log through the existing `gh_api_safe` wrapper and scan it for the fixed substring `Editor summary contains failure/fallback markers`.\n- Evaluate that marker check before the current `FAILED_STEPS > 0` branch so the loop exits on the earlier root-cause signal instead of waiting for later resolver/cleanup failures to land.\n- On a marker hit, emit the existing outputs `status=completed_with_findings` and `review_run_id=${RUN_ID}`, then `exit 0`.\n- If the marker is absent or the log fetch fails, fall through to the existing `FAILED_STEPS` shortcut and then the rest of the polling logic unchanged.\n- Reuse any fetched log content for the later reviewer-progress and/or log-size logic so the loop does not add an unnecessary extra log download per poll iteration.\n\n3. Data structures affected\n\n- Shell locals only: `JOBS_JSON`, `FAILED_STEPS`, job-id/log-content cache variables, `LOG_SIZE`, `RUN_STATUS`, and `RUN_CONCLUSION`.\n- Step outputs remain unchanged: `status` still uses the existing values, and downstream consumers still see `completed_with_findings`.\n\n4. API or interface changes\n\n- No external API, env var, label, DB contract, or workflow input/output schema changes.\n- Internal behavior change only: while the review run is still `in_progress`, Phase 4a can now conclude with `completed_with_findings` from the editor-fallback log marker.\n- The completed-success, completed-failure, cancelled, and non-shortcut current-step / idle-state reporting paths should remain intact.\n\n5. Potential risks or edge cases\n\n- GitHub job logs can lag or fail to download; the marker path must fail open so the existing `FAILED_STEPS` and timeout behavior remain the fallback.\n- Use a fixed-string match on the stable marker substring, not a broader regex over the whole warning line, to avoid brittleness around log formatting.\n- Keep the same job-selection behavior already used in this loop (`.jobs[0]` / first-job semantics); broader polling-loop redesign is out of scope.\n- No change should be needed in `.github/workflows/review_autofix.yml`; that file is only the source of the marker text contract.\n\n6. Testing considerations\n\n- Add a dedicated regression test that reads `.github/workflows/test-and-mark-stable.yml` and asserts:\n  - the marker-based shortcut exists,\n  - it emits `completed_with_findings`,\n  - it appears before the failed-step fallback,\n  - the existing `FAILED_STEPS` shortcut is still present.\n- Use `tests/test_test_and_mark_stable_plan_polling_guard.py` as the representative pattern for the new test style.\n- Targeted validation should be `pytest` on the new guard test file, and any adjacent workflow-guard test file if it is also touched.\n\nImplementation note\n\n- This is a small, localized change. It should stay within the intended workflow + regression-test scope; no broader release-gate behavior needs to move.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9bb3e2609cef0d0666d1288be8b45e9a7856b5530428986583d3ad943c79b929",
+  "lineage": {
+    "issue_number": 1793,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25142989267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25142989267",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1793"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260430015156_9a30be2621",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1793,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25142989267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1793",
+  "timestamps": {
+    "created_at": "2026-04-30T01:51:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
