@@ -120,14 +120,16 @@ def _read_line_with_timeout(stream, deadline: float) -> Optional[bytes]:
 			# buffer: MCP framing requires newline-terminated JSON, so a
 			# fragment without a newline is not a valid response.
 			return None
+		# Bound buffer growth so a misbehaving server cannot exhaust process
+		# memory by streaming bytes without ever sending a newline. Check
+		# *before* extending so the buffer never exceeds the documented cap
+		# even by a single read chunk.
+		if len(buffer) + len(chunk) > _MAX_RESPONSE_BYTES:
+			raise _ResponseTooLargeError(len(buffer) + len(chunk))
 		buffer.extend(chunk)
 		newline = buffer.find(b"\n")
 		if newline != -1:
 			return bytes(buffer[:newline])
-		# Bound buffer growth so a misbehaving server cannot exhaust process
-		# memory by streaming bytes without ever sending a newline.
-		if len(buffer) > _MAX_RESPONSE_BYTES:
-			raise _ResponseTooLargeError(len(buffer))
 
 
 def _terminate(proc: subprocess.Popen) -> None:
