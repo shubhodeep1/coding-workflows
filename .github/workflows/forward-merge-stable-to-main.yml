@@ -73,6 +73,14 @@ jobs:
 
           if ! git merge --no-ff origin/stable -m "${MSG}"; then
             echo "merge_status=conflict" >> "$GITHUB_OUTPUT"
+            # Capture the conflicting file list BEFORE aborting so the
+            # fallback PR body can surface which files need manual
+            # resolution. `--diff-filter=U` lists only unmerged paths
+            # (the conflict-hunk files). `tr` collapses to a single
+            # space-separated line so it survives the GITHUB_OUTPUT
+            # single-line constraint.
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
+            echo "conflict_files=${CONFLICT_FILES}" >> "$GITHUB_OUTPUT"
             git merge --abort || true
             exit 0
           fi
@@ -96,6 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           MERGE_STATUS: ${{ steps.direct.outputs.merge_status }}
+          CONFLICT_FILES: ${{ steps.direct.outputs.conflict_files }}
         run: |
           set -euo pipefail
           # Include GITHUB_RUN_ATTEMPT so a workflow re-run uses a fresh
@@ -111,7 +120,10 @@ jobs:
             # for manual resolution and the PR will contain the ahead
             # commits from stable.
             git push origin "refs/remotes/origin/stable:refs/heads/${BRANCH}"
+            CONFLICT_LIST="${CONFLICT_FILES:-(none captured)}"
             BODY="Automated forward-merge of \`stable\` into \`main\` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on \`stable\` is also present on \`main\`.
+
+          Conflicting files (from the aborted merge attempt): \`${CONFLICT_LIST}\`
 
           Source SHA: \`${GITHUB_SHA}\`
           Triggered by: forward-merge-stable-to-main.yml"
