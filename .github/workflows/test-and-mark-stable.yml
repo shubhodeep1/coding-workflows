@@ -899,7 +899,7 @@ jobs:
           # cheap to verify the push wasn't silently demoted (e.g. to
           # a token whose identity can't trigger workflows) without an
           # out-of-band gh api call.
-          jq '{commit_sha: .commit.sha, commit_url: .commit.html_url, author: .commit.author.name, committer: .commit.committer.name, verification: .commit.verification.verified, content_url: .content.html_url}' /tmp/bait_resp.json 2>/dev/null \
+          jq '{commit_sha: .commit.sha, commit_url: .commit.html_url, author: .commit.author.name, committer: .commit.committer.name, verification: .commit.verification.verified, content_url: .content.html_url} | with_entries(select(.value != null))' /tmp/bait_resp.json 2>/dev/null \
             || echo "  (could not parse bait_resp.json)"
           echo "status=injected" >> "$GITHUB_OUTPUT"
           echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
