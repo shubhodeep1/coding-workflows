@@ -3937,9 +3937,33 @@ jobs:
           # commit lands, closing the PR before the e2e gate has read
           # the post-edit canary blob. Repo-wide ENABLE_AUTO_MERGE stays
           # untouched so non-e2e PRs keep auto-merging as before.
-          PR_LABELS_RAW="$(gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" --jq '[.[].name] | join(",")' 2>/dev/null || echo "")"
-          if printf '%s' "${PR_LABELS_RAW}" | tr ',' '\n' | grep -qx 'e2e-smoke-test'; then
-            echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
+          #
+          # Fail-closed on API failure: if gh_retry exhausts its
+          # retries, we cannot tell whether the PR carries
+          # `e2e-smoke-test`. Defaulting to "no label → auto-merge"
+          # would silently bypass this guard for an e2e PR (consensus
+          # finding from the multi-reviewer claude-branch-review on
+          # this PR — when a transient API blip persists past 5
+          # retries, auto-merge would race the e2e gate again, the
+          # exact regression this guard was added to prevent). Skip
+          # auto-merge with a clear ::warning:: instead — non-e2e PRs
+          # lose auto-merge for one review_autofix cycle on a
+          # persistent outage, but the next sync event (next push,
+          # next reviewer commit) re-runs review_autofix and picks it
+          # up. This trade is asymmetric in our favour: a missed
+          # auto-merge on a non-e2e PR is recoverable; an e2e PR that
+          # auto-merges mid-test is not.
+          _label_err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+          if PR_LABELS_RAW="$(gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" --jq '[.[].name] | join(",")' 2>"${_label_err_file}")"; then
+            [ "${_label_err_file}" = /dev/null ] || rm -f "${_label_err_file}"
+            if printf '%s' "${PR_LABELS_RAW}" | tr ',' '\n' | grep -qx 'e2e-smoke-test'; then
+              echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
+              exit 0
+            fi
+          else
+            _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+            [ "${_label_err_file}" = /dev/null ] || rm -f "${_label_err_file}"
+            echo "::warning::Could not fetch labels for PR #${PR_NUMBER} (gh_retry exhausted): ${_label_err}. Failing closed: skipping auto-merge enablement so an e2e-smoke-test PR cannot race the e2e gate. Next sync event will re-run review_autofix and retry the merge enablement."
             exit 0
           fi
 
