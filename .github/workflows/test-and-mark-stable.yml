@@ -1019,11 +1019,17 @@ jobs:
                     # the proximate cause of the run-25126757724 cascade
                     # masking the real editor failure).
                     #
-                    # `grep -qF` for an exact substring match — the
+                    # `grep -qaF` for an exact substring match — the
                     # annotation text is stable per analysis/e2e-smoke-
                     # failure-25126757724.md (a rename in
                     # review_autofix.yml is a breaking change per
                     # CLAUDE.md §6, so this literal is safe to depend on).
+                    # The `-a` flag forces grep to treat the input as text
+                    # even if a NUL byte in the streamed log would
+                    # otherwise make grep classify it as binary and
+                    # short-circuit to "Binary file ... matches" without
+                    # honouring `-q`'s quiet exit-code-only contract; do
+                    # not drop `-a` when editing this block.
                     #
                     # The `::warning::` prefix is part of the literal so
                     # this only matches the validator's annotation, not

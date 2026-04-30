@@ -771,7 +771,7 @@ Operational rules:
 
 ### 20.10 Editor-NoOp Suspicious Skip (`EDITOR_NOOP_SUSPICIOUS` cascade guard)
 
-`Validate editor no-op disposition` in `.github/workflows/review_autofix.yml` sets `EDITOR_NOOP_SUSPICIOUS=true` whenever the editor either produced no summary at all or wrote the fallback markers (`editor failed before producing` / `unavailable (editor fallback)`) that `scripts/review_apply_fixes.sh` emits when every editor attempt fails. In that state no autofix commit can be pushed, so the merge-conflict detect/resolver chain has nothing fix-related to land — running it anyway burns ~3.5 minutes of runner time and (when the defensive merge-fail fallback at `Detect merge conflicts` trips on an unrelated git issue) sets `MERGE_CONFLICT=true`, which then fires the Codex resolver, which exits non-zero, which the e2e poller misreads as the proximate failure (analysis/`e2e-smoke-failure-25126757724.md`).
+`Validate editor no-op disposition` in `.github/workflows/review_autofix.yml` sets `EDITOR_NOOP_SUSPICIOUS=true` whenever the editor either produced no summary at all or wrote the fallback markers (`editor failed before producing` / `unavailable (editor fallback)`) that `scripts/review_apply_fixes.sh` emits when every editor attempt fails. In that state no autofix commit can be pushed, so the merge-conflict detect/resolver chain has nothing fix-related to land — running it anyway burns ~3.5 minutes of runner time and (when the defensive merge-fail fallback at `Detect merge conflicts` trips on an unrelated git issue) sets `MERGE_CONFLICT=true`, which then fires the Codex resolver, which exits non-zero, which the e2e poller misreads as the proximate failure (`analysis/e2e-smoke-failure-25126757724.md`).
 
 Contract:
 
