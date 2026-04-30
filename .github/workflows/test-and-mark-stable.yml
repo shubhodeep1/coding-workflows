@@ -3689,6 +3689,7 @@ jobs:
       # consolidation step degrades gracefully (empty-input stub) and
       # the Telegram send step itself is `if: always()`.
       - name: Checkout repository
+        id: checkout_repo
         if: always()
         continue-on-error: true
         uses: actions/checkout@v5
@@ -3696,6 +3697,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Python
+        id: setup_python
         if: always()
         continue-on-error: true
         uses: actions/setup-python@v6
@@ -3729,17 +3731,55 @@ jobs:
           # findings" stub identical to a clean run, masking real
           # per-phase findings that exist upstream.
           DOWNLOAD_OUTCOME: ${{ steps.download_soft_errors.outcome }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout_repo.outcome || 'success' }}
+          SETUP_PYTHON_OUTCOME: ${{ steps.setup_python.outcome || 'success' }}
         run: |
           set -euo pipefail
+          REPORT="/tmp/soft_error_report.md"
+          SUMMARY="/tmp/soft_error_summary.md"
           mkdir -p /tmp/soft-error-artifacts
+
+          # Fail-open shell fallback: if the upstream Checkout or
+          # Setup-Python steps failed (both are `continue-on-error: true`),
+          # the consolidator script and/or python3 may not be on disk.
+          # Without this guard, the `python3 scripts/...` invocation below
+          # would `set -e` exit the step before writing stub files, and
+          # the Telegram step would have nothing to attach. Detect the
+          # missing prerequisites and emit the same stub shape the
+          # consolidator would have, so downstream behaviour matches the
+          # documented fail-open intent.
+          if ! command -v python3 >/dev/null 2>&1 \
+             || [ ! -f scripts/consolidate_soft_error_reports.py ]; then
+            REASON="checkout=${CHECKOUT_OUTCOME} setup_python=${SETUP_PYTHON_OUTCOME}"
+            echo "::warning::Consolidator unavailable (${REASON}); writing fallback stub."
+            {
+              echo "# Consolidated soft-error report"
+              echo
+              echo "**CONSOLIDATOR UNAVAILABLE.** The notify job's"
+              echo "Checkout / Setup-Python step failed (${REASON}), so the"
+              echo "consolidation script could not be executed. Per-phase"
+              echo "soft-error artifacts may still exist upstream — inspect"
+              echo "the run's artifact list for"
+              echo "\`soft-error-report-<run_id>-<phase>\` entries."
+            } > "${REPORT}"
+            {
+              echo "## Soft-error consolidation"
+              echo "_CONSOLIDATOR UNAVAILABLE (${REASON}); inspect per-phase"
+              echo "artifacts directly in the run summary._"
+            } > "${SUMMARY}"
+            echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+            echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           python3 scripts/consolidate_soft_error_reports.py \
             --input-dir /tmp/soft-error-artifacts \
-            --output-full /tmp/soft_error_report.md \
-            --output-summary /tmp/soft_error_summary.md \
+            --output-full "${REPORT}" \
+            --output-summary "${SUMMARY}" \
             --max-summary-bytes 2800 \
             --download-status "${DOWNLOAD_OUTCOME:-unknown}"
-          echo "report_path=/tmp/soft_error_report.md" >> "$GITHUB_OUTPUT"
-          echo "summary_path=/tmp/soft_error_summary.md" >> "$GITHUB_OUTPUT"
+          echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+          echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
 
       - name: Upload consolidated soft-error report
         if: always() && steps.consolidate_soft_errors.outputs.report_path != ''
