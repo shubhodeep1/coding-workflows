@@ -3950,7 +3950,18 @@ jobs:
                && [ -f scripts/truncate_to_utf8_byte_cap.py ]; then
               MSG=$(printf '%s' "${MSG}" | python3 scripts/truncate_to_utf8_byte_cap.py 3950)
             else
-              MSG="${MSG:0:3950}"
+              # Fallback when checkout/setup-python failed and the helper
+              # script isn't on disk. `${MSG:0:3950}` is char-oriented under
+              # bash's UTF-8 locale (the default in `ubuntu-latest` runners),
+              # so it could char-slice and still leave the message > 3950
+              # BYTES — exactly the case that trips Telegram's body cap.
+              # `head -c` is byte-oriented (POSIX), so the resulting message
+              # is guaranteed to fit even though we may mid-byte-split a
+              # codepoint (Telegram renders that as a U+FFFD glyph at the
+              # tail; not great, but better than message rejection).
+              # The python3 path above is preferred; this is defence-in-
+              # depth for the rare case where it's unavailable.
+              MSG=$(printf '%s' "${MSG}" | head -c 3950)
             fi
             MSG+=$'\n'"…[truncated; see artifact 'soft-error-report-${{ github.run_id }}']"
           fi

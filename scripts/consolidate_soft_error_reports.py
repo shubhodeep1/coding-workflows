@@ -26,6 +26,15 @@ import re
 import sys
 from pathlib import Path
 
+# Sibling-script import: both this file and `truncate_to_utf8_byte_cap.py`
+# live in scripts/, and the workflow runs us as `python3 scripts/...`,
+# so scripts/ is on sys.path. The pattern matches `ai_memory.py`'s
+# `from ai_memory_lib import ...`. Sharing the truncation algorithm
+# keeps boundary handling in lockstep across both code paths — the
+# tests that exercise the helper indirectly cover the consolidator
+# too.
+from truncate_to_utf8_byte_cap import truncate_bytes_to_utf8_cap
+
 # Canonical phase order. Phases produced by the release-gate smoke test
 # in pipeline order so the consolidated report reads top-to-bottom along
 # the same axis an operator would mentally trace through the workflow.
@@ -159,28 +168,20 @@ def extract_findings_section(markdown: str) -> str:
 
 def _truncate_bytes_at_utf8_boundary(text: str, cap: int) -> str:
 	"""Truncate `text` so its UTF-8 byte length is `<= cap`, on a codepoint
-	boundary. Returns "" when `cap <= 0`. Used as a last-resort guard
-	when the assembled summary head alone would exceed `max_bytes`
-	(degenerate but possible if an operator passes a tiny cap or the
-	status pill explodes for an unusually large run).
+	boundary. Returns "" when `cap <= 0` (per the consolidator's
+	`max_bytes <= 0` opt-out semantic). Wraps the canonical
+	`truncate_bytes_to_utf8_cap` helper so both scripts share boundary
+	handling — see that module's docstring for the algorithm.
 
-	Decodes with `errors="replace"` (mirroring `_read_report_safe`) so
-	any malformed UTF-8 bytes that survived an upstream `errors="replace"`
-	read are still surfaced as visible U+FFFD characters rather than
-	silently dropped — keeps diagnostic behaviour consistent across the
-	two read paths.
+	Decodes with `errors="replace"` so any malformed UTF-8 that survived
+	an upstream `errors="replace"` read surfaces as visible U+FFFD
+	characters rather than silently dropped — diagnostic behaviour stays
+	consistent with `_read_report_safe`.
 	"""
 	if cap <= 0:
 		return ""
-	encoded = text.encode("utf-8")
-	if len(encoded) <= cap:
-		return text
-	i = cap
-	# Walk back over UTF-8 continuation bytes (top two bits == 0b10) so
-	# the slice never lands inside a multi-byte codepoint.
-	while i > 0 and (encoded[i] & 0xC0) == 0x80:
-		i -= 1
-	return encoded[:i].decode("utf-8", errors="replace")
+	truncated = truncate_bytes_to_utf8_cap(text.encode("utf-8"), cap)
+	return truncated.decode("utf-8", errors="replace")
 
 
 def parse_status(markdown: str) -> str:
