@@ -4,7 +4,7 @@ $ARGUMENTS
 
 ## Steps
 
-1. **Download the log** — Use `curl -sL` to download the raw log content from the provided URL. Save it to a temporary file in `/tmp/` so you can reference it throughout the analysis. If the download fails with a transient error (5xx, 429, timeout, connection reset, DNS failure), retry with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before declaring failure. For hard failures (401, 403, 404, 410), record the URL under **Inaccessible Resources** in the final output.
+1. **Download the log** — Use `curl -sL` to download the raw log content from the provided URL. Save it to a temporary file in `/tmp/` so you can reference it throughout the analysis. If the download fails with a transient error, retry according to the **Retry Rule** in the Rules section. For hard failures (401, 403, 404, 410), record the URL under **Inaccessible Resources** in the final output.
 
 2. **Read the full log carefully** — Do not skim or summarize. Read the entire log from start to finish. Pay attention to:
    - Error messages, stack traces, exceptions
@@ -22,7 +22,7 @@ $ARGUMENTS
    - **Other runs of the same workflow** → check whether the same failure appears on `main` and on related branches (regression vs. flake).
    - **Failing files** in the stack trace → `git blame` and `git log -p -- <file>` to find the commit/PR that introduced the relevant code.
    - **Recent commits** → intersect files changed in recent commits/PRs with files in the stack trace to identify the likely culprit change.
-   - **Retry transient errors when fetching from GitHub or any HTTP source** (5xx, 429, timeouts, connection resets, DNS failures) with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before treating a resource as inaccessible. A transient blip is not an excuse to give up on the investigation.
+   - **Retry transient errors when fetching from GitHub or any HTTP source** according to the **Retry Rule** in the Rules section. A transient blip is not an excuse to give up on the investigation.
 
 4. **Identify every distinct issue** — List each unique issue. For each:
    - Exact error message or log line (with line number in the saved log file)
@@ -59,17 +59,16 @@ $ARGUMENTS
 ## Rules
 
 - Always download the complete log. Never truncate or skip sections.
-- **Retry transient HTTP/GitHub errors** (5xx, 429, timeouts, connection resets, DNS failures) with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before declaring failure. This applies to the initial log download **and** to every follow-up fetch (PRs, issues, workflow files, artifacts, related runs).
-- **Inaccessible resources** — If a resource is still unreachable after retries, or returns a hard failure (401, 403, 404, 410), or is auth-walled / expired / private, STOP and emit under **Inaccessible Resources**:
+- **Retry Rule**: For transient HTTP/GitHub errors (5xx, 429, timeouts, connection resets, DNS failures), retry with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before declaring failure. This applies to the initial log download **and** to every follow-up fetch (PRs, issues, workflow files, artifacts, related runs).
+- **Inaccessible resources** — If a resource is still unreachable after retries, or returns a hard failure (401, 403, 404, 410), or is auth-walled / expired / private, record the following under **Inaccessible Resources** and continue the investigation with other available evidence:
   - The exact URL
   - What is needed from it
   - What conclusion is blocked without it
 
-  Do not proceed with a fix that depends on guessed content from an inaccessible resource.
+  Do not propose a fix whose correctness depends on guessed content from an inaccessible resource — surface that gap under **Open Questions** instead.
 - **Use the GitHub MCP tools (`mcp__github__*`) for all GitHub interactions.** The `gh` CLI is not available in this environment. Repo scope is restricted to `shubhodeep1/coding-workflows`.
 - Prioritize the root cause — the first meaningful error in the log — over cascading failures.
 - If the log contains multiple independent failures, address each separately.
 - If a failure is environmental (service was down, rate limit, runner outage) and no code change can fix it, say so explicitly rather than proposing a workaround.
 - **Forbidden silent moves**: modifying tests to make them pass (unless the test is genuinely wrong, with evidence), broadening `except`/`catch` blocks, suppressing warnings, version-bumping without verified compatibility, adding retries to mask deterministic failures.
 - **No guessing.** Every diagnosis cites evidence; every fix is tied to a specific log line and source location. If you cannot find evidence, ask or surface the gap — do not invent it.
-- Clean up the temp file when done.
