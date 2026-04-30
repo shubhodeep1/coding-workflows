@@ -3987,7 +3987,15 @@ jobs:
           # itself unavailable (checkout failed), fall back to the
           # legacy byte-slice — best-effort defence-in-depth so the
           # notification still goes out.
-          MSG_BYTES=$(printf '%s' "${MSG}" | wc -c)
+          # `wc -c` output may include leading whitespace on some
+          # implementations (BSD-derived `wc` pads with spaces; GNU
+          # `wc` on `ubuntu-latest` typically does not). Under
+          # `set -euo pipefail`, a non-integer `MSG_BYTES` like
+          # `"  4500"` would make `[ -gt 4000 ]` exit with a numeric-
+          # comparison error, aborting the Telegram step before the
+          # send. Strip whitespace defensively so the comparison is
+          # robust to any future runner image change.
+          MSG_BYTES=$(printf '%s' "${MSG}" | wc -c | tr -d '[:space:]')
           if [ "${MSG_BYTES}" -gt 4000 ]; then
             if command -v python3 >/dev/null 2>&1 \
                && [ -f scripts/truncate_to_utf8_byte_cap.py ]; then

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """Truncate stdin to a UTF-8 byte cap on a codepoint boundary.
 
-Reads bytes from stdin, writes <= cap bytes to stdout, never splitting
-a multi-byte UTF-8 sequence. Used by the release-gate notify step
-to enforce Telegram's 4096-char body limit without corrupting the
-multi-byte glyphs (✓/✗/⏳/em-dashes) the consolidated soft-error
-summary routinely contains.
+Reads bytes from stdin and writes a UTF-8-safe prefix to stdout that
+never splits a multi-byte UTF-8 sequence. Used by the release-gate
+notify step to enforce Telegram's 4096-char body limit without
+corrupting the multi-byte glyphs (✓/✗/⏳/em-dashes) the consolidated
+soft-error summary routinely contains.
 
 Usage: cat msg.txt | truncate_to_utf8_byte_cap.py <cap>
+
+Output size guarantee. When `cap > 0`, output is `<= cap` bytes and
+ends on a UTF-8 codepoint boundary. When `cap == 0` the script is a
+no-op (writes the input verbatim) — this matches the consolidator's
+`max_bytes <= 0` opt-out semantic for operators who want the full
+summary regardless of size, so the output may exceed `cap` in this
+documented opt-out case. Negative caps are rejected at the CLI layer
+with exit 2.
 
 The library function `truncate_bytes_to_utf8_cap` is the canonical
 truncation algorithm — `scripts/consolidate_soft_error_reports.py`
@@ -26,19 +34,25 @@ import sys
 
 
 def truncate_bytes_to_utf8_cap(data: bytes, cap: int) -> bytes:
-	"""Return a prefix of `data` whose byte length is `<= cap`, ending on
-	a UTF-8 codepoint boundary when the input is valid UTF-8.
+	"""Return a prefix of `data` ending on a UTF-8 codepoint boundary.
 
-	**Contract.** Callers MUST pass valid UTF-8 input. Under that
-	assumption, the returned prefix is the maximal valid-UTF-8 prefix
-	whose length is `<= cap`. For malformed input the function still
-	returns a byte-level prefix obtained by walking back over
-	continuation bytes, but the result is not guaranteed to decode
-	cleanly — that case is out of scope for the release-gate use sites
-	(both the Telegram MSG and the consolidator's per-phase reports
-	originate from `errors="replace"` reads, which always re-encode to
-	valid UTF-8). Adding strict-decode validation here would cost a
-	full decode on every call without benefiting any real call site.
+	**Output size contract.** When `cap > 0`, the returned prefix is
+	`<= cap` bytes long. When `cap <= 0`, truncation is disabled and
+	the input is returned unchanged — the result CAN exceed `cap`
+	(see the "edge cases" paragraph below). Library callers that need
+	a hard `<= cap` upper bound MUST pass `cap > 0`.
+
+	**UTF-8 validity contract.** Callers MUST pass valid UTF-8 input.
+	Under that assumption, the returned prefix is the MAXIMAL
+	valid-UTF-8 prefix whose length is `<= cap`. For malformed input
+	the function still returns a byte-level prefix obtained by walking
+	back over continuation bytes, but the result is not guaranteed to
+	decode cleanly — that case is out of scope for the release-gate
+	use sites (both the Telegram MSG and the consolidator's per-phase
+	reports originate from `errors="replace"` reads, which always
+	re-encode to valid UTF-8). Adding strict-decode validation here
+	would cost a full decode on every call without benefiting any
+	real call site.
 
 	If `data[cap]` (the first byte beyond the cap) is a continuation
 	byte (top two bits == 0b10), the cap fell inside a multi-byte
@@ -46,14 +60,15 @@ def truncate_bytes_to_utf8_cap(data: bytes, cap: int) -> bytes:
 	slice `data[:i]` then ends on a clean codepoint boundary because
 	the codepoint containing `data[cap]` is fully excluded.
 
-	Edge cases. (a) `cap <= 0` returns the input unchanged; this
-	matches operator opt-out semantics at the consolidator level
-	(`max_bytes <= 0` → no truncation), so a CLI invocation
-	`truncate_to_utf8_byte_cap.py 0` is the same as a no-op.
-	A negative `cap` is also treated as a no-op rather than letting
-	Python's negative-index slicing (`data[:-1]`) silently strip a
-	tail byte — the helper is a library function, and library
-	functions should not surprise their callers.
+	Edge cases. (a) `cap <= 0` is the documented opt-out path:
+	returns the input unchanged. This matches operator opt-out
+	semantics at the consolidator level (`max_bytes <= 0` → no
+	truncation), so a CLI invocation `truncate_to_utf8_byte_cap.py 0`
+	is the same as a no-op. A negative `cap` is also treated as a
+	no-op rather than letting Python's negative-index slicing
+	(`data[:-1]`) silently strip a tail byte — the helper is a
+	library function, and library functions should not surprise their
+	callers. NOTE the output may exceed `cap` in this branch.
 	(b) `cap >= len(data)` returns data unchanged — the input already
 	fits, no truncation needed. (c) Malformed UTF-8 input causes the
 	walk-back to step over continuation bytes until it finds a non-
