@@ -966,7 +966,21 @@ jobs:
                 if [ "$ELAPSED" -ge 600 ]; then
                   JOB_ID=$(echo "$JOBS_JSON" | jq -r '.jobs[0].id // empty' 2>/dev/null || echo "")
                   if [ -n "$JOB_ID" ]; then
-                    LOG_CONTENT=$(gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" || echo "")
+                    # Stream the job log to a tempfile rather than capturing
+                    # into a shell variable. `gh_api_safe .../actions/jobs/
+                    # {id}/logs` returns the raw log bytes (multi-MB on long
+                    # autofix runs) and bash command-substitution `$(...)`
+                    # silently drops NUL bytes from the captured output —
+                    # which can occur when an inner tool (codex, jq, gh)
+                    # emits binary content into stderr/stdout. Dropped NULs
+                    # could merge adjacent lines and cause both the editor-
+                    # noop grep and the reviewer-success counter to silently
+                    # miss otherwise-valid matches. Writing once to a
+                    # tempfile and grepping the file is byte-exact and uses
+                    # no more API calls than before. See PR #1798 review by
+                    # copilot-pull-request-reviewer.
+                    LOG_FILE="$(mktemp)"
+                    gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG_FILE" 2>/dev/null || : > "$LOG_FILE"
 
                     # Editor-noop fallback marker shortcut.
                     #
@@ -1001,16 +1015,22 @@ jobs:
                     # a validated review."`); GitHub Actions preserves
                     # workflow-command prefixes verbatim in the raw log
                     # bytes returned by /actions/jobs/{id}/logs.
-                    if printf '%s' "$LOG_CONTENT" | grep -qF '::warning::Editor summary contains failure/fallback markers'; then
+                    if grep -qaF '::warning::Editor summary contains failure/fallback markers' "$LOG_FILE"; then
                       echo "  ⚠ Editor noop marker detected in live log — editor never produced a validated commit; aborting wait early"
                       echo "::warning::Review workflow editor produced no validated summary (EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
                       echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
                       echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+                      rm -f "$LOG_FILE"
                       exit 0
                     fi
 
-                    SUCCEEDED=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* succeeded" || true)
-                    FAILED_R=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* failed after" || true)
+                    # `-a` treats the input as text even if grep otherwise
+                    # heuristically classified it as binary (any NUL byte
+                    # would normally make grep fall through to "Binary file
+                    # ... matches" instead of printing/counting matches).
+                    SUCCEEDED=$(grep -caE "Reviewer .* succeeded" "$LOG_FILE" || true)
+                    FAILED_R=$(grep -caE "Reviewer .* failed after" "$LOG_FILE" || true)
+                    rm -f "$LOG_FILE"
                     SUCCEEDED="${SUCCEEDED:-0}"; SUCCEEDED="${SUCCEEDED##*$'\n'}"
                     FAILED_R="${FAILED_R:-0}"; FAILED_R="${FAILED_R##*$'\n'}"
                     [[ "$SUCCEEDED" =~ ^[0-9]+$ ]] || SUCCEEDED=0
