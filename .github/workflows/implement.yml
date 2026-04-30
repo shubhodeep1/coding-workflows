@@ -552,9 +552,16 @@ jobs:
           # the smoke-test fixture so the gate isn't drowned in
           # start/progress/finish notifications. SILENT > CRITICAL so
           # all callers' levels filter to no-op.
+          # Also export IS_SMOKE_TEST so the post-PR-creation step can
+          # auto-apply force-review + e2e-smoke-test labels — required
+          # because the canary edit is doc-only and the deterministic-
+          # skip-merge job in review_autofix.yml will otherwise enable
+          # auto-merge before the e2e gate's bait-injection phase has
+          # a chance to push (race observed in run 25150961704).
           if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
             echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+            echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
           fi
 
       - name: Fetch issue comments
@@ -2470,6 +2477,62 @@ jobs:
 
           exit 1
 
+      - name: Ensure E2E smoke-test labels exist on repo
+        # Pre-creates the labels referenced by `Create Pull Request`'s
+        # conditional `--label` flags below. `gh pr create --label`
+        # requires the label to already exist on the repo or the whole
+        # PR creation fails — so this idempotent ensure step runs FIRST
+        # and only when IS_SMOKE_TEST=true (no work for non-smoke runs).
+        # Failures here are FATAL: the next step's `gh pr create
+        # --label force-review --label e2e-smoke-test` will fail
+        # anyway, so we surface the cause loudly with a clear error
+        # message rather than letting it manifest downstream as an
+        # opaque PR-creation failure. (Copilot review on PR #1823.)
+        if: env.SKIP_IMPLEMENT != 'true' && env.IS_SMOKE_TEST == 'true' && steps.commit_changes.outputs.did_commit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+
+          # Both `force-review` and `e2e-smoke-test` are now in the
+          # central catalog (scripts/label_helpers.sh +
+          # .github/ai/label_contract.v1.json), so a single
+          # `ensure_label_exists` call gives us the correct
+          # color/description for each. The helper internally
+          # treats GitHub's "already_exists" response as success,
+          # killing the GET/POST race the earlier inline ensure
+          # pattern was vulnerable to (consensus claude-branch-
+          # review finding on this PR). If the helper isn't
+          # available — e.g., the support-source checkout in this
+          # job didn't land scripts/label_helpers.sh — fail loud
+          # rather than reinventing the catalog inline; the next
+          # `gh pr create --label` would fail anyway and we'd
+          # rather surface "label_helpers missing" than have a
+          # parallel inline catalog drift over time (Copilot review
+          # comment #4 on this PR).
+          if [ ! -f scripts/label_helpers.sh ]; then
+            echo "::error::scripts/label_helpers.sh not present in checkout; cannot ensure smoke-test labels via the catalog. Aborting smoke-test PR creation."
+            exit 1
+          fi
+          # shellcheck disable=SC1091
+          source scripts/label_helpers.sh
+          if ! type ensure_label_exists >/dev/null 2>&1; then
+            echo "::error::scripts/label_helpers.sh did not export ensure_label_exists; aborting smoke-test PR creation (catalog drift risk)."
+            exit 1
+          fi
+
+          ensure_label_exists "force-review" "${REPOSITORY}" || {
+            echo "::error::Could not ensure 'force-review' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
+            exit 1
+          }
+          ensure_label_exists "e2e-smoke-test" "${REPOSITORY}" || {
+            echo "::error::Could not ensure 'e2e-smoke-test' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
+            exit 1
+          }
+
       - name: Create Pull Request
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
         id: create_pr
@@ -2478,12 +2541,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! gh pr create \
-            --repo "${{ github.repository }}" \
-            --base "${PR_BASE_BRANCH}" \
-            --head "${TARGET_BRANCH}" \
-            --title "AI implementation for issue #${ISSUE_NUMBER}" \
-            --body "Automated implementation. Closes ${ISSUE_URL}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
+          # Atomically apply force-review + e2e-smoke-test labels at PR
+          # creation time when this is a smoke-test run. Applying them
+          # post-creation would race the `pull_request: opened` event
+          # that fires `internal-review.yml` → `review_autofix.yml` gate
+          # — the gate snapshots labels and the wrapper does NOT trigger
+          # on `labeled`, so a label added afterwards cannot rewind the
+          # gate decision. Race observed in run 25150961704: doc-only
+          # canary PR auto-merged 50s after creation, before the e2e
+          # gate's Phase 3b1 force-review-label step ran. See
+          # `Ensure E2E smoke-test labels exist on repo` step above —
+          # `--label` here requires those labels to exist.
+          PR_CREATE_ARGS=(
+            --repo "${{ github.repository }}"
+            --base "${PR_BASE_BRANCH}"
+            --head "${TARGET_BRANCH}"
+            --title "AI implementation for issue #${ISSUE_NUMBER}"
+            --body "Automated implementation. Closes ${ISSUE_URL}"
+          )
+          if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
+            PR_CREATE_ARGS+=(--label "force-review" --label "e2e-smoke-test")
+          fi
+
+          if ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
             echo "PR creation failed. This may indicate a PR was created by another process during execution."
             if [ -s "${RUNTIME_DIR}/created_pr_url.err" ]; then
               cat "${RUNTIME_DIR}/created_pr_url.err"
@@ -2506,6 +2586,71 @@ jobs:
             exit 1
           fi
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Backstop E2E smoke-test labels on PR after creation
+        # Best-effort post-create backstop. The atomic `--label` path
+        # in `Create Pull Request` above is the source of truth on the
+        # happy path; this step exists to cover the existing-PR-reuse
+        # fallback inside that step (when `gh pr create` fails because
+        # a PR already exists for the issue, no `--label` flags are
+        # applied — gh pr list / view returns the existing PR by URL
+        # without modifying its labels). It also re-asserts both
+        # labels in case the atomic path was preempted by a transient
+        # GitHub API issue. Idempotent.
+        #
+        # Early label presence matters because `pull_request: opened`
+        # fires `internal-review.yml` immediately, and the gate
+        # decision in `review_autofix.yml` uses whatever labels are
+        # present at that moment. The wrapper does NOT trigger on
+        # `labeled`, so a label added after `opened` cannot retrigger
+        # the gate — by the time the e2e workflow's Phase 3b1
+        # force-review-label step runs, the deterministic-skip-merge
+        # job has already auto-merged a doc-only canary PR (race
+        # observed in run 25150961704: PR merged at +50s, e2e bait
+        # push at +113s, then 30 min wait-review timeout).
+        if: env.SKIP_IMPLEMENT != 'true' && env.IS_SMOKE_TEST == 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PR_URL: ${{ steps.create_pr.outputs.pr_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+
+          PR_NUMBER="$(printf '%s\n' "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
+          if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not extract PR number from URL '${PR_URL}'; skipping E2E label backstop"
+            exit 0
+          fi
+
+          # Re-use the central catalog so the backstop never drifts
+          # from .github/ai/label_contract.v1.json. Both labels are
+          # cataloged, so a single `ensure_label_exists` call per
+          # label is enough. Failures here are non-fatal because
+          # this is the backstop — the atomic `--label` path on
+          # `Create Pull Request` is the source of truth on the
+          # happy path; the `Ensure E2E smoke-test labels exist on
+          # repo` step has already aborted the run if the catalog
+          # source itself is missing.
+          if [ -f scripts/label_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/label_helpers.sh
+          fi
+          if type ensure_label_exists >/dev/null 2>&1; then
+            ensure_label_exists "force-review" "${REPOSITORY}" >/dev/null 2>&1 || true
+            ensure_label_exists "e2e-smoke-test" "${REPOSITORY}" >/dev/null 2>&1 || true
+          else
+            echo "::warning::scripts/label_helpers.sh did not export ensure_label_exists; skipping non-fatal label backstop ensure (atomic --label path remains the source of truth)"
+          fi
+
+          if ! gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
+              -f "labels[]=force-review" \
+              -f "labels[]=e2e-smoke-test" >/dev/null 2>&1; then
+            echo "::warning::Backstop label apply failed on PR #${PR_NUMBER}; relying on the atomic --label path. review_autofix may auto-merge before the e2e bait phase runs if both paths missed."
+          else
+            echo "✓ Backstop applied force-review + e2e-smoke-test labels to PR #${PR_NUMBER}"
+          fi
 
       - name: Refetch memory helpers after commit cleanup
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''

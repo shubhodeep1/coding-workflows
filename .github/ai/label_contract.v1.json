@@ -140,6 +140,10 @@
     "force-review": {
       "color": "fbca04",
       "description": "Force a full review_autofix cycle, bypassing the deterministic pre-review skip"
+    },
+    "e2e-smoke-test": {
+      "color": "5319e7",
+      "description": "E2E smoke test PR — review_autofix skips auto-merge"
     }
   },
   "phase_groups": [
