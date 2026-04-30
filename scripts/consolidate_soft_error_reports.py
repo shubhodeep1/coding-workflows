@@ -76,9 +76,9 @@ def discover_reports(input_dir: Path) -> list[tuple[str, Path]]:
 	"""Return [(phase, markdown_path)] for every per-phase report found.
 
 	Tolerates both layouts produced by `actions/download-artifact@v6`:
-	  - merge-multiple=false (default): each artifact in its own subdir
-	    `<input_dir>/soft-error-report-<run>-<phase>/<artifact>.md`
-	  - merge-multiple=true: flattened into `<input_dir>/<artifact>.md`
+	(a) merge-multiple=false (default): each artifact in its own
+	subdirectory `<input_dir>/soft-error-report-<run>-<phase>/<file>.md`.
+	(b) merge-multiple=true: flattened into `<input_dir>/<file>.md`.
 	The artifact contents are written by the composite action as
 	`/tmp/<artifact_name>.md`, so the inner filename matches the artifact
 	name with a `.md` suffix.
