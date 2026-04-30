@@ -164,8 +164,12 @@ jobs:
           # tags (e.g. `v1.4.2-beta.1`) which would later break patch
           # arithmetic on `cut -d. -f3` under `set -euo pipefail`. Filter
           # to strict semver with grep so only release tags survive.
+          # `{ grep ... || true; }` keeps the pipeline exit status at 0
+          # when no semver tags exist (grep returns 1 on no-match, which
+          # under pipefail would abort the step before the empty-LATEST
+          # fallback below can run).
           LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
             | head -n1)
 
           NEXT=""
