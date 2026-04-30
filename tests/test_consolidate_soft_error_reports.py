@@ -109,6 +109,42 @@ def test_discover_missing_dir_returns_empty():
 	assert csr.discover_reports(Path("/tmp/this-path-does-not-exist-xyz")) == []
 
 
+def test_discover_oserror_on_iterdir_falls_through_to_layout2():
+	"""Permission-denied / transient FS errors during layout-1 walk
+	must not crash the consolidator. Layout-2 (flat) results should
+	still be returned. Matches the docstring's fail-open contract.
+	"""
+	import unittest.mock as mock
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		# Drop a flat-layout report so layout-2 has something to find.
+		_write_per_phase_report(root, run_id="9", phase="clarify", findings="x", flatten=True)
+		# Patch iterdir to raise OSError, simulating a transient FS issue.
+		original_iterdir = Path.iterdir
+
+		def _broken_iterdir(self):
+			if self == root:
+				raise OSError("simulated transient FS error")
+			return original_iterdir(self)
+
+		with mock.patch.object(Path, "iterdir", _broken_iterdir):
+			found = csr.discover_reports(root)
+		# Layout-1 walk failed cleanly; layout-2 still picked up clarify.
+		assert [p for p, _ in found] == ["clarify"]
+
+
+def test_discover_oserror_on_is_dir_returns_empty():
+	"""OSError from `input_dir.is_dir()` itself (e.g. stale NFS handle)
+	must degrade to the empty stub rather than crash.
+	"""
+	import unittest.mock as mock
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		with mock.patch.object(Path, "is_dir", side_effect=OSError("stale handle")):
+			found = csr.discover_reports(root)
+		assert found == []
+
+
 # ---------------------------------------------------------------------------
 # Ordering
 # ---------------------------------------------------------------------------

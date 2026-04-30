@@ -3750,15 +3750,22 @@ jobs:
 
           # Fail-open shell fallback: if the upstream Checkout or
           # Setup-Python steps failed (both are `continue-on-error: true`),
-          # the consolidator script and/or python3 may not be on disk.
-          # Without this guard, the `python3 scripts/...` invocation below
-          # would `set -e` exit the step before writing stub files, and
-          # the Telegram step would have nothing to attach. Detect the
-          # missing prerequisites and emit the same stub shape the
-          # consolidator would have, so downstream behaviour matches the
-          # documented fail-open intent.
+          # python3 and/or one of the consolidation scripts may not be on
+          # disk. Without this guard, the `python3 scripts/...` invocation
+          # below would `set -e` exit the step before writing stub files,
+          # and the Telegram step would have nothing to attach.
+          #
+          # We check BOTH helper scripts because the consolidator imports
+          # `truncate_to_utf8_byte_cap` as a sibling module — if that
+          # helper is missing or renamed (e.g. partial checkout, future
+          # refactor), the python invocation would `ImportError` before
+          # writing stubs. Belt-and-braces: also wrap the python call in
+          # an `||` fallback so any *other* unanticipated failure (env
+          # var corruption, missing system dep, etc.) still yields stub
+          # outputs rather than aborting the step.
           if ! command -v python3 >/dev/null 2>&1 \
-             || [ ! -f scripts/consolidate_soft_error_reports.py ]; then
+             || [ ! -f scripts/consolidate_soft_error_reports.py ] \
+             || [ ! -f scripts/truncate_to_utf8_byte_cap.py ]; then
             REASON="checkout=${CHECKOUT_OUTCOME} setup_python=${SETUP_PYTHON_OUTCOME}"
             echo "::warning::Consolidator unavailable (${REASON}); writing fallback stub."
             # Lead with the actual diagnostic — the failed step is the
@@ -3815,12 +3822,35 @@ jobs:
             SOFT_ERROR_BYTES=2800
           fi
 
-          python3 scripts/consolidate_soft_error_reports.py \
-            --input-dir /tmp/soft-error-artifacts \
-            --output-full "${REPORT}" \
-            --output-summary "${SUMMARY}" \
-            --max-summary-bytes "${SOFT_ERROR_BYTES}" \
-            --download-status "${DOWNLOAD_OUTCOME:-unknown}"
+          # `||` fallback: any unanticipated failure (system Python
+          # missing a stdlib module, OS-level error before argparse
+          # runs, etc.) still yields stub outputs so the Telegram
+          # step has something to attach. The script itself is
+          # already non-blocking for the documented failure modes
+          # (missing inputs, decode errors, OpenRouter outages),
+          # so this branch only fires for genuinely unexpected
+          # crashes.
+          if ! python3 scripts/consolidate_soft_error_reports.py \
+              --input-dir /tmp/soft-error-artifacts \
+              --output-full "${REPORT}" \
+              --output-summary "${SUMMARY}" \
+              --max-summary-bytes "${SOFT_ERROR_BYTES}" \
+              --download-status "${DOWNLOAD_OUTCOME:-unknown}"; then
+            echo "::warning::Consolidator exited non-zero unexpectedly; writing fallback stub."
+            {
+              echo "# Consolidated soft-error report"
+              echo
+              echo "**CONSOLIDATOR CRASHED.** \`scripts/consolidate_soft_error_reports.py\`"
+              echo "exited non-zero. The script is documented as non-blocking,"
+              echo "so this is unexpected — inspect the notify-job logs for"
+              echo "the traceback. Per-phase artifacts may still be available"
+              echo "as separate \`soft-error-report-<run_id>-<phase>\` entries."
+            } > "${REPORT}"
+            {
+              echo "## Soft-error consolidation"
+              echo "_CONSOLIDATOR CRASHED unexpectedly; see notify-job logs_"
+            } > "${SUMMARY}"
+          fi
           echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
           echo "summary_path=${SUMMARY}" >> "$GITHUB_OUTPUT"
 

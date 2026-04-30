@@ -93,24 +93,71 @@ def discover_reports(input_dir: Path) -> list[tuple[str, Path]]:
 	name with a `.md` suffix.
 	"""
 	found: list[tuple[str, Path]] = []
-	if not input_dir.is_dir():
+	# `is_dir()` itself can raise OSError on transient FS / permission
+	# issues (NFS hiccup, permission-denied on the runner's tmpdir,
+	# stale handle from a half-written download artifact). Treat any
+	# such failure the same as "no reports found" — the script
+	# contract is non-blocking, so a directory we can't even stat
+	# should degrade to the empty stub rather than crash.
+	try:
+		if not input_dir.is_dir():
+			return found
+	except OSError as exc:
+		print(
+			f"::warning::discover_reports: cannot stat input dir "
+			f"{input_dir}: {exc}; treating as empty.",
+			file=sys.stderr,
+		)
 		return found
 
-	# Layout 1: subdir per artifact.
-	for child in sorted(input_dir.iterdir()):
-		if child.is_dir():
-			m = ARTIFACT_NAME_RE.match(child.name)
-			if not m:
+	# Layout 1: subdir per artifact. Wrap the directory walks in
+	# try/except OSError so a permission glitch or transient FS error
+	# on a single subdir doesn't crash the whole consolidator —
+	# matches the docstring's fail-open contract.
+	try:
+		children = sorted(input_dir.iterdir())
+	except OSError as exc:
+		print(
+			f"::warning::discover_reports: iterdir({input_dir}) failed: "
+			f"{exc}; falling through to layout 2.",
+			file=sys.stderr,
+		)
+		children = []
+	for child in children:
+		try:
+			if not child.is_dir():
 				continue
-			phase = m.group("phase")
-			# Pick the first .md inside the subdir. The composite action
-			# writes exactly one file per artifact, so this is unambiguous.
+		except OSError:
+			continue
+		m = ARTIFACT_NAME_RE.match(child.name)
+		if not m:
+			continue
+		phase = m.group("phase")
+		# Pick the first .md inside the subdir. The composite action
+		# writes exactly one file per artifact, so this is unambiguous.
+		try:
 			md_files = sorted(child.glob("*.md"))
-			if md_files:
-				found.append((phase, md_files[0]))
+		except OSError as exc:
+			print(
+				f"::warning::discover_reports: glob({child}/*.md) failed: "
+				f"{exc}; skipping subdir.",
+				file=sys.stderr,
+			)
+			continue
+		if md_files:
+			found.append((phase, md_files[0]))
 
 	# Layout 2: flattened into input_dir.
-	for md in sorted(input_dir.glob("*.md")):
+	try:
+		flat_md = sorted(input_dir.glob("*.md"))
+	except OSError as exc:
+		print(
+			f"::warning::discover_reports: glob({input_dir}/*.md) failed: "
+			f"{exc}; returning what layout 1 found.",
+			file=sys.stderr,
+		)
+		flat_md = []
+	for md in flat_md:
 		m = REPORT_FILENAME_RE.match(md.name)
 		if not m:
 			continue
