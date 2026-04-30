@@ -858,7 +858,15 @@ jobs:
             echo "::error::PR #${PR_NUMBER} is already ${PR_STATE} (merged=${PR_MERGED}, merged_at=${PR_MERGED_AT}, closed_at=${PR_CLOSED_AT}) before bait could be injected — pushes to the head branch will not fan out a pull_request synchronize event, so no review_autofix run will be triggered. Likely cause: review_autofix.yml's deterministic-skip-merge job auto-merged the PR before the e2e gate's force-review/e2e-smoke-test labels took effect (see implement.yml 'Apply E2E smoke-test labels to PR' step and review_autofix.yml 'Enable auto-merge on PR' step's e2e-smoke-test guard)."
             echo "status=pr_already_closed" >> "$GITHUB_OUTPUT"
             echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
-            exit 1
+            # Exit 0 (not 1) so the implicit `if: success()` on the
+            # downstream Phase 4 (wait-review) and Phase 7 verify
+            # summary still let those steps run. The summary owns the
+            # final pass/fail decision and special-cases this status —
+            # otherwise PASSED=false would never be set and the job
+            # would conclude success despite the ::error:: annotation
+            # above. Mirrors the exit-0-with-status pattern used by
+            # the other non-fatal inject-bait branches (lines below).
+            exit 0
           fi
 
           echo "Fetching current canary blob on branch ${BRANCH}..."
