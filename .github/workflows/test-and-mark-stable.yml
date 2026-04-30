@@ -158,15 +158,13 @@ jobs:
             fetch_attempt=$((fetch_attempt + 1))
           done
 
-          # Find the latest vX.Y.Z tag reachable from the source branch's
-          # HEAD. `--merged HEAD` is critical for the stable-branch path:
-          # if main is on v1.5.0 and stable is on v1.4.2, releasing from
-          # stable must bump from v1.4.2 (→ v1.4.3), not from main's v1.5.0.
-          # When releasing from main, `--merged HEAD` returns every tag
-          # reachable from main (which, given the stable→main forward-
-          # merge workflow, includes all stable-line tags too) so the
-          # main-path bump behaves identically to the previous global
-          # `git tag --list` lookup.
+          # Find the latest vX.Y.Z tag reachable from `stable`'s HEAD.
+          # `--merged HEAD` is critical: if main is on v1.5.0 and stable
+          # is on v1.4.2, the next stable patch must bump from v1.4.2
+          # (→ v1.4.3), not from main's v1.5.0. Restricting the lookup
+          # to tags reachable from the checked-out branch avoids
+          # computing the next version from unrelated newer tags
+          # elsewhere in the repo.
           #
           # The shell glob `v[0-9]*.[0-9]*.[0-9]*` also matches prerelease
           # tags (e.g. `v1.4.2-beta.1`) which would later break patch
@@ -3881,9 +3879,9 @@ jobs:
       - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
-  # Job 3.5: Sync stable bug fixes back to main (stable releases only)
+  # Job 3.5: Sync stable bug fixes back to main
   #
-  # When a stable patch release succeeds, dispatch
+  # After a successful stable release, dispatch
   # `forward-merge-stable-to-main.yml` so the just-released bug fixes
   # are propagated to `main`. This is belt-and-braces — the
   # forward-merge workflow already runs on every push to `stable`
@@ -3891,13 +3889,11 @@ jobs:
   # here guarantees the sync is tied to the release event itself, so
   # `main` can never silently drift behind a tagged stable release.
   #
-  # Skipped when releasing from `main` (no sync needed) and on
-  # dry runs (no real release happened).
+  # Skipped on dry runs (no real release happened).
   # ──────────────────────────────────────────────────────────────────
   sync-to-main:
-    needs: [source, release]
+    needs: [release]
     if: >-
-      needs.source.outputs.branch == 'stable' &&
       !inputs.dry_run &&
       needs.release.result == 'success'
     runs-on: ubuntu-latest

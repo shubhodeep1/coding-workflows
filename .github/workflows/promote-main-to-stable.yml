@@ -134,10 +134,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
-          # `--ref stable` makes test-and-mark-stable.yml's source-job
-          # auto-detect resolve to `stable`, so the release tags from
-          # the just-fast-forwarded commit and `gh release create`
-          # targets the stable branch.
+          # test-and-mark-stable.yml hard-rejects any dispatch ref
+          # other than `stable`, so we MUST pass `--ref stable` here.
+          # Releasing tags the just-fast-forwarded commit on stable
+          # and `gh release create` targets the stable branch.
           gh workflow run test-and-mark-stable.yml \
             --ref stable \
             -f version_tag="${{ inputs.version_tag }}" \
