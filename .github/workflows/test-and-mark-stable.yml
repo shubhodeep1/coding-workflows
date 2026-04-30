@@ -66,13 +66,21 @@ permissions:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
-  # Job -1: Resolve source branch — auto-detect from dispatch ref
+  # Job -1: Validate dispatch ref — must be `stable`
   #
-  # When this workflow is dispatched from `stable`, the release path
-  # tags from the `stable` branch (a "stable patch release" — old
-  # stable + cherry-picked bug fix). When dispatched from `main` (or
-  # anything else), the default `main` path is used. Threaded into
-  # `resolve-version`, `validate`, and `release` via `needs.source`.
+  # This workflow only releases from the long-lived `stable` branch.
+  # Dispatching from `main` (or any other ref) is rejected so an
+  # operator cannot accidentally tag main as stable and drag in
+  # untested in-flight work. To promote `main` to the new stable
+  # baseline (typical for minor/major bumps), run
+  # promote-main-to-stable.yml — it fast-forwards stable to main and
+  # then dispatches this workflow on stable automatically. For
+  # bug-fix patch releases on the existing stable line, dispatch
+  # this workflow directly with `--ref stable`.
+  #
+  # The `branch` output is preserved (always `stable`) so downstream
+  # jobs that reference `needs.source.outputs.branch` keep working
+  # without per-job edits.
   # ──────────────────────────────────────────────────────────────────
   source:
     runs-on: ubuntu-latest
@@ -80,18 +88,18 @@ jobs:
     outputs:
       branch: ${{ steps.detect.outputs.branch }}
     steps:
-      - name: Detect source branch
+      - name: Validate dispatch ref
         id: detect
         run: |
           set -euo pipefail
           REF="${{ github.ref_name }}"
-          if [ "$REF" = "stable" ]; then
-            BRANCH="stable"
-          else
-            BRANCH="main"
+          if [ "$REF" != "stable" ]; then
+            echo "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
+            echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches this workflow on stable automatically."
+            exit 1
           fi
-          echo "Dispatched from ref '${REF}' → source branch '${BRANCH}'"
-          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "Dispatched from 'stable' — proceeding with stable-source release path"
+          echo "branch=stable" >> "$GITHUB_OUTPUT"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 0: Resolve version — auto-increment patch if not provided
