@@ -3682,12 +3682,22 @@ jobs:
       #      every per-phase finding is preserved verbatim. The previous
       #      flow re-ran the analyser model with an "<800 words" prompt
       #      cap, which silently dropped findings during consolidation.
+      # The notify job runs `if: always()` to deliver a Telegram message
+      # even when earlier jobs fail. Each setup step below is marked
+      # fail-open so a transient checkout/setup-python/download outage
+      # cannot suppress the release-status notification — the
+      # consolidation step degrades gracefully (empty-input stub) and
+      # the Telegram send step itself is `if: always()`.
       - name: Checkout repository
+        if: always()
+        continue-on-error: true
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
       - name: Setup Python
+        if: always()
+        continue-on-error: true
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -3735,6 +3745,13 @@ jobs:
 
       - name: Send Telegram notification
         id: tg_send
+        # Always send the release-status notification, even if any of the
+        # upstream consolidation steps (checkout / setup-python / download
+        # / consolidate) failed. Without `if: always()` a single failure
+        # in those steps would suppress the notification entirely; the
+        # Telegram body simply omits the soft-error summary when its
+        # source file is missing.
+        if: always()
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

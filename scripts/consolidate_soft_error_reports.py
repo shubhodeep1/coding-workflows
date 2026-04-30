@@ -162,6 +162,27 @@ def parse_status(markdown: str) -> str:
 	return m.group("status") if m else "unknown"
 
 
+def _read_report_safe(path: Path) -> tuple[str | None, str | None]:
+	"""Read a per-phase report, returning (text, error). Fail-open by design.
+
+	A single malformed artifact must not crash the consolidator (the entry-
+	point docstring promises non-blocking behaviour). `OSError` covers
+	missing files / permission issues; reading with `errors="replace"`
+	covers non-UTF-8 byte sequences (e.g. binary garbage in a corrupted
+	artifact) by substituting U+FFFD rather than raising
+	`UnicodeDecodeError`.
+	"""
+	try:
+		# `errors="replace"` is intentional — see docstring above. Any
+		# replacement chars in the input would already be present in the
+		# original analyser report (which itself reads logs with
+		# `errors="replace"`), so this only kicks in for genuinely
+		# corrupted artifacts.
+		return path.read_text(encoding="utf-8", errors="replace"), None
+	except OSError as exc:
+		return None, f"{type(exc).__name__}: {exc}"
+
+
 def build_full_report(ordered: list[tuple[str, Path]]) -> str:
 	"""Concatenate per-phase reports verbatim with phase-banner separators."""
 	parts: list[str] = [
@@ -183,10 +204,9 @@ def build_full_report(ordered: list[tuple[str, Path]]) -> str:
 		"",
 	]
 	for phase, path in ordered:
-		try:
-			body = path.read_text(encoding="utf-8")
-		except OSError as exc:
-			body = f"_(could not read {path.name}: {exc})_"
+		body, err = _read_report_safe(path)
+		if body is None:
+			body = f"_(could not read {path.name}: {err})_"
 		parts.append(f"## Phase: `{phase}`")
 		parts.append("")
 		parts.append(body.rstrip())
@@ -215,9 +235,8 @@ def build_summary(
 	finding_blocks: list[str] = []
 
 	for phase, path in ordered:
-		try:
-			markdown = path.read_text(encoding="utf-8")
-		except OSError:
+		markdown, _err = _read_report_safe(path)
+		if markdown is None:
 			statuses.append((phase, "unreadable"))
 			continue
 		statuses.append((phase, parse_status(markdown)))
@@ -247,23 +266,36 @@ def build_summary(
 		head = "\n".join(lines[: 2 if pill else 1]) + "\n"
 		kept_blocks: list[str] = []
 		running = head
+		# Track the running byte length incrementally to avoid re-encoding
+		# the cumulative string on every iteration (O(n²) → O(n)).
+		running_bytes = len(running.encode("utf-8"))
 		truncation_marker = "\n\n…[truncated for Telegram cap; see consolidated artifact]\n"
 		marker_bytes = len(truncation_marker.encode("utf-8"))
 		for block in finding_blocks:
-			candidate = running + "\n" + block + "\n"
-			if len(candidate.encode("utf-8")) + marker_bytes > max_bytes:
+			# Block separator matches the original concat (`"\n" + block + "\n"`).
+			separator_and_block_bytes = len(("\n" + block + "\n").encode("utf-8"))
+			if running_bytes + separator_and_block_bytes + marker_bytes > max_bytes:
 				break
-			running = candidate
+			running += "\n" + block + "\n"
+			running_bytes += separator_and_block_bytes
 			kept_blocks.append(block)
 		if kept_blocks:
 			summary = running.rstrip() + truncation_marker
 		else:
-			# Even the first block doesn't fit. Truncate it inline.
+			# Even the first block doesn't fit. Truncate at a valid UTF-8
+			# character boundary so we never split a multi-byte codepoint
+			# (release-gate logs contain ✓/✗/⏳/—/etc.). Walking back over
+			# any continuation bytes (top two bits == 0b10) lands `i` on
+			# the start of the next codepoint.
 			budget = max_bytes - len(head.encode("utf-8")) - marker_bytes
 			if budget > 0 and finding_blocks:
-				inline = finding_blocks[0].encode("utf-8")[:budget].decode(
-					"utf-8", errors="ignore"
-				)
+				encoded_block = finding_blocks[0].encode("utf-8")
+				if len(encoded_block) > budget:
+					i = budget
+					while i > 0 and (encoded_block[i] & 0xC0) == 0x80:
+						i -= 1
+					encoded_block = encoded_block[:i]
+				inline = encoded_block.decode("utf-8", errors="ignore")
 				summary = head + "\n" + inline + truncation_marker
 			else:
 				summary = head + truncation_marker
