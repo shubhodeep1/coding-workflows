@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Fix e2e smoke failure 25126757724 in review-autofix and release smoke handling\",\"issues\":[{\"id\":\"floor-tag-passthrough-handoff\",\"title\":\"Propagate floor-tagged passthrough anchors as actionable review issues\",\"priority\":1},{\"id\":\"editor-noop-gates-and-retry\",\"title\":\"Block suspicious editor no-op runs from conflict resolution and retry fallback summaries\",\"priority\":1},{\"id\":\"e2e-review-wait-shortcut\",\"title\":\"Short-circuit the e2e smoke review wait loop on editor fallback markers\",\"priority\":2},{\"id\":\"document-e2e-editor-hardening\",\"title\":\"Document the review-autofix and e2e smoke hardening for failure 25126757724\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"floor-tag-passthrough-handoff\",\"to\":\"document-e2e-editor-hardening\"},{\"from\":\"editor-noop-gates-and-retry\",\"to\":\"document-e2e-editor-hardening\"},{\"from\":\"e2e-review-wait-shortcut\",\"to\":\"document-e2e-editor-hardening\"}]}",
+  "fingerprint": "254b275288a5de825353348707d39222424f94ad328763332a1d9c28e4003e87",
+  "lineage": {
+    "issue_number": 1790,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25142643371",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25142643371",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260430014131_b2a62f9fa2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1790,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25142643371"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Fix e2e smoke failure 25126757724 in review-autofix and release smoke handling' into 4 issues (tracking #1790)",
+  "timestamps": {
+    "created_at": "2026-04-30T01:41:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
