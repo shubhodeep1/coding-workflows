@@ -1174,11 +1174,32 @@ jobs:
                 # The success-no-op path leaves a flag file for the
                 # "Handle no-op implementation" step so it can close the
                 # issue with ai:closed instead of re-issuing it.
-                if grep -qEi '^([[:space:]]*([-[:space:]]*)?)?(no file changes were made|nothing to change|already (aligned|implemented|satisfied|up[- ]to[- ]date|done|exists|present|complete)|no changes needed|no repository changes (were )?made|no file changes made|no repository changes (were )?required|no files (were )?modified)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
+                if grep -qEi '^([[:space:]]*([-[:space:]]*)?)?(no file changes were made|nothing to change|already (aligned|implemented|satisfied|up[- ]to[- ]date|done|exists|present|complete)|no changes needed|no repository changes (were )?made|no file changes made|no repository changes (were )?required|no files (were )?modified|no repository changes (were )?needed|no file changes (were )?needed)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
                   echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
                   : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
                   break
+                fi
+                # Stuck-intent detection (run 25206967321 issue #1860,
+                # run 25206976031 issue #1859 attempts 2-5): when Codex
+                # returns non-empty output that announces an
+                # apply_patch / edit / patching action but the worktree
+                # delta is empty AND the success-no-op regex above did
+                # not match, the attempt is functionally as useless as
+                # an empty-output attempt — the model is stuck in a
+                # "I will apply_patch next" loop without ever invoking
+                # the tool. Count toward empty_streak so the same
+                # 2-attempt bail applies; otherwise the loop burns the
+                # full 5-attempt budget on identical no-op repetitions.
+                # Restricted to apply_patch / patch / edit / update verb
+                # phrases that ONLY appear in announce-the-edit
+                # contexts; the "applying ... if line N does not match"
+                # conditional-verify phrasing (run 25206976031 attempt 1)
+                # is filtered out by the success-no-op regex above, so
+                # it never reaches this branch. Fail-open on grep error.
+                if grep -qEi '(apply_patch|applying (a |an |the |this |requested |first |minimal )(patch|edit)|patching `?[A-Za-z0-9_./-]+|editing `?[A-Za-z0-9_./-]+|i.?ll (now )?(apply|patch|edit|update)|will (now )?(apply|patch|edit|update))' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                  echo "::warning::Codex announced an edit/apply_patch on attempt ${attempt} but produced no file changes — counting toward empty_streak."
+                  attempt_was_empty=true
                 fi
                 echo "::warning::Codex returned output but produced no file changes on attempt ${attempt}."
               else
@@ -1255,19 +1276,33 @@ jobs:
               break
             fi
 
-            # Fix #2: track consecutive empty-output streak so a stuck-in-
-            # exploration agent loop bails early instead of burning the full
-            # 5-attempt budget. Reset to 0 on any attempt that produced
-            # output (even output-without-changes), incrementing only on
-            # the genuine empty-output path. Counter is checked AFTER
-            # increment; a `>= empty_streak_threshold` (default 2) trips
-            # the bail. This complements the exec-history retry nudge
-            # (which tries to break the redo-recon loop) by recovering
-            # budget when the nudge doesn't take.
+            # Fix #2: track consecutive no-actionable-output streak so a
+            # stuck-in-exploration agent loop bails early instead of
+            # burning the full 5-attempt budget. The streak counter is
+            # incremented on any attempt that produced no committable
+            # delta, regardless of whether stdout was empty:
+            #   - genuine empty-output path (`attempt_was_empty=true`
+            #     set on cmd_rc==0 + empty stdout, or non-zero exit +
+            #     empty stdout — see the two branches above), and
+            #   - stuck-intent path (cmd_rc==0 + non-empty stdout that
+            #     announces apply_patch/edit/patching/etc but yields an
+            #     empty worktree delta and does not match success-no-op
+            #     — also sets `attempt_was_empty=true`, so it shares the
+            #     same counter).
+            # The flag name `codex_stuck_in_exploration.flag` and
+            # downstream `diag_reason` cover both modes; the per-attempt
+            # `::warning::` lines distinguish which mode fired so
+            # diagnostics stay accurate. Reset to 0 on any attempt that
+            # produced a non-empty Codex-attributable delta. Counter is
+            # checked AFTER increment; a `>= empty_streak_threshold`
+            # (default 2) trips the bail. This complements the
+            # exec-history retry nudge (which tries to break the
+            # redo-recon loop) by recovering budget when the nudge
+            # doesn't take.
             if [ "${attempt_was_empty}" = "true" ]; then
               empty_streak=$((empty_streak + 1))
               if [ "${empty_streak}" -ge "${empty_streak_threshold}" ]; then
-                echo "::error::Codex returned empty output ${empty_streak} attempts in a row — agent loop is stuck in exploration. Aborting retry loop."
+                echo "::error::Codex produced no actionable output ${empty_streak} attempts in a row (empty-output and/or announced-edit-without-changes) — agent loop is stuck in exploration. Aborting retry loop."
                 : > "${RUNTIME_DIR}/codex_stuck_in_exploration.flag"
                 break
               fi
@@ -1294,7 +1329,7 @@ jobs:
             if [ -f "${RUNTIME_DIR}/codex_request_user_input.flag" ]; then
               diag_reason="Codex bailed: request_user_input rejected in exec mode (issue/plan ambiguity — route back to clarify)"
             elif [ -f "${RUNTIME_DIR}/codex_stuck_in_exploration.flag" ]; then
-              diag_reason="Codex bailed: ${empty_streak} consecutive empty-output attempts (agent loop stuck in exploration)"
+              diag_reason="Codex bailed: ${empty_streak} consecutive attempts with no actionable output (empty-output and/or announced-edit-without-changes — agent loop stuck in exploration)"
             fi
 
             diag_file="${RUNTIME_DIR}/codex_failure_diagnostics.md"
@@ -1348,12 +1383,45 @@ jobs:
                 # the model touched a credential-bearing file. The
                 # diagnostics post lands as a public GitHub issue
                 # comment, so we redact line-by-line before printing.
-                # Same redaction policy as the validator's offending-
-                # bytes block (`scripts/validate_changed_files_syntax.sh`):
-                # secret-like keys → "<redacted: secret-like key>",
-                # long opaque tokens → "<redacted: long opaque token>".
-                # Mirrors the policy keyword list verbatim — keep them
-                # in lockstep when adding new patterns.
+                #
+                # Two-rule policy, applied in order:
+                #   1. secret-like keys (line contains an identifier
+                #      like `*_secret`, `api_key`, `bearer_token`,
+                #      etc) → erase the whole line and emit
+                #      "<redacted: secret-like key>".
+                #   2. long opaque tokens (any contiguous run of
+                #      40+ chars from `[A-Za-z0-9+/=_-]`) → replace
+                #      *in place* with "<redacted: long opaque token>"
+                #      via `gsub`, leaving the surrounding line text
+                #      intact.
+                #
+                # Keyword list mirrors the validator's offending-bytes
+                # block (`scripts/validate_changed_files_syntax.sh`)
+                # verbatim — keep them in lockstep when adding new
+                # secret-name patterns.
+                #
+                # Marker text (`<redacted: secret-like key>` /
+                # `<redacted: long opaque token>`) also matches the
+                # validator's so operators see consistent strings
+                # across both paths. Only the *application* of the
+                # opaque-token rule diverges from the validator
+                # (inline `gsub` here vs full-line erase there): the
+                # validator's offending-bytes block is a single short
+                # snippet and erasing the whole snippet is acceptable;
+                # this redactor emits a 40-line stderr tail where
+                # erasing whole lines hid tool-invocation structure
+                # markers (`tool <name>(...)`, `exec`, `apply_patch`)
+                # and made it impossible to tell from the diagnostics
+                # whether the model invoked apply_patch at all (run
+                # 25206967321 issue #1860 diagnostics — every tool
+                # line collapsed to a single redaction marker). The
+                # inline-replacement form preserves the line shape,
+                # so post-mortem diagnostics can show the tool-call
+                # structure while still erasing token-shaped substrings
+                # inside arg/result bodies. The keyword detector above
+                # still erases entire lines that mention secrets by
+                # name, so credential-bearing lines remain fully
+                # redacted.
                 tail -n 40 "${a_log}" 2>/dev/null | awk '
                   {
                     line = $0
@@ -1362,10 +1430,7 @@ jobs:
                       print "<redacted: secret-like key>"
                       next
                     }
-                    if (match(line, /[A-Za-z0-9+\/=_-]{40,}/)) {
-                      print "<redacted: long opaque token>"
-                      next
-                    }
+                    gsub(/[A-Za-z0-9+\/=_-]{40,}/, "<redacted: long opaque token>", line)
                     print line
                   }
                 ' || printf '(empty log)\n'
