@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation\n- No Q1/Q2 clarification questions were issued in this thread.\n- `/answer [auto-answered-by-clarify]` and `/answer [auto-answered-by-orchestrator]` indicate the issue description is sufficient for planning.\n\nConflict detection\n- Requested command `gh issue list --label 'ai:*'` conflicts with current `gh` CLI behavior: `--label` expects exact label values, not wildcards. Implementation should use an equivalent approach (fetch JSON and filter labels starting with `ai:` via `jq`) to satisfy intent.\n- Prior failed plan targeted runtime-fetched template files (`scripts/`, `prompts/`); this plan avoids that and stays in `.github/workflows/orchestrate.yml` to ensure a real commit.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/orchestrate.yml`\n\n2. Functions/modules/steps to implement\n- Add a new workflow step before `Build Codex prompt` (after memory retrieval), e.g. `Gather existing AI inventory`.\n- In that step, create `${RUNTIME_DIR}/existing_inventory.txt` with three sections:\n- Open AI-managed issues: `gh issue list --repo \"${{ github.repository }}\" --state open --limit 50 --json number,title,labels`, then `jq` filter where any label starts with `ai:`.\n- Closed AI-managed issues: `gh issue list --repo \"${{ github.repository }}\" --state closed --limit 30 --json number,title,closedAt,labels`, then same label filter.\n- Active AI/Claude branches: `gh api \"repos/${{ github.repository }}/branches?per_page=100\"` filtered to names matching `^(ai|claude)/`.\n- Add graceful degradation for each data source: on failure, append marker text (for example `[inventory unavailable: <reason>]`) instead of failing orchestration.\n- Update `Build Codex prompt` so that after `=== PROJECT DESCRIPTION ===` + description text, it appends:\n- `=== EXISTING ISSUES & BRANCHES ===`\n- Contents of `${RUNTIME_DIR}/existing_inventory.txt` (or fallback marker if missing).\n\n3. Data structures affected\n- New runtime artifact: `${RUNTIME_DIR}/existing_inventory.txt` (plain-text inventory block).\n- Existing `${CODEX_PROMPT_FILE}` format extended with one additional section.\n- Temporary JSON payloads from `gh issue list` and `gh api` parsed by `jq`.\n\n4. API/interface changes\n- No `workflow_call` input/output or DAG interface changes.\n- Internal prompt contract change only: decomposer now receives `=== EXISTING ISSUES & BRANCHES ===`.\n- External API surfaces used:\n- `gh issue list --repo <owner/repo> --state open|closed --limit N --json ...`\n- `GET /repos/{owner}/{repo}/branches?per_page=100` via `gh api`\n\n5. Risks and edge cases\n- Wildcard label behavior mismatch can cause empty/incorrect inventory if not filtered explicitly.\n- Repos with no AI activity must still produce a non-empty inventory block via explicit \u201cnone found\u201d markers.\n- GitHub API/rate-limit/permission failures must degrade gracefully and not interrupt orchestration.\n- Prompt-size growth risk from long lists; enforce section caps (open 50, closed 30, bounded branch list) before writing file.\n\n6. Testing considerations\n- Validate workflow syntax (`actionlint`/YAML validation).\n- Smoke test with repo containing prior AI activity:\n- `existing_inventory.txt` is produced and non-empty.\n- `CODEX_PROMPT_FILE` contains `=== EXISTING ISSUES & BRANCHES ===` immediately after project description.\n- Inventory includes open `ai:` issues and `ai/` or `claude/` branches.\n- Degradation test by forcing one inventory command to fail and confirming marker text is emitted while workflow continues.\n- Regression check that downstream orchestration behavior (tracking issue creation, wave issue creation/dispatch) is unchanged except for added prompt context.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b7e6ec78b5cceb018cdf377e22cf446fcba720cdfbe36098d4ebf3450ed2861f",
+  "lineage": {
+    "issue_number": 842,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378234635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378234635",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/842"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025223_84633bd84b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 842,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378234635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #842",
+  "timestamps": {
+    "created_at": "2026-04-14T02:52:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

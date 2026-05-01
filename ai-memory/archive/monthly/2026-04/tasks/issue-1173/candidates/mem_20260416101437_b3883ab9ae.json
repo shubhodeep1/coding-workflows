@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `20eafd7794b5c71aa63b90759de1781d2a86c312`\n- `branch`: `orchestrator/project-1170`\n- Integration metadata branch: `orchestrator/project-1170`\n- Mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` items were issued in Clarify.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as confirmation to proceed with the original prompt-rewrite scope only.\n\nImplementation plan:\n\n1. Files likely to change\n- `prompts/mode-workflow-analysis.txt` (full rewrite, same file path retained)\n\n2. Functions/modules to implement or account for\n- No code-module implementation required.\n- Compatibility must be preserved with existing prompt consumers:\n  - `scripts/analyze_workflow_logs.py` (`DEFAULT_PROMPT_FILE`, `load_prompt_template`, `build_prompt_messages`)\n  - Existing workflow wiring that references the same prompt path.\n\n3. Data structures affected\n- Prompt template content only (instruction schema for report generation).\n- Required section heading order in generated report text:\n  - `## Executive Summary`\n  - `## Speed Optimizations`\n  - `## Cost Optimizations`\n  - `## Reliability Improvements`\n  - `## GH API Call Audit`\n  - `## MCP & Serena Efficiency`\n  - `## Prompt Cache & Memory System`\n  - `## Orchestrator Health`\n  - `## Pipeline Flow Bottlenecks`\n  - `## Per-Repo Breakdown`\n  - `## Metrics Appendix`\n- Preserve `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` placeholder for renderer compatibility.\n\n4. API/interface changes\n- No API, CLI, schema, workflow, or path changes.\n- Backward compatibility requirement: keep single prompt file path unchanged (`prompts/mode-workflow-analysis.txt`).\n\n5. Potential risks and edge cases\n- Risk: accidental removal/alteration of the Serena placeholder could break prompt rendering behavior.\n- Risk: section heading/order drift would violate acceptance criteria and downstream expectations.\n- Risk: dropping \u201cinsufficient data\u201d handling guidance may weaken behavior when telemetry is sparse.\n- Risk: adding guidance inconsistent with current operational constraints (e.g., suggesting external infra) would conflict with repo rules.\n\n6. Testing considerations\n- Run targeted analysis script invocation using existing input fixture/data to ensure prompt loads and report generation succeeds.\n- Validate output includes all required headings in exact order.\n- Verify prompt still yields concrete, evidence-oriented recommendations for speed, cost, reliability, GH API efficiency, MCP/Serena efficiency, cache/memory effectiveness, orchestrator health, and bottlenecks.\n- Confirm no non-prompt files changed.\n\nConflict detection:\n- No factual conflicts found between issue scope and repository wiring.\n- Issue requirement \u201cprompt-only, keep same path\u201d matches current implementation references.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "05ef1dfa3d158eda3ccfa61b3f070c0f7bb07db6ec5337b3ce32adb4c5c66374",
+  "lineage": {
+    "issue_number": 1173,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24504540426",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24504540426",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1173"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416101437_b3883ab9ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1173,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24504540426"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1173",
+  "timestamps": {
+    "created_at": "2026-04-16T10:14:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

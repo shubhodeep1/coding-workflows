@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context\n- `git rev-parse HEAD`: `f549f88c21e21c1155839e1e76e08dbe2d450093`\n- Checked-out branch: `orchestrator/project-1299`\n- Integration metadata branch: `orchestrator/project-1299`\n- Integration mismatch: `false` (planning can proceed)\n\nClarification mapping\n- No Q1/Q2 were asked in Clarify.\n- `/answer [auto-answered-by-orchestrator]` confirms continuation with current scope.\n\nRepresentative implementation pattern to follow\n- `scripts/build_issue_consensus.py`: tolerant parsing + deterministic output + explicit fail-open behavior.\n- `tests/test_merge_probe.py` and `tests/test_detect_editor_changes_lost.py`: existing pattern for script-oriented tests and stability checks.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/review_floor_rules.sh` (new): deterministic floor-rule classifier.\n- `tests/test_review_floor_rules.py` (new): unit tests for rules, malformed input, schema stability, determinism.\n- `tests/fixtures/review_pipeline/` (new fixture files): reviewer bundle samples and expected outputs for positive/negative cases.\n\n2. Functions/modules to implement\n- Module: `scripts/review_floor_rules.sh`\n- Implement input/output contract: read `reviewer_bundle.txt`, write `floor_tags.txt` (always produce file, even on error).\n- Implement parser for current bundle structure from `review_apply_fixes.sh`: `FILE_PATH`, `BYTES`, `SHA256`, `CONTENT_START`, `CONTENT_END`.\n- Implement finding anchor extraction from reviewer text using existing reviewer report conventions (`File:`, `Line or code reference:` / `Code:` and line parsing).\n- Implement Rule 1: multi-reviewer agreement on same `file:line` with documented tolerance `\u00b13` lines, tag `FLOOR_MULTI_REVIEWER`.\n- Implement Rule 2: severity keyword floor using built-in keyword categories, emit `FLOOR_CRITICAL_KEYWORD:<category>`.\n- Implement Rule 3: high-confidence floor for `ISSUE_CONFIDENCE` max confidence forms, emit `FLOOR_HIGH_CONFIDENCE`.\n- Implement optional keyword override via `REVIEW_FLOOR_KEYWORDS_FILE`; fallback to built-in list when missing/unreadable.\n- Implement deterministic writer: stable sorted output and stable tag ordering.\n- Implement fail-open wrapper: on any internal failure, emit empty valid `floor_tags.txt`, exit success path, and log machine-readable warnings.\n\n3. Data structures affected\n- New runtime artifact schema: `floor_tags.txt` lines:\n  - `<file>:<line>\\t<FLOOR_TAG>[,<FLOOR_TAG>...]\\t<reviewer_id>\\t<excerpt<=240 chars>`\n- In-script structures (associative arrays / awk maps):\n  - Anchor key map for `(normalized_file, line)` and tolerance matching windows.\n  - Reviewer sets per anchor for Rule 1 distinct-reviewer counting.\n  - Tag aggregation per finding (multi-tag additive behavior).\n  - Keyword catalog grouped by category for Rule 2.\n- No persistence changes, no DB contracts/indexes, no workflow state schema changes in this issue.\n\n4. API or interface changes\n- New script entrypoint: `scripts/review_floor_rules.sh`.\n- New optional env contract consumed by script: `REVIEW_FLOOR_KEYWORDS_FILE`.\n- No workflow wiring changes in this issue (explicitly deferred).\n- No renames/removals of existing identifiers or artifacts.\n\n5. Potential risks and edge cases\n- Bundle format drift risk: parser must strictly tolerate noise and missing sections without hard-failing.\n- Anchor extraction ambiguity: reviewer outputs may use different line reference forms; parser should accept multiple known forms and skip unverifiable anchors.\n- Tolerance collisions: nearby but different findings could merge under `\u00b13`; keep logic file-scoped and reviewer-distinct to reduce false joins.\n- Keyword false positives: substring matching can over-trigger; mitigate with canonical lowercase matching and category-scoped keyword list.\n- Confidence parsing variance: support `5`, `5/5`, and equivalent textual max-confidence forms without broad overmatching.\n- Determinism risk from shell map iteration: always sort before emitting.\n- Fail-open correctness: script errors must still create valid empty output artifact and log structured warnings (`stage=floor_rules ...`) without non-zero pipeline stop behavior.\n\n6. Testing considerations\n- Add `tests/test_review_floor_rules.py` cases for:\n  - Rule 1 positive: same file/line across >=2 reviewers.\n  - Rule 1 tolerance boundary: `+3/-3` matches, `+4/-4` does not.\n  - Rule 2 positive per major category and negative non-matches.\n  - Rule 3 positive for max-confidence forms and negative for lower confidence.\n  - Multi-tag additive behavior on one finding.\n  - Output schema stability: exactly 4 tab-separated fields; tags comma-separated; excerpt truncation at 240 chars.\n  - Determinism: identical input run twice produces byte-identical output.\n  - Malformed/partial bundle handling: no crash, valid empty output if needed.\n  - Missing override keyword file fallback: built-ins still used and warning emitted.\n  - Unknown/garbled findings: skipped safely, script remains fail-open.\n- Keep tests unit-level and fixture-driven; no workflow integration assertions in this issue.\n\nConflict detection\n- No factual conflicts found between the issue request and current codebase.\n- Clarified from repo docs: \u201cdocumented tolerance\u201d for Rule 1 is `\u00b13` lines in `docs/review-pipeline-improvements.md`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c3c3acc8db5ecb81a089e2f2d0468c95b46aab73d6dee72cfa14f286cb5139f4",
+  "lineage": {
+    "issue_number": 1300,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24599615649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24599615649",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1300"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418072535_f807bd0ef7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1300,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24599615649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1300",
+  "timestamps": {
+    "created_at": "2026-04-18T07:25:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

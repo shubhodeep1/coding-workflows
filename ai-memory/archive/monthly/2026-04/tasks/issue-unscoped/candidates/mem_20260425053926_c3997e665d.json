@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1797-1801 | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The grep check for \"Missing validation/validate.env\" can never match because nothing writes that message to PRE_FLIGHT_LOG_FILE.\n  WHY: The check is dead code and later reviewers noted the missing-validate.env path is intentional/optional, so the grep is inert.\n- scripts/implement_diagnose_post_codex_failure.sh:124-126 | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The jq expression can fail when `.jobs` is null or not an array.\n  WHY: The fallback only covers empty JSON, so malformed GitHub API output can still trigger a jq null-iteration error; later reviewers disputed the impact because downstream handling degrades to `unknown-step`.\n- .github/workflows/validate.yml:520-529 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: Python dependencies are installed even when `VALIDATION_USE_TEMPLATES=false`.\n  WHY: The old guard avoided that work, so the new step does unnecessary installs; later reviewers argued this is intentional because template mode is now the only supported path.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:1799 | confidence=5\n  PROBLEM: Dead code - grep check for \"Missing validation/validate.env\" will never match because nothing writes that message to PRE_FLIGHT_LOG_FILE.\n  WHY: The check is ineffective and can mask real issues if validate.env is actually missing but not reported.\n- scripts/implement_diagnose_post_codex_failure.sh:124-126 | confidence=4\n  PROBLEM: jq expression will fail if .jobs is null or not an array, causing the script to potentially fail or produce incorrect results.\n  WHY: If GitHub API returns unexpected JSON structure, the script will throw an error on `.jobs[]`.\n- .github/workflows/validate.yml:520-529 | confidence=3\n  PROBLEM: Python dependencies are always installed when renderer exists, even if VALIDATION_USE_TEMPLATES=false (script exits early).\n  WHY: This is wasteful because the dependencies are installed but not used.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:1799 | confidence=4\n  PROBLEM: The grep check `grep -Fq \"Missing validation/validate.env\" \"${PRE_FLIGHT_LOG_FILE}\"` will never match because the echo statement that wrote this string was removed in the same diff (line 314 shows `- echo \"Missing validation/validate.env\" >> \"${PRE_FLIGHT_LOG_FILE}\"`).\n  WHY: This dead code will never trigger the \"missing_validation_artifact\" failure classification path, making the grep check inert.\n- .github/workflows/validate.yml:520-529 | confidence=3\n  PROBLEM: The new code unconditionally installs Python dependencies if `scripts/render_validation_templates.py` exists, regardless of the `VALIDATION_USE_TEMPLATES` setting. The old code checked `VALIDATION_USE_TEMPLATES` before installing.\n  WHY: When `VALIDATION_USE_TEMPLATES=false` is explicitly set (which now returns `harness_error`), the workflow still installs pyyaml/jsonschema/jinja2 unnecessarily, wasting compute time.\n- scripts/implement_diagnose_post_codex_failure.sh:124-126 | confidence=3\n  PROBLEM: The empty JSON fallback `'{\"jobs\":[]}'` handles the case where `FAILED_STEP_JOBS_JSON` is empty, but does not handle malformed JSON where `.jobs` is `null` instead of an array (e.g., `{\"jobs\": null}`). The jq filter `[.jobs[].steps[]...]` will fail when trying to iterate over `null`.\n  WHY: If the GitHub API returns `{\"jobs\": null}` or any non-array value for `.jobs`, the jq expression throws a null-iteration error.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:1799 | confidence=5\n  PROBLEM: The grep check for `\"Missing validation/validate.env\"` at line 1799 is dead code.\n  WHY: No code ever writes `\"Missing validation/validate.env\"` to `PRE_FLIGHT_LOG_FILE`, and the template-mode harness only checks for `docker-compose.test.yml` and `tests/00_canary.sh`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/validate_process.sh:1797-1801 | confidence=4\n  PROBLEM: The grep check for `\"Missing validation/validate.env\"` can never match because the code that would write this message to `PRE_FLIGHT_LOG_FILE` was removed.\n  WHY: This is dead code that wastes a negligible amount of CPU cycles and could confuse future maintainers who might wonder why this check exists but nothing writes the corresponding message.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a601302da323e2382100ecb73eb2ad30481896f0da44c8ce239198fa64cb4855",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24923431575",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24923431575",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260425053926_c3997e665d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24923431575"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-25T05:39:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

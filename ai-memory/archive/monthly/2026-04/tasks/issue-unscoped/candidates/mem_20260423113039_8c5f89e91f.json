@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:181-196 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` documentation is contradictory and still misstates the removed freehand fallback and default behavior.\n  WHY: Line 184 still says non-truthy values fall through to freehand Codex generation in one place while another entry says `VALIDATION_USE_TEMPLATES=false` returns `raw_status=harness_error`, and the later \"defaults to true\" wording also needed `.github/workflows/validate.yml` unset handling clarified.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md:184-196 | severity=critical | confidence=5\n  PROBLEM: Autofix introduced contradictory and incorrect documentation about `VALIDATION_USE_TEMPLATES` env variable.\n  WHY: Line 184 misstates the default and says non-truthy values fall through to freehand generation, while line 196 says `VALIDATION_USE_TEMPLATES=false` returns `raw_status=harness_error` because freehand generation was removed.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3_1-pro-preview ===\n- agents.md:181-196\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` documentation was contradictory.\n  WHY: Line 184's freehand fallback claim conflicted with line 196's `raw_status=harness_error` behavior.\n- agents.md:196\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` default wording was imprecise.\n  WHY: The later \"defaults to true\" phrasing needed the `.github/workflows/validate.yml` unset handling clarified.\n=== END FINDINGS FROM google_gemini-3_1-pro-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:184 (original entry) and 196 (superseding entry) | severity=critical | confidence=5\n  PROBLEM: Documentation contradiction in `agents.md` for `VALIDATION_USE_TEMPLATES`.\n  WHY: `agents.md` says non-truthy values fall through to freehand Codex generation at the earlier entry, but the superseding entry says `VALIDATION_USE_TEMPLATES=false` returns `raw_status=harness_error` because freehand generation was removed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:184 and 196 | severity=critical | confidence=5\n  PROBLEM: Critical documentation contradiction in `agents.md`.\n  WHY: line 184 says non-truthy values fall through to freehand Codex generation while line 196 says `VALIDATION_USE_TEMPLATES=false` returns `raw_status=harness_error`.\n- agents.md:184\n  PROBLEM: Stale documentation entry superseded but not removed.\n  WHY: The LAST RUN DIFF re-words line 184 to re-introduce outdated \"non-truthy values fall through to freehand Codex generation\" language while simultaneously adding a \"superseding\" entry at line 196 that correctly states the opposite behavior.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6b4cb8ff678f1d0a201599a35ab6712d2176cb7bd03e92aec8ee9d7c77f64142",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1540,
+    "run_id": "24830885596",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24830885596",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423113039_8c5f89e91f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1540,
+    "run_id": "24830885596"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T11:30:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

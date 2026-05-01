@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning context interpreted\n- Clarification mapping: no `Q<ID>` questions existed; `/answer [auto-answered-by-orchestrator]` confirms proceeding with the issue scope as written.\n- Ref context: `HEAD=58f752b7ff161903029e5b035a9d90e852de3685`, checkout ref `orchestrator/project-1170`, integration metadata `orchestrator/project-1170`, mismatch `false`.\n\nRepresentative implementation patterns to follow\n- `.github/workflows/test-and-mark-stable.yml` for `gh workflow run` dispatch + inactivity-based polling (`gh_api_safe`, run-id capture, timeout reset on progress).\n- `scripts/orchestrate_poll_process.sh` (`extract_comprehensive_release_metadata`) for callback metadata parsing contract.\n- `tests/test_workflow_checkout_integration_ref_audit.py` for checkout@v5 workflow classification requirements.\n\nConflict notes\n- `docs/comprehensive-test-and-release-plan.md` describes broader changes (collector/analyzer/poller), but this issue scope is intentionally narrower; implementation should stay within requested files.\n- Poller callback currently parses `version_tag:` / `test_repo:` key-value lines, not JSON-only metadata. The new metadata comment must include parser-compatible key-value lines for callback consumption without changing poller core logic.\n\nChecklist (mapped to issue scope)\n- [ ] Add `.github/workflows/comprehensive-test-and-release.yml` with required `workflow_dispatch` inputs.\n- [ ] Implement Phase 1 dispatch/poll for `test-and-mark-stable.yml` with inactivity timeout.\n- [ ] Implement Phase 2 dispatch/poll for `workflow-log-analysis.yml` (`codex_mode=true`), safe timestamp update, commit only on change.\n- [ ] Implement Phase 3 dispatch for `internal-orchestrate.yml` with report-linked description, then deterministically tag tracking issue and post metadata comment.\n- [ ] Add seed file `analysis/last_collection_timestamp.txt`.\n- [ ] Update checkout-audit classification test if new workflow uses `actions/checkout@v5`.\n\nFiles likely to change\n- `.github/workflows/comprehensive-test-and-release.yml` (new)\n- `analysis/last_collection_timestamp.txt` (new)\n- `tests/test_workflow_checkout_integration_ref_audit.py` (allowlist update if checkout@v5 is used)\n\nFunctions/modules to implement\n- New workflow job `phase1-first-pass-test`:\n  - Dispatch `test-and-mark-stable.yml` with `dry_run=true`, optional `version_tag`/`test_repo`.\n  - Poll run status with inactivity timeout (`phase_timeout`) and rate-limit-safe API handling.\n- New workflow job `phase2-collect-and-analyze-logs`:\n  - Read `analysis/last_collection_timestamp.txt` safely; if missing/invalid, use `lookback_days_fallback`.\n  - Dispatch `workflow-log-analysis.yml` with `codex_mode=true` and `since`/`lookback_days`.\n  - Poll to completion with inactivity timeout.\n  - Update `analysis/last_collection_timestamp.txt` with UTC ISO-8601 timestamp and commit/push only if file content changed.\n- New workflow job `phase3-dispatch-orchestrator`:\n  - Resolve latest analysis report path committed under `analysis/`.\n  - Dispatch `internal-orchestrate.yml` with report-linked `project_description`.\n  - Deterministically identify the newly created tracking issue (pre/post snapshot of `ai:orchestrator-tracking` issue set; fail on ambiguity instead of guessing).\n  - Ensure `ai:comprehensive-test-pending` label exists, apply it, and post metadata comment containing parser-compatible lines (`version_tag`, `test_repo`) plus run context.\n- Audit test update:\n  - If checkout@v5 is present in the new workflow, add `comprehensive-test-and-release.yml` to `ALLOWLIST_EXCEPTIONS` with rationale.\n\nData structures affected\n- `analysis/last_collection_timestamp.txt`: single-line UTC ISO-8601 timestamp.\n- Tracking issue metadata comment: machine-readable key/value lines consumed by existing callback parser.\n- Workflow step outputs/env: dispatched run ids, resolved report path, detected tracking issue number.\n\nAPI/interface changes\n- New manual workflow inputs:\n  - `version_tag` (string)\n  - `test_repo` (string)\n  - `phase_timeout` (number)\n  - `lookback_days_fallback` (number)\n- No changes to existing workflow APIs or poller/orchestrator core interfaces.\n\nPotential risks and edge cases\n- Run matching ambiguity when multiple workflow runs start concurrently; mitigate with created-after timestamp + uniqueness checks.\n- GitHub API rate limiting during polling/tagging; mitigate with safe API wrapper + backoff.\n- Timestamp commit races vs. report commit from `workflow-log-analysis`; mitigate with fetch/rebase before push.\n- Ambiguous tracking issue detection if multiple new tracking issues appear; fail explicitly instead of tagging wrong issue.\n- Invalid/empty `version_tag` or `test_repo`; preserve callback compatibility by emitting sanitized or blank values.\n\nTesting considerations\n- Run `python3 tests/test_workflow_checkout_integration_ref_audit.py`.\n- Run workflow linting (`yamllint`, `actionlint`) to validate new YAML.\n- Manual workflow_dispatch dry run to verify:\n  - Phase 1 and Phase 2 polling behavior and timeout handling.\n  - Timestamp file update and \u201ccommit only when changed\u201d behavior.\n  - Deterministic tracking issue tagging + metadata comment attachment after orchestrator dispatch.\n- Confirm no MongoDB contract or index impact (none expected).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "657683e7f26e80e8da18800917b186cca7669a87120988558f4a3db5a89e8ae7",
+  "lineage": {
+    "issue_number": 1214,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24520030550",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24520030550",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1214"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416155904_240ad1e219",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1214,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24520030550"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1214",
+  "timestamps": {
+    "created_at": "2026-04-16T15:59:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

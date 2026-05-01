@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 10\nIssues with multi-reviewer agreement: 4\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: Lines: 1507-1509; The workflow step comment says \"Commit-time touched-file detection now derives from live git diff HEAD state (plus untracked files)\" but omits the staged-add capture (`git diff --cached --diff-filter=A --name-only HEAD`) that was added in this PR. This documentation drift may mislead future maintainers into believing that staged-add detection is redundant.; No immediate failure, but if someone later removes the staged-add line based on the incomplete comment, the AD-state regression (staged add + worktree delete) will return, causing editor-created files to be dropped from commits.; Issue 2\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: Location: Lines 1507-1509; Issue: Comment inaccuracy - doesn't mention staged-addition detection; Suggested minimal fix: Update comment to accurately reflect all three detection sources:; # Commit-time touched-file detection derives from:; #   - git diff HEAD (modified files in working tree); #   - git diff --cached --diff-filter=A (new staged additions); #   - git ls-files --others (untracked files); Estimated lines changed: 4; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 1693; Issue: Pathspec for untracked files only excludes top-level node_modules; Suggested minimal fix: Change `-- ':!node_modules'` to `-- ':!node_modules' ':!**/node_modules'` to ensure nested directories are also excluded by git.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 1707; Issue: Case statement doesn't exclude nested node_modules; Suggested minimal fix: Change `node_modules|node_modules/*)` to `node_modules|node_modules/*|*/node_modules|*/node_modules/*)`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [5] File: .github/workflows/review_autofix.yml\n      Problem: `-- ':!node_modules'` pathspec excludes top-level node_modules but not nested `*/node_modules/*` directories. Nested node_modules directories could appear in touched files list.; In a monorepo or project with nested node_modules directories, editor-touched files under nested node_modules could be included in commits unless filtered by other protections.\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: .github/workflows/review_autofix.yml\n      Problem: Case statement pattern `node_modules|node_modules/*` doesn't exclude nested `*/node_modules|*/node_modules/*` directories. Files under nested node_modules that pass through the touched-file detection won't be skipped.; If a nested node_modules file appears in the touched list (e.g., via `git diff --name-only HEAD` for a modified file), it won't be skipped by the case statement and could be added to the commit.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: .github/workflows/review_autofix.yml\n      Problem: Location: Lines 1691-1693; Issue: Error suppression (`|| true`) hides git command failures; Suggested minimal fix: Add warning logging for git command failures: Change `|| true` to `|| { echo \"::warning::git command failed: exit code $?\"; true; }` for critical detection commands; Estimated lines changed: 3; HARDENING_RISK_SCORE: 1; The PR's core change simplifies touched file detection correctly and addresses the original issue (#1322 post-mortem) where files already dirty at snapshot time were incorrectly classified as unchanged. The addition of `git diff --cached --diff-filter=A` correctly handles the AD state edge case.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [8] File: .github/workflows/review_autofix.yml\n      Problem: The `case` statement pattern `node_modules|node_modules/*` only excludes top-level `node_modules`.; If the editor creates or modifies files within a nested `node_modules` directory (e.g., inside a subdirectory or a package), these files will be captured by `git ls-files --others` and will NOT be skipped by this `case` statement. This results in unintended `node_modules` content being staged and committed to the repository.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [9] File: .github/workflows/review_autofix.yml\n      Problem: Lines: 1706-1708; The case statement `node_modules|node_modules/*` excludes only node_modules paths at the repository root. Nested node_modules paths (e.g., `packages/foo/node_modules/bar`) are not matched and therefore not skipped.; A nested node_modules file can enter the touched list either as an untracked file (if the repository lacks a recursive node_modules ignore) or as a modified tracked file (if nested node_modules are tracked). Because the case statement does not match it, the `git add` path will stage the file, causing node_modules to be committed. This undermines the intended node_modules guard and risks leaking dependencies.; HARDENING_SUGGESTIONS:; HARDENING_RISK_SCORE: 1 (minor improvement)\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [10] File: .github/workflows/review_autofix.yml\n      Problem: Location: line 1707; Issue: The case pattern should robustly exclude node_modules at any directory depth.; Suggested minimal fix: Replace the pattern with a substring match that catches any path containing \"/node_modules/\". For example, use:; case \"${touched_path}\" in; *node_modules*) continue ;;; This matches nested occurrences (e.g., `packages/foo/node_modules/bar`) while remaining simple. The risk of a false positive (a legitimate file whose path contains the substring \"node_modules\") is extremely low.; Estimated lines changed: 1; (Note: The same concern applies to the pathspec on line 1693, but git pathmatch patterns cannot reliably exclude arbitrary nesting with a single pattern; the case statement is the effective final guard. Adding a comment to explain the defense-in-depth approach would also help maintainability.)\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "6b98f1a01a398d2ff7cfc119044c4873e5df017e31972cce7087a672af613f32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1335,
+    "run_id": "24612727852",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24612727852",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418202037_b2a24cfc95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1335,
+    "run_id": "24612727852"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T20:20:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

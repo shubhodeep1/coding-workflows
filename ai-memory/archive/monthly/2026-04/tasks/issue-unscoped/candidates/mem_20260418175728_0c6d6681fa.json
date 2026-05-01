@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 8\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: The `PRE_EDITOR_STATE_FILE` snapshot creation logic is still present but its output is no longer consumed by the \"Commit changes\" step.; This is dead code that performs expensive file I/O and SHA hashing on every tracked file in the repository (potentially thousands of files) for a snapshot that is never used. It increases execution time and resource usage without any benefit.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: The merge conflict resolver (\"codex_touched_resolver\" logic) still uses the old snapshot-comparison algorithm that the PR's main change correctly identified as flawed.; The PR intent was to fix a \"critical flaw\" where files already dirty before a snapshot were incorrectly excluded from commits. The resolver path remains vulnerable to this exact bug: if `git merge` or a pre-resolver script modifies a file, the snapshot captures that dirty state as the baseline. If the resolver then modifies it further, the hash comparison against the dirty baseline may fail to detect the change if the resolver happens to restore parts of the file or if the baseline was caught mid-mutation. It also maintains inconsistent logic between the \"Apply fixes\" and \"Resolve conflicts\" paths.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Using `git diff --name-only HEAD` captures all working tree modifications relative to HEAD, including side-effects from the \"Reviewer\" pass or diagnostic scripts.; The original logic (lines 1500-1509 comments) was designed to commit ONLY files the editor actually wrote to. By using `git diff HEAD` as the new baseline, any file modified by a Reviewer script (e.g., for logging, temporary state, or diagnostic output) that happens to be present in the working tree when the Editor finishes will now be staged and committed as if it were an intentional AI fix. This re-introduces the risk of \"unrelated files riding along in the commit\" which the snapshot logic was specifically meant to prevent.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: Location: 1725; Issue: Shell redirection to `CODEX_TOUCHED_FILE` could fail silently if the disk is full or permissions are restricted, leading to an incomplete file list.; Suggested minimal fix: `git diff --name-only HEAD > \"${CODEX_TOUCHED_FILE}\" || { echo \"::error::Failed to detect touched files\"; exit 1; }`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: .github/workflows/review_autofix.yml (line ~1500)\n      Problem: Dead code \u2014 the pre-editor snapshot (PRE_EDITOR_STATE_FILE) is captured and exported but is no longer consumed by any logic. The autofix path now uses `git diff --name-only HEAD`. The comment above the block incorrectly claims the commit step uses this snapshot.; No functional failure, but every autofix run wastes compute hashing all tracked files and writing the snapshot, increasing latency and resource usage. The stale comment risks future maintainer confusion and potential regression.; ISSUE 2\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [6] File: .github/workflows/review_autofix.yml (line ~2922)\n      Problem: The resolver still uses the old snapshot-based detection approach that the PR explicitly replaced in the autofix path due to a critical mis-classification bug (PR #1322). This leaves the resolver vulnerable to the same failure mode where files already dirty at snapshot time could be incorrectly treated as unchanged and dropped from the merge-resolve commit.; If the resolver modifies a file whose pre-snapshot state somehow aligns with the post-resolver hash (the same condition that doomed the autofix path), that file's changes would be omitted from the [ai-merge-resolve] commit, reproducing lost-work bugs similar to PR #1322.; ISSUE 3\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [7] File: .codex-workflow-src-main/.github/workflows/review_autofix.yml (line ~1507)\n      Problem: This template copy was not updated to the simplified `git diff HEAD` approach at all. It still creates and consumes PRE_EDITOR_STATE_FILE for both autofix and resolver, meaning it carries the same flaws the PR fixes elsewhere.; When this copy is used (e.g., during distribution or internal runs), the buggy snapshot logic remains active, exposing runs to the same file-dropping bug. The repository now contains inconsistent workflow definitions, increasing maintenance risk.; ISSUE 4\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [8] File: .codex-workflow-src/.github/workflows/review_autofix.yml (line ~1507)\n      Problem: Although this copy\u2019s autofix path already uses `git diff HEAD`, the dead snapshot creation code is still present, mirroring the primary workflow\u2019s waste.; Unnecessary snapshot I/O and hashing add latency to every run on the workflow source repo where this copy is exercised. Stale comment also misdocuments behavior.; HARDENING_SUGGESTIONS:; None within the 10-line scope per suggestion; the correct fixes are the cleanups listed above (remove dead snapshot blocks, update outdated comments, and align .codex-workflow-src-main with the simplified logic).\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.codex-workflow-src-main/.github/workflows/review_autofix.yml\n.codex-workflow-src/.github/workflows/review_autofix.yml\n.github/workflows/review_autofix.yml",
+  "fingerprint": "062c10d929ed435e25d6df9cfde7f0fefbdfebf753c97017e86c5e09d68458c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1335,
+    "run_id": "24610120685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24610120685",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418175728_0c6d6681fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1335,
+    "run_id": "24610120685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T17:57:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

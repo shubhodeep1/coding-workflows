@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No pending clarification Q-items were issued.\n- `/answer [auto-answered-by-orchestrator]` confirms planning can proceed with the issue requirements as written.\n\nImplementation plan:\n\n1. Files likely to change\n- `tests/test_implement_post_codex_recovery.py` (only `test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid`, around lines 859-893).\n\n2. Functions/modules to implement\n- Update assertions inside `test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid` to match current fallback label behavior.\n- Keep this as a test-only change; do not modify `.github/workflows/implement.yml`.\n\n3. Data structures affected\n- Test expectations for mocked GitHub issue creation payload:\n- `created_issues[0][\"args\"]` label flags (`--label` occurrences and label values).\n- Existing contract to preserve: `created[\"args\"].count(\"--label\") == 2`.\n- Expected labels: `ai:clarification` and `ai:implement-fix-up`.\n\n4. API/interface changes\n- None. No runtime behavior changes, no workflow interface/env var changes, no DB contract/index impact.\n\n5. Potential risks or edge cases\n- Risk of a false-positive test if only presence checks are used and extra labels are added in future.\n- Mitigation in test logic: assert both intended labels and keep `--label` count at `2` so the test enforces the exact pair.\n- Keep assertions order-insensitive (labels may appear in either order in CLI args).\n\n6. Testing considerations\n- Run targeted test file exactly as CI/local repro uses:\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py`\n- Confirm zero failures in this file.\n- Optionally run the corresponding CI lint job path to verify no regression in `Implement post-Codex recovery unit tests`.\n\nConflict check against codebase:\n- No factual conflict found.\n- Current workflow logic in `.github/workflows/implement.yml` creates fallback issues with `ai:clarification` + `ai:implement-fix-up` labels, so the existing test assertion for `ai:orchestrator-managed` is outdated.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "018a19cf3f6e74c7ab7a1a0e297ded44492bdd6d26a5cb882923473b879abc08",
+  "lineage": {
+    "issue_number": 1131,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24485030972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24485030972",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1131"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416001657_77d5df6191",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1131,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24485030972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1131",
+  "timestamps": {
+    "created_at": "2026-04-16T00:16:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

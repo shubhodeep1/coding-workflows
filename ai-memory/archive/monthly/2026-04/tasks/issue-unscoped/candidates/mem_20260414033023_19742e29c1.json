@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nscripts/extract_db_contracts.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/implement.yml\n.github/workflows/implement.yml",
+  "fingerprint": "a3618f0f127b3213f0f9dcbbd5bbe2c69fc0d004e022d7881d499cd13026dbaf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 852,
+    "run_id": "24379155317",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379155317",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414033023_19742e29c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 852,
+    "run_id": "24379155317"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T03:30:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

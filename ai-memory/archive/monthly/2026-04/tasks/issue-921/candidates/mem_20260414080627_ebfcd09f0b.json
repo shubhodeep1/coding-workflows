@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: For phases that use `codex exec` (not direct `curl` to OpenRouter), what is the required behavior if explicit request-body `cache_control` injection is not exposed by Codex CLI?**\nChoices:\n- **A** \u2014 Keep `codex exec` architecture unchanged; implement cache-friendly static-prefix ordering + kill switch + cache usage telemetry extraction where available, and add explicit `cache_control` only in direct OpenRouter API calls that exist. **(RECOMMENDED)**\n- **B** \u2014 Refactor phase model calls from `codex exec` to direct OpenRouter HTTP calls so `cache_control` can always be injected explicitly.\n- **C** \u2014 Block rollout for those phases unless explicit `cache_control` injection is guaranteed end-to-end.\nReply: `Q1: A`\n**Q2: How should the `review_autofix` acceptance check be made deterministic for `cache_read_input_tokens > 0` in the \u201csecond reviewer model call\u201d requirement?**\nChoices:\n- **A** \u2014 Add a dedicated cache-verification path that performs two consecutive calls with the same reviewer model in one cycle (telemetry-only), while keeping normal reviewer cascade behavior unchanged. **(RECOMMENDED)**\n- **B** \u2014 Keep current mixed reviewer fan-out unchanged and treat the requirement as best-effort (no deterministic guarantee).\n- **C** \u2014 Change acceptance to require cache-read evidence from any repeated same-model call in any covered phase, not specifically reviewer fan-out.\nReply: `Q2: A`",
+  "fingerprint": "0de5fcd641838d4dba9c11bbee9a9d9ca33f20ab7685f80c6a50282984469723",
+  "lineage": {
+    "issue_number": 921,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24387945611",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24387945611",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414080627_ebfcd09f0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 921,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24387945611"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #921 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T08:06:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

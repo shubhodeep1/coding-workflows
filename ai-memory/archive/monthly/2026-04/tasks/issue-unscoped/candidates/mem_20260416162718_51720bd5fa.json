@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/comprehensive-test-and-release.yml\nscripts/ai_memory.py\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/comprehensive-test-and-release..yml",
+  "fingerprint": "f58aaf1572dcc5f77ccd268f381420af24213d0effc6e9a10bc1744f8f4af39d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1220,
+    "run_id": "24520972314",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24520972314",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416162718_51720bd5fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1220,
+    "run_id": "24520972314"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T16:27:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

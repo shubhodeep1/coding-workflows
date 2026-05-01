@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No clarification QIDs were generated.\n- `/answer [auto-answered-by-clarify]` was auto-posted, so planning proceeds with no pending user decisions.\n\nFactual conflicts detected:\n- The issue says [`scripts/orchestrate_poll_process.sh`](scripts/orchestrate_poll_process.sh) already reads `ENABLE_STALL_HUMAN_TERMINALIZATION` and forwards `--allow-human-terminalization`; current code has no occurrences of that env var or flag.\n- The issue says docs already advertise the variable; current [`README.md`](README.md) and [`agents.md`](agents.md) do not contain it.\n- Plan includes reconciliation so acceptance criteria can still be met.\n\nImplementation plan:\n\n1. Files likely to change\n- [`.github/workflows/orchestrate_poll.yml`](.github/workflows/orchestrate_poll.yml)\n- New workflow-contract regression test (patterned after existing workflow-string tests): [`tests/test_review_autofix_reasoning_schedule.py`](tests/test_review_autofix_reasoning_schedule.py) as representative; likely new file under `tests/` for orchestrate poll env mapping.\n- If conflict-confirmed during implementation (likely): [`scripts/orchestrate_poll_process.sh`](scripts/orchestrate_poll_process.sh), [`scripts/orchestrate_lib.py`](scripts/orchestrate_lib.py), [`tests/test_orchestrate_lib.py`](tests/test_orchestrate_lib.py), [`tests/test_orchestrate_poll_process.py`](tests/test_orchestrate_poll_process.py).\n- Docs only if behavior surface must be documented/restored: [`README.md`](README.md), [`agents.md`](agents.md).\n\n2. Functions/modules to implement or adjust\n- Workflow env contract in `Process each tracking issue` step: add `ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}`.\n- Add regression assertion that required stall-control env mappings exist in reusable workflow YAML (lightweight static contract test).\n- Reconcile stall logic gap if needed:\n  - Shell normalization + pass-through in poller script.\n  - `check-stalls` parser/argument plumbing in `orchestrate_lib.py`.\n  - Stall recovery action resolution to honor allow/deny human terminalization compatibility mode.\n\n3. Data structures affected\n- GitHub Actions job `env` map for orchestrate poll step.\n- Poller runtime env->normalized boolean flags.\n- Optional `check-stalls` CLI argument set and stall-detection decision inputs.\n- No MongoDB collections/contracts affected.\n\n4. API/interface changes\n- Exposed operational interface: repository variable `ENABLE_STALL_HUMAN_TERMINALIZATION` becomes effective at runtime via reusable workflow.\n- Backward compatibility target: unset variable preserves default behavior (`false`), explicit `true` toggles behavior.\n- No external API endpoint changes.\n\n5. Risks and edge cases\n- Boolean parsing drift (`true/false`, mixed case) between Actions env, shell normalization, and Python parsing.\n- Contract-test brittleness if assertions are too formatting-specific; assert semantic key/value presence.\n- Regression risk in existing stall ladders (`escalate_human`, `run_stall_judge`, max-recovery skip) if compatibility gate is added.\n- Potential doc/code mismatch if variable remains undocumented after behavior is restored.\n\n6. Testing considerations\n- Add dedicated regression test that fails if orchestrate poll workflow omits required stall env mapping.\n- If logic reconciliation is required, add/extend:\n  - `orchestrate_lib` unit tests for `check-stalls` argument forwarding and action selection with gate on/off.\n  - `orchestrate_poll_process` tests proving behavior difference when variable is `true` vs `false/unset`.\n- Run targeted pytest for new/updated tests, then full CI test suite used by this repo\u2019s workflows to satisfy \u201cCI passes\u201d acceptance.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "77dab9c6c03c3fb074614ecdaf4e3018b7b53521a9122f0f55697f7e4bebb0fd",
+  "lineage": {
+    "issue_number": 980,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24427467221",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24427467221",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/980"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414231618_b4b3869e05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 980,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24427467221"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #980",
+  "timestamps": {
+    "created_at": "2026-04-14T23:16:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

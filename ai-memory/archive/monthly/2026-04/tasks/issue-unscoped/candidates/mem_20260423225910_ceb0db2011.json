@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:2988-2999 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The jq deduplication filter uses `contains()`, so marker text elsewhere in the issue body can be mistaken for an existing fix-up.\n  WHY: All three reviewers identified substring-based matching as a false-positive risk; moonshot framed it as a low-severity edge case.\n- scripts/validate_process.sh:2982-2993 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `gh issue list --limit 200` can miss already-open fix-ups in larger repositories.\n  WHY: All three reviewers noted the hard cap can miss matching `ai:orchestrator-managed` issues and cause duplicate fix-up creation.\n- scripts/orchestrate_poll_process.sh:4438-4473 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The failed-autofix redispatch check stops after the first failed workflow, so additional failed review workflows are not surfaced.\n  WHY: All three reviewers pointed to the `break`; one treated it as intentional, but the others saw reduced debugging visibility.\n- scripts/validate_process.sh:2970-2974 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The tracker-open guard can treat a missing `.state` as non-open and skip fix-up creation.\n  WHY: Deepseek reported a potential skip on missing state, while minimax and moonshot explicitly rejected it as fail-open behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:2988 | confidence=3\n  PROBLEM: The jq deduplication filter uses `contains()` which performs substring matching, not exact line matching.\n  WHY: This could cause false positives if the marker strings appear elsewhere in the issue body.\n- scripts/validate_process.sh:2982 | confidence=3\n  PROBLEM: `gh issue list --limit 200` may not fetch all open `ai:orchestrator-managed` issues in large repositories, causing deduplication to miss existing fix-ups.\n  WHY: In repositories with more than 200 orchestrator-managed issues, a matching fix-up issue might not be included in the first 200 results.\n- scripts/orchestrate_poll_process.sh:4440-4473 | confidence=4\n  PROBLEM: The failed-autofix redispatch check breaks after finding the first failed workflow, hiding information about other failed workflows.\n  WHY: If multiple review workflows fail, only the first one is reported in logs and notifications, reducing debugging context.\n- scripts/validate_process.sh:2970 | confidence=2\n  PROBLEM: The tracker-open guard's jq filter `.state` returns `null` if the field is missing, which would be treated as a non-open state, skipping fix-up creation.\n  WHY: If GitHub API returns a malformed issue response missing the `state` field, `--jq '.state'` returns `null`, which after `tr -d '[:space:]'` becomes `\"null\"`, triggering the guard; however, this is actually safe conservative behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3_1-pro-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-pro-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:2988 | severity=low | confidence=2\n  PROBLEM: The dedupe jq filter uses `contains()`, so marker text appearing elsewhere in the issue body can be mistaken for an existing fix-up.\n  WHY: `contains()` is substring-based, and a false positive could cause a valid new fix-up to be skipped.\n- scripts/validate_process.sh:2982 | severity=low | confidence=2\n  PROBLEM: `gh issue list --limit 200` can miss an already-open fix-up in larger repositories.\n  WHY: If there are more than 200 open `ai:orchestrator-managed` issues, the matching fix-up might not be in the fetched list.\n- scripts/orchestrate_poll_process.sh:4440-4473 | severity=low | confidence=1\n  PROBLEM: The redispatch path only reports the first failed workflow it finds, so additional failed review workflows are not surfaced.\n  WHY: The loop breaks on the first failure, which limits debugging context but does not affect functionality.\n- scripts/validate_process.sh:2970 | confidence=4\n  PROBLEM: The tracker-open guard can misread a malformed issue response that lacks `state` as `null` and skip fix-up creation.\n  WHY: The code actually fail-opens when `TRACKER_STATE` is empty, so the pass-1 finding is backwards.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:2999 | severity=low | confidence=2\n  PROBLEM: The deduplication jq filter uses `contains($lid)` and `contains($trk)`, which performs substring matching and can cause false-positive dedupe matches.\n  WHY: Markers appearing elsewhere in the issue body could trigger a false match, though the marker format is specific enough that accidental collision is unlikely.\n- scripts/validate_process.sh:2993 | confidence=1\n  PROBLEM: The `gh issue list --limit 200` cap could miss open fix-ups in repositories with more than 200 managed issues.\n  WHY: This is an intentional trade-off to avoid excessive API calls and only matters at extreme scale.\n- scripts/orchestrate_poll_process.sh:4438-4473 | confidence=1\n  PROBLEM: The redispatch loop breaks after finding the first failed workflow.\n  WHY: The break is intentional because only one dispatch is needed, and the specific failed workflow is logged in `_rtr_failed_wf`.\n- scripts/validate_process.sh:2974 | confidence=1\n  PROBLEM: The tracker-open guard can misread a malformed API response lacking `state` as `null`.\n  WHY: The code actually fail-opens on empty or missing state, so this is not a valid issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b8043438ea6ec3189e9104538210048550ed8d50a999545ff917f2b91d360346",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1555,
+    "run_id": "24861856340",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24861856340",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423225910_ceb0db2011",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1555,
+    "run_id": "24861856340"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T22:59:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

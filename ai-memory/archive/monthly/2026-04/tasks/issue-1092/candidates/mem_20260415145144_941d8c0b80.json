@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- Q1: **A** selected. Plan assumes we will add `pull_request.closed` to review wrappers and run a merge-only post-merge hook inside `review_autofix.yml`.\n\nConflict detection:\n- The issue requires dispatching `ai-validate.yml`, but in this repo the active wrapper is [`.github/workflows/internal-validate.yml`](.github/workflows/internal-validate.yml) while `ai-validate.yml` exists as a template ([`workflow-templates/ai-validate.yml`](workflow-templates/ai-validate.yml)). A direct `ai-validate.yml` dispatch can fail here; this is acceptable only if handled as non-blocking warning (required behavior).\n- Current review wrappers do not fire on merge/close; this blocks true post-merge behavior and must be changed (already resolved by Q1).\n\nImplementation plan\n\n1. Files likely to change\n- [`.github/workflows/review_autofix.yml`](.github/workflows/review_autofix.yml)\n- [`.github/workflows/internal-review.yml`](.github/workflows/internal-review.yml)\n- [`workflow-templates/ai-review.yml`](workflow-templates/ai-review.yml)\n- Optional doc touch if behavior section is updated: [`README.md`](README.md)\n\n2. Functions/modules to implement\n- Wrapper trigger expansion (both review wrappers):\n  - Add `closed` to `pull_request.types`.\n- Post-merge validation hook in `review_autofix.yml`:\n  - Add a merge-event gate: run only when PR event is `closed` and `merged == true`.\n  - Reuse existing linked-issue resolution pattern already used in \u201cMark linked issues ready to merge\u201d:\n    - GraphQL `closingIssuesReferences(first: 50)` query.\n    - Existing PR title/body regex fallback when no closing references are found.\n  - For each linked issue:\n    - Check label presence for `ai:orchestrator-validate-required`.\n    - If present, dispatch validation:\n      - `gh workflow run ai-validate.yml --repo \"$GITHUB_REPOSITORY\" -f tracking_issue=\"0\"`\n      - Do not pass compose inputs so workflow defaults remain unchanged.\n    - On successful dispatch, remove `ai:orchestrator-validate-required` from that issue.\n    - On dispatch failure, emit `::warning::` and continue (no job failure).\n- Keep existing review/autofix paths unchanged for non-merge events and issues without the label.\n\n3. Data structures affected\n- GitHub issue label state transitions:\n  - `ai:orchestrator-validate-required` is consumed (removed) only after successful dispatch.\n- Workflow event filter lists:\n  - `pull_request.types` adds `closed` in both wrapper files.\n- Validation dispatch input payload:\n  - `tracking_issue` set to `\"0\"` (standalone mode).\n\n4. API/interface changes\n- Event interface change:\n  - Review wrappers now invoke review flow on PR close events.\n- No change to validate workflow schema:\n  - Uses existing `workflow_dispatch` inputs (`tracking_issue`, compose defaults untouched).\n- GitHub API usage in hook:\n  - GraphQL linked-issue lookup via `closingIssuesReferences`.\n  - Issue label read/edit via `gh issue view/edit`.\n  - Workflow dispatch via `gh workflow run`.\n\n5. Risks / edge cases\n- `ai-validate.yml` may not exist in some repos/branches (notably this repo\u2019s internal runtime path); dispatch must fail-open with warning.\n- Multiple linked issues may trigger multiple standalone validations; ensure this is intended and each issue is handled independently.\n- If label removal fails after successful dispatch, duplicate dispatch risk remains on later runs; should warn clearly.\n- Non-merged PR close events must not dispatch validation.\n- PRs with no linked issues should exit cleanly with no side effects.\n\n6. Testing considerations\n- Lint/schema:\n  - `actionlint` and YAML lint on modified workflows.\n- Behavioral checks:\n  - Merged PR + linked issue with `ai:orchestrator-validate-required`:\n    - validation dispatch attempted with `tracking_issue=0`\n    - label removed on success.\n  - Merged PR + linked issue without label:\n    - no dispatch, no label mutation.\n  - Merged PR + forced dispatch failure:\n    - warning logged, workflow remains successful.\n  - Closed but unmerged PR:\n    - no validation dispatch path triggered.\n- Regression checks:\n  - Existing review/autofix behavior for `opened/synchronize/reopened/ready_for_review` remains unchanged.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "86b6586480297da7ea940e3ab08ca9de4906e7bb66110c3dc79fe2554aab3b53",
+  "lineage": {
+    "issue_number": 1092,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24461056132",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24461056132",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1092"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415145144_941d8c0b80",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1092,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24461056132"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1092",
+  "timestamps": {
+    "created_at": "2026-04-15T14:51:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

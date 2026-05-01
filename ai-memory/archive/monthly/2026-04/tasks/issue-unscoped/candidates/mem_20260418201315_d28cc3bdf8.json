@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/label_helpers.sh\n      Problem: `ensure_label_exists` function returns `1` on failure, creating inconsistent behavior with duplicate functions in `orchestrate_poll_process.sh` (line 940) and `validate_process.sh` (line 484) which return `0` on failure.; Scripts using different versions behave differently when label creation fails. With `set -e`, scripts using `label_helpers.sh` will exit on failure while others continue. This inconsistency can mask infrastructure problems (rate limits, permissions) in some code paths but not others.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: scripts/label_helpers.sh\n      Problem: Location: ensure_label_exists function, lines 112-135; Issue: The function uses `mktemp` which may fail or be unavailable, falling back to `/dev/null`. If fallback occurs, error message capture at line 124 will be empty, making the warning at line 134 unhelpful.; Suggested minimal fix: Add a check: if `_label_err_file` is `/dev/null` and `_label_err` is empty, set a default error message.; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1; **Recommendation:**; The code duplication should be eliminated. Either:; 1. Update all duplicate functions to return `1` on failure (consistent with the fix in `label_helpers.sh`); 2. Or refactor to use a single shared implementation; Given that `ensure_label_exists` should signal failure when it can't ensure a label exists, option 1 is preferred. However, this requires updating all call sites to handle the potential failure or use `|| true` where fail-open is intentional.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: scripts/label_helpers.sh (line ~101)\n      Problem: Code reference: The function ends with `return 1` on genuine GitHub API errors (after printing a warning). The \"already exists\" path still returns 0.; This changes the contract of ensure_label_exists from always returning 0 (fail-open) to returning 1 on errors. The embedded copies in scripts/orchestrate_poll_process.sh (line 940) and scripts/validate_process.sh (line 484) still return 0 on error. script/review_rb_judge.sh sources label_helpers.sh (or uses an inline fallback with `|| true`), and calls ensure_label_exists without checking its return value.; All affected scripts use `set -euo pipefail`. Under `set -e`, any command returning non-zero that is not part of an `if`, `while`, or `&&`/`||` chain causes the script to exit immediately. Since callers do not check the return code, they rely on the function always returning 0. With the change:; - review_rb_judge.sh will exit on the first label creation failure (lines 140-141 and several others), skipping the rest of the judge logic. This breaks the review-blocked recovery path.; - Even if review_rb_judge.sh falls back to its inline version (which uses `|| true` and always returns 0), inconsistency means behavior depends on whether label_helpers.sh was successfully fetched.; - Future refactoring that sources label_helpers.sh from orchestrate_poll_process.sh or validate_process.sh would introduce hard failures where they previously continued. This violates existing design intent documented in embedded comments: labels are non-blocking best-effort; failures should log a warning but not terminate the workflow.; Label creation errors (rate-limit, transient network, permissions) \u2014 already handled as recoverable \u2014 now cause premature script termination. Workflow runs would fail or hang waiting for manual intervention over infrastructure issues that were previously non-blocking.; Correction: Revert the return code on failure in scripts/label_helpers.sh to `return 0` to preserve fail-open semantics. The warning message on line 134 should remain, maintaining observability while keeping the original contract. This matches the implementations in scripts/orchestrate_poll_process.sh and scripts/validate_process.sh, and maintains compatibility with callers.; Additional note: The label color and description additions in label_helpers.sh are correct and fully match .github/ai/label_contract.v1.json. No issues there.\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [4] File: scripts/orchestrate_poll_process.sh\n      Problem: Duplicate `ensure_label_exists` function returns `0` on failure, inconsistent with the canonical version in `label_helpers.sh`.; This critical orchestrator script continues execution even when it fails to create labels, masking potential permission, rate-limit, or network issues that should be addressed.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: scripts/validate_process.sh\n      Problem: Duplicate `ensure_label_exists` function returns `0` on failure, inconsistent with the canonical version in `label_helpers.sh`.; Validation scripts continue even when label creation fails, potentially leading to incorrect issue labeling and masking of underlying problems.; **HARDENING_SUGGESTIONS:**\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/label_helpers.sh\nscripts/orchestrate_poll_process.sh\nscripts/validate_process.sh",
+  "fingerprint": "1d37823846aafee74c4bd8e11462a11601facfc83134d144298dec76a641bbb7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1346,
+    "run_id": "24612444255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24612444255",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418201315_d28cc3bdf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1346,
+    "run_id": "24612444255"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T20:13:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

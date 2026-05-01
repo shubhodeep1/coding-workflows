@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `workflow_log_collector_script`\n\nClarification mapping used for planning:\n- `Q1: A` -> Scope is only core pipeline workflows: `clarify`, `plan`, `implement`, `review_autofix`.\n- `Q2: A` -> Source of truth is GitHub Actions API run/job/step data (and logs endpoint when needed), not local runtime artifacts.\n- `Q3: A` -> Deliverable is JSON report only.\n- `Q4: A` -> Required metrics are reliability + timing only (status, duration, retries, failure point).\n- `Q5: A` -> Deliver as a standalone script with explicit CLI inputs, callable from workflows.\n\nRepresentative implementation pattern to follow:\n- CLI/script structure and JSON manifest writing in [scripts/issue_attachment_bundle.py](scripts/issue_attachment_bundle.py).\n- Deterministic GH API mocking style in [tests/test_orchestrate_poll_process.py](tests/test_orchestrate_poll_process.py).\n- CI wiring pattern in [.github/workflows/ci.yml](.github/workflows/ci.yml).\n\n**1) Files likely to change**\n- Create [scripts/collect_workflow_logs.py](scripts/collect_workflow_logs.py).\n- Create [tests/test_collect_workflow_logs.py](tests/test_collect_workflow_logs.py).\n- Update [.github/workflows/ci.yml](.github/workflows/ci.yml) to compile and run the new test file.\n- Optional doc-alignment update in [docs/workflow-llm-analysis-plan.md](docs/workflow-llm-analysis-plan.md) if this repo wants the narrowed scope reflected immediately.\n\n**2) Functions/modules to implement**\nIn `scripts/collect_workflow_logs.py`:\n- `build_parser()` for explicit CLI flags (repo(s), lookback/since, output path, max runs/pages).\n- `gh_api_json()` wrapper for API calls with consistent error handling and pagination.\n- `normalize_workflow_family()` mapper that only admits core families (`clarify/plan/implement/review_autofix`) using workflow name/path matching.\n- `list_runs_for_repo()` to fetch completed runs in window and apply scope filter.\n- `list_jobs_for_run()` to fetch jobs + steps for each run.\n- `extract_failure_point()` to identify first failing job/step for failed runs.\n- `compute_run_metrics()` to calculate duration/retry/reliability metrics per run.\n- `build_report()` to assemble final JSON document.\n- `main()` to orchestrate and write JSON report atomically.\n\n**3) Data structures affected**\nPrimary output contract (single JSON file) should include:\n```json\n{\n  \"schema_version\": \"workflow_log_collector.v1\",\n  \"generated_at\": \"ISO-8601\",\n  \"scope\": {\n    \"repositories\": [\"owner/repo\"],\n    \"workflow_families\": [\"clarify\", \"plan\", \"implement\", \"review_autofix\"],\n    \"source\": \"github_actions_api\"\n  },\n  \"runs\": [\n    {\n      \"repository\": \"owner/repo\",\n      \"run_id\": 123,\n      \"workflow_name\": \"AI Plan\",\n      \"workflow_path\": \".github/workflows/plan.yml\",\n      \"workflow_family\": \"plan\",\n      \"status\": \"completed\",\n      \"conclusion\": \"success|failure|cancelled|...\",\n      \"run_attempt\": 1,\n      \"retries\": 0,\n      \"created_at\": \"ISO-8601\",\n      \"run_started_at\": \"ISO-8601|null\",\n      \"updated_at\": \"ISO-8601\",\n      \"duration_seconds\": 0,\n      \"failure_point\": {\n        \"job_name\": \"string|null\",\n        \"step_name\": \"string|null\"\n      }\n    }\n  ],\n  \"summary\": {\n    \"total_runs\": 0,\n    \"success_count\": 0,\n    \"failure_count\": 0,\n    \"cancelled_count\": 0,\n    \"avg_duration_seconds\": 0.0,\n    \"p50_duration_seconds\": 0.0,\n    \"p95_duration_seconds\": 0.0\n  },\n  \"errors\": []\n}\n```\nNo MongoDB collections or DB contracts are impacted.\n\n**4) API/interface changes**\nCLI interface (standalone script):\n- `--repo owner/repo` (repeatable; default to `$GITHUB_REPOSITORY` when present).\n- `--lookback-days N` or `--since ISO8601` (one required path to time window).\n- `--output /path/report.json` (required or defaulted).\n- `--per-page` default `100`.\n- `--max-runs` optional cap for safety.\n\nAuth/input:\n- Use existing token env (`GH_TOKEN` or `GITHUB_TOKEN`), no new required env var name changes.\n\nGitHub API endpoints (official REST):\n- `GET /repos/{owner}/{repo}/actions/runs` with `status=completed`, `created`, `per_page`, `page`.\n- `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` with `filter=all`, `per_page`, `page`.\n- Optional for future deep-dive: `GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs` (302 redirect URL, short-lived).\n\n**5) Potential risks and edge cases**\n- Workflow naming mismatches between wrapper/internal workflows can cause misclassification; use both `name` and `path`.\n- Missing timestamps (`run_started_at`/step times) can break duration math; require guarded null-safe computation.\n- Re-run semantics (`run_attempt`) can distort counts if not normalized.\n- GitHub API filtered searches can cap results; report truncation metadata when limits are hit.\n- Rate limiting/secondary limits; implement bounded retries/backoff.\n- Partial failures across repos/runs; keep report generation fail-open with `errors[]` plus non-zero exit only for total failure.\n\n**6) Testing considerations**\nAdd deterministic tests in `tests/test_collect_workflow_logs.py` to cover:\n- Workflow family mapping for core scope and exclusion of non-core workflows.\n- Retry extraction from `run_attempt`.\n- Duration calculation with complete and missing timestamps.\n- Failure point extraction precedence (first failed step, then failed job fallback).\n- Pagination handling for runs and jobs endpoints.\n- Partial API failure behavior (report still emitted with `errors[]`).\n- JSON schema shape and stable keys for downstream consumers.\n\nCI updates:\n- Add `python3 -m py_compile scripts/collect_workflow_logs.py`.\n- Add `python3 tests/test_collect_workflow_logs.py`.\n\nConflict detection:\n- [docs/workflow-llm-analysis-plan.md](docs/workflow-llm-analysis-plan.md) describes a broader telemetry/analyzer scope (including `validate/orchestrate`, token/cost, extra workflow and analyzer script). This conflicts with the clarified scope for this issue (core workflows only, reliability/timing only, JSON-only collector).  \n- Plan above intentionally follows the clarified issue scope and defers broader analysis features.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "11110d8d2db25110e15b89a5fbc21df1a2e62e5970657a437ca190917042b5c5",
+  "lineage": {
+    "issue_number": 711,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24279338432",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24279338432",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/711"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411092816_0db3b07734",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 711,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24279338432"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #711",
+  "timestamps": {
+    "created_at": "2026-04-11T09:28:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

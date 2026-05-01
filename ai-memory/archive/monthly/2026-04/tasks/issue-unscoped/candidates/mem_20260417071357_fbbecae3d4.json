@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 1\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: `tests/test_stall_recovery_pr_lookup.py`\n      Problem: Lines changed: 36; Change: `full_env.setdefault(\"GITHUB_REPOSITORY\", \"owner/repo\")` \u2192 `full_env[\"GITHUB_REPOSITORY\"] = \"owner/repo\"`; **Analysis**; The `_run_bash` test helper builds a subprocess environment for running the extracted poller helpers under test. The change replaces `setdefault` with direct assignment, ensuring `GITHUB_REPOSITORY` is always set to the deterministic test value `\"owner/repo\"` regardless of the CI runner's ambient environment variable.; Why this is correct and necessary:; - The test stubs are keyed to `owner/repo`. For example, `PR_STATE_MAP[\"repos/owner/repo/pulls/2568\"]` expects the repository to be exactly `owner/repo`. If the host environment's `GITHUB_REPOSITORY` (e.g., `shubhodeep1/coding-workflows`) leaked into the subprocess, API-path construction inside the helpers would mismatch the stubbed keys and tests would fail.; - `setdefault` would preserve an existing value, making tests non-deterministic and environment-dependent. Direct assignment guarantees isolation.; - Order is correct: direct assignment happens before `if env: full_env.update(env)`, so an explicit `extra_env` passed by a test could still override if needed (no test currently does this, but the hook remains available).; I verified the implementation of `_linked_prs_by_branch_name`, `_linked_prs_by_body_reference`, `_find_all_linked_prs`, `close_linked_pr`, and `surface_reissue_closed_without_pr` under `scripts/orchestrate_poll_process.sh`. The production code correctly:; - Outputs newline-separated PR numbers from lookup helpers; - Filters non-numeric lines via `grep -E '^[0-9]+$'` before sorting/deduping; - Iterates safely with `while IFS= read -r` over the filtered list; - Emits the documented `REISSUE_CLOSED_WITHOUT_PR` log prefix, GHA warning, and issue comment; - Fail-open on all underlying calls so surfacing never blocks stall recovery; The prior cross-review findings about jq output capture, sorting, and diagnostic text are not runtime blockers; the functions operate as intended. The single-line test fix is the only modification in the last run and it improves reliability without side effects.; **Classification**; - Applied: test environment isolation fix (GITHUB_REPOSITORY deterministic assignment); - Already satisfied: all prior review comments on production helpers were addressed in the PR's main changes; no additional fixes required; - Ignored: none; **Files changed:**; - `tests/test_stall_recovery_pr_lookup.py` \u2014 line ~36: direct assignment for `GITHUB_REPOSITORY` in test helper\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n`tests/test_stall_recovery_pr_lookup.py`",
+  "fingerprint": "5df646ae2b13c6219ec9766b331eef49ba245b5fcedb9f18f7a723caf3d567d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1259,
+    "run_id": "24552015983",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24552015983",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417071357_fbbecae3d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1259,
+    "run_id": "24552015983"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T07:13:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

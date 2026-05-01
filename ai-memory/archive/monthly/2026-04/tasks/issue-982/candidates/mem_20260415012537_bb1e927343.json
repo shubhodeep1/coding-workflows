@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping: no Q-IDs were asked; `/answer [auto-answered-by-clarify]` means scope is approved as-is.\n\nConflict check: issue text lists `scripts/orchestrate_lib.sh`, but that file does not exist; the shared stall-recovery contract lives in [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py).\n\n1. Files likely to change: [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh) (primary), [tests/test_orchestrate_poll_process.py](tests/test_orchestrate_poll_process.py) (only if fixture/assertion wiring needs alignment), and possibly [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py) if fallback selection is centralized.\n\n2. Functions/modules to adjust: `invoke_stall_judge` should convert unknown/unsupported judge actions into a fail-open declarative recovery action (instead of unintended escalation side effects); `recovery_action_for_phase` (or a new small helper) should provide deterministic fallback rung selection for judge-failure cases; keep `execute_stall_recovery_action` behavior unchanged except consuming the corrected fallback action. Representative pattern to mirror: existing `resolve_merge_conflict` branch fallback checks inside `invoke_stall_judge`.\n\n3. Data structures affected: orchestrator state fields `waves[].issues[].stall_recovery_count` and `status_since_ts` must remain single-increment per recovery; shell control flags `STALL_RECOVERY_SHOULD_INCREMENT` and `STALL_RECOVERY_EFFECTIVE_ACTION` must remain the sole source of increment/side-effect control; label outcomes must stay backward compatible (no duplicate dispatch/escalation).\n\n4. API/interface changes: no external API, CLI, env var, or schema changes planned; this is an internal control-flow fix for unknown stall-judge action handling.\n\n5. Risks/edge cases: off-by-one fallback rung selection (current regression symptom); hardcoding assumptions about `STALL_JUDGE_TRIGGER_COUNT`; accidental double increment when judge fallback and outer loop both mutate state; divergence between orchestrator-managed and standalone flows (both use `invoke_stall_judge`).\n\n6. Testing considerations: run `python3 tests/test_orchestrate_poll_process.py` and verify `test_stall_judge_unknown_action_falls_back_to_declarative_recovery` passes; confirm adjacent stall-judge tests remain green (resolve-merge-conflict, escalate-human variants); run requested validation suite (`test_validate_harness_rpc.py`, `test_validate_process_driver_guard_scope.py`, `test_overlap_validation_fallback.py`, `test_orchestrate_lib.py`, `test_orchestrate_poll_process.py`); ensure assertions cover single increment and expected fallback command emission (e.g., `/approved`) without duplicate side effects.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b4357a7153f98235b658014cd93f27cf24315749635573b8d1df2e4c9b660803",
+  "lineage": {
+    "issue_number": 982,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24431333684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24431333684",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/982"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415012537_bb1e927343",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 982,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24431333684"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #982",
+  "timestamps": {
+    "created_at": "2026-04-15T01:25:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

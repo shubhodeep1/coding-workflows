@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 4\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/label_helpers.sh (line ~32)\n      Problem: No critical runtime issues found. Label restoration is correct and complete.; N/A - fix corrects prior regression where failure labels would be created with incorrect metadata; Actually, confidence 1 means \"speculative, pattern-based suspicion only\". Since I'm not reporting an actual defect, I should reconsider. Let me check if there are any actual issues with the implementation.; Wait, looking more carefully at the cross-pollination findings, the google_gemini-3-flash-preview reviewer reported an issue with CONFIDENCE 5 about the workflow name inconsistency. Let me examine this more carefully.; The description says: \"Orchestrator clarify-respond workflow failed before posting an answer\"; But the actual workflow file is `orchestrate_clarify_respond.yml`.; However, when I look at other labels:; - \"Clarify workflow\" refers to `clarify.yml`; - \"Plan workflow\" refers to `plan.yml`; - \"Validate workflow\" refers to `validate.yml`; So the pattern is to drop the `.yml` extension and use a readable name. \"clarify-respond\" could be seen as a readable shorthand for `orchestrate_clarify_respond`. But it's inconsistent because it drops the \"orchestrate_\" prefix.; Actually, looking at the actual workflow names again:; - `clarify.yml` \u2192 \"Clarify workflow\" \u2713; - `plan.yml` \u2192 \"Plan workflow\" \u2713; - `validate.yml` \u2192 \"Validate workflow\" \u2713; - `orchestrate_clarify_respond.yml` \u2192 \"clarify-respond workflow\" (missing \"orchestrate_\"); This is a consistency issue, but is it a **runtime correctness issue**? No, it's a documentation/naming consistency issue. The label would still work correctly.; Given the unattended decision policy and the requirement to focus on runtime correctness, this is not a critical issue that needs to be fixed.; However, I should acknowledge it in my review. Let me provide a balanced assessment.; **Final Review Output:**; Based on my analysis of the last run changes to `scripts/label_helpers.sh`:; 1. **Label restoration is correct**: All 9 failure phase labels (`ai:clarify-failed`, `ai:clarify-respond-failed`, `ai:plan-failed`, `ai:implement-diagnose-failed`, `ai:review-autofix-failed`, `ai:validate-failed`, `ai:integration-judge-failed`, `ai:log-analysis-failed`, `ai:memory-maintenance-failed`) have been restored with correct color codes (`e11d48`) and descriptions matching `.github/ai/label_contract.v1.json`.; 2. **Contract alignment verified**: All 31 contract labels are present in both `_AI_LABEL_COLORS` and `_AI_LABEL_DESCS` associative arrays.; 3. **Bash syntax valid**: `bash -n scripts/label_helpers.sh` passes.; 4. **Test compatibility**: The test `test_contract_labels_match_helper_color_and_description_catalogs` would pass with the restored labels.; 5. **No critical runtime issues found**: The restoration fixes the regression where `ensure_label_exists` would create these labels with default metadata instead of phase-appropriate metadata.; **Observations (not defects):**; - The label description for `ai:clarify-respond-failed` uses \"clarify-respond\" while the actual workflow file is `orchestrate_clarify_respond.yml`. This is a minor naming inconsistency but doesn't affect runtime behavior.; - The broader implementation of issue #1314 (workflow hardening with retries and failure markers) may still be incomplete, but this falls outside the scope of reviewing the specific label restoration changes.; **Conclusion**: The autofix correctly addressed the regression identified in the bot review. No critical issues requiring fixes were found in the last run modifications.\n      Confidence: avg 1.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: scripts/label_helpers.sh (line ~67)\n      Problem: The description for `ai:clarify-respond-failed` uses the term \"clarify-respond\", while the actual workflow file is named `orchestrate_clarify_respond.yml` and is referenced as such in `agents.md` and other documentation.; This mismatch creates operational friction for human operators when auditing labels or searching for corresponding workflow logs. Using the canonical workflow name `orchestrate_clarify_respond` ensures consistency across the repository's automation and documentation.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: scripts/label_helpers.sh\n      Problem: Location: line 32-40 and 66-74; Issue: The newly restored labels are appended to the middle of the arrays rather than being grouped with existing terminal failure labels like `ai:implementation-failed` or `ai:validation-failed`.; Suggested minimal fix: Reorder the associative array entries to group all `ai:*-failed` labels together, improving auditability against the JSON contract.; Estimated lines changed: 18; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: scripts/label_helpers.sh\n      Problem: The restoration of 9 failure phase labels is complete, correct, and fully aligned with `.github/ai/label_contract.v1.json`. The pass 1 reviewers' concerns were based on incomplete verification - the actual code matches the contract exactly in ordering, descriptions, and color codes.; ISSUE_CONFIDENCE: N/A - No issues to report\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/label_helpers.sh",
+  "fingerprint": "2e86e859bded952877cf32834cb08e26e361676f10caa7759d415a7c10798d72",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1318,
+    "run_id": "24602728958",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24602728958",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418104822_eb0075f27b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1318,
+    "run_id": "24602728958"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T10:48:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

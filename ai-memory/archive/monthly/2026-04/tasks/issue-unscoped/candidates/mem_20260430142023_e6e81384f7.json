@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/consolidate_soft_error_reports.py:88 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `NEXT_HEADING_RE = re.compile(r\"^##\\s+\\S\", re.MULTILINE)` can prematurely stop extraction when findings content contains a legitimate `##` heading.\n  WHY: At least one reviewer confirmed the parser can truncate later content on real `##` lines, while other reviewers disputed only the `###`-matching rationale.\n- scripts/consolidate_soft_error_reports.py:210-211 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The placeholder check can drop genuine short findings that merely contain phrases like \"no findings\" or \"no issues\".\n  WHY: Multiple reviewers showed the `len(body) < 160` substring test can incorrectly filter real findings when placeholder phrases appear in context.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/consolidate_soft_error_reports.py:210 | severity=low | confidence=3\n  PROBLEM: The placeholder check can incorrectly filter genuine short findings that contain placeholder phrases as normal prose.\n  WHY: The substring-based test against `(\"no soft errors\", \"no findings\", \"none observed\", \"no issues\", \"(none)\")` will return `\"\"` for a real finding under 160 characters if it contains one of those phrases.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/consolidate_soft_error_reports.py:88 | confidence=4\n  PROBLEM: `NEXT_HEADING_RE` is too broad and can treat legitimate `##`-style issue text inside findings as a new section heading.\n  WHY: `extract_findings_section` stops at the first regex hit in the tail, so a line like `## Rate Limit Issue` can truncate the rest of the findings body.\n- scripts/consolidate_soft_error_reports.py:~102 | confidence=3\n  PROBLEM: Placeholder detection can incorrectly filter legitimate findings that contain placeholder phrases as substrings.\n  WHY: The `any(sig in lower and len(body) < 160 ...)` check drops real short findings such as ones containing \"no findings\" or \"none observed\" in context.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/consolidate_soft_error_reports.py:210-211 | severity=low | confidence=4\n  PROBLEM: The placeholder detection logic can incorrectly filter genuine short findings that mention placeholder phrases in context.\n  WHY: A concise real finding like \"No soft errors were found in the rate limiting module\" would match `no soft errors` and be removed because the body is under 160 characters.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/consolidate_soft_error_reports.py:207-211 | confidence=3\n  PROBLEM: Placeholder detection can filter out genuine short findings that merely mention a placeholder phrase.\n  WHY: The `sig in lower and len(body) < 160` condition can incorrectly drop a real finding like \"No soft errors were found in X\" even though it is not a placeholder report.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "92f3ff7eeaaccfadc99a22c2c746cda263a29d47882ab98b25522aa83576e8d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1824,
+    "run_id": "25168996760",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25168996760",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430142023_e6e81384f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1824,
+    "run_id": "25168996760"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T14:20:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

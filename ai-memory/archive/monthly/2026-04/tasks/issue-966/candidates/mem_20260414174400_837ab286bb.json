@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- Q1 was answered as `B`, so the plan is to implement a new narrowly scoped managed-artifact guard in the current `scripts/validate_process.sh` even though the originally referenced guard/function is not present.\n\nConflict detection:\n- The issue references `enforce_no_renamed_driver_artifacts()` and `scripts/validate_driver.sh`, but neither exists on `orchestrator/project-857`.\n- Current behavior already includes other protections (ownership marker for `validation/`, non-`validation/` git-diff guard), so this fix will add the missing scoped guard behavior without assuming the old function exists.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/validate_process.sh`\n- `README.md` (validation behavior note, if repository policy requires documenting behavior changes)\n\n2. Functions/modules to implement\n- Add a new preflight guard function in `scripts/validate_process.sh` (for example, `enforce_managed_validation_artifact_contract`).\n- Invoke it during startup before harness generation.\n- Keep existing guards intact (`validation/.ai-validation-owned` ownership checks, non-`validation/` workspace diff checks, transient runtime cleanup behavior).\n\n3. Guard behavior to implement\n- Enforce only managed artifacts, not broad `scripts/validate*.sh` naming.\n- Keep canonical managed path protection centered on `scripts/validate_process.sh` and `scripts/validate_driver.sh` (treat `validate_driver.sh` as optional if absent on branch).\n- Preserve transient contract for `validation/validate.sh` (must not be committed/tracked).\n- Do not fail on consumer-owned scripts like `scripts/validate_local.sh`.\n- Preserve fail-open posture when git metadata/tools are unavailable, consistent with existing script patterns.\n\n4. Data structures affected\n- Bash-local canonical artifact list(s) and violation accumulator(s) in `scripts/validate_process.sh`.\n- No DB contracts, indexes, or persistent data schema changes.\n\n5. API/interface changes\n- No external API changes.\n- No env var additions/renames.\n- Behavioral change: startup no longer rejects unrelated `scripts/validate*.sh`; it rejects only managed-artifact contract violations.\n\n6. Risks and edge cases\n- False positives if matching is too broad; detection must be scoped to canonical managed artifacts only.\n- Branch currently lacks `scripts/validate_driver.sh`; logic must not require it to exist.\n- Must avoid regressions to Wave 2 protections that ensure only `validation/` runtime outputs are allowed and cleaned safely.\n\n7. Testing considerations\n- Validate pass case: repo includes `scripts/validate_local.sh` (or similar) and startup succeeds.\n- Validate fail case: managed-artifact contract violation is detected (copied/renamed managed driver/process artifact scenario).\n- Validate fail case: `validation/validate.sh` is tracked/committed.\n- Validate pass case: branch without `scripts/validate_driver.sh` still runs correctly.\n- Run existing validation/orchestrator test suite to confirm no regressions in current pipeline behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0de8e884911ed2b769367850fa9f0cb5e6f4cc31553e5cff9c56b6d162b45fcc",
+  "lineage": {
+    "issue_number": 966,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24413785644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24413785644",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/966"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414174400_837ab286bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 966,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24413785644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #966",
+  "timestamps": {
+    "created_at": "2026-04-14T17:44:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

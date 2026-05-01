@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation Plan\n\n### Clarification Mapping\n- No `Q<ID>` clarification questions were asked in this issue.\n- Interpreted answer: `/answer [auto-answered-by-clarify]` means proceed with the issue scope exactly as written.\n\n### Conflict Detection (Issue vs Code)\n- `THINKING_LEVEL_IMPLEMENT` is already `high` in `.github/workflows/implement.yml` (issue states current is `xhigh` there).\n- README still documents `THINKING_LEVEL_IMPLEMENT` as `xhigh`, so docs are currently out of sync with workflow defaults.\n\n### Checklist\n- [ ] Update thinking-level defaults and adaptive behavior.\n- [ ] Trim static prompt context in plan/implement/editor phases.\n- [ ] Inline editor static context into `EDITOR_PROMPT_FILE`.\n- [ ] Update documentation (`README.md`) and changelog.\n- [ ] Add/adjust tests for adaptive judge reasoning and rerun relevant suites.\n\n### 1) Files Likely to Change\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `.github/workflows/validate.yml`\n- `.github/workflows/orchestrate_poll.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/review_autofix.yml`\n- `scripts/validate_process.sh`\n- `scripts/orchestrate_poll_process.sh`\n- `README.md`\n- `CHANGELOG.md`\n- `tests/test_orchestrate_poll_process.py` (likely)\n\n### 2) Functions/Modules to Implement\n- **Thinking defaults**\n- Change fallback defaults:\n- `THINKING_LEVEL_CLARIFY_RESPOND`: `medium` \u2192 `low`\n- `THINKING_LEVEL_VALIDATE`: `xhigh` \u2192 `high` (workflow + script fallback)\n- `THINKING_LEVEL_CONFLICT_RESOLVER`: `xhigh` \u2192 `medium` (workflow + script fallback)\n- Keep `THINKING_LEVEL_IMPLEMENT` workflow default as-is (`high`), but align docs.\n\n- **Adaptive judge reasoning**\n- In `scripts/orchestrate_poll_process.sh`, before main judge config generation, derive effective effort:\n- cycles `1-3`: use `MODEL_REASONING_EFFORT_JUDGE`\n- cycle `4+`: force `high`\n- Apply only to the main wave-judge invocation; keep review-blocked judge path unchanged unless explicitly intended.\n\n- **Issue summary low-effort override**\n- In `.github/workflows/implement.yml` summary step, temporarily set `model_reasoning_effort = \"low\"` in `~/.codex/config.toml` just for that `codex exec`, then restore original config (trap-safe).\n\n- **Static context trimming**\n- Reuse the existing clarify trimming pattern as representative implementation.\n- `plan.yml`: trim `codex_system_instructions.md`, `ai_pipeline.md`, `README.md` per planning needs.\n- `implement.yml`: trim `codex_system_instructions.md` and `ai_pipeline.md` per implementation needs.\n- `review_autofix.yml`: keep full `unattended_llm_system_instructions.md`; trim `codex_system_instructions.md` to Serena + code style section; trim README similarly.\n\n- **Editor prompt inlining**\n- In `review_autofix.yml`, prepend `pre_assembled_static.txt` directly into `EDITOR_PROMPT_FILE` during prompt assembly.\n- Remove \u201cread `./pre_assembled_static.txt` first\u201d and example `cat` hints from editor prompt text.\n\n### 3) Data Structures Affected\n- No schema changes expected.\n- Existing orchestrator state field `judge_cycle` is reused for adaptive reasoning branch logic.\n- Prompt artifact composition changes:\n- `pre_assembled_static.txt` content becomes phase-trimmed.\n- `editor_prompt.txt` gains inlined static prefix.\n\n### 4) API / Interface Changes\n- No new env vars.\n- Default behavior changes:\n- `THINKING_LEVEL_CLARIFY_RESPOND` default becomes `low`.\n- `THINKING_LEVEL_VALIDATE` default becomes `high`.\n- `THINKING_LEVEL_CONFLICT_RESOLVER` default becomes `medium`.\n- `THINKING_LEVEL_JUDGE` remains configurable as-is, but runtime behavior becomes adaptive after cycle 3.\n- `THINKING_LEVEL_IMPLEMENT` interface unchanged; docs corrected to current default.\n\n### 5) Risks / Edge Cases\n- `awk` section cuts can silently over/under-include if headings change; use stable heading anchors and comments.\n- Temporary config override for issue summary must restore on failure/interrupt to avoid contaminating later steps.\n- Ensure adaptive judge override does not unintentionally affect review-blocked judge logic.\n- Ensure editor prompt still includes all required dynamic artifacts after static inlining.\n\n### 6) Testing Considerations\n- Run:\n- `pytest tests/test_orchestrate_poll_process.py tests/test_orchestrate_lib.py`\n- Validate YAML/shell syntax for touched workflows/scripts.\n- Add/adjust poller test coverage for adaptive judge effort (cycle <=3 vs >3), likely by extending codex mock to capture effective reasoning from generated config.\n- Smoke-check that `review_autofix.yml` editor prompt assembly no longer instructs runtime `cat ./pre_assembled_static.txt` and now contains inlined static content.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cf6d38fb4058b76a2e3e548390717f976a547227724e966a2b284603b7ce7632",
+  "lineage": {
+    "issue_number": 547,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24169893181",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24169893181",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/547"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409030323_c054bfde5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 547,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24169893181"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #547",
+  "timestamps": {
+    "created_at": "2026-04-09T03:03:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

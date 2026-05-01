@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1107,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1107\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1110\",\"pr_number\":1110,\"branch\":\"ai/issue-1107\",\"run_id\":\"24470091555\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24470091555\",\"changed_files\":[\".github/ai/label_contract.v1.json\",\".github/workflows/ci.yml\",\".github/workflows/implement.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/test-and-mark-stable.yml\",\"README.md\",\"agents.md\",\"prompts/mode-implement-repair-syntax.txt\",\"prompts/mode-implement-repair.txt\",\"scripts/label_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/validate_changed_files_syntax.sh\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\"]}",
+  "fingerprint": "64768dbb87701f97e1e6abebfd3e8a0a76ce5a2f52e168e753e289647614c634",
+  "lineage": {
+    "issue_number": 1107,
+    "parent_ids": [],
+    "pr_number": 1110,
+    "run_id": "24470091555",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24470091555",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1110"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260415181004_b2dabc15bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1107,
+    "level": "run",
+    "pr_number": 1110,
+    "run_id": "24470091555"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1107: https://github.com/shubhodeep1/coding-workflows/pull/1110",
+  "timestamps": {
+    "created_at": "2026-04-15T18:10:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

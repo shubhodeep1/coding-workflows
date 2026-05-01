@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping\n- Q1: Interpreted as **A**. The `/answer [auto-answered-by-orchestrator]` message says the issue description is sufficient and to proceed, which implies this issue should include `codex_system_instructions.md` updates.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/setup_serena.sh`\n- `README.md` (both variable tables where Serena vars are documented)\n- `codex_system_instructions.md`\n- Likely required for CI toggle propagation:  \n  `.github/workflows/clarify.yml`, `plan.yml`, `implement.yml`, `review_autofix.yml`, `validate.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, `orchestrate_clarify_respond.yml`\n\n2. Functions/modules to implement\n- In `scripts/setup_serena.sh`, add a small reusable block-removal helper for MCP tables (same pattern as current Serena cleanup logic) and use it for both `serena` and `context7` to make re-runs idempotent.\n- Keep existing Serena setup path unchanged functionally (cache warm, language detection, health check, post-hardening), but ensure reruns do not duplicate `[mcp_servers.serena]`.\n- Add Context7 setup block gated by `CONTEXT7_DISABLED`:\n  - when `false` (default): append one `[mcp_servers.context7]` block with `required = false`\n  - when `true`: skip append (and remove existing context7 block so toggle is effective across reruns)\n\n3. Data structures affected\n- `~/.codex/config.toml` MCP tables:\n  - `[mcp_servers.serena]`, `[mcp_servers.serena.env]`\n  - new `[mcp_servers.context7]` (and optional env/header subtable only if needed)\n- Workflow runtime env map:\n  - new `CONTEXT7_DISABLED` pass-through to setup step\n\n4. API/interface changes\n- New env toggle: `CONTEXT7_DISABLED` with default `false`.\n- README variable docs updated with default and impacted workflows.\n- `codex_system_instructions.md` gets concise Context7 usage rules:\n  - use Context7 when library/framework API details are uncertain\n  - resolve library first, then fetch docs\n  - fallback to normal workflow if Context7 is unavailable\n\n5. Risks and edge cases\n- Idempotency risk: current script appends Serena MCP every run; duplicate tables can accumulate. Must normalize before append.\n- Compatibility risk: do not alter Serena health-check behavior or fallback semantics.\n- Tool-name drift risk: Context7 docs show naming differences (`get-library-docs` vs `query-docs` depending integration/version). Instruction text should reference the tool names exposed by the active MCP server.\n- Environment propagation risk: without workflow env pass-through, repo variable `CONTEXT7_DISABLED` will not affect CI behavior.\n\n6. Testing considerations\n- Run setup twice with defaults; verify exactly one Serena block and one Context7 block in `~/.codex/config.toml`.\n- Run with `CONTEXT7_DISABLED=true`; verify no Context7 block remains after rerun.\n- Run with `SERENA_DISABLED=true`; verify existing Serena skip behavior is unchanged.\n- Validate Serena health-check and hardened settings still apply (`startup_timeout_sec=60`, `required=false` for Serena section).\n- In CI, confirm each workflow calling `setup_serena.sh` honors `vars.CONTEXT7_DISABLED`.\n\nConflict detection\n- Existing codebase conflict with new acceptance criteria: `scripts/setup_serena.sh` currently appends Serena MCP config on each run (non-idempotent), so idempotency work must include existing Serena write path, not only new Context7 block.\n- Clarification conflict noted in issue thread (\u201cmust not modify `codex_system_instructions.md`\u201d) does not appear as a hard guard in current `codex_system_instructions.md`; proceeding per issue scope is consistent with interpreted Q1.\n\nRepresentative pattern used for planning\n- Primary reference: existing Serena MCP write/hardening flow in `scripts/setup_serena.sh` (config append + section-scoped post-processing).\n- Workflow env propagation pattern reference: current `SERENA_*` env injection in the setup step of the eight workflows listed above.\n\nExternal docs referenced\n- https://github.com/upstash/context7#installation\n- https://context7.com/docs/clients/cli\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ad6f92237c5c6af732e818ecd3b8d0fd41c0fca974c8b7a70096b858b1873f17",
+  "lineage": {
+    "issue_number": 565,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24174376347",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24174376347",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/565"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409054358_facb2b2259",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 565,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24174376347"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #565",
+  "timestamps": {
+    "created_at": "2026-04-09T05:43:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

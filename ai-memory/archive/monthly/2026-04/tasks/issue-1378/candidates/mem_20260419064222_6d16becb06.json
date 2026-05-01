@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `ebb0220ae50755387e9a221b0c429b738549eeee`\n- Checked-out branch: `orchestrator/project-1292`\n- Resolved checkout ref: `orchestrator/project-1292`\n- Integration metadata ref: `orchestrator/project-1292`\n- Mismatch: `false`\n\nClarification interpretation:\n- No explicit `Q<ID>` clarification questions were present in the thread.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as: proceed with the issue-defined scope and constraints without additional overrides.\n\nConflict detection (issue vs current codebase):\n- The requested render-recovery behavior already exists in `scripts/validate_process.sh` (`attempt_render_recovery_after_preflight_failure`, template-only rerender + relint path, fail-open fallback).\n- Render-phase self-heal routing already exists (`attempt_self_heal_and_reexec \"render\"` on render-recovery failure path).\n- Self-heal guardrails are already present in `scripts/self_heal_validation.sh` (four-file allow-list, additive-only patch enforcement).\n- `prompts/mode-validate-self-heal.txt` already includes render-phase guidance that harness rerender/relint is owned by `validate_process.sh`.\n- Integration-style tests already exist in `tests/test_validate_process_render_recovery.py`.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_render_recovery.py`\n- `tests/test_validate_process_template_mode.py`\n\n2. Functions/modules to implement or harden\n- `scripts/validate_process.sh`\n  - `attempt_render_recovery_after_preflight_failure`\n  - Preflight failure dispatch block that selects `render` vs `preflight` self-heal phase\n  - `run_template_validation_harness_renderer` call flow guardrails (template-only, single-attempt loop guard)\n- `scripts/self_heal_validation.sh`\n  - Keep `SELF_HEAL_FAILURE_PHASE` handling and ledger emission (`failure_phase`) explicit for `render`\n  - Preserve strict `ALLOWED_TARGETS` + additive-only patch checks (no scope expansion)\n- `prompts/mode-validate-self-heal.txt`\n  - Tighten wording (if needed) to ensure render-phase failures never imply harness/script/workflow edits and remain prompt-only\n\n3. Data structures affected\n- Env/state flags in validate runtime:\n  - `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`\n  - `HARNESS_MODE`, `HARNESS_GENERATOR_MODE`\n  - `SELF_HEAL_FAILURE_PHASE`\n- Runtime logs:\n  - `validation_preflight.log` render-recovery markers\n- Self-heal patch ledger JSONL:\n  - `failure_phase` field (must carry `render` when applicable)\n- Diagnose/result JSON remains unchanged (`harness_error` failure handling path)\n\n4. API/interface changes\n- No external API changes.\n- No schema/contract changes intended.\n- Internal behavior contract to preserve:\n  - Render recovery is deterministic rerender + relint only.\n  - Self-heal remains prompt-file-only (no freehand harness edits).\n\n5. Potential risks and edge cases\n- Accidental fallback to freehand generation during render recovery (must be explicitly prevented).\n- Infinite retry risk if `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED` is not respected.\n- Misclassification of failure phase (`preflight` vs `render`) causing wrong self-heal context.\n- Non-template harness modes must keep legacy behavior unchanged.\n- Missing renderer assets/errors must fail open to legacy hard-fail path with clear diagnostics.\n\n6. Testing considerations\n- Extend/adjust `tests/test_validate_process_render_recovery.py` to cover:\n  - Successful rerender+reflight resumes pipeline (no self-heal call).\n  - Rerender/reflight failure triggers `attempt_self_heal_and_reexec(\"render\")`.\n  - Non-template preflight failure keeps legacy `preflight` self-heal path and never calls renderer.\n- Keep/extend `tests/test_validate_process_template_mode.py` assertions for render-recovery hook presence and phase routing.\n- Run targeted tests first:\n  - `pytest tests/test_validate_process_render_recovery.py tests/test_validate_process_template_mode.py`\n- Then run broader validate-process test subset to ensure backward compatibility across non-render phases.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fafbeb23c26275b8134d626e2ed6fb6262ab22e7d0c8f486c87b9a6e20c70745",
+  "lineage": {
+    "issue_number": 1378,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24622989895",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622989895",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1378"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419064222_6d16becb06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1378,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24622989895"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1378",
+  "timestamps": {
+    "created_at": "2026-04-19T06:42:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

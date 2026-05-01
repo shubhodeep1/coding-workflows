@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 8\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/render_validation_templates.py\n      Problem: Location: write_outputs function, line ~367; Issue: Ensure cross-platform deterministic LF line endings for generated scripts when using Python <3.10+ on any OS.; Suggested minimal fix: Replace the single write_text call with a portable open() that preserves LF exactly, consistent with _normalize_newlines:; with open(target, \"w\", encoding=\"utf-8\", newline=\"\") as f:; f.write(rendered_file.content); This works on all Python 3 versions and writes content exactly as normalized, avoiding platform translation.; Estimated lines changed: 2 (replace 1 line with 3, respecting tab indentation); HARDENING_RISK_SCORE: 3; --- Summary of other changes (verified correct):; - sorted(..., key=str) additions: correct defensive fix for mixed-type dict keys in manifest processing.; - TAP changes in 00_canary.sh.j2: correct TAP-compliant numbering and fail-fast semantics; no runtime issues detected.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: scripts/render_validation_templates.py (line ~367)\n      Problem: Platform-dependent line ending translation breaks deterministic output. Without newline parameter, Python translates \\n to os.linesep (\\r\\n on Windows).; Shell scripts generated on Windows will have \\r\\n line endings, causing \"bad interpreter\" errors when executed on Unix systems.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: scripts/render_validation_templates.py (line ~271)\n      Problem: Path object sorting order is platform-dependent (filesystem case sensitivity affects string comparison of Path objects).; Template processing order may vary across platforms, potentially affecting output if templates have side effects or output comparison assumes deterministic order.; HARDENING_SUGGESTIONS:\n      Confidence: avg 2.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: scripts/render_validation_templates.py\n      Problem: Location: collect_templates function, line 271; Issue: Platform-dependent template processing order; Suggested minimal fix: Add key=lambda p: str(p).lower() to sorted() call: sorted((path for path in family_dir.rglob(\"*.j2\") if path.is_file()), key=lambda p: str(p).lower()); Estimated lines changed: 1; HARDENING_RISK_SCORE: 1 (minor improvement for cross-platform determinism)\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: scripts/render_validation_templates.py\n      Problem: Removal of newline=\"\\n\" parameter in write_text introduces platform-dependent line endings.; On Windows, Python's write_text() translates \\n to \\r\\n by default. This causes generated shell scripts to have CRLF line endings, which leads to \"bad interpreter\" or \"command not found\" errors when executed in Linux environments (e.g., within Docker or GitHub Actions runners) because the shell sees the carriage return as part of the command or shebang path. Although _normalize_newlines ensuring internal \\n, write_text() will still translate them upon writing if newline is not strictly set to \"\\n\" or \"\".\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: scripts/render_validation_templates.py\n      Problem: Platform-dependent line endings \u2014 removal of newline control breaks deterministic output on Windows.; Path.write_text() with default newline=None performs newline translation on Windows, converting \\n to \\r\\n. Even though _normalize_newlines() normalizes content to Unix \\n, writing without explicit newline=\"\\\" reverts to platform default on Windows, producing CRLF line endings in generated shell scripts. This can cause \"bad interpreter\" errors (e.g., #!/usr/bin/env bash\\r) when scripts are executed on Unix-like systems or in TAP consumers expecting LF. The repository requires deterministic output regardless of runner OS.; Evidence: The function _normalize_newlines (lines 132-136) normalizes all line endings to \\n and ensures a trailing newline. The write_text call at line 367 removed the explicit newline=\"\\n\" parameter that previously preserved these LF endings on all platforms. In Python's text mode (Windows), omitting newline causes \\n \u2192 \\r\\n translation. The codebase targets Python 3.12 in CI; Path.write_text gained the newline parameter in Python 3.10, so using it directly excluded <3.10, but removing it entirely reintroduces Windows-specific line-ending corruption.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [7] File: workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2\n      Problem: Potential UndefinedError if 'slots' or 'slots.canary_tools' is missing.; The template assumes 'slots.canary_tools' is always present in the Jinja2 context. If a manifest family uses this shared template but does not populate the 'canary_tools' slot, rendering will fail with an UndefinedError. While the previous iteration also used 'slots.canary_tools' in a loop (which would just be an empty loop if missing), the new length calculation 'slots.canary_tools | length' is more likely to trigger an error depending on the Jinja2 environment configuration (StrictUndefined is used in scripts/render_validation_templates.py).; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [8] File: workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2\n      Problem: Location: TAP plan line and loop; Issue: Robustness against missing variables; Suggested minimal fix: Use a default filter for the tools list to avoid UndefinedError: {% for tool in (slots.canary_tools | default([])) %}; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/render_validation_templates.py\n\nLow confidence files (mentioned by 1 reviewer):\nworkflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
+  "fingerprint": "1bc26f12359acd1c02af4a305e0de2b0bf690a7b30355b54cc3a65d158aff40d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1295,
+    "run_id": "24602008003",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24602008003",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418101741_cb9d35c112",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1295,
+    "run_id": "24602008003"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T10:17:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

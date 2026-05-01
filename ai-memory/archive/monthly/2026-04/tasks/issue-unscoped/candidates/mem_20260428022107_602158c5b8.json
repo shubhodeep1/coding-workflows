@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:~103 | flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The retry condition uses `git log --format='%s' -n 5` without specifying a branch, so it depends on the workflow already having checked out the PR branch.\n  WHY: This is correct in the intended workflow context, but the same script could behave unexpectedly if reused elsewhere.\n- scripts/orchestrate_poll_process.sh:5300-5312 | flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: When both date commands fail, `_skip_since_iso` is empty and the jq filter matches all commits.\n  WHY: The source treats this as intentional fail-open behavior, but it could be documented more explicitly or handled explicitly.\n- .github/workflows/review_autofix.yml:2654 | flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The in-step retry uses a fixed 30s sleep instead of a configurable delay.\n  WHY: The current value is reasonable, but the source notes it could be configurable for different runner environments.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:~103\n  PROBLEM: The retry condition uses `git log --format='%s' -n 5` without specifying a branch, so it depends on the workflow already having checked out the PR branch.\n  WHY: This is correct in the intended workflow context, but the same script could behave unexpectedly if reused elsewhere.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:5300-5312\n  PROBLEM: When both date commands fail, `_skip_since_iso` is empty and the jq filter matches all commits.\n  WHY: The source treats this as intentional fail-open behavior, but it could be documented more explicitly or handled explicitly.\n- .github/workflows/review_autofix.yml:2654\n  PROBLEM: The in-step retry uses a fixed 30s sleep instead of a configurable delay.\n  WHY: The current value is reasonable, but the source notes it could be configurable for different runner environments.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "dca975eabcb493e7557fd4450315c81c77164f21d8e6148de1b802459b452137",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1703,
+    "run_id": "25029392749",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25029392749",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428022107_602158c5b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1703,
+    "run_id": "25029392749"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-28T02:21:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

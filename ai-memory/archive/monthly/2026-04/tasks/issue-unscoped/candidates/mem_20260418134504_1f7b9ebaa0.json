@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: tests/test_family_python_mongo_flask.py\n      Problem: The _fixture_files() function uses FIXTURES_ROOT.rglob(\"*\") to collect all files in the fixture directory without excluding __pycache__ directories. When Python compiles the .py files in the fixtures (either during test run or during prior validation), it creates __pycache__/*.pyc files that are then included in the fixture file list.; test_python_mongo_flask_golden_output_matches_fixture_tree fails because it compares rendered file list (12 files) against fixture file list (15 files including 3 .pyc files), causing assertion failure.; Evidence: /tests/fixtures/validation_harness/python_mongo_flask/tests/_lib/__pycache__/ contains graceful_shutdown.cpython-312.pyc, http_smoke.cpython-312.pyc, import_audit.cpython-312.pyc; ISSUE 2: PID discovery fallback uses dangerous PID 1 default\n      Confidence: avg 5.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [2] File: tests/test_family_python_mongo_flask.py\n      Problem: Location: _fixture_files() function; Issue: Includes __pycache__ directories in fixture file list; Suggested minimal fix: Add filter to exclude paths containing \"__pycache__\"; Estimated lines changed: 1; HARDENING_RISK_SCORE: 3 (causes test failure); H2: Safer PID fallback in graceful shutdown test\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\n  [3] File: tests/fixtures/validation_harness/python_mongo_flask/tests/30_graceful_shutdown.sh\n      Problem: The app_pid discovery has a fallback `|| docker compose ... exec -T app /bin/sh -c 'echo 1'` which defaults to PID 1 (init process) if the PID file cannot be read. While there is numeric validation on lines 25-29 that checks if the PID is numeric, PID 1 is a special process in containers and sending SIGTERM to it could have unintended side effects.; If the Flask app PID file is missing or unreadable, the test would attempt to signal PID 1, potentially killing the container's init process instead of the Flask app.; === VERIFICATION SUMMARY ===; The most critical issue is ISSUE 1 - the __pycache__ pollution. This is a real test failure that prevents the golden output comparison test from passing. The _fixture_files() function needs to filter out __pycache__ directories.; ISSUE 2 is a minor hardening concern. The fallback to `echo 1` is questionable but the numeric validation provides some safety. Given this is test fixture code (not production), the risk is contained.; === CLASSIFICATION ===; - ISSUE 1 applied: Filter __pycache__ from _fixture_files() in test_family_python_mongo_flask.py; - ISSUE 2 advisory: PID fallback behavior in test fixture - acceptable risk given numeric validation; === HARDENING_SUGGESTIONS ===; H1: Filter __pycache__ in _fixture_files()\n      Confidence: avg 3.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [4] File: tests/fixtures/validation_harness/python_mongo_flask/tests/30_graceful_shutdown.sh\n      Problem: Location: app_pid discovery; Issue: Falls back to PID 1 which could affect container init; Suggested minimal fix: Fail the test instead of defaulting to 1; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\n  [5] File: tests/fixtures/validation_harness/python_mongo_flask/tests/30_graceful_shutdown.sh\n      Problem: Lines: ~15-23 (app_pid discovery compound command); PID discovery falls back to `echo 1` when the PID file is unreadable. If the first `docker compose ... cat /tmp/flask-app.pid` fails, the `||` path runs `echo 1`, which passes the `grep -Eq '^[0-9]+$'` check and yields PID 1.; Evidence: Code block lines:; app_pid=\"$({; docker compose -f validation/docker-compose.test.yml exec -T app /bin/sh -c 'cat /tmp/flask-app.pid 2>/dev/null' \\; || docker compose -f validation/docker-compose.test.yml exec -T app /bin/sh -c 'echo 1'; } 2>/dev/null | tr -d '\\r' | tail -n 1)\"; If the PID file cannot be read, the test will attempt to SIGTERM PID 1 inside the app container. PID 1 has special init semantics; sending SIGTERM can kill the container's init process or produce undefined behavior. The correct path is to fail the test cleanly, not default to a dangerous sentinel.; === ADDITIONAL OBSERVATIONS ===; - Node-hardhat-solidity templates and all regression tests in that family pass (verified by multiple pass-1 runs). No issues found in those files.; - Dockerfile.app uses tabs for indentation. This is permissible (general code style defaults to tabs; only YAML and Makefile have special rules). File ends with a newline. No change needed.; - autofix_retrigger_has_inflight_peer logic (scripts/gh_helpers.sh) correctly filters runs with GitHub status \"queued\" and \"in_progress\". The \"waiting\" suggestion is invalid \u2014 such a status does not exist at the run level. No change recommended.; === CLASSIFICATION SUMMARY ===; - Issue 1: Applied (must remove __pycache__ artifacts from working tree); - Issue 2: Applied (must fix graceful_shutdown.sh to fail instead of defaulting PID to 1); - Already satisfied: subprocess error handling in graceful_shutdown.py is present; no missing try/except.; - Ignored suggestions: Dockerfile indentation (acceptable per style); HTTP timeout (3s reasonable); autofix peer \"waiting\" check (invalid GitHub Actions status).\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [6] File: tests/fixtures/validation_harness/python_mongo_flask/tests/_lib/__pycache__/\n      Problem: graceful_shutdown.cpython-312.pyc; http_smoke.cpython-312.pyc; import_audit.cpython-312.pyc; `__pycache__` directory with `.pyc` bytecode artifacts exists inside the fixture tree. These are runtime-generated build artifacts, not goldens.; Evidence: _fixture_files() in tests/test_family_python_mongo_flask.py uses `FIXTURES_ROOT.rglob(\"*\")` and includes all files. With __pycache__ present it returns 15 files vs the renderer's 12 files. The assert `render_files == fixture_files` fails because the rendered output does not contain `tests/_lib/__pycache__/*`.; test_python_mongo_flask_golden_output_matches_fixture_tree fails immediately; CI blocked.; ISSUE 2 (BLOCKER)\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\ntests/fixtures/validation_harness/python_mongo_flask/tests/30_graceful_shutdown.sh\ntests/fixtures/validation_harness/python_mongo_flask/tests/_lib/__pycache__/\ntests/test_family_python_mongo_flask.py",
+  "fingerprint": "8c99d632f959317afe46505ee06934f28eaf7958379f2c09a04896cefbd93be4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1328,
+    "run_id": "24605695613",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24605695613",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418134504_1f7b9ebaa0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1328,
+    "run_id": "24605695613"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T13:45:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

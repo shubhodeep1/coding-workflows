@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/dev/replay_review_pipeline.sh:118-162 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `runtime_dir` can stay relative across `cd \"${workspace_dir}\"`, so exported paths and later stage inputs resolve against the wrong working directory.\n  WHY: All five reviewers report the same root cause: relative `runtime_dir` is used after changing directories, which breaks artifact lookup and stage execution; severity was only explicitly given by some reviewers, so consensus uses medium as the highest stated impact here.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- (No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/dev/replay_review_pipeline.sh:41-160 | severity=medium | confidence=5\n  PROBLEM: `runtime_dir` can be relative when `cd \"${workspace_dir}\"` runs, so later uses of `${runtime_dir}` and related environment-derived paths resolve from the wrong directory.\n  WHY: The script changes working directory before consuming `runtime_dir`, which makes artifact reads and stage execution target the wrong location if the user passed a relative path.\n- scripts/dev/replay_review_pipeline.sh:107 | severity=low | confidence=1\n  PROBLEM: `runtime_dir` is not checked for existence before use.\n  WHY: The review notes a missing directory validation that would fail earlier with a clearer error.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/dev/replay_review_pipeline. sh:~108-114 | severity=medium | confidence=5\n  PROBLEM: `runtime_dir` is still exported as a potentially relative path after `cd \"${workspace_dir}\"`, so `RUNTIME_DIR` and derived file paths resolve relative to the new working directory.\n  WHY: The reviewer says stage scripts then look for files under the workspace tree instead of the original runtime directory, causing file-not-found errors.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/dev/replay_review_pipeline.sh:118 | severity=medium | confidence=5\n  PROBLEM: `export RUNTIME_DIR=\"${runtime_dir}\"` runs after `cd \"${workspace_dir}\"`, so a relative `runtime_dir` is exported with the wrong base directory.\n  WHY: The reviewer states stage scripts will read and write artifacts under the workspace directory instead of the original invocation directory, causing missing-file failures.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/dev/replay_review_pipeline.sh:118-130, 162 | severity=medium | confidence=5\n  PROBLEM: `runtime_dir` may be relative when the script changes to `workspace_dir`, so exported variables, derived artifact paths, and the stage invocation all resolve incorrectly.\n  WHY: The reviewer reports that after `cd` the paths point at the wrong location, leading to missing artifacts and non-zero exit.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "dc389da2d2f289ea93b6b9088a92004f50f7f8c99472cb2d11fa6c70a68548ec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1430,
+    "run_id": "24627226440",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24627226440",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419110422_bce568e689",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1430,
+    "run_id": "24627226440"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T11:04:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

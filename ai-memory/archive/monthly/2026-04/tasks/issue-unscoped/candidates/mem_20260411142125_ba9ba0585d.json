@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/workflow-log-analysis.yml\n.github/workflows/workflow-log-analysis.yml**\n`.github/workflows/workflow-log-analysis.yml`\ntests/test_orchestrate_poll_process.py**\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/workflow-log-analysis.yml`,\n`.github/workflows/workflow-log-analysis.yml`,\n`.github/workflows/workflow-log-analysis.yml`,",
+  "fingerprint": "fcbdbaf666c396139b9c651dde63904845c1a3acff2682eaca5be0edc07a9a07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 735,
+    "run_id": "24284105348",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24284105348",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260411142125_ba9ba0585d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 735,
+    "run_id": "24284105348"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-11T14:21:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

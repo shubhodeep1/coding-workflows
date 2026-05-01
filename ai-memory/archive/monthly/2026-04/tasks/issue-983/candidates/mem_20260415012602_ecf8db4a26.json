@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping\n- QIDs asked: none.\n- Interpreted answer: `/answer [auto-answered-by-clarify]` means proceed with the issue scope exactly as written (no extra constraints added).\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/mode-validate-fix-harness.txt` (primary): add missing anti-137 / PID1 signal-forwarding guidance for fix-mode harness edits.\n- `prompts/mode-validate-generate.txt` (secondary): align wording if needed so generate/fix prompts are consistent and non-contradictory.\n- `tests/test_validate_harness_rpc.py` (or a focused new prompt-contract test): add assertions that shutdown guidance is present and stable.\n- `docs/validation-phase-spec.md` (optional but recommended): document graceful-shutdown expectations and that `137` is not graceful.\n\n2. Functions/modules to implement or adjust\n- Prompt contract module (primary): strengthen fix-harness instructions to require root-cause remediation (exec-form `CMD/ENTRYPOINT`, optional `init: true`) instead of relaxing assertions.\n- Prompt parity module: ensure both generate and fix prompts enforce the same graceful shutdown semantics.\n- Test contract module: enforce required prompt fragments so regressions are caught in CI.\n\n3. Data structures affected\n- No schema/DB changes.\n- Preserve runtime validation JSON structure and keys (`result`, `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures`, `duration_seconds`).\n- Preserve TAP output semantics from generated tests.\n- Preserve coverage map keys (including `\"graceful_shutdown\"`).\n\n4. API/interface changes\n- No external API changes.\n- No env var rename/removal; no new env var required.\n- Behavioral contract change in prompts only: generated/fixed harnesses must treat `137` as failure and fix signal-forwarding cause.\n\n5. Potential risks / edge cases\n- Overly strict prompt wording could break projects that legitimately use wrapper scripts; mitigate by documenting accepted remediation paths (`exec` form first, `init: true` fallback).\n- False positives if fix prompt encourages assertion-only edits; mitigate by explicitly forbidding \u201caccept 137\u201d.\n- Drift between generate vs fix prompt behavior; mitigate with shared required test assertions.\n- Conflict with transient artifact assumptions: validation harness files are generated in consumer repos, not maintained directly here.\n\n6. Testing considerations\n- Update prompt-contract tests to assert shutdown guidance in both prompt files:\n  - `137` explicitly non-graceful.\n  - PID1 signal-forwarding requirement (exec-form `CMD/ENTRYPOINT`).\n  - Allowed graceful exit set remains `0`, `143`, and existing npm-wrapper SIGTERM pattern only.\n- Run targeted tests:\n  - `python3 tests/test_validate_harness_rpc.py`\n- Run broader validation-related test suite if available in CI matrix to catch unintended prompt-contract regressions.\n\nFactual conflicts detected (issue vs codebase)\n- `validation/tests/99_graceful_shutdown.sh` and `validation/docker-compose.test.yml` are generated runtime artifacts (consumer repo), not tracked source files in this repository.\n- `compose-stop.log` is referenced in the issue, while canonical repository guidance primarily uses `validation/logs/compose.log`; naming/path expectations may differ by generated harness.\n- Issue suggests `scripts/validate_driver.sh` as a likely edit target, but fix-mode prompt currently states \u201cDo not modify `scripts/validate_driver.sh` in this phase\u201d; primary remediation should therefore be prompt-layer guidance unless a driver defect is proven.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4f96676f38e51190774ddfc95e60283deb1918876d90fb2a6e162d827f886abf",
+  "lineage": {
+    "issue_number": 983,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24431343798",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24431343798",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/983"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415012602_ecf8db4a26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 983,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24431343798"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #983",
+  "timestamps": {
+    "created_at": "2026-04-15T01:26:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

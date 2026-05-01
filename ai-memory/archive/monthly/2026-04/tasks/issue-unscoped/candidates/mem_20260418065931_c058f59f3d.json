@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/validate_process.sh\n      Problem: Potential multi-line match failure in Dockerfile parsing.; The script uses a `sed` loop to join backslash-continued lines into a single line before grepping. While this handles line continuations, it only reads the entire file into memory for that specific service-side CLI check. If `validation/Dockerfile.app` is exceptionally large (atypical for this pipeline but possible in a consumer repo), the `sed` buffer could hit limits. More importantly, the current regex check for the tool depends on the presence of the tool in a line that *looks* like an installation. The logic effectively checks if the tool pattern exists *anywhere* in the non-commented, flattened Dockerfile. If a tool name appears in an unrelated `ENV` or `LABEL` instruction, it would satisfy the check as \"installed,\" leading to a false pass for the preflight gate.; **HARDENING_SUGGESTIONS**\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: scripts/validate_process.sh\n      Problem: Location: line 1284; Issue: Over-broad tool detection in Dockerfile.; Suggested minimal fix: Restrict the grep to look for the tool pattern within the context of an `apt` installation or similar package manager command, rather than searching the entire file. For example, `grep -qEi \"apt(-get)?[[:space:]].*install.*(${_tool_pattern})\"`. This aligns with the `mongosh` check on line 1238.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: scripts/validate_process.sh\n      Problem: Location: line 1290; Issue: The preflight failure message recommends installing the tool via `apt` but does not provide the specific package name for aliases like `postgresql-client` (for `psql`) or `redis-tools` (for `redis-cli`).; Suggested minimal fix: Include the suggested package name in the `_offenders` list or the error message output to help the LLM (and human) choose the correct package.; Estimated lines changed: 5; HARDENING_RISK_SCORE: 1; **NO CHANGES ARE MANDATORY.** The latest fixes successfully resolved the primary issues with comment stripping and MySQL aliases. The findings above are for long-term robustness and error clarity.\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: scripts/validate_process.sh\n      Problem: Location: case statement in run_preflight_checks() around lines 1263\u20131270; The denylist includes `kafkacat`, `kcat`, and `mongo`, but the `_tool_pattern` mapping provides aliases only for `psql` (\u2192 postgresql-client), `redis-cli` (\u2192 redis-tools), and `mysql|mysqladmin` (\u2192 multiple). Without aliases, if a Dockerfile installs the alternative package that provides the same binary (e.g., `kafkacat` package provides both `kafkacat` and `kcat`; `mongodb-clients` or `mongodb-org-shell` provides `mongo`), the regex search fails to match and the check incorrectly flags the tool as missing.; False-positive preflight failure blocks validation and triggers unnecessary self-heal cycles even though the required binary is present.; **Issue B: Error message lacks specific package suggestions**\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [5] File: scripts/validate_process.sh\n      Problem: Location: error output block around line 1290; When offending tools are found, the diagnostic suggests \u201cInstall the tool \u2026 via apt\u201d but does not list the concrete package names that satisfy each tool (e.g., `postgresql-client` for `psql`, `redis-tools` for `redis-cli`, the multiple options for `mysql`/`mysqladmin`). It also provides no guidance for `kcat`/`kafkacat`/`mongo` where aliases are missing. This reduces actionability.; Users/LLM must infer package names, increasing friction and risk of incorrect fix attempts.; **HARDENING_SUGGESTIONS**; 1) Extend the tool alias case branch to cover the missing pairs:; - For `kcat|kafkacat`: `_tool_pattern='kcat|kafkacat'`; - For `mongo`: `_tool_pattern='mongo|mongodb-clients|mongodb-org-shell'`; Place alongside existing specialized cases. This mirrors existing pattern for `psql`/`redis-cli`/`mysql*`. Estimated lines changed: ~2\u20134.; HARDENING_RISK_SCORE: 2; 2) Optionally enrich the error output with per-tool package suggestions. The simplest approach is to set a second variable `_tool_suggest` alongside `_tool_pattern` inside the case branch, then include it in the emitted messages:; `echo \"  2) Install ${_tool} via apt (suggested package(s): ${_tool_suggest}) \u2026\"`; This is a readability improvement, not a correctness blocker. Estimated lines changed: ~6.; HARDENING_RISK_SCORE: 1; **Other Notes**; - The inline-comment stripping (`sed -E 's/[[:space:]]+#.*$//'`) and MySQL alias expansions are correct and covered by new tests. All 15 unit tests pass.; - Dockerfile multi-line continuation handling is sound; the `sed -E ':a;N;$!ba;s/\\\\[[:space:]]*\\n[[:space:]]*/ /g'` pipeline flattens backslash-continued lines and is validated by `test_line_continuation_install_is_accepted`.; - No syntax errors or integration issues found with the self-heal invocation (`attempt_self_heal_and_reexec \"preflight\"`).; - The observed gaps for `kcat`/`kafkacat`/`mongo` are analogous to the recently fixed MySQL alias issue and should be addressed for consistency and to avoid false positives.\n      Confidence: avg 3.0\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/validate_process.sh",
+  "fingerprint": "ed66c908a8d08fe8c7d82a8ab7d716272ed11f914dcf4410b4092ef4e5021c5b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1289,
+    "run_id": "24598796076",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24598796076",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418065931_c058f59f3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1289,
+    "run_id": "24598796076"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T06:59:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

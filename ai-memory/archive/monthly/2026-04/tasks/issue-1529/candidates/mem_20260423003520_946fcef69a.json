@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `73a100ae8c077b14d7b7b9331b6652cdd5aff171`\n- Checked-out branch: `orchestrator/project-1479`\n- Integration metadata branch: `orchestrator/project-1479`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with planning as scoped.\u201d\n\nConflict detection:\n- No factual scope/code conflict found.\n- Note: optimization report line numbers for BATCH-002 are stale, but the targeted logic is present in the current `implementation-failed` recovery block.\n\nScope checklist (implementation):\n- [ ] Add batched issue-state fetch helper for blocker lists (chunked GraphQL aliases)\n- [ ] Replace per-blocker REST state reads with local map lookups in normal path\n- [ ] Keep strict fail-open behavior on batch failure\n- [ ] Preserve existing retry/escalation semantics and labels\n- [ ] Extend poller tests for batching + fallback behavior\n\n1. Files Likely to Change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n\n2. Functions/Modules To Implement\n- In `scripts/orchestrate_poll_process.sh`, add a new helper near existing batch helpers (`_fetch_issue_labels_batch_graphql`, `_fetch_linked_pr_status_graphql`) following the same chunked alias pattern:\n  - Proposed helper: `_fetch_issue_states_batch_graphql(numbers_json)`\n  - Input: JSON array of issue numbers\n  - Output: JSON object keyed by issue number string with normalized state (`open`/`closed`)\n  - Behavior: batch size 25, merge per-batch results, skip failed batches (fail-open)\n- Update the `implementation-failed` post-Codex blocker evaluation loop:\n  - Fetch blocker states once via `_fetch_issue_states_batch_graphql \"${IF_BLOCKERS_JSON}\"`\n  - For each blocker, read from local map first\n  - If map key missing/invalid, use existing REST fallback (`GET /issues/{n}` `.state`) per blocker\n  - Keep existing `IF_BLOCKER_OPEN_COUNT`, `IF_BLOCKER_UNKNOWN_COUNT`, status summary, defer/reissue decisions, comments, and labels unchanged\n\n3. Data Structures Affected\n- New ephemeral local JSON map for blocker states (keyed by blocker issue number as string)\n- Existing local counters/strings remain the decision source:\n  - `IF_BLOCKER_OPEN_COUNT`\n  - `IF_BLOCKER_UNKNOWN_COUNT`\n  - `IF_BLOCKER_STATUS_SUMMARY`\n- No orchestrator state schema changes and no DB contract/index changes\n\n4. API/Interface Changes\n- Internal API behavior change only (no user-facing interface change):\n  - Normal path for blocker-state evaluation shifts from `B` REST calls to `ceil(B/25)` GraphQL calls\n  - Fallback path preserves current REST behavior for unresolved/missing entries\n- No env var changes, label name changes, or retry policy changes\n\n5. Potential Risks / Edge Cases\n- Partial GraphQL responses (missing aliases): must trigger per-item REST fallback only for missing blockers\n- Full GraphQL failure: must fail open and preserve existing safe defer behavior (never hard-fail poller)\n- State normalization (`OPEN`/`CLOSED` vs lowercase): must be explicit to avoid false unknowns\n- Non-numeric/malformed blocker IDs in parsed metadata: keep current conservative unknown/defer semantics\n- Keep change scoped to implementation-failed blocker-state logic only; do not touch stall/merge-conflict subflows\n\n6. Testing Considerations\n- Extend `tests/test_orchestrate_poll_process.py` around existing implementation-failed tests:\n  - Assert full GraphQL path avoids per-blocker REST `.state` reads in normal closed-blocker reissue path\n  - Add/extend partial GraphQL scenario to verify REST fallback is used and behavior remains equivalent\n  - Add/extend GraphQL error scenario to verify fail-open fallback and unchanged defer/reissue outcomes\n- Use existing mock counters:\n  - `candidate_details_graphql_calls` / `graphql_calls`\n  - `issue_state_calls` for per-issue REST state read detection\n- Validate acceptance invariants:\n  - No per-blocker REST calls in normal (successful batch) path\n  - Behavior unchanged for open/unknown blockers (defer) and closed blockers (reissue)\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "147c540d21a9d55840972fcddaefeec5e41b894d9e21d05a06b48c5b14ee1b27",
+  "lineage": {
+    "issue_number": 1529,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24809834060",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24809834060",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1529"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260423003520_946fcef69a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1529,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24809834060"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1529",
+  "timestamps": {
+    "created_at": "2026-04-23T00:35:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

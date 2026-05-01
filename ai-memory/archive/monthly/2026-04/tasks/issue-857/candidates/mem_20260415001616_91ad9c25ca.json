@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Treat this run as harness_error and repair validation harness behavior before opening app-fix issues: 1) Add restart readiness polling to graceful shutdown validation (bounded retries using existing health timeout/poll interval semantics) instead of a single immediate curl. 2) Gate `11_error_format_validation.sh` on successful post-restart readiness (or perform an independent readiness wait) to prevent cascade false negatives. 3) Improve `06_existing_test_suite_execution.sh` diagnostics to ca",
+  "fingerprint": "87f9a21011bcfe612848e16284102a812d65d99ba6dac49547a1fe54158736a8",
+  "lineage": {
+    "issue_number": 857,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24428749455",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24428749455",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260415001616_91ad9c25ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 857,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24428749455"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-15T00:16:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

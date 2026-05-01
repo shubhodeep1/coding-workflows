@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2420-2433 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: validate-scripts depends on source but lacks explicit if: needs.source.result == 'success' gating.\n  WHY: Both reviewers call out the missing explicit gate; GitHub Actions will still auto-skip the job on a failed need, so this is a readability/hardening gap rather than a runtime failure.\n- .github/workflows/mark-stable.yml:~69 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: resolve-version uses git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname without --merged HEAD filtering, which can pick a newer tag from main when releasing from stable.\n  WHY: The next stable patch can be computed from the wrong tag if main is ahead of stable.\n- .github/workflows/mark-stable.yml:~259 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: STATE=$(_gh_retry gh api ... 2>/dev/null || echo \"pending\") treats API failure as pending, allowing release to proceed without verified CI status.\n  WHY: Sustained GitHub API errors can let the release gate pass without confirmed CI health.\n- .github/workflows/forward-merge-stable-to-main.yml:76-78, 93-100 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: On merge conflict, the workflow aborts the merge and pushes from refs/remotes/origin/stable, discarding the attempted merge result and conflict context.\n  WHY: The fallback PR loses merge attempt information that would help reviewers resolve conflicts.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:2420-2421 | severity=low | confidence=2\n  PROBLEM: The validate-scripts job now depends on source but lacks explicit if: needs.source.result == 'success' gating.\n  WHY: GitHub Actions automatically skips downstream jobs when dependencies fail, so this is a readability/future-proofing concern rather than a runtime failure.\n- .github/workflows/mark-stable.yml:~69 | severity=high | confidence=4\n  PROBLEM: resolve-version uses git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname without --merged HEAD filtering, which can incorrectly bump from a newer tag on main when releasing from stable.\n  WHY: If main is ahead of stable, the next stable patch version can be computed from the wrong tag.\n- .github/workflows/mark-stable.yml:~259 | severity=high | confidence=5\n  PROBLEM: STATE=$(_gh_retry gh api ... 2>/dev/null || echo \"pending\") treats retry exhaustion as \"pending\", allowing release to proceed without verified CI status.\n  WHY: Under sustained GitHub API errors, the release gate can proceed without confirmed CI health.\n- .github/workflows/forward-merge-stable-to-main.yml:76-78, 93-100 | severity=medium | confidence=4\n  PROBLEM: On merge conflict, the workflow aborts the merge and pushes from refs/remotes/origin/stable, discarding the attempted merge result and conflict context.\n  WHY: The fallback PR does not preserve the merge attempt information that would help reviewers resolve conflicts.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:2420-2433 | severity=low | confidence=2\n  PROBLEM: Added dependency on source job and dynamic ref=${{ needs.source.outputs.branch }}, but no explicit if: needs.source.result == 'success' condition.\n  WHY: No runtime failure occurs because GitHub Actions automatically skips downstream jobs if any needs.* job fails, but the declaration is less self-documenting for operators debugging job skips.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d2f822b1c561654724a3a06a4e982313c49e9733a40924679ab03346a201a614",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1821,
+    "run_id": "25160831068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25160831068",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430110050_41b5d8eb76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1821,
+    "run_id": "25160831068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T11:00:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

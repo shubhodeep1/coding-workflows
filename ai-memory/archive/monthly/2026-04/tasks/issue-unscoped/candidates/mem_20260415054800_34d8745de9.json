@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n.github/workflows/implement.yml\ntests/test_implement_post_codex_recovery.py\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24438254827-1-32635/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\nprompts/mode-implement-repair-syntax.txt",
+  "fingerprint": "407b70556702df707d79dad502e97bf583dc1ee520310016299734f0375bf525",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1029,
+    "run_id": "24438254827",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24438254827",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415054800_34d8745de9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1029,
+    "run_id": "24438254827"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T05:48:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

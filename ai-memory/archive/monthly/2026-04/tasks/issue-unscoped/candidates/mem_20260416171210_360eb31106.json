@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n.github/workflows/review_autofix.yml**\nscripts/generate_symbol_diff_summary.py\nscripts/generate_symbol_diff_summary.py**\nscripts/review_run_reviewers.sh\nscripts/review_run_reviewers.sh**\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/review_run_reviewers..sh",
+  "fingerprint": "bac682747ae967f39f4ab9361e79fa2886ebde8170b954e700530fa081f7135b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1194,
+    "run_id": "24522954783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24522954783",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416171210_360eb31106",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1194,
+    "run_id": "24522954783"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 6 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T17:12:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

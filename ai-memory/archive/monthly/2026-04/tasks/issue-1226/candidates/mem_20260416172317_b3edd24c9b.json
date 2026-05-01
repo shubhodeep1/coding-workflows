@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Fix the dependency-auditing harness logic to extract and validate only actual executable names from `custom_tests` entries (command argv[0]) instead of incidental text tokens. Ensure parsing is robust to quoting/whitespace and is sourced strictly from structured hints data, not free-form/log text. Keep deterministic comparison against installed binaries and report unknown executables with source command context. Add a regression check using the current hints set (all `python3 tests/...` comma",
+  "fingerprint": "7a17f53fd20aab883e9d48a6a0ce0c1576fb80d3f34baf8a7d161021106c412f",
+  "lineage": {
+    "issue_number": 1226,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24523372180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24523372180",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260416172317_b3edd24c9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1226,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24523372180"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-16T17:23:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

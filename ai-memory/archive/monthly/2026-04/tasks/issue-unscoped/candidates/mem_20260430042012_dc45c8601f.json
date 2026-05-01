@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1021-1023 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The fixed-string grep for `::warning::Editor summary contains failure/fallback markers` could match a malformed or incidental validator annotation.\n  WHY: Reviewers disagreed on practical impact \u2014 some called it low risk or theoretical, others said it was already satisfied/not a real issue \u2014 but they all discussed the same contract match.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:170 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The contract test hardcodes the cross-workflow string literals.\n  WHY: Reviewers treated those literals as the intentional contract values, while also noting the pattern is brittle if YAML/text changes.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:84-86 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The failure message embeds `VALIDATOR_WARNING_LITERAL` directly, which can render awkwardly if the literal contains quotes or newlines.\n  WHY: Only x-ai raised this diagnostic-formatting concern.\n- .github/workflows/test-and-mark-stable.yml:1058\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The pre-existing `grep -caE \"Reviewer .* succeeded\"` pattern could theoretically over-match.\n  WHY: moonshot called it a minor observation outside the PR scope and not correctness-critical.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:1021-1023\n  PROBLEM: The `::warning::Editor summary contains failure/fallback markers` grep could false-trigger on incidental or malformed validator text.\n  WHY: The reviewer treated this as a theoretical false-trigger concern and noted the warning prefix is intentional, so this was assessed as not a real issue.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:170 | confidence=2\n  PROBLEM: The contract test hardcodes cross-workflow string literals.\n  WHY: The reviewer said the assertions are plain Python pytest checks and the string comparisons are intentional contract validation, so this was assessed as not a real issue.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:1021-1023 | severity=low | confidence=2\n  PROBLEM: The grep `-qaF '::warning::Editor summary contains failure/fallback markers'` could false-trigger if that literal appears incidentally in non-validator log content.\n  WHY: The reviewer judged this theoretical and very low probability, but still noted the fixed-string match is only anchored by the `::warning::` prefix.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:170 | confidence=2\n  PROBLEM: Hardcoded string assumptions about YAML structure and exact log literals.\n  WHY: The reviewer said these are the exact contract values and are intentionally hardcoded for contract verification.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:1058\n  PROBLEM: The pre-existing `grep -caE \"Reviewer .* succeeded\"` pattern could theoretically over-match.\n  WHY: The reviewer called it a pre-existing minor observation outside the PR scope and said it is only an opportunistic shortcut.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:1021-1023 | confidence=3\n  PROBLEM: The grep `-qaF '::warning::Editor summary contains failure/fallback markers'` could false-positive on incidental log content.\n  WHY: The reviewer concluded the `::warning::` prefix, fixed-string match, and raw-log scope make a false-positive extremely unlikely and classified it as already satisfied.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:170 | confidence=2\n  PROBLEM: The test uses hardcoded string constants for the cross-workflow contract.\n  WHY: The reviewer said these constants must be hardcoded because they define the contract values.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:~1022 | confidence=2\n  PROBLEM: The grep is anchored only by the `::warning::` prefix, so a malformed or truncated validator annotation could still match.\n  WHY: The reviewer said the pattern is overly permissive to partial validator lines and could early-exit on an incomplete warning.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:84-86 | confidence=2\n  PROBLEM: The failure message embeds `VALIDATOR_WARNING_LITERAL` directly, which can render awkwardly if the literal contains quotes or newlines.\n  WHY: The reviewer noted the pytest output could be hard to copy or read in CI logs because the literal is not escaped for the message.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "22dfb450f40649612d5290b15ab89d012f7db096f49654277e9a5259e35e74b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1798,
+    "run_id": "25146468751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25146468751",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430042012_dc45c8601f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1798,
+    "run_id": "25146468751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T04:20:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

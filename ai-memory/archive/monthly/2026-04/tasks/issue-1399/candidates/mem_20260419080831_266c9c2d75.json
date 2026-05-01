@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `4477e2bd919864097794771869a824feaa990085`\n- Resolved checkout ref: `orchestrator/project-1292`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No explicit `Q<ID>` clarification items were present in this issue thread.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cno additional clarification needed\u201d; plan proceeds from issue description.\n\nConflict detection (issue vs current codebase):\n- Requested behavior appears partially/mostly present already:\n  - Render-phase recovery path exists in [scripts/validate_process.sh](scripts/validate_process.sh) (`attempt_render_recovery_after_preflight_failure`, phase routing to `attempt_self_heal_and_reexec \"render\"`).\n  - Render-phase self-heal guidance already exists in [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt).\n  - Render-recovery tests already exist in [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py).\n- There is an internal inconsistency to resolve: `attempt_template_render_recovery_after_preflight_lint` is implemented but not wired into the phase flow, so lint-classification logic is effectively dead today.\n\nRepresentative implementation pattern to follow:\n- Use the existing template-mode preflight/recovery flow in [scripts/validate_process.sh](scripts/validate_process.sh) and companion assertions in [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py) as the single end-to-end reference.\n\nImplementation plan\n\n1. Files likely to change\n- [scripts/validate_process.sh](scripts/validate_process.sh)\n- [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh) (only if render-phase logging/plumbing gaps remain)\n- [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt)\n- [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py)\n- [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py)\n\n2. Functions/modules to implement or adjust\n- In `validate_process.sh`:\n  - Wire preflight failure handling to lint classification (`classify_preflight_failure`) before deciding recovery path.\n  - Use deterministic rerender+relint helper for template-mode lint failures (likely by wiring `attempt_template_render_recovery_after_preflight_lint` into the phase-2 failure block).\n  - Preserve legacy non-render behavior for non-template or non-lint failures.\n  - Keep self-heal phase dispatch explicit: `\"render\"` only for rerender/relint failure branch, `\"preflight\"` otherwise.\n- In `self_heal_validation.sh`:\n  - Preserve and verify render-phase propagation (`failing_phase`, ledger `failure_phase`) and keep existing allow-list/additive patch guards intact.\n- In `mode-validate-self-heal.txt`:\n  - Tighten wording only as needed so render failures remain renderer-driven and prompt self-heal stays prompt-only.\n\n3. Data structures affected\n- Shell state fields in `validate_process.sh`:\n  - `PRE_FLIGHT_FAILURE_KIND`\n  - `PRE_FLIGHT_FAILURE_REASON`\n  - `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`\n- Self-heal metadata/log payload in `self_heal_validation.sh`:\n  - `failing_phase` in prompt context\n  - `failure_phase` in JSONL patch ledger entries\n- No MongoDB collections/contracts/indexes affected.\n\n4. API/interface changes\n- No external API or workflow input contract changes expected.\n- No env-var rename/removal expected.\n- Internal behavior contract to preserve:\n  - Template-mode lint failure gets deterministic rerender+reflight attempt before terminalization.\n  - No render-phase path performs freehand harness edits.\n  - Existing self-heal prompt target allow-list and additive-only patch enforcement remain unchanged.\n\n5. Potential risks and edge cases\n- Misclassification risk: non-lint failures incorrectly treated as lint could trigger unnecessary rerender loops.\n- Regression risk: changing recovery branching could alter when `\"render\"` vs `\"preflight\"` phase is sent to self-heal.\n- Safety risk: any broadening of self-heal target scope would violate existing guardrails.\n- Compatibility risk: template-mode behavior must not affect freehand/non-template flows.\n\n6. Testing considerations\n- Extend/align render recovery tests in [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py):\n  - Success path: preflight fail -> deterministic rerender -> relint pass -> pipeline continues.\n  - Fail-open path: rerender failure or rerender+reflight still failing routes to self-heal phase `\"render\"`.\n  - Legacy path: non-template preflight failure keeps `\"preflight\"` self-heal path and skips renderer.\n- Update contract assertions in [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py) to match final wired helper/function names and branch contracts.\n- Verify that self-heal allow-list safety remains unchanged (target prompt allow-list and additive-only diff checks).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "78a2d648375d0f491efe5de44b59ef6fa99d78e7db1afeca11507da4117234f9",
+  "lineage": {
+    "issue_number": 1399,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24624417303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24624417303",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1399"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419080831_266c9c2d75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1399,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24624417303"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1399",
+  "timestamps": {
+    "created_at": "2026-04-19T08:08:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `e824678fb9ce5f22a844c0389144aad92a3760d1`\n- Resolved checkout ref: `orchestrator/project-1057`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1057`\n- Integration branch metadata: `orchestrator/project-1057`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No Q1/Q2 clarifications were issued in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with issue scope exactly as specified.\u201d\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/review_run_reviewers.sh`\n- `README.md`\n- `agents.md`\n- `CHANGELOG.md`\n\n2. Functions/modules to implement\n- `scripts/review_run_reviewers.sh` (`run_reviewer` watchdog loop around the PR-state check):\n  - Introduce configurable poll sleep env var `REVIEW_PR_STATE_POLL_INTERVAL_SECS` with default from current literal (`10`) using `${REVIEW_PR_STATE_POLL_INTERVAL_SECS:-10}` semantics.\n  - Add safe parsing/validation for integer-only input and enforce allowed range `[10, 3600]`.\n  - On invalid or out-of-range input, emit structured warning with stable key `rate_limit_audit_fallback` and revert to default (`10`).\n  - Replace the hardcoded `sleep 10` in the watchdog loop with the resolved interval variable.\n  - Update nearby inline comment(s) so cadence description remains accurate after configurability.\n  - Keep behavior unchanged when env var is unset (same default and same loop mechanics).\n\n3. Data structures affected\n- Environment/config surface:\n  - New env var: `REVIEW_PR_STATE_POLL_INTERVAL_SECS`\n- Runtime shell variables:\n  - New resolved interval variable(s) in `review_run_reviewers.sh` for parsed/validated poll sleep.\n- No DB collections/contracts/indexes are affected.\n\n4. API/interface changes\n- New configurable interface:\n  - `REVIEW_PR_STATE_POLL_INTERVAL_SECS`\n  - Default: `10`\n  - Valid range: `10..3600` seconds\n  - Invalid/out-of-range: warning + fallback to default\n- Logging interface:\n  - Add warning line with stable key prefix `::warning::rate_limit_audit_fallback ...` for auditability/fail-open consistency.\n- Documentation updates:\n  - Add variable row in README env var table(s) with default, used-by, and description.\n  - Append env-var bullet in `agents.md` env reference section (under the existing env-var anchor block).\n\n5. Potential risks / edge cases\n- Numeric parsing edge cases:\n  - Empty, whitespace, non-numeric, signed, decimal, and overflow-like values must not break arithmetic.\n- Range handling ambiguity:\n  - Issue text says \u201cclamp\u201d and also says \u201cinvalid/out of range -> fallback default\u201d; implementation should follow acceptance criteria and use fallback-default for invalid/out-of-range values.\n- Cadence semantics:\n  - Current PR-state check happens every 9 watchdog iterations; making sleep configurable changes effective PR check cadence proportionally while preserving existing default behavior.\n- Log noise:\n  - Validation warning should be emitted deterministically (not spammed per loop iteration).\n\n6. Testing considerations\n- Script validity:\n  - `bash -n scripts/review_run_reviewers.sh`\n- Acceptance checks:\n  - Unset var: verify default behavior path remains unchanged.\n  - Set `REVIEW_PR_STATE_POLL_INTERVAL_SECS=120`: verify watchdog uses `sleep 120`.\n  - Set invalid values (e.g. `abc`, `5`, `99999`): verify warning contains `rate_limit_audit_fallback` and default fallback is used.\n- Docs consistency:\n  - Confirm README and `agents.md` both include the new env var with aligned default/description.\n- Changelog:\n  - Add H8 entry under `[Unreleased]` summarizing the configurable poll interval + safe fallback behavior.\n\nConflicts detected (issue vs code/wording):\n- The issue wording combines \u201cclamp to [10, 3600]\u201d with \u201cinvalid/out of range -> fallback default\u201d; these are not identical behaviors. Plan follows the explicit acceptance criterion (fallback to default on invalid/out-of-range).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "475c58944a9a07ce9740c1475615bdf367085dd3577c679c920e9f2820ce4893",
+  "lineage": {
+    "issue_number": 1245,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24535930914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24535930914",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1245"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416215801_4e4b293eb5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1245,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24535930914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1245",
+  "timestamps": {
+    "created_at": "2026-04-16T21:58:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

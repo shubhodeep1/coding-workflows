@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Clarification required\n\nClarification required before planning.\n\nInterpreted answers mapped to prior questions:\n- `Q1: A` \u2014 fix should be applied in a different repository/workspace.\n- `Q2: A` \u2014 use prompt-provided AGENTS context; `/db/contracts` not required for this parsing-only fix.\n- `Q3: A`, `Q4: A`, `Q5: A`, `Q6: A`, `Q7: A`, `Q8: A` \u2014 selected \u201cprovide target repository/path + branch,\u201d but those concrete values were not supplied.\n\nBlocking gap:\n- A concrete implementation plan cannot be grounded until the exact target repository/path and branch are provided (where `validation/tests/01_core_smoke.sh` and `validation/app_server.py` exist).\n\n**Q9: What exact target repository/path and branch should this plan use?**\n\nChoices:\n- **A** \u2014 Provide the target repository URL (or local absolute path), branch name, and confirm these exact paths exist: `validation/tests/01_core_smoke.sh` and `validation/app_server.py`. **(RECOMMENDED)**\n- **B** \u2014 Keep this repository and provide exact equivalent file paths here to plan against.\n- **C** \u2014 Override previous `A` selections and proceed with a generic repository-agnostic plan based only on the issue text (no code inspection).\n\nReply: `Q9: A`\n\nReply with:\n`/answer`\n\nReply with:\n/answer",
+  "fingerprint": "73f0640130ac1b09c384c054886395f4ef26b8ab8ec830333f8239274a9d647b",
+  "lineage": {
+    "issue_number": 634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24216986144",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24216986144",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/634"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409224722_47d916da4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24216986144"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #634",
+  "timestamps": {
+    "created_at": "2026-04-09T22:47:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

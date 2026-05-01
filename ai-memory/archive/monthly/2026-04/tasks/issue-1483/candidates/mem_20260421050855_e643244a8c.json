@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `7342faa9155af83163a10e56816e147bd2b94344`\n- `branch`: `orchestrator/project-1479`\n- `integration metadata`: `orchestrator/project-1479`\n- `integration mismatch`: `false`\n\nClarification mapping:\n- No clarification Q-IDs were issued; `/answer [auto-answered-by-orchestrator]` confirms planning can proceed on the stated scope.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n\n2. Functions/modules to implement\n- Extend `_fetch_candidate_issue_details_graphql` to include issue `state` in its GraphQL payload and transformed cache output.\n- In current-wave reconciliation (`ISSUE_STATES_JSON` build loop), read issue state from the cycle-local candidate-details cache first, and only fall back to legacy per-issue REST (`GET /issues/{n}`) on cache miss/error.\n- Extract/reuse a batched issue-label GraphQL helper (pattern currently in the current-wave inline label batch) and apply it to the prior-wave backward-scan non-terminal issue set.\n- In prior-wave backward scan, consume the batched prior-wave labels map; fall back to per-issue REST label fetch only when batch data is unavailable.\n- Preserve existing log-prefix contracts and behavior (`LABEL_REPAIR*`, backward-scan logs, fail-open execution flow).\n\n3. Data structures affected\n- Candidate-details cache object keyed by issue number: add `state` (normalized for existing `open|closed` consumers).\n- Prior-wave batched labels cache object keyed by issue number.\n- Existing `ISSUE_STATES_JSON` and `LABELS_JSON` remain the downstream interfaces (no schema change), but their population source becomes batched cache-first.\n\n4. API/interface changes\n- Internal GraphQL query shape in poller helpers adds `issue.state`.\n- No external workflow inputs, env vars, labels, or public contracts changed.\n- No MongoDB/contracts impact.\n\n5. Potential risks and edge cases\n- GraphQL enum casing (`OPEN/CLOSED`) must be normalized to current shell logic expectations (`open|closed`).\n- Partial/failed GraphQL batches must fail open and trigger legacy REST fallback per issue.\n- Prior-wave batching must not alter backward-scan ordering semantics or status transitions.\n- Keep scope constrained to current-wave/prior-wave hot loops; do not refactor unrelated orchestrator paths.\n\n6. Testing considerations\n- Update poller mock/store plumbing to observe current-wave issue-state REST usage explicitly (so tests can assert cache-hit vs fallback behavior).\n- Add/adjust tests for current-wave path:\n- full GraphQL path: no per-issue `GET /issues/{n}` state calls in steady state.\n- GraphQL error/partial path: fallback REST state calls still occur.\n- Add/adjust tests for prior-wave path:\n- full GraphQL path: no per-issue `/issues/{n}/labels` in backward scan.\n- GraphQL error/partial path: fallback per-issue label calls still occur.\n- Keep existing label-batch fallback contract tests green.\n\nConflict note\n- Issue text says \u201cbatch prior-wave label/state reads,\u201d but the current prior-wave loop performs per-issue label reads (not per-issue issue-state reads). Plan applies batching to prior-wave labels and keeps state logic unchanged there.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "57b8ed092a22e473518cf8a3ddf6101ae3826923d997fb6c1cfc6a773d7f1e15",
+  "lineage": {
+    "issue_number": 1483,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24704924806",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24704924806",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1483"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421050855_e643244a8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1483,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24704924806"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1483",
+  "timestamps": {
+    "created_at": "2026-04-21T05:08:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

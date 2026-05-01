@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/forward-merge-stable-to-main.yml:83-122 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: Aborting the attempted merge discards the conflicted merge state and preserves only the list of conflicting files for the fallback PR.\n  WHY: Reviewers disagree on whether this is acceptable, but the workflow still aborts the merge and does not carry the conflict hunks forward.\n- .github/workflows/forward-merge-stable-to-main.yml:147-165 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The `gh pr create` benign-error classifier uses a loose `grep -qiE 'pull request already exists|a pull request for branch'` match that can misclassify real failures as success.\n  WHY: Several reviewers flagged the substring match as overly broad; others considered it correct against current CLI output, so the disagreement is about how fragile the current pattern is.\n- .github/workflows/test-and-mark-stable.yml:128-138 | severity=medium | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: Failing hard on `git fetch --tags --force origin` can abort release runs on transient fetch errors instead of proceeding with already-fetched local tag data.\n  WHY: One reviewer treats this as an intentional safety choice, but another reports it as a release-blocking failure path.\n- .github/workflows/test-and-mark-stable.yml:3715-3720 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The diagnostic path assumes `/tmp/_gh_rl_err` exists, so an early short-circuit can leave the failure output empty or missing.\n  WHY: Only one reviewer reported this residual diagnostic gap, while the others said the retry helper now writes the file correctly.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/forward-merge-stable-to-main.yml:158 | confidence=1\n  PROBLEM: The `a pull request for branch` alternative is a loose substring match that could accept future GitHub CLI error phrasings it was not meant to cover.\n  WHY: The current pattern works today, but it relies on undocumented wording and was suggested only as a minor hardening tweak.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/forward-merge-stable-to-main.yml:83-122 | severity=medium | confidence=4\n  PROBLEM: When merge conflicts occur, the workflow aborts the merge and the conflict hunk context is not preserved.\n  WHY: The reviewer says this was already addressed in the original code because only the conflicting file list is surfaced in the fallback PR body.\n- .github/workflows/test-and-mark-stable.yml:3649-3787 | severity=low | confidence=2\n  PROBLEM: The tag-existence race was called out as a TOCTOU issue.\n  WHY: The reviewer says the last run addressed it by moving the tag fetch before `LATEST` computation, eliminating the window.\n- .github/workflows/forward-merge-stable-to-main.yml:158-160 | severity=medium | confidence=3\n  PROBLEM: The PR creation benign-failure classifier is a `grep` alternation that could misclassify non-benign errors.\n  WHY: The reviewer says the last run addressed it with return-code checks and specific benign-failure detection.\n- .github/workflows/test-and-mark-stable.yml:136-138 | severity=medium | confidence=3\n  PROBLEM: Hard-failing on `git fetch --tags --force origin` is treated as an intentional design choice rather than a bug.\n  WHY: The reviewer explicitly says failing loudly is preferable to stale tag data, so no change is needed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/forward-merge-stable-to-main.yml:83-122 | confidence=3\n  PROBLEM: Aborting the merge discards the conflict state, and the reviewer suggests preserving conflict markers by committing the conflicted state to a temporary branch.\n  WHY: The reviewer considers the current behavior functionally correct because GitHub recomputes conflicts, but says the conflict hunk context is lost and only file names are preserved.\n- .github/workflows/forward-merge-stable-to-main.yml:158-165 | confidence=3\n  PROBLEM: The `gh pr create` benign-failure classifier is substring-based and could misclassify non-benign failures as \"already exists\".\n  WHY: The reviewer warns that a real auth/scope/API failure could be silently treated as success if the stdout/stderr text happens to match the loose pattern.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/forward-merge-stable-to-main.yml:158 | confidence=3\n  PROBLEM: The `grep` pattern for `gh pr create` benign failures is substring-based and could match unrelated errors.\n  WHY: The reviewer says the current pattern is overly broad and suggests removing the second alternative or anchoring it to the actual message.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/forward-merge-stable-to-main.yml:147-160 | confidence=3\n  PROBLEM: The `gh pr create` error classifier assumes exact phrasing from `gh pr create` and could suppress hard failure on unrelated errors.\n  WHY: The reviewer says legitimate PR creation failures could be misclassified as \"already exists\", causing stable\u2192main propagation to silently drop.\n- .github/workflows/test-and-mark-stable.yml:128-138 | confidence=3\n  PROBLEM: Hard failure on `git fetch --tags --force origin` blocks release on transient network/auth flakes.\n  WHY: The reviewer says there is no fallback to local tags or retry, so the release workflow aborts mid-run on a retryable fetch error.\n- .github/workflows/test-and-mark-stable.yml:3715-3720 | confidence=2\n  PROBLEM: `cat /tmp/_gh_rl_err` assumes the helper always writes that path, so the diagnostic can be empty or missing.\n  WHY: The reviewer says the error path can lose `gh api` details if `_gh_retry` short-circuits before the redirect is established.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "37bda71bf59646231f39ac3ce476fa2d1ee3c852ba04546c47e8c6cb225dd807",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1821,
+    "run_id": "25153559372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25153559372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430081301_3797a07785",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1821,
+    "run_id": "25153559372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T08:13:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

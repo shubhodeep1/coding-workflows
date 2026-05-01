@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `d1d19642746c191351a2f4402278c04283853353`\n- Checked-out branch: `orchestrator/project-1299`\n- Integration metadata branch: `orchestrator/project-1299`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No Q<ID> clarification questions were issued in this cycle.\n- Continuation signal was `/answer [auto-answered-by-orchestrator]`.\n- No unresolved ambiguity remains for planning.\n\n1. Files likely to change\n- [.github/workflows/review_autofix.yml](.github/workflows/review_autofix.yml)\n- Optional only if implementation reveals contract drift: [README.md](README.md), [agents.md](agents.md)\n\n2. Functions/modules to implement\n- In `review_autofix.yml`, insert per-iteration glue steps between reviewer fan-out and editor invocation in exact order:\n  1) `review_floor_rules.sh`\n  2) `review_consolidate.sh`\n  3) `review_parse_consolidator.sh`\n  4) `review_issue_ledger.sh`\n- Follow the existing representative integration pattern from [scripts/review_apply_fixes.sh](scripts/review_apply_fixes.sh) for ordering, artifact handoff, and fail-open semantics.\n- Wire step-level gates to existing env contract switches/defaults (including floor/consolidator/parser/ledger controls) without inventing new env names.\n- Ensure bootstrap validation in workflow includes any newly required stage scripts if not already present in `REQUIRED_BOOTSTRAP_SCRIPTS`.\n- Add/adjust workflow summary emission step to publish metrics table per documented schema in [docs/review-pipeline-improvements.md](docs/review-pipeline-improvements.md), including parser-failure, override, and residual-acceptance metrics.\n- Preserve existing review loop, autofix iteration counting, and review-blocked judge handoff behavior unchanged.\n\n3. Data structures affected\n- Intermediate artifacts passed across stages:\n  - `floor_tags.txt`\n  - `consolidator_raw.txt`\n  - `review_issues.txt`\n  - `parser_stats.txt`\n  - `ledger_status.txt`\n- Existing env/flags and outputs used by workflow control:\n  - consolidator override signal (`CONSOLIDATOR_OVERRIDDEN`)\n  - stage enable/fail-open controls from current env contract\n- `$GITHUB_STEP_SUMMARY` table rows/fields for per-iteration metrics.\n\n4. API/interface changes\n- No external API endpoint changes.\n- No `gh` call pattern expansion beyond what is strictly needed for this integration.\n- Workflow interface change is internal: additional gated stage execution + metrics reporting in existing job flow.\n\n5. Risks and edge cases\n- Stage script non-zero exits must degrade fail-open and not block editor unless an existing contract-defined hard-fail debug mode is explicitly active.\n- Missing artifact files when a stage is disabled or skipped must be handled with safe defaults to avoid breaking downstream steps.\n- Parser/consolidator outputs may be partial or empty; summary step must still render deterministic metrics.\n- Ensure conditionals do not accidentally alter success/failure control flow for existing review/autofix loop.\n- Avoid implicit behavior changes in review-blocked escalation paths.\n\n6. Testing considerations\n- Validate step order in logs matches the required 1\u21924 sequence for each iteration.\n- Run with each stage toggle enabled/disabled to confirm backward-compatible behavior.\n- Inject controlled failures per stage and verify editor still runs under fail-open defaults.\n- Verify summary table always appears and contains parser failure, override, and residual-acceptance metrics.\n- Confirm existing iteration termination and RB-judge handoff semantics are unchanged.\n\nConflict detection:\n- No factual conflicts found between issue description and current code structure.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f64e43e669345ed6d6fa13f812b6914b3790adfa6826661a1c73888b4a96da3c",
+  "lineage": {
+    "issue_number": 1451,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24630419468",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24630419468",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1451"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419134347_6a5b79e518",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1451,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24630419468"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1451",
+  "timestamps": {
+    "created_at": "2026-04-19T13:43:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

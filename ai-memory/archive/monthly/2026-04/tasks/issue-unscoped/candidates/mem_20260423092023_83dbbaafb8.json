@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1097 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: The `jq -s` merge uses process substitution, which some shell environments may not support reliably.\n  WHY: One reviewer flagged restricted-shell / file-descriptor fragility, and another noted bash-/`/dev/fd`-related portability failure modes; severity stays low because the script is already `#!/bin/bash`.\n- scripts/orchestrate_poll_process.sh:1070 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Label names are returned without lowercasing, unlike the state helper\u2019s normalization.\n  WHY: Exact string matching on labels could fail if casing is inconsistent, though the reviewer rated this only as a plausible edge case.\n- scripts/orchestrate_poll_process.sh:1110,1183 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The GraphQL calls do not include an explicit timeout.\n  WHY: A hung `gh api graphql` request could stall the poller on network/platform issues; this is a hardening gap rather than a demonstrated regression.\n- scripts/orchestrate_poll_process.sh:1097,1170 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The process-substitution-based JSON merge may be fragile in restricted environments or under file-descriptor pressure.\n  WHY: The reviewer saw this as a portability concern for `<(...)`, though the impact was rated low and uncertain.\n- scripts/orchestrate_poll_process.sh:1118,1171 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The reviewer believed empty or whitespace-only GraphQL fragments could produce invalid queries.\n  WHY: They argued this could trigger a 400 from the GraphQL API, though later reviewers said the current empty-fragment guard already prevents this; keep the original finding text as reported.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:1070 | severity=low | confidence=2\n  PROBLEM: Label names are returned without lowercasing, inconsistent with state normalization in `_fetch_issue_states_batch_graphql`.\n  WHY: Case-sensitive comparisons could fail if labels have inconsistent casing, though the reviewer treated this as a plausible edge case.\n- scripts/orchestrate_poll_process.sh:1110,1183 | severity=medium | confidence=3\n  PROBLEM: The GraphQL API calls lack timeout protection.\n  WHY: A hung API call could stall the poller process on network or platform issues.\n- scripts/orchestrate_poll_process.sh:1097,1170 | severity=low | confidence=2\n  PROBLEM: Process substitution may fail in restricted environments or with file descriptor exhaustion.\n  WHY: The reviewer warned the script could fail where process substitution is unsupported or fragile.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/orchestrate_poll_process.sh:1097 | severity=medium | confidence=3\n  PROBLEM: The `jq -s` merge with process substitution can fail in shell environments where `/dev/fd` or descriptor creation is unavailable.\n  WHY: If process substitution cannot be created, `jq -s` fails and the fallback returns the original merged object, silently dropping the batch update.\n- scripts/orchestrate_poll_process.sh:1118,1171 | severity=medium | confidence=4\n  PROBLEM: Empty or whitespace-only GraphQL fragments could make the generated query syntactically invalid.\n  WHY: The reviewer said an empty selection set would trigger a GraphQL 400 and waste a retry cycle.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "743dda4055eec29f1f21f0f48998ec9837a799a9a62be7e797fcc547fe1c0ea9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24824398294",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24824398294",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423092023_83dbbaafb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24824398294"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T09:20:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

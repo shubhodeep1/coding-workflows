@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:184 and 196 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: Two nearly identical \"Validation harness template-mode toggle\" entries are duplicated in the documentation.\n  WHY: The duplicate contract text can confuse operators and downstream tools about the authoritative `VALIDATION_USE_TEMPLATES` behavior.\n- .github/workflows/validate.yml:517-534 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The workflow unconditionally installs the Python renderer dependencies and still warns as if installation is merely being skipped when the renderer script is missing.\n  WHY: Reviewers disagreed on impact, but the shared concern is that this now-mandatory template-only path still does unnecessary install work and emits misleading optional-path wording.\n- scripts/validate_process.sh:2161 and 2230+ | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The early guard and the renderer exit paths use different template-mode failure wording that can confuse users about whether freehand generation is still supported.\n  WHY: Two reviewers flagged the messaging as inconsistent, while others said the messages are context-specific and intentional.\n- scripts/validate_process.sh:62-65 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Explicit `VALIDATION_USE_TEMPLATES=false` now fails immediately without any migration warning or guidance.\n  WHY: Existing workflows that still set `false` will break with no clear path to update their configuration.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md: Lines: 184 and 196 | severity=low | confidence=5\n  PROBLEM: Two identical \"Validation harness template-mode toggle\" entries exist in the environment variable documentation section.\n  WHY: This creates documentation confusion for operators and downstream tools about `VALIDATION_USE_TEMPLATES` behavior.\n- .github/workflows/validate.yml: Lines: 517-534 | severity=medium | confidence=3\n  PROBLEM: The workflow now unconditionally installs Python dependencies and the missing-script warning says it is \"skipping renderer dependency installation\" even though the dependencies are required for the now-mandatory template mode.\n  WHY: That step does unnecessary work when the renderer script is missing and its warning text is misleading about the actual failure mode.\n- scripts/validate_process.sh: Lines: 62-65 | severity=medium | confidence=4\n  PROBLEM: `VALIDATION_USE_TEMPLATES` now defaults to `true`, but there is no warning or migration guidance for repositories that still set it to `false`.\n  WHY: Existing workflows that explicitly disabled template mode will now fail with `harness_error` without clear migration instructions.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md: Lines: 184 and 196 | severity=low | confidence=5\n  PROBLEM: Two nearly identical entries for \"Validation harness template-mode toggle\" are present.\n  WHY: The duplicate documentation can confuse operators about the `VALIDATION_USE_TEMPLATES` contract, even though it does not affect runtime behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md: Lines: 184 and 196 | severity=low | confidence=4\n  PROBLEM: Two nearly identical entries for \"Validation harness template-mode toggle\" exist in `agents.md`.\n  WHY: The duplicated contract text creates confusion about which description is authoritative for `VALIDATION_USE_TEMPLATES`.\n- .github/workflows/validate.yml: Lines: 517-534 (in the \"Install Python dependencies for validation renderer\" step) | severity=medium | confidence=3\n  PROBLEM: The step unconditionally installs Python dependencies even when `VALIDATION_USE_TEMPLATES=false`.\n  WHY: That adds unnecessary runtime work and potential dependency conflict exposure on the explicitly disabled path.\n- scripts/validate_process.sh: Line 2161 (early guard) vs lines 2230+ (renderer exit code handlers) | severity=low | confidence=3\n  PROBLEM: The early-guard failure message and the later renderer exit messages use different wording about template mode and freehand generation.\n  WHY: The differing phrases can confuse users about whether `VALIDATION_USE_TEMPLATES=false` is still supported or deprecated.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- agents.md: Lines 184 and 196 | severity=low | confidence=4\n  PROBLEM: There are duplicate \"Validation harness template-mode toggle\" entries in `agents.md`.\n  WHY: The duplication can confuse operators and downstream automation tools parsing configuration contracts.\n- .github/workflows/validate.yml: Lines: ~517-534 | severity=medium | confidence=4\n  PROBLEM: Python dependencies are installed even when `VALIDATION_USE_TEMPLATES=false`.\n  WHY: This wastes CI resources and adds dependency exposure with no benefit in the disabled path.\n- scripts/validate_process.sh: Line 2161 (early guard) vs lines 2230+ (renderer exit code handlers) | severity=low | confidence=4\n  PROBLEM: The early-guard failure message is inconsistent with the later template-mode exit messages.\n  WHY: Conflicting guidance can mislead users during preflight failures about whether `VALIDATION_USE_TEMPLATES=false` is still supported.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- agents.md: Lines 184 and 196 | severity=low | confidence=4\n  PROBLEM: Two nearly identical bullets exist for `VALIDATION_USE_TEMPLATES`, one at line 184 and one at line 196.\n  WHY: The duplicated documentation creates ambiguity about the correct behavior of `VALIDATION_USE_TEMPLATES`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5542d4274ed8ab3eb9801108849696a22bf866032f85d617ea306dd0924932db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24919618582",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24919618582",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260425020937_c07c3d89a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24919618582"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-25T02:09:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

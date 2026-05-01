@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\ntests/e2e_smoke_canary.txt",
+  "fingerprint": "4439bd74c6ef8fc30c902afc7bf3204357e20940360c4d5725b4b530508a57b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 667,
+    "run_id": "24233994202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24233994202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260410083215_c72ad2b171",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 667,
+    "run_id": "24233994202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-10T08:32:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

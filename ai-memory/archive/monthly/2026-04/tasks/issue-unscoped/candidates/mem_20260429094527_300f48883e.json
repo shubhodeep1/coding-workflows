@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:1011-1027 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Commands exceeding 500 characters are truncated from the retry prompt recap via `substr($0, 1, 500)`, so the full command history is not available to retries.\n  WHY: The model may repeat long exploration commands across attempts, wasting budget without progressing to edits; this was observed in bitsafe.io #26 where recon looped without file changes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi_k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/implement.yml:1011-1027 | confidence=4\n  PROBLEM: Commands exceeding 500 characters are truncated from the retry prompt recap via `substr($0, 1, 500)`, preventing full command history from informing retries.\n  WHY: Model may repeat long exploration commands (e.g., complex `mcp__serena__find_symbol` calls) across attempts, wasting budget without progressing to edits; observed in bitsafe.io #26 where recon looped without file changes.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "95773c0033f9dcd0a2c431e44f81f95c909c0d37ccb3311364cd9ce1becefcd1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1771,
+    "run_id": "25100964874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25100964874",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429094527_300f48883e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1771,
+    "run_id": "25100964874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-29T09:45:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

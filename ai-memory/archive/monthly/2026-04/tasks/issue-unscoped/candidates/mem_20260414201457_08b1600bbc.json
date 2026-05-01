@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24420388325-1-1130/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n/tmp/codex-pr-24420388325-1-1130/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n/tmp/codex-pr-24420388325-1-1130/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n/tmp/codex-pr-24420388325-1-1130/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\nscripts/check_resolver_diff.sh\nscripts/check_workflow_script_refs.py\nscripts/openrouter_prompt_cache.py\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n.github/workflows/review_autofix.yml**\n/tmp/codex-pr-24420388325-1-1130/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24420388325-1-1130/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24420388325-1-1130/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\nprompts/conflict-resolver.txt\nscripts/check_Resolver_2.0.\nscripts/check_Resolver_2.0.sh\nscripts/check_workflow_script_refs.py**\nscripts/openrouter_prompt_cache.py**",
+  "fingerprint": "6dfdd8bd604cdb057367b358d694aabfe1dc121fbe5f1a45e39a5192a4357689",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 930,
+    "run_id": "24420388325",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24420388325",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414201457_08b1600bbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 930,
+    "run_id": "24420388325"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 7 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T20:14:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

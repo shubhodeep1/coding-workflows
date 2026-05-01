@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1197 | severity=medium | confidence=5\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: Inside `attempt_render_recovery_after_preflight_failure`, `local PRE_FLIGHT_APPEND_LOG=\"true\"` creates a local variable instead of setting the global flag used by `run_preflight_checks`.\n  WHY: With the local assignment, the original preflight log is truncated on rerun and the failure diagnostics are lost, which harms self-healing and debugging.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/review_run_reviewers.sh:140-141, 877-883 | severity=low | confidence=5\n  PROBLEM: The reviewer invocation was correctly changed from `--full-auto` to `--ask-for-approval never --sandbox read-only` to prevent workspace mutations during review.\n  WHY: Reviewer writes polluted the pre-editor baseline and caused `EDITOR_CHANGES_LOST` false positives; this sandbox change addresses that root cause.\n- tests/test_orchestrate_poll_process.py:3585-3620 | severity=low | confidence=5\n  PROBLEM: The test anchors were updated to match the current `scripts/orchestrate_poll_process.sh` structure after the recent no-op cap block insertion.\n  WHY: The old anchors no longer matched the script content, so the update is necessary for the test to stay aligned.\n- Various validation template files (.github/workflows/validate.yml, scripts/validate_process.sh, etc.) | severity=low | confidence=3\n  PROBLEM: Unrelated validation template mode changes were introduced outside the PR\u2019s stated scope.\n  WHY: The changes appear to be scope creep; they do not obviously break anything, but they add behavior not requested by the PR.\n- scripts/review_run_reviewers.sh:140-141 | severity=low | confidence=1\n  PROBLEM: The probe usage calls also use `--sandbox read-only`, which is consistent but purely defensive.\n  WHY: The existing probe calls already measure token usage, so this is only a minor consistency note.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_run_reviewers.sh:877-883 | severity=low | confidence=5\n  PROBLEM: `exec \"${codex_bin}\" --ask-for-approval never exec --model \"${model}\" --sandbox read-only < \"${prompt_file}\"` correctly fixes the workspace-mutation issue in reviewer execution.\n  WHY: Replacing `--full-auto` with `--sandbox read-only` prevents reviewers from mutating the workspace before the editor snapshot is captured.\n- tests/test_orchestrate_poll_process.py:3585-3620 | severity=low | confidence=5\n  PROBLEM: The updated `close_and_reissue)` and `close_linked_pr` anchors correctly restore the test expectations after the control-flow changes.\n  WHY: The upstream script now contains the ancestor-chain no-op cap block, which shifted the matching offsets.\n- scripts/review_run_reviewers.sh:883 | severity=low | confidence=1\n  PROBLEM: A defensive check immediately before the loop would improve diagnostics if `codex_bin` is misconfigured.\n  WHY: Although `codex_bin` is derived from `command -v codex`, an explicit executable check would make failures clearer.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_run_reviewers.sh:140-141, 883 | severity=low | confidence=5\n  PROBLEM: The main reviewer invocation was correctly changed to `codex --ask-for-approval never exec --model \"${model}\" --sandbox read-only`.\n  WHY: This prevents reviewers from writing to the workspace and polluting the pre-editor snapshot that feeds the touched-file detector.\n- tests/test_orchestrate_poll_process.py:3588-3606 | severity=low | confidence=5\n  PROBLEM: The test anchors were updated to accommodate PR #1452's ancestor-chain no-op cap block.\n  WHY: The new anchors now match the current script structure, so the test should continue to pass.\n- scripts/review_run_reviewers.sh:750-757 | severity=low | confidence=1\n  PROBLEM: The script already checks whether `codex` exists before running reviewers.\n  WHY: The earlier low-confidence availability concern is already handled by the existing `command -v codex` check.\n- scripts/review_run_reviewers.sh:960 | severity=low | confidence=2\n  PROBLEM: Exit-code handling is already present through status-file logging, though it is not explicitly echoed.\n  WHY: The failure path is detected indirectly, so explicit exit-code logging would only be an observability improvement.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:140-141, 877-883 | severity=low | confidence=5\n  PROBLEM: The reviewer Codex invocation was correctly changed from `--full-auto` to `--ask-for-approval never --sandbox read-only` to prevent workspace mutations during review.\n  WHY: Reviewers writing to the workspace polluted the pre-editor snapshot and caused `EDITOR_CHANGES_LOST` false positives.\n- tests/test_orchestrate_poll_process.py:3585-3620 | severity=low | confidence=5\n  PROBLEM: The test anchor updates correctly accommodate PR #1452's inserted ancestor-chain no-op cap blocks.\n  WHY: The expected strings still exist in the updated script, so the anchors now match the current control flow.\n- scripts/review_run_reviewers.sh:140-141 | severity=low | confidence=5\n  PROBLEM: The usage probe calls were also changed to `--ask-for-approval never --sandbox read-only`.\n  WHY: This is acceptable because the probes do not need workspace write access and consistent sandboxing reduces unexpected behavior.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/validate_process.sh:1197 | severity=medium | confidence=5\n  PROBLEM: Inside `attempt_render_recovery_after_preflight_failure`, `local PRE_FLIGHT_APPEND_LOG=\"true\"` sets only a local variable instead of the global flag used by `run_preflight_checks`.\n  WHY: The initial preflight log will be truncated on rerun, which discards failure diagnostics and weakens self-heal debugging.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "d262ea8a307e8a279b29c7440c3d9d893696aae4e4c1099e2c59f47f2739d38b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1449,
+    "run_id": "24655986535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24655986535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420085650_91b60b9a3b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1449,
+    "run_id": "24655986535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-20T08:56:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

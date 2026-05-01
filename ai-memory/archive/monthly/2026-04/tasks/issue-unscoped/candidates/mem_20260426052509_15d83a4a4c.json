@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:7877, 7881, 7884 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: Using `echo` on the comment body before piping to `grep` can reinterpret option-like or escaped input.\n  WHY: All three reviewers flagged the same shell-fragility concern; z-ai_glm-5 disputed that this is a bug, so this is the highest-confidence consolidation of that concern.\n- scripts/orchestrate_poll_process.sh:7870-7871, 7876-7884 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: The `/judge_resume` body is parsed directly with `grep` regexes, so prose containing flag names can be misread as command flags.\n  WHY: Both reviewers point at the same lack of sanitization/extraction before matching; z-ai_glm-5 considered the false-positive risk unlikely, but did not identify a different root cause.\n- scripts/orchestrate_poll_process.sh:7873 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The recovery_count fallback can still hand `--argjson` a bad value when the state file is missing or malformed.\n  WHY: Moonshot reports this as a runtime failure path, while z-ai frames the same line as a hardening edge case rather than a confirmed bug.\n- scripts/orchestrate_poll_process.sh:7872 | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: Missing defaulting for `PREV_JUDGE_STALL` can leave the later `NEW_JUDGE_STALL` / `--argjson` path with an empty value when the state file omits `judge_stall_cycles`.\n  WHY: This is only raised by z-ai_glm-5 as a defensive hardening concern.\n- scripts/orchestrate_poll_process.sh:7887-7888 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: When both `.judge_stall_cycles` and `.judge_cycle` are absent, `PREV_JUDGE_STALL` can be empty and the later `jq --argjson` call fails.\n  WHY: Minimax reports a concrete runtime failure on this path and no other reviewer contradicted this exact case.\n- scripts/orchestrate_poll_process.sh:7900-7903, 7915-7916 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: Missing validation/defaulting lets empty or malformed state values reach `jq --argjson`, which can abort the state update.\n  WHY: Moonshot reports the empty-string path, deepseek flags malformed JSON input, and z-ai_glm-5 raises the same concern as a hardening issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:7877, 7881, 7884 | confidence=4\n  PROBLEM: Using `echo` with user-controlled input for flag parsing is unsafe.\n  WHY: `echo` can interpret options like `-n` and `-e`, and escape sequences like `\\n`, so the comment body can be transformed before `grep` sees it.\n- scripts/orchestrate_poll_process.sh:7915-7916 | confidence=3\n  PROBLEM: `--argjson` expects valid JSON but receives a shell variable that may contain invalid JSON if state is corrupted.\n  WHY: If the state file contains non-numeric or malformed values, `jq -r` can surface them and the later `jq --argjson` call will fail.\n- scripts/orchestrate_poll_process.sh:7876-7884 | confidence=2\n  PROBLEM: Flag regex patterns could match flag-like text in comment prose.\n  WHY: Comment text containing `--force` or similar flag spellings can be treated as a command flag by the regex-based parsing.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:7877, 7881, 7884 | confidence=3\n  PROBLEM: `echo` can misinterpret escape sequences in user-controlled input.\n  WHY: The pipeline depends on `echo` preserving the comment body literally, which is fragile when the body can begin with option-like text or contain backslash escapes.\n- scripts/orchestrate_poll_process.sh:7887-7888 | confidence=4\n  PROBLEM: Empty `PREV_JUDGE_STALL` causes `jq --argjson` to fail.\n  WHY: If both `.judge_stall_cycles` and `.judge_cycle` are missing from the state file, the shell variable can become empty and the JSON argument becomes invalid.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:7873 | confidence=3\n  PROBLEM: The fallback expression for `recovery_count` can produce a value that later breaks `--argjson` when the state is malformed.\n  WHY: The legacy boolean fallback and the numeric field are mixed without validation, so a missing or non-numeric state value can propagate into the later JSON assignment.\n- scripts/orchestrate_poll_process.sh:7877, 7881, 7884 | confidence=2\n  PROBLEM: Using `echo` to pipe the comment body into `grep` can mishandle special characters.\n  WHY: An input body starting with option-like text or containing escape sequences can be altered before the regex check runs.\n- scripts/orchestrate_poll_process.sh:7870-7871 | confidence=2\n  PROBLEM: The grep-based flag parsing can still match flag-like substrings in larger words or prose.\n  WHY: The command body is not separately sanitized before regex matching, so text that merely mentions `--force`, `--reset-stall`, or `--reset-recovery` can be interpreted as flags.\n- scripts/orchestrate_poll_process.sh:7900-7903 | confidence=3\n  PROBLEM: `PREV_JUDGE_STALL` and `PREV_RECOVERY` are retrieved as raw strings that can become empty and then be passed to `--argjson`.\n  WHY: If the state file yields null or empty values, the later `jq --argjson` call receives invalid input and the state update fails.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:7872\n  PROBLEM: Defensive handling for empty `PREV_JUDGE_STALL` is missing.\n  WHY: If the state file is corrupted or omits the expected stall counter, the later `--argjson` path can still be fed an empty value; z-ai treats this as an unlikely edge case rather than a confirmed bug.\n- scripts/orchestrate_poll_process.sh:7873\n  PROBLEM: Defensive handling for empty `PREV_RECOVERY` is missing.\n  WHY: The same state-defaulting gap can leave the recovery counter path without a numeric fallback, which z-ai frames as a hardening improvement rather than a runtime defect.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b5f5b08e6d42240f53baabb9e9a31a7700f5dc076267f6a9961da3e4890dd8ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1650,
+    "run_id": "24948769868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24948769868",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426052509_15d83a4a4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1650,
+    "run_id": "24948769868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T05:25:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

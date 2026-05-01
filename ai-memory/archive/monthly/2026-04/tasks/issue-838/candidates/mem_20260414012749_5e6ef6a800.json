@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping\n- QIDs: none were issued in Clarify.\n- Interpreted answer: `/answer [auto-answered-by-clarify]` means no unresolved clarification decisions remain, so planning can proceed.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/implement.yml` (in step `Generate AI issue summary for PR comment`).\n\n2. Functions/modules to implement\n- Extend the existing summary-context assembly block that writes `${RUNTIME_DIR}/issue_context_for_summary.txt`.\n- Before the issue-summary `codex exec`, append:\n- `=== CHANGED FILES (this PR) ===`\n- `git diff --stat origin/${PR_BASE_BRANCH}...HEAD` output when available.\n- `=== FILE LIST ===`\n- `git diff --name-only origin/${PR_BASE_BRANCH}...HEAD` output, capped to 100 files, then append `... and N more` when truncated.\n- Add fail-open handling if base ref lookup is unavailable (append fallback text; do not fail the step).\n\n3. Data structures affected\n- Runtime artifact only: `${RUNTIME_DIR}/issue_context_for_summary.txt` gains bounded PR diff context sections.\n- No database collections/contracts are affected.\n\n4. API or interface changes\n- No external API changes.\n- No workflow input/output contract changes.\n- No summary posting contract changes.\n- Keep existing 120-word summary prompt behavior unchanged.\n\n5. Potential risks or edge cases\n- `origin/${PR_BASE_BRANCH}` may be missing in local refs.\n- Large PRs can overwhelm context without truncation.\n- Empty/no-op diffs.\n- `set -euo pipefail` can fail the step if diff commands are unguarded.\n- Mitigation: guarded diff generation + explicit fallback text + hard cap on file list.\n\n6. Testing considerations\n- Validate workflow YAML after edits.\n- Verify in run logs:\n- Small/medium PR: diff stat + concrete file names appear in summary context.\n- Large PR (>100 files): list is truncated and includes `... and N more`.\n- Base ref unavailable: fallback text appears and summary generation/posting still succeeds.\n- Confirm existing summary validation remains intact (`### AI Issue Summary`, no fenced code blocks, unchanged posting flow).\n\nConflict detection\n- No factual conflicts found between the issue request and the current codebase. The target file and insertion point exist and align with the requested change.\n\nReply `/approved` to proceed with implementation or `/reclarify` to adjust this plan.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "adc7df86e4afeaa62a243c3d589240aa290be752784ebba364bb71e21a604518",
+  "lineage": {
+    "issue_number": 838,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375836876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375836876",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/838"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414012749_5e6ef6a800",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 838,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375836876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #838",
+  "timestamps": {
+    "created_at": "2026-04-14T01:27:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

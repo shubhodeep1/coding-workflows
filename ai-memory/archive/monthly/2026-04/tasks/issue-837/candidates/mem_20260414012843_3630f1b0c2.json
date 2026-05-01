@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nClarification mapping:\n- No clarification Q/As were required; `/answer [auto-answered-by-clarify]` indicates planning can proceed.\n- Locked decision applied from issue: **Q4 = A** (lowercased token-set matching over issue + answers (+ approved plan for implement)).\n\n1. Files likely to change\n- [scripts/extract_db_contracts.sh](scripts/extract_db_contracts.sh) (new)\n- [.github/workflows/plan.yml](.github/workflows/plan.yml)\n- [.github/workflows/implement.yml](.github/workflows/implement.yml)\n\n2. Functions/modules to implement\n- Add `extract_db_contracts.sh` with fail-open behavior:\n- Accept output path + one or more context text inputs (plan: issue+answers, implement: issue+answers+approved plan).\n- If `db/contracts/` is missing: write a clear marker under `=== DB CONTRACTS (relevant) ===` and exit `0`.\n- Build lowercased token set from provided context text.\n- For each `db/contracts/*.yml`, derive candidate collection identifiers from filename stem and `collection:` field.\n- Match contracts via token-set intersection/subset logic per Q4 decision.\n- Inline matched contracts into output, capped to 200 lines per contract.\n- If none match, emit one-line index of available contract filenames.\n- Wire script into plan workflow (following existing \u201cextract then build context\u201d pattern around `Extract clarification answers and questions` + `Build planning context`):\n- Fetch/support new script in workflow bootstrap script list.\n- Generate `db_contracts_relevant.txt` before context assembly.\n- Insert DB-contract block immediately before `ALL COMMENTS`.\n- Wire script into implement workflow (following existing `Extract implementation plan`/`Extract clarification answers` + `Build implementation context` pattern):\n- Fetch/support new script in workflow bootstrap script list.\n- Generate `db_contracts_relevant.txt` using issue + clarification answers + approved plan.\n- Insert DB-contract block immediately before `ISSUE COMMENTS`.\n\n3. Data structures affected\n- New runtime artifact file in each workflow run: `db_contracts_relevant.txt`.\n- New runtime env path variable in each workflow job (e.g., `DB_CONTRACTS_RELEVANT_FILE`).\n- Helper-internal structures:\n- Context token set (lowercased).\n- Per-contract candidate identifiers (filename-derived + parsed `collection:`).\n- Matched-contract list with per-file truncation metadata (implicit via 200-line cap).\n\n4. API/interface changes\n- No external API changes.\n- New internal script interface used by workflows (CLI args/env for output path and context inputs).\n- Planning/implementation prompt context format changes by inserting a new section:\n- `=== DB CONTRACTS (relevant) ===`\n- Placement is deterministic and before comment sections as requested.\n\n5. Potential risks or edge cases\n- False positives/negatives in token matching for generic names (`users`, `events`) or compound names.\n- `collection:` parsing in YAML must tolerate quotes/whitespace/comments; fallback to filename match if field missing.\n- Repos with many contracts could produce long context; 200-line cap mitigates overflow.\n- Repos without `db/contracts/` must stay green (marker + exit `0`).\n- Workflow robustness: helper invocation must be fail-open even if script errors unexpectedly.\n\n6. Testing considerations\n- Script-level validation in CI shell:\n- Missing `db/contracts/` => marker output + exit `0`.\n- Matching DB issue text => expected contract(s) inlined with correct section header.\n- Non-DB issue text => only one-line filename index.\n- Large contract file => output truncates at 200 lines for that contract.\n- Workflow-level validation:\n- Plan context includes DB contracts block before `ALL COMMENTS`.\n- Implement context includes DB contracts block before `ISSUE COMMENTS`.\n- Consumer-repo mode still works (script is fetched in bootstrap lists).\n\nConflicts detected:\n- No naming/path conflicts with requested files.\n- Repository currently has no `db/contracts/` directory; this is compatible with the required \u201cmarker and exit 0\u201d behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4b10a30f21c40ffb499ac1a5f22a39090877d6d7e707af55cdb021aa12356acf",
+  "lineage": {
+    "issue_number": 837,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375832396",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375832396",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/837"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414012843_3630f1b0c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 837,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375832396"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #837",
+  "timestamps": {
+    "created_at": "2026-04-14T01:28:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

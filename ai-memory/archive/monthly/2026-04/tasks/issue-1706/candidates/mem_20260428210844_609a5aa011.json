@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\n**Ref Context**\n- Planning against `main` at `f78061f263cc8f5f34983a5576089db041dca655`.\n- `git symbolic-ref --short -q HEAD` resolved to `main`.\n- Integration branch metadata is empty, so no integration-ref mismatch is actionable.\n\n**Interpreted Answers**\n- `Q1=A`: implement mitigation 1 on this branch: probe optional MCP servers before registering them, and omit failed optional MCPs from Codex config behind a default-enabled knob.\n- `Q2=A`: include the Context7 pin in this change instead of assuming #1705 lands first.\n\n**Conflict Noted**\n- The issue says #1705 already pinned Context7 to `2.1.8`, but the current branch context still describes `scripts/setup_serena.sh` as using `@upstash/context7-mcp@latest`. This issue should carry that pin directly so the current branch is self-contained.\n\n**Files Likely To Change**\n- `scripts/setup_serena.sh`\n- Possibly a small helper under `scripts/` for MCP initialize probing if the probe logic is easier to isolate/test outside the shell script\n- `.github/workflows/implement.yml`\n- `.github/workflows/validate.yml`\n- `.github/workflows/review_autofix.yml`\n- Likely the other workflows that invoke `setup_serena.sh` so behavior stays consistent across phases:\n  - `.github/workflows/clarify.yml`\n  - `.github/workflows/plan.yml`\n  - `.github/workflows/orchestrate.yml`\n  - `.github/workflows/orchestrate_clarify_respond.yml`\n  - `.github/workflows/orchestrate_poll.yml`\n- `README.md`\n- `agents.md`\n- Regression coverage under `tests/` plus a mock MCP fixture under `tests/fixtures/` or equivalent\n\n**Modules / Functions To Implement**\n- Extend `scripts/setup_serena.sh` with a generic preflight path for optional MCP servers before writing `[mcp_servers.*]` entries to `~/.codex/config.toml`.\n- Reuse the existing config-maintenance pattern in that script (`warn_and_exit`, stale-block removal, idempotent config writes) rather than introducing a parallel config generator.\n- The preflight must validate an actual MCP `initialize` handshake, not just process startup, so it catches the observed \u201cconnection closed during initialize\u201d failure mode.\n- On probe failure for an optional MCP:\n  - emit a warning\n  - remove any stale stanza for that server\n  - skip writing the server block entirely\n- Keep `required = false` as defense-in-depth, but the primary protection becomes \u201cfailed optional MCPs are not registered at all.\u201d\n- Pin Context7 in `scripts/setup_serena.sh` to `@upstash/context7-mcp@2.1.8`.\n- Leave OpenRouter provider-routing changes out of scope for this issue.\n\n**Data Structures Affected**\n- `~/.codex/config.toml` generation logic changes from unconditional optional-server registration to conditional registration based on handshake success.\n- One additive env/repo-var knob is needed for optional MCP probing, default enabled.\n- Existing knobs `SERENA_DISABLED`, `CONTEXT7_DISABLED`, and `GIT_MCP_DISABLED` must remain unchanged and backward compatible.\n- No MongoDB contracts, collections, indexes, or DB write paths are involved.\n\n**API / Interface Changes**\n- Add a workflow-facing config knob for \u201cprobe optional MCPs before registering them,\u201d default enabled.\n- No OpenRouter request-shape changes.\n- No consumer-facing CLI/API rename should occur; this should be an additive control only.\n\n**Representative Pattern To Follow**\n- Use `scripts/setup_serena.sh` as the primary representative implementation.\n- For workflow wiring, follow the existing \u201cSetup Serena MCP server\u201d env-forwarding pattern already used by current workflow callers, then mirror that pattern into the remaining `setup_serena.sh` callers.\n\n**Risks / Edge Cases**\n- Probe timeouts and child cleanup must be strict so a bad MCP binary cannot hang CI.\n- Probe execution must match production startup shape closely enough to catch real initialize failures, including command/args/env differences for Git MCP.\n- Config writes must remain idempotent across reruns and toggle flips.\n- Failed probes must not leave stale `[mcp_servers.context7]` / `[mcp_servers.git]` blocks behind.\n- Serena\u2019s own required-path handling should not be weakened; this issue is specifically about optional MCPs surviving into the tool list as broken stubs.\n- Scope should not expand into pinning every MCP binary; Q2 selected the Context7 pin only.\n\n**Testing Considerations**\n- Add a reproduction harness with a mock MCP server that accepts startup and then closes during `initialize`.\n- Add focused regression tests for:\n  - healthy optional MCP registers successfully\n  - failing optional MCP is omitted from config\n  - probing disabled preserves legacy registration behavior\n  - Context7 pin is present\n- Add workflow-level or contract-style coverage proving the new knob is wired into at least `implement.yml`, `validate.yml`, and `review_autofix.yml`, and preferably all `setup_serena.sh` callers.\n- Smoke assertions should verify that forced optional-MCP handshake failure does not make the setup step fail the job and does not leave Codex config entries that can produce malformed tool payloads downstream.\n\n**Docs**\n- Update `README.md` and `agents.md` for:\n  - the new probe knob and default\n  - the Context7 `2.1.8` pin as defense-in-depth\n  - the operational behavior change: optional MCP handshake failure now degrades by pruning that server instead of allowing downstream Codex/OpenRouter hard failure\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9064d94931c458e7544131459d5fc1442c252d348a2973b1b7e6688ff5b46585",
+  "lineage": {
+    "issue_number": 1706,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25073268072",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25073268072",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1706"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260428210844_609a5aa011",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1706,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25073268072"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1706",
+  "timestamps": {
+    "created_at": "2026-04-28T21:08:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

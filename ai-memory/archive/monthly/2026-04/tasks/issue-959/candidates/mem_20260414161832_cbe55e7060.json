@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":959,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/959\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/960\",\"pr_number\":960,\"branch\":\"ai/issue-959\",\"run_id\":\"24409931861\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24409931861\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/implement.yml\",\"scripts/openrouter_prompt_cache.py\",\"tests/test_implement_post_codex_recovery.py\"]}",
+  "fingerprint": "03c04bedaa20192f39bba61937665d92d69c023f03d2c13fd3480aea7b023dfe",
+  "lineage": {
+    "issue_number": 959,
+    "parent_ids": [],
+    "pr_number": 960,
+    "run_id": "24409931861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24409931861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/960"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260414161832_cbe55e7060",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 959,
+    "level": "run",
+    "pr_number": 960,
+    "run_id": "24409931861"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #959: https://github.com/shubhodeep1/coding-workflows/pull/960",
+  "timestamps": {
+    "created_at": "2026-04-14T16:18:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which scope should govern \u201cevery Codex invocation\u201d?**\nChoices:\n- **A** \u2014 Update only the explicitly listed files, but cover all Codex prompt constructions/invocations inside them (including judge/review-blocked judge + validator paths). **(RECOMMENDED)**\n- **B** \u2014 Update every Codex invocation across the entire repository, even outside the listed files.\n- **C** \u2014 Update only locations that currently emit `TOOL_CALL_BUDGET: N`, and leave other Codex invocations unchanged.\nReply: `Q1: A`",
+  "fingerprint": "3181c004a0ad2dbf4562f506ac17e02004b41fbc77ece1f1775d6e4aae65c3f1",
+  "lineage": {
+    "issue_number": 845,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375767256",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375767256",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414012356_4a402cfe57",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 845,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375767256"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #845 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T01:23:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

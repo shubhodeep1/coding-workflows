@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `56fd255fac8978f66e6a3885eaa21994a777793e`\n- Checked-out branch: `orchestrator/project-1303`\n- Integration metadata branch: `orchestrator/project-1303`\n- Mismatch: `false` (planning can proceed)\n\nClarification mapping:\n- No Q1/Q2/etc. were asked in clarify for this issue.\n- Interpreted answer `/answer [auto-answered-by-orchestrator]` as: proceed with the exact issue scope and acceptance criteria.\n\nDetected code/issue mismatches to account for:\n- `implement.yml` currently has inconsistent Codex retry behavior across paths: main implement loop, repair loop, single-shot diagnose call, and separate summary loop.\n- `review_autofix.yml` terminal failure handling currently centers on `ai:review-blocked`; `ai:review-autofix-failed` exists in label contract/tests but is not applied in workflow failure paths.\n- `AI_PHASE_FAILURE_V1` is documented in `docs/resilient-codex-failure-plan.md` but not emitted by current implement/review workflow runtime paths.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `.github/workflows/review_autofix.yml`\n- `scripts/review_rb_judge.sh`\n- `tests/test_implement_post_codex_recovery.py`\n- New/updated review failure-mode tests under `tests/` (likely a focused workflow/script contract test file)\n- Optional docs updates if new env knobs are introduced: `README.md`, `agents.md`\n\n2. Functions/modules to implement\n- In `implement.yml`:\n  - Normalize Codex retry/backoff/empty-output handling for all four paths:\n    - main implementation Codex call\n    - post-Codex repair Codex call\n    - diagnose Codex call\n    - issue summary Codex call\n  - Preserve existing `ai:implementation-failed` semantics for implementation failure paths.\n  - Add additive `ai:implement-diagnose-failed` labeling only for terminal diagnose/summary Codex failure scenarios.\n  - Add phase-failure comment emission helper/logic and ensure `AI_PHASE_FAILURE_V1` is emitted exactly once per terminal path.\n- In `review_autofix.yml`:\n  - Apply terminal Codex failure detection and retry/empty-output checks to workflow-level Codex invocations and judge integration points.\n  - On terminal failure with linked issue context, apply additive `ai:review-autofix-failed` (without removing existing `ai:review-blocked` behavior unless explicitly required).\n  - Emit `AI_PHASE_FAILURE_V1` once for terminal review Codex failure paths.\n- In `scripts/review_rb_judge.sh`:\n  - Align retry/empty-output logic across judge Codex invocations (judge decision call and fix application call).\n  - Surface deterministic terminal-failure status/outputs so workflow can label/comment consistently.\n\nRepresentative pattern to follow:\n- Reuse the existing implement main retry/backoff pattern (attempt loop + exponential sleep + empty-output detection) as the canonical model, then apply it uniformly to diagnose/summary/repair and review-side Codex paths.\n\n3. Data structures affected\n- New machine-readable issue comment payload marker:\n  - `AI_PHASE_FAILURE_V1` block with stable JSON fields (phase, failure_mode, attempt counts, run URL/ID, recommended action, timestamp).\n- Issue label sets (additive):\n  - `ai:implementation-failed` (existing semantics retained)\n  - `ai:implement-diagnose-failed` (diagnose/summary terminal Codex failures)\n  - `ai:review-autofix-failed` (review terminal Codex failures with linked issue context)\n\n4. API/interface changes\n- No external API changes expected.\n- Internal workflow interface likely to add/shared retry controls (env-driven) for Codex calls; if new vars are added, defaults will be provided and docs updated.\n- No renames/removals of existing labels, env vars, or phase labels (strict additive compatibility).\n\n5. Potential risks and edge cases\n- Duplicate phase-failure comments from overlapping failure steps (`failure()` chains) if emission isn\u2019t guarded.\n- Mislabeling risk between `ai:implementation-failed` and `ai:implement-diagnose-failed`; must keep diagnose label additive and scoped.\n- Review path ambiguity between \u201creview blocked due to unresolved findings\u201d vs \u201cterminal Codex/runtime failure\u201d; both labels may be needed additively.\n- Linked issue extraction may be empty; review failure labeling must be conditional exactly as requested.\n- Retry unification must not break existing timeout/watchdog behavior or budget guards.\n\n6. Testing considerations\n- Extend `tests/test_implement_post_codex_recovery.py` to assert:\n  - Unified retry/backoff contract across implement Codex paths.\n  - Diagnose/summary terminal-failure labeling includes additive `ai:implement-diagnose-failed`.\n  - `AI_PHASE_FAILURE_V1` emission occurs exactly once per terminal path.\n- Add review-side failure-mode tests to assert:\n  - Terminal review Codex failures apply `ai:review-autofix-failed` when linked issue context exists.\n  - Existing `ai:review-blocked` behavior remains backward compatible.\n  - `AI_PHASE_FAILURE_V1` marker emitted exactly once for terminal review failure.\n- Keep static label contract coverage (`tests/test_ai_labels.py`) passing; no label renames/removals.\n\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "745a6cedcb60eb0c553f9f24f99d1550672cdeca9ed9aa728c5aa89c61a56571",
+  "lineage": {
+    "issue_number": 1316,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24601998110",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24601998110",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1316"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418094939_cf8d05a57f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1316,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24601998110"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1316",
+  "timestamps": {
+    "created_at": "2026-04-18T09:49:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

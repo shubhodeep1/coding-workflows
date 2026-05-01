@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context validated:\n- HEAD: `df7fa001abf2a14ca96928febb3528918f3181fb`\n- Checked-out branch: `orchestrator/project-1299`\n- Integration metadata branch: `orchestrator/project-1299`\n- Mismatch: `false` (planning can proceed)\n\nClarification mapping:\n- No clarification Q-IDs were required for this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as proceed-with-planning confirmation.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/review_apply_fixes.sh` (prompt assembly block writing `EDITOR_PROMPT_BODY_FILE`, currently around the heredoc section that includes \u201cREVIEWER INPUTS\u201d and \u201cCONSOLIDATOR + LEDGER CONTEXT\u201d).\n- If `files_touched` permits tests: `tests/test_detect_editor_changes_lost.py` (or a nearby review-autofix test) to add string-contract assertions for the updated prompt wording and override format.\n\n2. Functions/modules to implement\n- In `scripts/review_apply_fixes.sh`, update only the editor prompt construction content (no retry/watchdog/commit-marker logic changes):\n- Add a fixed prelude that explicitly states input authority contract:\n- Authoritative: `reviewer_bundle.txt`\n- Advisory: `review_issues.txt`, `ledger_status.txt`, `floor_tags.txt`\n- Keep fail-open semantics for advisory artifacts by preserving current non-blocking artifact generation and not adding advisory files to required-file gating.\n- Replace/adjust override instruction so intentional divergence from consolidator guidance requires a stable summary line:\n  - `CONSOLIDATOR_OVERRIDDEN: <reason>`\n- Preserve existing guard behavior and editor execution path exactly as-is.\n\n3. Data structures affected\n- No schema, index, or DB contract changes.\n- Runtime artifact filenames remain unchanged.\n- Effective contract change is prompt-level only: editor instruction semantics for authoritative/advisory sources and override line format.\n\n4. API/interface changes\n- Editor prompt interface changes (internal workflow contract):\n- Consolidator/ledger/floor artifacts become explicitly advisory in the fixed prelude.\n- Override reporting contract becomes a stable grep-friendly prefix with `<reason>` payload:\n  - `CONSOLIDATOR_OVERRIDDEN: ...`\n- No workflow trigger/API/env-var/interface renames.\n\n5. Potential risks and edge cases\n- Existing prompt text currently says floor tags are \u201cnon-skippable\u201d; this must be reconciled with new advisory classification without weakening reviewer bundle authority.\n- Existing text/docs include a more specific override example (`<issue_id> - <short reason>`); moving to `<reason>` can affect downstream assumptions if any parser expects issue IDs. Current code search shows no strict parser in scripts, but this should be treated as a known compatibility check item.\n- Missing/corrupt advisory files must not become hard failures; avoid introducing new `-s` required checks or strict parsing dependencies in this issue.\n\n6. Testing considerations\n- Validate prompt content contract after change:\n- Authoritative/advisory prelude lines present and exact.\n- `CONSOLIDATOR_OVERRIDDEN: <reason>` instruction present and stable.\n- Validate fail-open behavior for advisory artifacts remains intact:\n- Script still builds editor prompt when advisory artifacts are empty/missing from upstream stages.\n- Regression check:\n- Existing editor retry/watchdog/commit-marker behavior unchanged.\n- Run targeted tests around modified assertions (and existing review-autofix script checks).\n\nConflict detection\n- Codebase/documentation currently includes an older override example format with issue ID (`CONSOLIDATOR_OVERRIDDEN: <issue_id> - <short reason>`), while this issue requires `CONSOLIDATOR_OVERRIDDEN: <reason>`. This is a factual contract divergence and should be treated as an intentional update in this change.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "707e9bcae04abe53f9ab649520237eb4630a39516bef2bb4ee6447366e9956b6",
+  "lineage": {
+    "issue_number": 1422,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24626072469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626072469",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1422"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419094248_7a0383077f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1422,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24626072469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1422",
+  "timestamps": {
+    "created_at": "2026-04-19T09:42:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

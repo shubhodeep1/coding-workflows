@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Mapping**\n- No `Q<ID>` clarification questions were asked in this issue.\n- `/answer [auto-answered-by-clarify]` is sufficient to proceed with planning.\n\n**Files Likely To Change**\n- `.github/workflows/orchestrate_poll.yml`\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n- `README.md`\n- `agents.md`\n\n**Functions/Modules To Implement**\n- Add workflow env wiring in `.github/workflows/orchestrate_poll.yml`:\n  - `ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}`\n- In `scripts/orchestrate_poll_process.sh`, normalize the new env var with existing `is_truthy` handling near other booleans.\n- Add a pre-judge gate right before the main judge execution path (`Running judge evaluation...`) with all required conditions:\n  - `WAVE_COMPLETE == true`\n  - `ANY_FAILED == false`\n  - `PROJECT_COMPLETE == false`\n  - `INVOKE_JUDGE_FOR_STUCK == false`\n  - `jq '.pending_issue_defs | length' \"${STATE_FILE}\" == 0`\n  - `ENABLE_CLEAN_WAVE_JUDGE_SKIP == true`\n- If gate passes, execute mechanical clean-wave advance without Codex judge call:\n  - Log explicit clean-wave-advance message.\n  - Advance `current_wave`.\n  - Increment `judge_cycle`.\n  - Keep `judge_stall_cycles` unchanged.\n  - Persist state and post state comment.\n  - Continue loop (`continue`) so judge block is skipped.\n- Preserve existing judge path unchanged for completion/failure/stuck/non-empty-pending/flag-disabled scenarios.\n\n**Data Structures Affected**\n- Runtime env surface gains `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`).\n- Orchestrator state JSON fields reused as-is:\n  - `current_wave` updated on clean advance.\n  - `judge_cycle` incremented on clean advance.\n  - `judge_stall_cycles` intentionally not incremented.\n  - `pending_issue_defs` read for gate condition.\n- No schema changes to orchestrator state.\n\n**API or Interface Changes**\n- New repo variable interface for poller behavior toggle:\n  - `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (`true` by default).\n- No changes to judge prompt format or judge JSON schema.\n- No changes to `MAX_JUDGE_CYCLES` semantics except the specified clean-wave skip behavior.\n\n**Potential Risks / Edge Cases**\n- Gate ordering must be before judge budget/judge invocation to ensure true skip.\n- Skip branch must not run for stuck-wave conditions (`INVOKE_JUDGE_FOR_STUCK=true`), failures, or project completion.\n- Wave-advance logic used in skip path must match current \u201cadvance wave\u201d behavior to avoid divergence.\n- `pending_issue_defs == 0` is restrictive; this may limit skip activation to projects where future-wave issues are already created.\n- Ensure no accidental increment of `judge_stall_cycles` in skip branch.\n\n**Testing Considerations**\n- Add/adjust unit tests in `tests/test_orchestrate_poll_process.py` for:\n  - Clean-wave eligible + flag enabled: no judge invocation, wave advances, `judge_cycle` increments, `judge_stall_cycles` unchanged.\n  - Same scenario with flag disabled: judge still invoked.\n  - Non-clean scenarios (`pending_issue_defs > 0`, stuck-wave, failures, `PROJECT_COMPLETE=true`) still invoke judge.\n- Assert judge invocation via stdout marker (`Running judge evaluation...`) and state transitions.\n- Run targeted test file and existing poller regression suite paths that cover in-progress wave advancement and stall accounting.\n\n**Conflict Detection**\n- No hard file/path/signature conflicts found.\n- Behavioral note: the required `pending_issue_defs == 0` condition narrows when the skip can trigger; this is consistent with the requested condition but may reduce cost savings frequency.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a1ae79e9748c64ef99c70c73ae7fea58a6ee374b9fce9f5274fddcd59c6168fa",
+  "lineage": {
+    "issue_number": 1023,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24437829335",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24437829335",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1023"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415052529_6b82cd5645",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1023,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24437829335"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1023",
+  "timestamps": {
+    "created_at": "2026-04-15T05:25:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

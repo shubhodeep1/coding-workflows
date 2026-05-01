@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate.yml:617-631 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: Brace-counting JSON extraction can mis-handle braces inside string values.\n  WHY: The fallback parser counts structural braces without tracking string state, so valid JSON containing `{` or `}` in strings can be extracted incorrectly.\n- .github/workflows/implement.yml:1021-1023 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The awk `/^exec$/` matcher is too strict for exec-history extraction.\n  WHY: It requires an exact `exec` line, so minor output-format changes or trailing whitespace can make the retry recap go empty.\n- .github/workflows/orchestrate.yml:~699-~703 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The retry sleep calculation uses the bash-specific `$RANDOM` variable.\n  WHY: This works on the GitHub Actions bash shell, but copied POSIX-shell contexts can fail or behave unexpectedly because `RANDOM` is unset.\n- .github/workflows/clarify.yml:805 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The retry sleep calculation uses the bash-specific `$RANDOM` variable.\n  WHY: This workflow also relies on bash-only expansion, so the same portability issue applies here.\n- .github/workflows/orchestrate_clarify_respond.yml:686 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The retry sleep calculation uses the bash-specific `$RANDOM` variable.\n  WHY: This workflow also relies on bash-only expansion, so the same portability issue applies here.\n- .github/workflows/implement.yml:1131 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The success-no-op regex contains redundant overlapping alternation.\n  WHY: The observed Codex phrasings are already covered by the surrounding alternatives, so this adds maintenance noise without changing matching behavior.\n- .github/workflows/orchestrate.yml:643-647 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The defensive jq type guard permits negative values other than -1, making the error message imprecise.\n  WHY: The logic is functionally correct, but the message can mislead if jq ever returned a different negative number.\n- prompts/mode-orchestrate.txt:67-77 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The retry-budget wording still reads as if retries depend on being \"well under\" the wall cap.\n  WHY: The text can be read as contradicting implement.yml's retry logic, which allows another attempt whenever enough budget remains after the previous attempt.\n- prompts/mode-plan.txt:19-29 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The retry-budget wording still reads as if retries depend on being \"well under\" the wall cap.\n  WHY: The text can be read as contradicting implement.yml's retry logic, which allows another attempt whenever enough budget remains after the previous attempt.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/orchestrate.yml:~703 | severity=low | confidence=3\n  PROBLEM: The retry sleep calculation uses `$RANDOM`.\n  WHY: `RANDOM` is a bash-specific variable, so portability is reduced outside bash.\n- .github/workflows/orchestrate.yml:617-631 | severity=medium | confidence=4\n  PROBLEM: The JSON extraction fallback can mis-handle braces inside string values.\n  WHY: The brace-depth scan does not track string state, so braces in prose can break boundary detection.\n- .github/workflows/implement.yml:1021-1023 | severity=low | confidence=3\n  PROBLEM: The awk `/^exec$/` pattern is too strict for exec history extraction.\n  WHY: Exact matching can silently fail if Codex output adds trailing whitespace or formatting changes.\n- .github/workflows/implement.yml:~1131 | severity=low | confidence=2\n  PROBLEM: The success-no-op regex has redundant alternation.\n  WHY: The overlapping phrases are a maintenance concern without changing behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/orchestrate.yml:617-631 | confidence=4\n  PROBLEM: Brace-counting JSON extraction fails on braces inside string values.\n  WHY: The parser counts `{` and `}` without tracking whether it is inside a JSON string, so valid output can be misparsed.\n- .github/workflows/implement.yml:1021-1023 | confidence=4\n  PROBLEM: awk pattern for exec history extraction is too strict.\n  WHY: `/^exec$/` requires an exact line match, so trailing whitespace or output-format changes can make the recap go empty.\n- .github/workflows/orchestrate.yml:699 | confidence=3\n  PROBLEM: RANDOM is bash-specific.\n  WHY: The retry sleep calculation relies on `$RANDOM`, which is undefined in POSIX shell contexts.\n- .github/workflows/clarify.yml:805 | confidence=3\n  PROBLEM: RANDOM is bash-specific.\n  WHY: The retry sleep calculation relies on `$RANDOM`, which is undefined in POSIX shell contexts.\n- .github/workflows/orchestrate_clarify_respond.yml:686 | confidence=3\n  PROBLEM: RANDOM is bash-specific.\n  WHY: The retry sleep calculation relies on `$RANDOM`, which is undefined in POSIX shell contexts.\n- .github/workflows/implement.yml:1131 | confidence=2\n  PROBLEM: Success-no-op regex contains redundant alternation.\n  WHY: The overlapping alternatives add maintenance burden without functional benefit.\n- .github/workflows/orchestrate.yml:643-647 | confidence=2\n  PROBLEM: jq type guard has an off-by-one logic issue.\n  WHY: The fallback permits negative values other than -1, so the resulting error message can be misleading.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- prompts/mode-orchestrate.txt:67-77 | confidence=3\n  PROBLEM: Wording claims retries are only possible when earlier attempts finish well under the wall cap / remaining budget.\n  WHY: That phrasing reads as contradictory to implement.yml's retry logic, which can still start another attempt when enough budget remains.\n- prompts/mode-plan.txt:19-29 | confidence=3\n  PROBLEM: Wording claims retries are only possible when earlier attempts finish well under the wall cap / remaining budget.\n  WHY: That phrasing reads as contradictory to implement.yml's retry logic, which can still start another attempt when enough budget remains.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c80c6c880fa5543c89f01afc7175d025619abb00a593ebaaf2e60ea341277820",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1771,
+    "run_id": "25099386261",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25099386261",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429091552_ee962fb462",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1771,
+    "run_id": "25099386261"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 9 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T09:15:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

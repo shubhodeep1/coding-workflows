@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `3c9a863e4b6c1620205ff3c6211ee7bd84a7c80c`\n- Checked-out ref: `orchestrator/project-1303`\n- Integration metadata ref: `orchestrator/project-1303`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No Q1/Q2/Q3 were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is present, so planning proceeds with the provided requirements.\n\nConflicts found between issue requirements and current code:\n- `AI_PHASE_FAILURE_V1` markers are emitted in validate/log-analysis flows, but not consumed by the poller today.\n- Stall-action normalization currently does not support `retrigger_validate`.\n- Label repair exists (`reconcile_managed_issue_labels`) but is unconditional per-loop and does not have sweep gating/cap/dry-run or `AI_LABEL_REPAIR_V1` audit comments.\n- Standalone stall state does not persist processed `workflow_run_id` dedupe data.\n\n**Implementation checklist**\n- [ ] Add marker parsing + actionable selection + dedupe by `workflow_run_id`.\n- [ ] Add multi-source resume verification before retrigger actions.\n- [ ] Add/normalize `retrigger_validate` action support.\n- [ ] Add label-repair sweep controls and `AI_LABEL_REPAIR_V1` audit comments.\n- [ ] Apply contradiction handling (Q3=B rule) with discarded-marker reporting.\n- [ ] Reduce API pressure by reusing batched GraphQL + cycle-local caches.\n- [ ] Extend tests and workflow/env wiring.\n\n**Files likely to change**\n- [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh)\n- [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py)\n- [.github/workflows/orchestrate_poll.yml](.github/workflows/orchestrate_poll.yml)\n- [prompts/mode-judge-stall-recovery.txt](prompts/mode-judge-stall-recovery.txt)\n- [tests/test_orchestrate_poll_process.py](tests/test_orchestrate_poll_process.py)\n- [tests/test_orchestrate_lib.py](tests/test_orchestrate_lib.py)\n- [tests/test_orchestrate_poll_workflow_contract.py](tests/test_orchestrate_poll_workflow_contract.py)\n- [README.md](README.md)\n- [agents.md](agents.md)\n\n**Functions/modules to implement or extend**\n1. In [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh):\n- Extend candidate prefetch payload usage (reuse `_candidate_details_json`, `STALL_MANAGED_LINKED_PR_CACHE`, actions-runs cache) to carry phase-failure evidence needed for decisions.\n- Add helpers to parse **all** `AI_PHASE_FAILURE_V1` comments, select newest actionable marker, and dedupe by persisted `workflow_run_id`.\n- Add resume-verification guard before retrigger actions:\n  - label/phase agreement\n  - phase artifact checks (clarify answers, plan approval, linked PR truth, validate run status)\n  - no competing newer phase-failure marker\n  - idempotency on observed run IDs\n- Add `retrigger_validate` execution branch (dispatch validate workflow with existing fallback behavior).\n- Add per-cycle label-repair sweep entrypoint before stall recovery with:\n  - `ENABLE_LABEL_REPAIR_SWEEP`\n  - `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE`\n  - `LABEL_REPAIR_DRY_RUN`\n  - `AI_LABEL_REPAIR_V1` audit comment payload\n- Keep current architecture (`detect_stalls` + managed/standalone recovery loops) and extend in-place.\n\n2. In [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py):\n- Extend `STALL_RECOVERY_ACTIONS` / `VALID_STALL_RECOVERY_ACTIONS` to include `retrigger_validate`.\n- Extend action normalization/validation path to accept and preserve `retrigger_validate`.\n- Add pure helper(s) for contradiction handling (Q3=B): choose most-advanced conclusive evidence and return discarded stale markers for audit.\n\n3. In [prompts/mode-judge-stall-recovery.txt](prompts/mode-judge-stall-recovery.txt):\n- Add `retrigger_validate` to allowed/schema action set so judge output and normalization stay consistent.\n\n**Data structures affected**\n- Standalone state marker payload in issue comments (`AI_STANDALONE_STALL_STATE_V1`): add additive fields for processed failure run IDs and latest-actioned failure metadata (backward-compatible defaults when absent).\n- Candidate issue prefetch JSON entries: include/derive phase-failure marker evidence from batched comments data.\n- New audit payload for label repairs under `AI_LABEL_REPAIR_V1` including:\n  - before/after labels\n  - add/remove set\n  - selected evidence source\n  - discarded stale marker references (per Q3=B)\n\n**API/interface changes**\n- New env vars in orchestrate poll workflow and script:\n  - `ENABLE_LABEL_REPAIR_SWEEP` (defaulted)\n  - `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` (defaulted, validated positive int)\n  - `LABEL_REPAIR_DRY_RUN` (defaulted)\n- `retrigger_validate` becomes a recognized stall-recovery action in lib + shell + judge prompt contract.\n- No identifier removals/renames; only additive behavior.\n\n**Risks and edge cases**\n- Marker JSON malformed/missing fields: fail-open and ignore invalid markers.\n- Out-of-order or contradictory markers: apply Q3=B rule deterministically and log discarded stale markers.\n- Duplicate triggering across poll cycles: enforce `workflow_run_id` idempotency via persisted state.\n- State-comment growth from run-id history: cap/compact stored IDs to bounded size.\n- Dry-run mode must never mutate labels/comments except explicit dry-run audit output.\n- GraphQL prefetch miss must degrade to existing safe fallback without tight new REST loops.\n\n**Testing considerations**\n- In [tests/test_orchestrate_lib.py](tests/test_orchestrate_lib.py):\n  - action-map tests for `retrigger_validate`\n  - normalization acceptance tests\n  - contradiction resolver tests (most-advanced evidence + stale discard list)\n- In [tests/test_orchestrate_poll_process.py](tests/test_orchestrate_poll_process.py):\n  - parse-all-marker behavior (not latest-only)\n  - newest actionable marker selection\n  - `workflow_run_id` dedupe persistence and replay safety\n  - resume-verification gate per phase artifact type\n  - label-repair sweep gating/cap/dry-run/edit path + `AI_LABEL_REPAIR_V1` audit comment\n  - `retrigger_validate` dispatch path\n- In [tests/test_orchestrate_poll_workflow_contract.py](tests/test_orchestrate_poll_workflow_contract.py):\n  - assert new env defaults are wired in `.github/workflows/orchestrate_poll.yml`\n- Keep/extend existing API-call-sensitive tests to confirm net API usage stays flat or reduced.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "568173e7ae07ccf81b9b772e2ec42c30cb574c8a7f56dbfe2b8caa0f833347b1",
+  "lineage": {
+    "issue_number": 1331,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24608190621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24608190621",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1331"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418155833_d4a87951ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1331,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24608190621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1331",
+  "timestamps": {
+    "created_at": "2026-04-18T15:58:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

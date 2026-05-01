@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validation-refresh.yml:~391 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The alert message says the threshold is \"\u2265 ERROR\" even though the case statement also suppresses `SILENT`.\n  WHY: The logic is correct and only the message is outdated, so this is a minor documentation inconsistency with no runtime impact.\n- .github/workflows/validation-refresh.yml:~162 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The comment says \"threshold \u2265 ERROR filters it\" even though the case statement also handles `SILENT`.\n  WHY: The logic correctly suppresses the alert, but the comment is now incomplete and should mention `SILENT` too.\n- .github/workflows/test-and-mark-stable.yml:2563-2564 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The children extraction query uses `per_page=100` without pagination, so more than 100 matching issues updated in the window could be missed.\n  WHY: Both reviewers identified the same edge case; it is unlikely in practice given the ~4 minute dispatch window, but the limit can still drop children.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/validation-refresh.yml:~391 | severity=low | confidence=4\n  PROBLEM: The echo message says \"threshold \u2265 ERROR filters it\" but the code also checks for SILENT.\n  WHY: The logic handles three levels, so the message is only outdated and does not affect functionality.\n- .github/workflows/test-and-mark-stable.yml:2564 | severity=low | confidence=2\n  PROBLEM: The children extraction query uses `per_page=100` without pagination.\n  WHY: If more than 100 `ai:orchestrator-managed` issues are updated since `DISPATCH_START_ISO`, children could be missed, though the reviewer notes this is unlikely in practice.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/validation-refresh.yml:~162 | severity=low | confidence=4\n  PROBLEM: The comment states \"threshold \u2265 ERROR filters it\" but the case statement also handles `SILENT`.\n  WHY: With `SILENT=99` and `ERROR=2`, the logic correctly suppresses the alert, but the comment is now incomplete.\n- .github/workflows/test-and-mark-stable.yml:~2563 | severity=low | confidence=2\n  PROBLEM: The children extraction query uses `per_page=100` without pagination logic.\n  WHY: If more than 100 `ai:orchestrator-managed` issues are updated within the dispatch window, some children could be missed, though the reviewer notes this is unlikely in practice.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7c3de6663dbfcdaf17b1042391958503abccc1fe1768a5a05082d2f1f2c13350",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1742,
+    "run_id": "25087190832",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25087190832",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429022222_f63e1c3ce6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1742,
+    "run_id": "25087190832"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T02:22:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

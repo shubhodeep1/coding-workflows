@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validation_selftest_runner.py:412-413 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: main() still called renamed test functions, so running the file directly would raise NameError.\n  WHY: The entry point `python3 tests/test_validation_selftest_runner.py` would fail once those old function names no longer existed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validation_selftest_runner.py:412-413 | confidence=5\n  PROBLEM: main() still called renamed test functions, causing NameError in CI.\n  WHY: Without this fix, CI would fail with `NameError` when `.github/workflows/ci.yml` executes `python3 tests/test_validation_selftest_runner.py` directly, as the old function names no longer exist after prior refactoring.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validation_selftest_runner.py:412-413\n  PROBLEM: The `main()` function was calling test functions by their old names that had been renamed in previous commits within this PR.\n  WHY: The `main()` function was referencing non-existent function names, and this fix updates it to reference the actual test functions defined in the file.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_validation_selftest_runner.py:412-413\n  PROBLEM: The `main()` function was calling two test functions by their old names that had been renamed in previous commits within this PR.\n  WHY: When `main()` is executed (via `python3 tests/test_validation_selftest_runner.py` in CI), it would raise a `NameError` because the called functions don't exist.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "adb516a0fda87f2eafb8b488446ba4826c2ae4110b679966cfa4f2788423b89b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1628,
+    "run_id": "24937432058",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24937432058",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260425184507_d2a0a83ecc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1628,
+    "run_id": "24937432058"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-25T18:45:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

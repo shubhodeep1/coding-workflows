@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2:29 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The `subprocess.run()` call has no timeout, so a hung import can stall validation indefinitely.\n  WHY: A stalled import can block the audit until the process is killed.\n- workflow-templates/validation-harness/python-repo-checks/tests/30_graceful_shutdown.sh.j2:15 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, qwen_qwen3-coder-plus]\n  PROBLEM: `docker compose exec -T app` hardcodes the service name instead of using `APP_SERVICE`.\n  WHY: If the compose service name changes, the graceful-shutdown test fails even though the repo is otherwise valid.\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/graceful_shutdown.py.j2:31-71 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The Python graceful-shutdown helper hardcodes `app` in its `subprocess.run()` calls instead of using the configured service name.\n  WHY: The helper will break whenever the service is not named `app`, making the harness brittle.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:12 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The healthcheck still uses `test -x`, so it can fail when the entry script exists but is not executable.\n  WHY: The file-existence fix did not remove the execute-bit gate, so a present-but-non-executable entry file still causes a false health failure; deepseek called it minor, while minimax and qwen treated it as a correctness failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/import_audit.py.j2:29 | severity=medium | confidence=4\n  PROBLEM: The `subprocess.run()` call has no timeout.\n  WHY: If Python import hangs, the subprocess can wait indefinitely and stall validation.\n- workflow-templates/validation-harness/python-repo-checks/tests/30_graceful_shutdown.sh.j2:15 | severity=medium | confidence=4\n  PROBLEM: Hardcoded service name `app` instead of using `APP_SERVICE`.\n  WHY: If the service name differs from `app`, the test fails.\n- workflow-templates/validation-harness/python-repo-checks/tests/_lib/graceful_shutdown.py.j2:31, 51, 71 | severity=medium | confidence=4\n  PROBLEM: Hardcoded service name `app` in the Python helper's `subprocess.run()` calls.\n  WHY: If the service name differs from `app`, the helper breaks.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:12 | severity=medium | confidence=3\n  PROBLEM: The healthcheck uses `test -x` instead of `test -f`.\n  WHY: If the entry script exists but lacks execute permission, the healthcheck fails even though the file is present.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:12 | severity=medium | confidence=4\n  PROBLEM: The healthcheck uses `test -x` instead of `test -f`.\n  WHY: If the entry script lacks execute permissions, the healthcheck fails even though the script exists and would run when invoked via `/bin/sh -c`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:12 | severity=medium | confidence=4\n  PROBLEM: The healthcheck still uses `test -x` instead of `test -f`.\n  WHY: The path is now manifest-aware, but the permission gate still causes spurious health failures.\n- workflow-templates/validation-harness/python-repo-checks/tests/30_graceful_shutdown.sh.j2:15 | severity=medium | confidence=3\n  PROBLEM: `docker compose exec -T app` hardcodes the service name instead of using `APP_SERVICE`.\n  WHY: The test fails if the service name differs from `app`.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cd9351cd3097355b0f39c6c67989998821260dde42d5db8e3c474c1ee6a90c59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1562,
+    "run_id": "24840980593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24840980593",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423153419_86c27b46ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1562,
+    "run_id": "24840980593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T15:34:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

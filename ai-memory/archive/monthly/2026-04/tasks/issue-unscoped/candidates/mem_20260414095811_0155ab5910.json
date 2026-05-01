@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24392200656-1-31364/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24392200656-1-31364/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n`scripts/orchestrate_poll_process.sh`\n`scripts/orchestrate_poll_process.sh`\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\ntests/test_orchestrate_poll_process.py",
+  "fingerprint": "1e829658d39932f45b207034e5da1975a939d5aaad0d50e2d86594e51c839512",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 934,
+    "run_id": "24392200656",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24392200656",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414095811_0155ab5910",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 934,
+    "run_id": "24392200656"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T09:58:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

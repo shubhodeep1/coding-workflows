@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nClarification mapping\n- No `Q<ID>` clarification questions were issued.\n- `/answer [auto-answered-by-clarify]` is interpreted as: proceed with the issue scope as written.\n\n1. Files likely to change\n- `.github/workflows/plan.yml`\n- `.github/workflows/implement.yml`\n\n2. Functions/modules to implement\n- In both workflows, extend `Create runtime workspace` to export `RECENT_CHANGES_FILE=${RUNTIME_DIR}/recent_changes.txt`.\n- Add a new step in `plan.yml` (source: `${ISSUE_BODY}`) to:\n- Extract path-like tokens using a deterministic regex with a fixed extension allowlist.\n- Normalize tokens (strip wrapping punctuation/backticks), dedupe while preserving first-seen order.\n- Cap to 20 unique paths.\n- For each path, append `git log --oneline -n 10 -- \"$path\"` output (fail-open).\n- If no paths are found, write exactly `none detected` to `recent_changes.txt`.\n- Add the analogous step in `implement.yml`, but parse from approved plan content (`${PLAN_FILE}`).\n- Append to both context files:\n- Header line: `=== RECENT CHANGES IN TARGET FILES ===`\n- Then the contents of `${RECENT_CHANGES_FILE}`.\n- Follow the existing runtime-context pattern already used in `.github/workflows/review_autofix.yml` (file-based git log capture), adapted for per-path capped history.\n\n3. Data structures affected\n- New runtime artifact per run:\n- `/tmp/codex-plan-<run>/recent_changes.txt`\n- `/tmp/codex-implement-<run>/recent_changes.txt`\n- Planning and implementation prompt-context payloads gain one appended bounded section.\n\n4. API/interface changes\n- No trigger, command, input, or output contract changes.\n- Internal Codex prompt context format is extended with one additional section.\n\n5. Potential risks / edge cases\n- Regex false positives/negatives in markdown-heavy text.\n- Path injection if untrusted tokens are passed to git commands.\n- Missing files/no history producing empty logs.\n- Unbounded context growth if caps are not enforced.\n- Duplicate path mentions inflating work if dedupe is missed.\n\n6. Testing considerations\n- Plan happy path: issue body with valid file paths produces commit-subject entries.\n- Implement happy path: approved plan body with valid file paths produces commit-subject entries.\n- No-path case: output is stable single-line `none detected`.\n- Bounds: >20 unique paths only processes first 20; each path max 10 commits.\n- Fail-open: nonexistent paths/history gaps do not fail workflow.\n- Determinism: repeated runs on same input produce same path order/output shape.\n\nConflict check\n- No factual conflicts found between the issue requirements and current workflow structure.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7253316f5448f9239e2addf1013976fed7e2d9821fbb6dd6b6b270b2aadd14aa",
+  "lineage": {
+    "issue_number": 839,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375844973",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375844973",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/839"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414012940_51b9f83a40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 839,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375844973"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #839",
+  "timestamps": {
+    "created_at": "2026-04-14T01:29:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

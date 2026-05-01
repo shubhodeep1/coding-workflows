@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No Q-IDs were issued in clarify; `/answer [auto-answered-by-orchestrator]` means planning can proceed with no additional user decisions.\n\nPlanning ref context:\n- `HEAD`: `dea22ee70b5c37954d2edf58758ced569969a6ad`\n- Checked-out branch: `orchestrator/project-1469`\n- Integration metadata branch: `orchestrator/project-1469`\n- Integration mismatch: `false`\n\nRepresentative implementation pattern to follow:\n- Use `shell-parity` as the template rule (`scripts/validation_lint.py` checker + `tests/test_validate_lint_shell_parity.py` fail/pass/escape-hatch triad).  \n- New rules should follow the same structure: deterministic checker, additive `Rule(...)` entry, and 3 explicit tests.\n\nImplementation plan:\n\n1. Build a deterministic gap list against prompt invariants\n- Compare current encoded rules (7 IDs in `scripts/validation_lint.py`) against high-signal invariants in `prompts/mode-validate-generate.txt`.\n- Select only invariants that can be checked from rendered harness artifacts (no runtime/network/human dependency), so findings stay deterministic and machine-readable.\n- Keep all existing rule behavior unchanged; only add new rule IDs/checkers.\n\n2. Extend `scripts/validation_lint.py` additively\n- Add new `_check_<rule>()` functions for each selected invariant.\n- Reuse existing helpers (`LintContext`, `_strip_inline_comment`, `find_line`, escape parsing) to keep behavior consistent.\n- Append new `Rule(...)` entries to `RULES` and let `RULE_MAP` include them automatically.\n- Preserve escape hatch contract exactly: `# validation-lint: allow <rule-id> <reason>`.\n\n3. Update in-file rule catalog/comments for auditability\n- Expand module docstring \u201cRule IDs\u201d list to include all new additive rule IDs.\n- Add short rule comments mapping each new checker to the invariant it enforces (and prompt section/line reference style already used in project docs).\n\n4. Keep interface compatibility\n- Do not rename/remove existing rule IDs, CLI flags, output fields, or escape syntax.\n- New rule IDs become additional valid values for `--rules`.\n- Keep text and JSON output schema unchanged (`path`, `line`, `rule_id`, `message`, `hint`), only with more possible `rule_id` values.\n\n5. Add explicit tests per new rule\n- Add one `tests/test_validate_lint_<new_rule>.py` file per rule (or extend existing file if strictly same concern) with:\n- failure test (assert non-zero and `[rule-id]` finding),\n- pass test (assert `validation-lint: OK`),\n- escape-hatch test (assert violation is suppressed only when allow comment is present).\n- Keep fixtures minimal and deterministic (temporary validation root, local file writes only).\n\n6. Verify lint pipeline behavior and determinism\n- Run targeted lint tests for all `tests/test_validate_lint_*.py`.\n- Ensure deterministic ordering still holds when multiple findings occur (sorted output already in `_run_rules`).\n- Confirm each new rule is reachable via `--rules <rule-id>` and emits machine-readable JSON via `--format json`.\n\nFiles likely to change:\n- `scripts/validation_lint.py`\n- `tests/test_validate_lint_*.py` (new files for new rule IDs and possibly minor shared-test helper alignment)\n\nData structures affected:\n- `RULES: tuple[Rule, ...]` (additive entries)\n- `RULE_MAP` (derived additive IDs)\n- New constants/regex helpers used by new checkers\n- `Finding` payload values (additional `rule_id`s only)\n\nAPI/interface changes:\n- Additive only: new accepted `--rules` values and new `rule_id` outputs.\n- No breaking changes to CLI arguments or output schema.\n\nPotential risks and edge cases:\n- Overly broad regex checks causing false positives in comments/quoted strings.\n- Line-number instability if checks rely on parsed/reformatted content instead of source lines.\n- Missing-file behavior must remain deterministic and consistent with existing rules.\n- Escape hatch must suppress only matching rule ID on matching line context.\n\nTesting considerations:\n- Ensure each new rule has fail-before/pass-after style coverage in its own test set.\n- Run the full lint test family to catch cross-rule interactions and escape-map regressions.\n- Include at least one multi-finding scenario in new tests if a rule can produce repeated violations.\n\nFactual conflicts found:\n- `docs/validation-templates-plan.md` says \u201c~22 more rules \u2026 enumerated in validation_lint.py module docstring\u201d, but current `scripts/validation_lint.py` docstring and `RULES` currently expose only 7 rule IDs.\n- Repo-wide references to `scripts/validation_lint.py` are currently in tests/docs only; no direct invocation from workflows/scripts was found in this branch, which may conflict with the phrase \u201cexisting lint pipeline\u201d if interpreted as runtime workflow enforcement rather than lint test pipeline usage.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f5b3d8762af37efac9f94133b411dcf5c844ccf55c7811099746bd40ff5aaeac",
+  "lineage": {
+    "issue_number": 1475,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24702495153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24702495153",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1475"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421034022_8fd567741a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1475,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24702495153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1475",
+  "timestamps": {
+    "created_at": "2026-04-21T03:40:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

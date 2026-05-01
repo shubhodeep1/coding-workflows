@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which exact consumer repo pair should be used for the compatibility run (one Node + one Hardhat)?**\nChoices:\n- **A** \u2014 `shubhodeep1/digital_pa` (Node) + `shubhodeep1/fun-token-multi-chain` (Hardhat) **(RECOMMENDED)**\n- **B** \u2014 `shubhodeep1/tele-funtoken-msg-scoring` (Node) + `shubhodeep1/fun-token-multi-chain` (Hardhat)\n- **C** \u2014 `shubhodeep1/multi-user-ai-agent` (Node) + `shubhodeep1/fun-token-multi-chain` (Hardhat)\nReply: `Q1: A`\n**Q2: What is the authoritative baseline for \u201cbyte-for-byte compatible\u201d validation result JSON and runtime semantics?**\nChoices:\n- **A** \u2014 Compare against the pre-driver-split behavior from this repository (last commit before `validate_driver.sh` split) **(RECOMMENDED)**\n- **B** \u2014 Compare against latest `stable` workflow behavior/artifacts\n- **C** \u2014 Compare only against current downstream parser contract (keys/types/semantics), not historical bytes\nReply: `Q2: A`\n**Q3: If a discrepancy is found, where must fixes be applied to satisfy acceptance criteria?**\nChoices:\n- **A** \u2014 Fix only in this `coding-workflows` repo; do not modify consumer repos **(RECOMMENDED)**\n- **B** \u2014 Fix in this repo and in affected consumer repos as needed\n- **C** \u2014 Report discrepancies only; no fixes in this task\nReply: `Q3: A`",
+  "fingerprint": "768d1c1beecf9c4239eb2108c967cb817c8c6599900769625aca010ce79e9039",
+  "lineage": {
+    "issue_number": 976,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24424534640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24424534640",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414214913_f4866841fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 976,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24424534640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #976 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T21:49:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which workflow families must this log collector/metrics extractor cover in scope?**\nChoices:\n- **A** \u2014 Core issue pipeline only: `clarify`, `plan`, `implement`, `review_autofix` (RECOMMENDED)\n- **B** \u2014 Core pipeline + `validate`\n- **C** \u2014 All AI workflows, including orchestrator workflows (`orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`) and maintenance workflows\nReply: `Q1: A`\n**Q2: What should be the primary log source of truth for extraction?**\nChoices:\n- **A** \u2014 GitHub Actions API run/job/step data only (live metadata + logs) (RECOMMENDED)\n- **B** \u2014 Codex/runtime artifacts only (for example `codex_output.txt`, generated context files), without API enrichment\n- **C** \u2014 Hybrid: API data + runtime artifacts merged into one record\nReply: `Q2: A`\n**Q3: What output contract is required from this implementation?**\nChoices:\n- **A** \u2014 Machine-readable JSON report file only (for downstream automation) (RECOMMENDED)\n- **B** \u2014 JSON report + human-readable markdown summary\n- **C** \u2014 Markdown summary only (no strict JSON schema)\nReply: `Q3: A`\n**Q4: Which metric set is mandatory for this issue\u2019s acceptance?**\nChoices:\n- **A** \u2014 Run-level reliability + timing metrics only (status, duration, retries, failure point) (RECOMMENDED)\n- **B** \u2014 A + token/tool-usage metrics (for phases that emit token/tool budget/usage lines)\n- **C** \u2014 B + cost/proxy-cost metrics per phase/workflow\nReply: `Q4: A`\n**Q5: How should this collector be executed initially?**\nChoices:\n- **A** \u2014 Standalone script callable from workflows (single run, explicit inputs) (RECOMMENDED)\n- **B** \u2014 Shared library/helper only, invoked by existing scripts/workflows\n- **C** \u2014 Both: reusable library plus a CLI wrapper script\nReply: `Q5: A`",
+  "fingerprint": "4af1725bc652f0001b99b5dc656b6b087fda2bf4abb2765fbdf8317f9f4b7bd7",
+  "lineage": {
+    "issue_number": 711,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24279283098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24279283098",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260411091155_9a64c27cae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 711,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24279283098"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #711 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-11T09:11:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

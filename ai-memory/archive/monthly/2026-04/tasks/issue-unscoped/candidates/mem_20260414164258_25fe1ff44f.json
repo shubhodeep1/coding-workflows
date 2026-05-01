@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/clarify.yml\n.github/workflows/review_autofix.yml\nscripts/orchestrate_poll_process.sh\nscripts/semantic_cache.py\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/clarify.yl\nREADME.md\nscripts/ai_memory_lib.py\nscripts/openrouter_prompt_cache.py\nscripts/orchestrate_poll_process.sh\nscripts/semantic_cache.py",
+  "fingerprint": "2e76f2d645199ba350d066672bf75d2649638ac87fd827e363346a28fdf1ef5c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 942,
+    "run_id": "24410693820",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24410693820",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414164258_25fe1ff44f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 942,
+    "run_id": "24410693820"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T16:42:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

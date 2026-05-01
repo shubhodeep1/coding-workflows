@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `HEAD`: `20eafd7794b5c71aa63b90759de1781d2a86c312`\n- Checked-out branch: `orchestrator/project-1170`\n- Integration branch metadata: `orchestrator/project-1170`\n- Mismatch: `false` (planning can proceed on this ref)\n\nClarification mapping\n- No `Q<ID>` clarification questions were asked in clarify phase.\n- Interpreted answer state: `/answer [auto-answered-by-orchestrator]` means proceed with the issue body and acceptance criteria as authoritative.\n\nRepresentative implementation to follow\n- Use current collector flow in `scripts/collect_workflow_logs.py` (`normalize_workflow_family`, `select_notable_runs_for_logs`, `main`) as the baseline pattern.\n- Use `tests/test_collect_workflow_logs.py::test_main_partial_jobs_failure_still_emits_report_with_errors` as the representative end-to-end test pattern for paginated `gh api`, partial-failure tolerance, and output assertions.\n\n1. Files likely to change\n- `scripts/collect_workflow_logs.py`\n- `tests/test_collect_workflow_logs.py`\n\n2. Functions/modules to implement\n- Expand `CORE_WORKFLOW_FAMILIES` and `normalize_workflow_family()` to cover all intended families from plan scope, including orchestrator/validate/clarify-respond families and other pipeline workflows, while keeping normalization deterministic.\n- Add CLI arg `--log-output-dir` in `build_parser()` (optional, additive).\n- Add disk-export helpers in `scripts/collect_workflow_logs.py` for:\n- category selection (`errors`, `slow`, `recent`) with deterministic ordering\n- full log extraction from zip (no truncation)\n- run artifact writing (`metadata.json` + `step-*.log`) under category directories\n- atomic `summary.json` write\n- Update `main()` orchestration to:\n- keep legacy `--output` JSON path behavior unchanged\n- run disk export path when `--log-output-dir` is set\n- download full logs only for selected category runs, deduped by `(repository, run_id)` across categories\n- preserve existing error collection behavior (`errors[]`) on jobs/log failures\n\n3. Data structures affected\n- Existing report schema stays intact for legacy output: `schema_version`, `scope`, `runs`, `summary`, `errors`.\n- `scope.workflow_families` values will expand to full family set (field unchanged; value set broadened).\n- New on-disk contract under `--log-output-dir`:\n- `summary.json` containing full run metadata + summary stats + errors\n- `errors/<repo_slug>/<family>/<run_id>/metadata.json` + full `step-*.log`\n- `slow/<repo_slug>/<family>/<run_id>/metadata.json` + full `step-*.log`\n- `recent/<repo_slug>/<family>/<run_id>/metadata.json` + full `step-*.log`\n\n4. API/interface changes\n- New additive CLI option: `--log-output-dir <path>`.\n- No breaking changes to existing CLI options or legacy `--output` behavior.\n- No new external service integration; continue reusing existing GitHub API patterns:\n- `GET /repos/{owner}/{repo}/actions/runs?...`\n- `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?...`\n- `GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs`\n- GH API call hygiene: avoid redundant log downloads by fetching each selected run archive once and reusing in all applicable categories.\n\n5. Potential risks / edge cases\n- Workflow-family misclassification from loose substring matching (especially `orchestrate*`, `clarify/respond`, hyphen vs underscore naming).\n- Duplicate category membership for the same run; must dedupe download/API calls while still writing into each category folder.\n- Determinism of output tree and file names across runs.\n- Path/file sanitization for repo slug, family, and step names.\n- Missing timestamps (`created_at`, `run_started_at`, `updated_at`) impacting `slow`/`recent` classification.\n- Partial failures (jobs/log fetch failures) must remain fail-open and recorded in `errors[]`.\n- Backward compatibility risk if legacy excerpt truncation behavior changes inadvertently.\n\n6. Testing considerations\n- Update `test_normalize_workflow_family_core_and_exclusion` to assert expanded mappings and removal of current exclusions.\n- Update `test_list_runs_for_repo_paginates_and_filters_core_scope` to reflect expanded in-scope families.\n- Keep and validate legacy behavior path:\n- `--output` still emits existing schema\n- excerpt truncation still enforced in legacy path\n- Add new tests for `--log-output-dir`:\n- writes deterministic `summary.json`\n- writes expected `errors/`, `slow/`, `recent/` directory structure\n- writes per-run `metadata.json` and full (untruncated) `step-*.log`\n- downloads logs only for selected category runs (non-selected remain metadata-only)\n- handles overlapping categories without duplicate API download calls\n- Extend current end-to-end mock-gh test pattern rather than introducing new test harness style.\n\nConflict detection notes\n- Terminology mismatch: issue text says \u201corchestrator families,\u201d while code/workflow names are `orchestrate*`; implementation should normalize to repository\u2019s existing `orchestrate`, `orchestrate_poll`, and `orchestrate_clarify_respond` family names.\n- Naming format mismatch in ecosystem docs/workflows (underscore family IDs vs hyphenated workflow filenames) should be handled explicitly in normalization logic.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5a63254be6954ba2bfc93819ef1ffda84be6067e829ed2361ce1a85b924e84c2",
+  "lineage": {
+    "issue_number": 1171,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24504536748",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24504536748",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1171"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416101808_ee3a0d5318",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1171,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24504536748"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1171",
+  "timestamps": {
+    "created_at": "2026-04-16T10:18:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

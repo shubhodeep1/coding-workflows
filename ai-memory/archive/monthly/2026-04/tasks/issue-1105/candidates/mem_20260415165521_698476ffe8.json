@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No Q<ID> decisions were required. The `/answer [auto-answered-by-clarify]` comment indicates scope is fully specified and planning can proceed without additional clarification.\n\nExecution checklist (mapped from required fix):\n- [ ] Add `mode-judge-stall-recovery.txt` to orchestrate poll prompt bootstrap fetch list with unchanged `${script_ref}` then `main` fallback behavior.\n- [ ] Include the new prompt in existing prompt-presence/preflight validation paths consistent with current required/optional behavior.\n- [ ] Add/extend regression tests for the workflow contract and bootstrap validation coverage.\n- [ ] Keep behavior unchanged outside missing-artifact coverage.\n\nImplementation plan:\n\n1. Files likely to change\n- `.github/workflows/orchestrate_poll.yml`\n- `tests/test_orchestrate_poll_workflow_contract.py`\n- `.github/workflows/ci.yml`\n- `.github/workflows/test-and-mark-stable.yml`\n\n2. Functions/modules to update\n- Orchestrate poll bootstrap step in `.github/workflows/orchestrate_poll.yml` (`Fetch workflow support scripts` run block):\n  - Extend the prompt loop from:\n    - `mode-judge.txt`\n    - `mode-judge-review-blocked.txt`\n    - `serena-efficiency-block.txt`\n  - To also include:\n    - `mode-judge-stall-recovery.txt`\n  - Keep `_gh_api_fetch` semantics unchanged (`script_ref` first, `main` fallback on miss).\n- Workflow contract test module `tests/test_orchestrate_poll_workflow_contract.py`:\n  - Add a dedicated assertion that orchestrate poll bootstrap includes stall-recovery prompt fetch mapping.\n  - Assert fallback contract is still present (warning + `?ref=main` fetch path pattern used by existing prompts).\n- Existing bootstrap validation checks:\n  - Add `prompts/mode-judge-stall-recovery.txt` to prompt-validation target lists in:\n    - `.github/workflows/ci.yml`\n    - `.github/workflows/test-and-mark-stable.yml`\n  - Keep them consistent with current \u201cmissing/empty is failure\u201d behavior where already enforced.\n\n3. Data structures affected\n- Shell prompt filename lists/arrays in workflow YAML run blocks:\n  - `for pf in ...` list in orchestrate poll bootstrap.\n  - `target_prompts=(...)` and similar prompt validation lists in CI/stable checks.\n- Python test string/regex expectations for workflow contract text.\n\n4. API/interface changes\n- No external API changes.\n- No env var changes.\n- No label/state semantics changes.\n- No changes to `_dispatch_review_for_conflicts` path or stall decision logic.\n\n5. Risks and edge cases\n- Risk: brittle test tied to exact loop formatting/order. Mitigation: assert presence of required prompt token and fallback semantics, not exact whitespace layout.\n- Risk: adding required prompt in CI/stable validation can fail older branches missing file. Mitigation: this repo already contains `prompts/mode-judge-stall-recovery.txt`; change is aligned with current script usage.\n- Guardrail: do not touch `scripts/orchestrate_poll_process.sh` behavior; only ensure artifact availability.\n\n6. Testing considerations\n- New/updated contract test should fail before fix and pass after fix.\n- Run targeted tests:\n  - `pytest tests/test_orchestrate_poll_workflow_contract.py -q`\n- Run workflow contract validations touched by prompt list changes:\n  - CI/stable prompt validation logic is exercised via workflow test jobs; at minimum, ensure lists include the new prompt and remain syntactically valid.\n- Optional safety check:\n  - Re-run orchestrate poll process tests that cover stall-judge action paths to confirm no behavioral regressions in logic (artifact-only fix).\n\nConflict detection notes:\n- Confirmed factual gap: `scripts/orchestrate_poll_process.sh` renders `prompts/mode-judge-stall-recovery.txt`, while `.github/workflows/orchestrate_poll.yml` currently does not fetch it.\n- Additional relevant gap found: repo-level prompt validation lists in CI/stable currently cover judge/review-blocked prompts but omit stall-recovery; this should be included to prevent recurrence.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "385ba0d67256dfba4ec6d8b3f2c3afcddbcdad931bd9511a8d84042418a3e50b",
+  "lineage": {
+    "issue_number": 1105,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24466960541",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24466960541",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1105"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415165521_698476ffe8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1105,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24466960541"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1105",
+  "timestamps": {
+    "created_at": "2026-04-15T16:55:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

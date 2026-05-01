@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\nprompts/mode-implement-repair-syntax.txt\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/implement.yml\n.github/workflows/review_autofix.yml\n.github/workflows/review_autofix.yml**\n/tmp/codex-pr-24438948978-1-3712/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n/tmp/codex-pr-24438948978-1-3712/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n`.github/workflows/review_autofix.yml`\n`scripts/label_helpers.sh`\nprompts/mode-implement-repair-syntax.txt\ntests/test_implement_post_codex_recovery.py",
+  "fingerprint": "1ea7dd1e7b97073fad08a7324adbdc7b30a7ed95acbf9608cc11fa610c6f0a6a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1029,
+    "run_id": "24438948978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24438948978",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415060730_414d6b5c4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1029,
+    "run_id": "24438948978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T06:07:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

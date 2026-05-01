@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_external_branch_advance.sh:97-106 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: The remote-tip check can misbehave in shallow-clone environments because the local history may be incomplete for `git merge-base --is-ancestor`.\n  WHY: Both reviewers report that insufficient fetch depth can cause the script to classify a legitimate advance incorrectly; severity is medium as reported, with one reviewer noting fail-open behavior while the other calls out premature soft-exit.\n- .github/workflows/review_autofix.yml:2130-2144 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: The workflow removes `scripts/check_external_branch_advance.sh` during cleanup and relies on later restoration for the pre-push gate.\n  WHY: Both reviewers identify the cleanup/restoration window as the risk point; one flags potential missing restoration as a high-severity bypass of the safety check, while the other says the script is restored before use and disagrees on bug status, so the highest severity is kept.\n- scripts/check_external_branch_advance.sh:175-187 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: The `for sha in ${self_subject_shas}; do` loop uses unquoted word-splitting.\n  WHY: Both reviewers cite the same loop as fragile; one treats it as low risk, and the other calls it acceptable risk but still notes the pattern, so the merged finding keeps low severity.\n- scripts/check_external_branch_advance.sh:beginning-of-script | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The script does not validate that required environment variables such as `LOCAL_HEAD_SHA` and `TARGET_BRANCH` are set.\n  WHY: This was reported only by one reviewer as a runtime correctness gap that could lead to unexpected behavior when inputs are unset.\n- scripts/check_external_branch_advance.sh:git-commands-with-2>/dev/null | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Git command errors are redirected away, reducing debuggability.\n  WHY: This was reported only by one reviewer as a logging/diagnostics issue rather than a functional failure.\n- scripts/orchestrate_poll_process.sh:4634-4650 | severity=low | confidence=2\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The fallback payload for the stall judge may omit diagnostic fields expected by the judge prompt.\n  WHY: This was reported only by one reviewer as a schema mismatch risk in the fallback path.\n- scripts/check_external_branch_advance.sh:135 | severity=low | confidence=1\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `git rev-list` could return an extremely long list.\n  WHY: This was reported only by one reviewer as a potential resource-exhaustion edge case with a suggested cap.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/check_external_branch_advance.sh:104-106 | severity=medium | confidence=3\n  PROBLEM: The `git fetch` logic may not handle shallow clones correctly before `git merge-base --is-ancestor`.\n  WHY: In shallow clone environments, missing history can make the ancestry check unreliable and misclassify branch advancement.\n- scripts/check_external_branch_advance.sh:182-187 | severity=low | confidence=2\n  PROBLEM: The `for sha in ${self_subject_shas}; do` loop relies on unquoted word-splitting.\n  WHY: The loop is fragile in edge cases, though commit SHAs themselves do not contain spaces.\n- .github/workflows/review_autofix.yml:2133 | severity=high | confidence=4\n  PROBLEM: `scripts/check_external_branch_advance.sh` is removed in cleanup and restoration may fail before the pre-push gate needs it.\n  WHY: If restoration fails, the pre-push gate skips with a warning and stale-base detection is lost.\n- scripts/check_external_branch_advance.sh:Missing input validation for LOCAL_HEAD_SHA and TARGET_BRANCH | severity=medium | confidence=3\n  PROBLEM: The script does not validate required environment variables.\n  WHY: Unset inputs could produce unexpected behavior at runtime.\n- scripts/check_external_branch_advance.sh:git commands with 2>/dev/null | severity=low | confidence=2\n  PROBLEM: Git command errors are suppressed.\n  WHY: Hiding command failures makes debugging operational issues harder.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/check_external_branch_advance.sh:97 | severity=medium | confidence=4\n  PROBLEM: The `git fetch`/`merge-base` check may be insufficient in shallow-clone environments.\n  WHY: Missing history can cause the script to misread branch ancestry and soft-exit early for a legitimate fast-forward advance.\n- .github/workflows/review_autofix.yml:2130-2133 | severity=high | confidence=5\n  PROBLEM: The script is removed in cleanup before the later pre-push gate uses it.\n  WHY: If the script is not restored into the support scripts path, the safety check is bypassed and the workflow can proceed without stale-base protection.\n- scripts/check_external_branch_advance.sh:182-187 | severity=low | confidence=3\n  PROBLEM: The `for sha in ${self_subject_shas}; do` loop uses fragile unquoted word-splitting.\n  WHY: Large commit ranges or unusual iteration behavior could make the loop less robust, even though SHAs are hex strings.\n- scripts/orchestrate_poll_process.sh:4634-4650 | severity=low | confidence=2\n  PROBLEM: The fallback payload for the stall judge lacks some diagnostic fields from the primary payload.\n  WHY: A schema mismatch in the fallback path could impair judge behavior when the primary builder fails.\n- scripts/check_external_branch_advance.sh:135 | severity=low | confidence=1\n  PROBLEM: `git rev-list` might become extremely long.\n  WHY: Capping the list would reduce resource pressure in unusually large advances.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "aad8ce136669c7b9389ad79ce3bc56745c67e979341c78c55d93aa1d21e678fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1509,
+    "run_id": "24772495925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24772495925",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422104016_299771486e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1509,
+    "run_id": "24772495925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T10:40:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

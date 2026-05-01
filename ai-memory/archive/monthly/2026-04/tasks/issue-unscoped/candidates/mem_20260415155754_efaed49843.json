@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/ci.yml\nscripts/gh_helpers.sh\nscripts/orchestrate_lib.py\nscripts/orchestrate_poll_process.sh\nscripts/review_rb_judge.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n.github/workflows/review_autofix.yml\n`.github/workflows/ci.yml`**\n`.github/workflows/internal-*.yml`**\n`.github/workflows/review_autofix.yml`**\n`scripts/gh_helpers.sh`**\n`scripts/orchestrate_poll_process.sh`**\nscripts/review_apply_fixes.sh\nscripts/review_apply_fixes.sh\nscripts/review_rb_judge.sh\nscripts/review_run_reviewers.sh",
+  "fingerprint": "6d4ec9e91badeef863e81dbaada30f33fd94eaf7fc2b414ccf94ac4793266e1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1077,
+    "run_id": "24463314180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24463314180",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415155754_efaed49843",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1077,
+    "run_id": "24463314180"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T15:57:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

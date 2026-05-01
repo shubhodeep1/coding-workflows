@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for Issue: update `tests/e2e_smoke_canary.txt`\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\n2. Functions or modules to implement\n- No code modules/functions need implementation.\n- Perform a full-file content replacement operation on the existing canary file.\n\n3. Data structures affected\n- Plain text file content only.\n- Final file must be exactly:\n  - `status: ok`\n  - `run_id: 24237042503`\n  - `updated-by: ai-pipeline`\n- Ensure newline handling results in exactly these three lines and no extra content.\n\n4. API or interface changes\n- None.\n- No workflow/API/schema/interface behavior changes are required.\n\n5. Potential risks or edge cases\n- Accidental modification of any file other than `tests/e2e_smoke_canary.txt` (must be avoided).\n- Leaving old content due to append instead of overwrite (must use full overwrite).\n- Introducing extra whitespace, blank lines, or metadata text (must be exact content only).\n- Creating the file path instead of updating existing file (issue states file already exists).\n\n6. Testing considerations\n- Verify only one file changed via git diff/file status.\n- Verify exact file content with a deterministic check (line-by-line or exact string compare).\n- Verify line count is exactly 3 and values match exactly.\n- No broader test suite needed for this change.\n\nConflict check\n- No factual conflicts detected between the issue description and expected repository behavior for this task.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7533f01acbb6cbe1afd104105fead1c45e163b26cc937dc71c0e4d7867c4cebd",
+  "lineage": {
+    "issue_number": 673,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24237130775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24237130775",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/673"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260410095826_05467560ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 673,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24237130775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #673",
+  "timestamps": {
+    "created_at": "2026-04-10T09:58:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

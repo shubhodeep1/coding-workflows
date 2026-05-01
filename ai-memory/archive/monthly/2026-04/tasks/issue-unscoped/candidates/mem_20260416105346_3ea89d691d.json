@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24506054564-1-4718/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\nscripts/analyze_workflow_logs.py\nscripts/analyze_workflow_logs.py**\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/analyze_workflow_logs.py**\ntests/test_analyze_workflow_logs.py",
+  "fingerprint": "0e1dc04926eade1b0f22428f1c93cfb64e977c6f79d75dd9b18e08980f3ddd7e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1177,
+    "run_id": "24506054564",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24506054564",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416105346_3ea89d691d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1177,
+    "run_id": "24506054564"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T10:53:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

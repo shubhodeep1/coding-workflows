@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- Q1 was answered as `C`: auto-retarget first, and if retargeting fails, abort with tracked failure.\n\nFactual conflicts found between issue text and current codebase:\n- No current occurrences of `resolve-merge-conflict` or `claude/resolve-merge-conflict` branch naming in `.github/workflows` or `scripts`.\n- The conflict-related PR creation path that matches the reported behavior is in `scripts/orchestrate_poll_process.sh` (follow-up PR creation via `FOLLOWUP_PR_URL=\"$(gh pr create ...)\"`), where base currently comes from `PR_META.base_ref` and falls back to default branch.\n- `review_autofix.yml` handles conflicts by committing/pushing to the existing PR branch; it does not create a new PR in the observed path.\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh` (primary and likely only required file).\n- No workflow file change is expected unless we decide to add extra logging/guard visibility in a caller workflow.\n\n2. Functions/modules to implement\n- Add a helper in `scripts/orchestrate_poll_process.sh` to resolve active orchestrator ownership for a given issue before base selection:\n  - Use open tracking issues from `tracking_issues.json`.\n  - Reuse `extract_latest_valid_orchestrator_state`.\n  - Read `issue_number_map` and `integration_branch` from the latest valid state.\n  - Validate branch existence with existing `integration_branch_exists`.\n- Patch the review-blocked follow-up PR path (merged-target branch flow) to call the resolver before `BASE_REF` is finalized.\n- Apply retarget-first logic:\n  - If issue is orchestrator-owned and integration branch is valid, set `BASE_REF` to that integration branch.\n- Add hard guard immediately before `gh pr create`:\n  - If orchestrator-owned integration branch exists and base is still default/main, attempt retarget once more.\n  - If still unresolved/wrong, abort PR creation and emit tracked failure via existing helpers (`post_tracking_comment`, warning log, `tg_notify` with `WARNING`).\n- Preserve standalone behavior:\n  - If no active orchestrator ownership is resolved, keep current `BASE_REF` behavior unchanged.\n\n3. Data structures affected\n- `ORCHESTRATOR_STATE_V1` comment payload (read-only use): `issue_number_map`, `integration_branch`, `waves[].issues[].github_issue`.\n- Runtime `tracking_issues.json` (read-only use for open `ai:orchestrator-tracking` issues).\n- No schema or contract changes.\n\n4. API or interface changes\n- No external API/interface changes (no new env vars, no renamed fields).\n- Internal behavior change only: follow-up conflict-fix PR base branch resolution in orchestrator-owned cases.\n\n5. Potential risks or edge cases\n- Malformed/latest-invalid tracking state comment: must rely on existing fallback to latest valid state.\n- Issue appears in multiple tracking states due historical drift: deterministic selection/logging needed (prefer current tracking context, then open trackers).\n- Integration branch missing/deleted: must fail safely (abort with tracked warning), never silently fall back to `main` for orchestrator-owned issues.\n- Non-orchestrator paths must remain unchanged.\n\n6. Testing considerations\n- Scenario A (orchestrator-owned, merged review-blocked PR, base currently `main`): verify created follow-up PR base is `orchestrator/project-<tracking>`.\n- Scenario B (orchestrator-owned but integration branch missing): verify no PR is created; tracked warning/comment + Telegram warning emitted.\n- Scenario C (standalone/non-orchestrator review-blocked): verify existing base behavior is unchanged.\n- Regression checks:\n  - Existing final integration PR path (`integration -> default`) remains unchanged.\n  - Revert PR path remains unchanged.\n- Run shell syntax/static checks for touched script (at minimum bash parse/shellcheck in CI context).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7865116fb871810133346d2d893285714880fcaa79436c42d47a8758d9260117",
+  "lineage": {
+    "issue_number": 871,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24379234540",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379234540",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/871"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414032923_bc02a49581",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 871,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24379234540"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #871",
+  "timestamps": {
+    "created_at": "2026-04-14T03:29:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

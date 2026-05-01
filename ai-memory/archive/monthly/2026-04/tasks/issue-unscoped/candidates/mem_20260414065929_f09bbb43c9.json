@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/clarify.yml\n.github/workflows/orchestrate_clarify_respond.yml\n`.github/workflows/clarify.yml`\n`scripts/semantic_cache.py`\nscripts/semantic_cache.py\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/orchestrate_clarify_respond.yml`\n`scripts/semantic_cache.py`\ntests/test_semantic_cache.py",
+  "fingerprint": "d7b603794bdbf0545ce6761368cebeaf502c03c012d7f6dbcc0d1480c957a268",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 892,
+    "run_id": "24384845869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24384845869",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414065929_f09bbb43c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 892,
+    "run_id": "24384845869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T06:59:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

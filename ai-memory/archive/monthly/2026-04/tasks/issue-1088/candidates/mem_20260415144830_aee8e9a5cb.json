@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No Q<ID> clarification questions were asked.\n- `/answer [auto-answered-by-clarify]` means the issue description is the authoritative spec for planning.\n\nRepresentative implementation inspected:\n- `.github/workflows/orchestrate.yml` Wave-1 creation/state path (`Create Wave 1 issues only` \u2192 `Dispatch Wave 1`) as the baseline pattern for issue creation, labels, metadata footer, and downstream orchestration wiring.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/orchestrate.yml`\n- `README.md` (document single-issue short-circuit orchestrate behavior; no new env vars expected)\n\n2. Functions/modules to implement\n- Add a decision step immediately after `Extract and validate decomposition JSON`:\n  - compute `jq '.issues | length' \"${DECOMPOSITION_FILE}\"`\n  - expose outputs like `single_issue_mode=true|false`\n- Add a dedicated single-issue creation step when count is `1`:\n  - create exactly one standalone issue from decomposer `title`/`body`\n  - apply labels:\n    - `ai:clarification`\n    - `ai:orchestrator-managed`\n    - `ai:orchestrator-validate-required`\n  - omit tracking/integration metadata fields in footer\n  - capture created issue number/url outputs\n- Gate orchestrator-heavy steps to run only when `single_issue_mode != true`:\n  - `Create tracking issue`\n  - `Create integration branch`\n  - `Create Wave 1 issues only`\n  - `Build and post initial state`\n  - `Record decomposition candidate`\n  - `Dispatch Wave 1`\n- Update `Write run summary` to show:\n  - execution mode (`normal` vs `single-issue short-circuit`)\n  - created standalone issue number in short-circuit mode\n- Update `Notify via Telegram` success message to include short-circuit mode + standalone issue URL when no tracking issue exists.\n\n3. Data structures affected\n- Workflow step outputs/env only (no decomposition schema changes):\n  - new mode/issue outputs (`single_issue_mode`, `single_issue_number`, `single_issue_url`)\n  - `TRACKING_ISSUE_NUMBER` remains unset/`0` in short-circuit path\n- `DECOMPOSITION_FILE` stays unchanged and validated via existing `orchestrate_lib.py`.\n\n4. API/interface changes\n- Behavior change in orchestrate workflow:\n  - exactly one decomposed issue -> direct standalone issue path\n  - multi-issue behavior remains unchanged\n- Single-issue created issue includes orchestrator-managed + validate-required semantics while still entering normal clarify\u2192plan\u2192implement\u2192review flow.\n\n5. Risks and edge cases\n- Skipped `tracking_issue` outputs must not break `always()` tail steps.\n- Single-issue body handling must preserve multiline content exactly.\n- Must guarantee no tracking issue and no `orchestrator/project-*` integration branch are created in count==1 path.\n- Ensure label creation step still runs before any issue creation in both branches.\n\n6. Testing considerations\n- Single-issue decomposition:\n  - verify exactly one issue is created\n  - verify no tracking issue created\n  - verify no integration branch created\n  - verify labels include `ai:orchestrator-managed` + `ai:orchestrator-validate-required`\n  - verify summary explicitly reports short-circuit mode and issue number\n- Multi-issue decomposition:\n  - verify legacy tracking/integration/wave dispatch behavior is unchanged\n- Failure path:\n  - verify summary, run-end memory record, and Telegram notify still execute (`if: always()` path)\n\nConflict detected:\n- Current code\u2019s `Create Wave 1 issues only` step appends tracking/integration metadata and creates issues using tracking context. Even though the issue explicitly lists other steps to skip, this step must also be short-circuit-gated or split for the single-issue path; otherwise requirements would be violated.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "105acaa1fe60dc38d34285a736bf746f943f4d86fb270910241c5b3f2482b576",
+  "lineage": {
+    "issue_number": 1088,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24461025461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24461025461",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1088"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415144830_aee8e9a5cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1088,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24461025461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1088",
+  "timestamps": {
+    "created_at": "2026-04-15T14:48:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

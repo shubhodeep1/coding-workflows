@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n`prompts/mode-clarify.txt`\n`prompts/mode-implement.txt`\n`prompts/mode-orchestrate.txt`\n`prompts/mode-plan.txt`\n`prompts/serena-efficiency-block.txt`\ndocs/serena-mcp-optimization-plan.md\nscripts/render_prompt.sh",
+  "fingerprint": "06cd0e7133f93e098509b08b8d23ef651b1f897063d61264d0cf232f9f800976",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 891,
+    "run_id": "24380922510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24380922510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414043318_ff05327605",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 891,
+    "run_id": "24380922510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-14T04:33:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping\n- No `Q<ID>` clarification prompts were issued.\n- `/answer [auto-answered-by-clarify]` means the issue was interpreted as fully specified for planning.\n\nConflicts detected\n- `ai:blocked` does not currently exist in `.github/ai/label_contract.v1.json` or `scripts/label_helpers.sh`, but the issue requires escalating to that label.\n- There is another `/answer [auto-answered-by-orchestrator]` path in `scripts/orchestrate_poll_process.sh` (stall recovery), so limiting changes only to `orchestrate_clarify_respond` leaves a residual auto-answer path.\n\n1. Files likely to change\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `scripts/ai_memory_lib.py`\n- `scripts/ai_memory.py`\n- `scripts/memory_helpers.sh`\n- `ai-memory/schemas/processed_command_entry.v1.json`\n- `ai-memory/examples/sample_processed_command_entry.v1.json`\n- `.github/ai/label_contract.v1.json`\n- `scripts/label_helpers.sh`\n- `README.md`\n- `agents.md`\n- `tests/test_orchestrate_clarify_loop_guard.py` (new)\n- `tests/test_ai_memory_processed_command_entry.py` (new)\n\n2. Functions/modules to implement\n- Add processed-command history read support in memory layer (issue-scoped list/filter) so clarify-respond can inspect prior auto-answer entries.\n- Extend processed-command CLI/helper wrappers to expose that history to workflows.\n- In `orchestrate_clarify_respond.yml`, add a pre-post loop-guard step that:\n- computes normalized `clarify_hash` from clarification comment text.\n- computes `answer_hash` from the chosen `/answer` payload.\n- checks prior auto-answer entries for same issue.\n- applies hash recurrence rule and cycle-budget rule before posting.\n- If blocked:\n- ensure `ai:blocked` label exists.\n- remove `ai:planning` and `ai:clarification`.\n- post one loop-break issue comment citing previous + current clarify comment IDs.\n- send Telegram alert in existing tracked-alert style.\n- `exit 0` (controlled escalation).\n- If allowed:\n- post auto-answer.\n- record processed-command completion metadata (hashes/comment IDs/cycle/status).\n\n3. Data structures affected\n- `processed_command_entry.v1` remains additive/compatible (no breaking rename/removal).\n- `metadata` gets explicit optional clarify-loop keys:\n- `clarify_hash` (string, sha256 hex)\n- `answer_hash` (string, sha256 hex)\n- `clarify_comment_id` (int)\n- `answer_comment_id` (int)\n- `cycle` (int >= 1)\n- `loop_blocked` (bool)\n- `loop_block_reason` (enum-like string)\n\n4. API/interface changes\n- New env var: `ORCHESTRATOR_MAX_CLARIFY_CYCLES` with default `3`.\n- Consumed by `orchestrate_clarify_respond.yml` to enforce N+1 escalation.\n- Document in `README.md` variable table and `agents.md` env-var section.\n- Add `ai:blocked` label contract entry and helper catalog entry.\n\n5. Potential risks and edge cases\n- Over/under-normalization could create false hash matches or misses.\n- Legacy entries without new metadata must still parse cleanly.\n- Concurrent reruns around the same comment must remain idempotent (claim/complete semantics).\n- Memory branch transient failures must not turn escalation into workflow failure.\n- If only clarify-respond is patched, stall-recovery auto-answer path can still generate repeated answers.\n\n6. Testing considerations\n- Unit: identical clarification body twice for same issue; second attempt escalates to `ai:blocked`, no second auto-answer posted.\n- Unit: `N+1` distinct clarification prompts with `ORCHESTRATOR_MAX_CLARIFY_CYCLES=N`; cycle `N+1` escalates.\n- Unit: schema/helper compatibility; old entries (no loop metadata) remain valid, new metadata validates, malformed metadata rejects.\n- Unit: normalization stability (whitespace/case/markdown-token drift yields same hash for semantically identical clarify text).\n- Unit: blocked path exits success (`0`) and emits label/comment/Telegram side effects.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0ab9e44eddf66f9c40228bb11beb039baef79312ae82419269aa7252029017dd",
+  "lineage": {
+    "issue_number": 1064,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24444594517",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24444594517",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1064"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415084551_f12fb5ad75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1064,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24444594517"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1064",
+  "timestamps": {
+    "created_at": "2026-04-15T08:45:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

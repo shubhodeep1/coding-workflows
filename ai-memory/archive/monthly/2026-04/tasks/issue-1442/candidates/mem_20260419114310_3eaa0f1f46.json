@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `3246b6f66d690097ce21868d2e8fe5d4f2e760c0`\n- Resolved checkout ref: `orchestrator/project-1292`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1292`\n- Integration branch metadata: `orchestrator/project-1292`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` clarification questions were asked in this issue.\n- Interpreted answer context: `/answer [auto-answered-by-orchestrator]` means proceed with the provided scope and constraints.\n\nConflict detection (issue vs codebase):\n- The requested render-phase recovery flow already exists in [scripts/validate_process.sh](scripts/validate_process.sh) (`attempt_render_recovery_after_preflight_failure`, preflight branch routing to `attempt_self_heal_and_reexec \"render\"` on render-recovery failure).\n- Render-phase recognition and logging in self-heal plumbing already exists in [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh) (`SELF_HEAL_FAILURE_PHASE` propagation + ledger `failure_phase` field + prompt-file allow-list/additive-only guards).\n- Prompt guidance already enforces renderer-driven render recovery in [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt).\n- Integration-style render recovery tests already exist in [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py) and contract assertions exist in [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py).\n\nImplementation plan:\n\n1. Files likely to change\n- Primary expectation: no functional code changes if audit confirms current behavior matches acceptance criteria.\n- If gaps are found, restrict edits to:\n- [scripts/validate_process.sh](scripts/validate_process.sh)\n- [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh)\n- [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt)\n- [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py)\n- [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py)\n\n2. Functions/modules to implement or verify\n- `attempt_render_recovery_after_preflight_failure` in [scripts/validate_process.sh](scripts/validate_process.sh):\n- Confirm lint-only gate, one-shot rerender guard, rerender+relint flow, and `return 2` fail-open signaling.\n- Phase-2 preflight failure branch in [scripts/validate_process.sh](scripts/validate_process.sh):\n- Confirm `render_recovery_exit == 2` routes to `attempt_self_heal_and_reexec \"render\"` and never to freehand harness generation.\n- `attempt_self_heal_and_reexec` in [scripts/validate_process.sh](scripts/validate_process.sh):\n- Confirm `render` is accepted in phase normalization and propagated via `SELF_HEAL_FAILURE_PHASE`.\n- Self-heal validator in [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh):\n- Preserve prompt allow-list (`mode-validate-{discover,generate,fix-harness,diagnose}.txt`) and additive-only patch enforcement.\n\n3. Data structures affected\n- Preflight/render recovery state variables in `validate_process.sh`:\n- `PRE_FLIGHT_FAILURE_CLASS`, `PRE_FLIGHT_FAILURE_KIND`, `PRE_FLIGHT_FAILURE_REASON`, `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `render_recovery_exit`.\n- Self-heal metadata/ledger fields in `self_heal_validation.sh`:\n- `SELF_HEAL_FAILURE_PHASE` and JSONL entry `failure_phase`.\n- No MongoDB collections/contracts/indexes are involved.\n\n4. API/interface changes\n- No external API, workflow input, or env-var contract changes are required.\n- Behavioral contract to preserve: template-mode render/lint recovery remains deterministic/renderer-driven; self-heal remains prompt-file-only.\n\n5. Potential risks and edge cases\n- Regression risk: accidentally routing render recovery failures into legacy `preflight` self-heal phase.\n- Regression risk: weakening allow-list/additive-only checks could allow out-of-scope prompt edits.\n- Operational risk: introducing any freehand harness generation fallback during render recovery would violate acceptance criteria.\n- Backward-compat risk: altering non-template or non-lint preflight behavior.\n\n6. Testing considerations\n- Run targeted render-recovery integration tests in [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py):\n- success continuation path\n- renderer fail-open path (`render` self-heal phase)\n- rerender+relint fail-open path (`render` self-heal phase)\n- non-template legacy preflight path preserved\n- Run template-mode contract tests in [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py):\n- render recovery contract strings present\n- prompt-only self-heal scope strings present\n- allow-list/additive-only guardrails still present\n- If all tests pass without code edits, close as already implemented on this integration branch; otherwise apply minimal patch set only within the files above.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c5e4b97fad5258182c9b8758222efd2bb7487c3bc214d753a54a51b980b58635",
+  "lineage": {
+    "issue_number": 1442,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24628188907",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24628188907",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1442"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419114310_3eaa0f1f46",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1442,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24628188907"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1442",
+  "timestamps": {
+    "created_at": "2026-04-19T11:43:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n.github/workflows/review_autofix.yml\n`.github/workflows/review_autofix.yml`\n`.github/workflows/review_autofix.yml`\n`.github/workflows/review_autofix.yml`\n`.github/workflows/review_autofix.yml`\nscripts/review_apply_fixes.sh\nscripts/review_apply_fixes.sh\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/review_autofix.yml`**\n`scripts/review_apply_fixes.sh`**",
+  "fingerprint": "977a9f3091bd6f2972d3dc85cd88e16b5b32d7fe3c584ef42e31753667f439ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1147,
+    "run_id": "24490298316",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24490298316",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416034916_5d21ae97f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1147,
+    "run_id": "24490298316"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 8 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T03:49:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

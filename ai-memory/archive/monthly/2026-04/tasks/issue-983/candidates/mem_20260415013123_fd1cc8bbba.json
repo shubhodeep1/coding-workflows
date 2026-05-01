@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":983,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/983\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/985\",\"pr_number\":985,\"branch\":\"ai/issue-983\",\"run_id\":\"24431575838\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24431575838\",\"changed_files\":[\"docs/validation-phase-spec.md\",\"prompts/mode-validate-fix-harness.txt\",\"tests/test_validate_harness_rpc.py\"]}",
+  "fingerprint": "22881d3f303426e9e024550f9cda2d55719bc0be09e03d462e068039baa05058",
+  "lineage": {
+    "issue_number": 983,
+    "parent_ids": [],
+    "pr_number": 985,
+    "run_id": "24431575838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24431575838",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/985"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260415013123_fd1cc8bbba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 983,
+    "level": "run",
+    "pr_number": 985,
+    "run_id": "24431575838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #983: https://github.com/shubhodeep1/coding-workflows/pull/985",
+  "timestamps": {
+    "created_at": "2026-04-15T01:31:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

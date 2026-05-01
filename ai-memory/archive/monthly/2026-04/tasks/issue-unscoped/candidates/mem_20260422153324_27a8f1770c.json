@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- N/A | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: Consumer repos that force-track `.ai/review_issue_ledger.txt` will continue to commit it and can recreate the sync-conflict problem this PR is meant to fix.\n  WHY: The reviewer says the fix depends on the ledger being gitignored and not force-tracked; if a consumer repo already tracks it or re-adds it with `git add -f`, `git add -u` will keep staging it and the conflict returns.\n- .github/workflows/review_autofix.yml:1614-1631,1748-1761 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The cache-key restore/save design could theoretically let related PR runs or workflow families share or race on ledger cache state.\n  WHY: Multiple reviewers raised this around the same cache steps, but all noted the current `PR_NUMBER` scoping and run-specific keying make it intentional or speculative; severity is set to the highest reported while noting the disagreement that several reviewers considered it non-buggy.\n- README.md / agents.md | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The documentation does not clearly explain the cache-restore fail-open behavior when the ledger cache is missing.\n  WHY: The reviewer says `ledger_reset=1` makes all issues treated as `NEW` on cache miss, and that this behavior should be documented to avoid confusion.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- N/A | severity=medium | confidence=4\n  PROBLEM: Consumer repos that force-track `.ai/review_issue_ledger.txt` will continue to commit it and can recreate the sync-conflict problem this PR is meant to fix.\n  WHY: The reviewer says the fix depends on the ledger being gitignored and not force-tracked; if a consumer repo already tracks it or re-adds it with `git add -f`, `git add -u` will keep staging it and the conflict returns.\n- .github/workflows/review_autofix.yml:1614-1631,1748-1761 | severity=low | confidence=2\n  PROBLEM: Cache-sharing across workflow runs could cause different PR runs to reuse or overwrite each other's ledger state.\n  WHY: The reviewer notes the cache key is scoped by `PR_NUMBER` and run identifiers, but still raises a minor concern about concurrent runs restoring stale state or overwriting each other.\n- README.md, agents.md | severity=low | confidence=3\n  PROBLEM: The documentation does not clearly explain the cache-restore fail-open behavior when the ledger cache is missing.\n  WHY: The reviewer says `ledger_reset=1` makes all issues treated as `NEW` on cache miss, and that this behavior should be documented to avoid confusion.\n- .github/workflows/review_autofix.yml:1758 | severity=low | confidence=1\n  PROBLEM: The cache save guard may not clearly handle the case where the ledger file exists but is empty.\n  WHY: The reviewer questions whether `hashFiles('.ai/review_issue_ledger.txt') != ''` is sufficient, though they also note it appears to work as intended.\n- .github/workflows/review_autofix.yml | severity=low | confidence=2\n  PROBLEM: Concurrent runs of the same PR could restore stale cache or overwrite each other's saves.\n  WHY: The reviewer says GitHub Actions cache is eventually consistent, so concurrent runs could interfere slightly, even if the impact is minor.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:1614-1631 | severity=high | confidence=5\n  PROBLEM: The cache restore step depends on `env.PR_NUMBER` being set, so non-PR triggers can silently lose ledger persistence.\n  WHY: The reviewer says the workflow guard prevents execution when `PR_NUMBER` is empty, but if that environment value is missing the cache key degrades and persistence is lost for those triggers.\n- .github/workflows/review_autofix.yml:1748-1761 | severity=high | confidence=5\n  PROBLEM: `if: always()` on the save step could save stale or empty state if the ledger was never touched.\n  WHY: The reviewer concludes the `hashFiles('.ai/review_issue_ledger.txt') != ''` guard prevents empty or missing files from being cached, so the step is acceptable as written.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- N/A | severity=medium | confidence=3\n  PROBLEM: Existing consumer repositories that already track `.ai/review_issue_ledger.txt` will keep committing it and recreate the sync conflicts this PR fixes.\n  WHY: The reviewer says `git add -u` will continue staging a tracked ledger file in consumer repos until they perform the same untracking migration used here.\n- .github/workflows/review_autofix.yml:16-31,17-27 | severity=low | confidence=1\n  PROBLEM: The shared restore prefix could let unrelated workflows on the same PR contend over cache state.\n  WHY: The reviewer considers this highly theoretical, but notes a custom workflow using the same prefix could conflict and that concurrent events on the same PR could race for cache updates.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- No findings reported.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- N/A | severity=high | confidence=5\n  PROBLEM: Consumer repos that have `.ai/review_issue_ledger.txt` tracked in git will continue to commit it and can recreate sync conflicts.\n  WHY: The reviewer says `git add -u` stages tracked files, so committing the ledger keeps the main \u2194 integration branch conflict pattern alive until the consumer performs the migration.\n- .github/workflows/review_autofix.yml:1625-1632,1757-1762 | severity=low | confidence=1\n  PROBLEM: The restore-keys prefix could let different workflow families restore each other's cache.\n  WHY: The reviewer says the current run-specific keying makes this benign and intentional, and that the guard prevents empty caches from being saved.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "4778db01f375c62be01f4442e55f3e302e0b38aa8a08453fb56eb9952c47655c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1524,
+    "run_id": "24785610213",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24785610213",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422153324_27a8f1770c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1524,
+    "run_id": "24785610213"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T15:33:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

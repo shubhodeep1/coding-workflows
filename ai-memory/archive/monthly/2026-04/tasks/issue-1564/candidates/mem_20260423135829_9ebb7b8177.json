@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nRef context: `c1d012471c8610a3cdfe593e1d3bbd985b6541dc` on `orchestrator/project-1479`; checkout matches the integration-branch metadata. Clarification mapping: no Q<ID> questions were asked, and `/answer [auto-answered-by-orchestrator]` only confirms continuation.\n\nRepresentative implementation to follow: use the existing TAP style in `workflow-templates/validation-harness/repo-local-tooling/tests/20_import_audit.sh.j2` and `workflow-templates/validation-harness/repo-local-tooling/tests/50_tap_report.sh.j2` as the pattern for family markers. Those scripts already source `../_lib/tap_helpers.sh`, emit a TAP plan, and keep extra text as diagnostics.\n\nFiles likely to change\n- `workflow-templates/validation-harness/repo-local-tooling/tests/10_family_marker.sh.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/10_family_marker.sh.j2`\n- `workflow-templates/validation-harness/node-hardhat-solidity/tests/10_family_marker.sh.j2`\n- `tests/test_family_repo_local_tooling.py`\n- `tests/test_render_validation_templates.py`\n- `tests/fixtures/validation_harness/repo_local_tooling/tests/10_family_marker.sh`\n- `tests/fixtures/validation_harness/python_mongo_flask/tests/10_family_marker.sh`\n- `tests/test_render_validation_templates_node_hardhat_regressions.py` only if node-specific execution coverage fits better there than in the existing renderer-routing test\n- `scripts/validate_driver.sh` should be inspected, but current logic is likely correct and may not need code changes\n\nFunctions or modules to implement\n- Convert each `10_family_marker.sh.j2` template from a banner-only script into a valid one-assertion TAP test.\n- Preserve the family text (`<family> family for <project>`) as a TAP diagnostic line or stable test description so the marker remains visible without breaking the TAP contract.\n- Keep the generated filename and ordering unchanged (`tests/10_family_marker.sh`).\n- Extend the existing renderer regressions so they verify executable TAP behavior, not just file existence and raw text.\n- Refresh fixture snapshots for the families that already use golden outputs.\n\nData structures affected\n- Generated validation artifact content changes: `validation/tests/10_family_marker.sh` stays in place, but its stdout becomes TAP-valid.\n- Validation result payloads from `scripts/validate_driver.sh` should stop producing the failure entry `test produced no TAP output` for the family marker.\n- No Mongo contracts, workflow inputs, schema shapes, or environment-variable interfaces should change.\n\nAPI or interface changes\n- No public API change is expected.\n- Internal validation-harness contract changes from \u201cmarker prints a banner\u201d to \u201cmarker is an executable TAP test, optionally with `#` diagnostics.\u201d\n- Avoid changing discovery semantics in `scripts/validate_driver.sh` unless a comment/doc clarification is needed; excluding marker scripts would be a broader contract change than necessary.\n\nPotential risks and edge cases\n- Do not rename, relocate, or de-executable `10_family_marker.sh`; existing tests and render behavior depend on that path.\n- Ensure all three families source `../_lib/tap_helpers.sh` correctly and still run under `set -euo pipefail`.\n- Keep the family text stable enough that current semantic assertions can be updated minimally.\n- `repo_local_tooling` and `python_mongo_flask` have fixture snapshots; `node_hardhat_solidity` does not currently have a fixture tree, so node coverage should stay assertion-based unless a new fixture is explicitly warranted.\n- Changing `scripts/validate_driver.sh` discovery rules would affect every validation harness; template-side TAP compliance is the smaller, safer fix.\n\nTesting considerations\n- Update renderer tests to assert TAP markers in rendered `10_family_marker.sh` content (`1..1`, `ok 1` or `tap_ok`) in addition to the family text.\n- Add at least one execution-level regression: render the harness in a temp directory, run the generated `tests/10_family_marker.sh`, and assert exit `0` plus TAP output.\n- Cover `repo-local-tooling` and at least one additional family (`python-mongo-flask` or `node-hardhat-solidity`).\n- Refresh the existing fixture-backed golden files after template changes.\n- Manual verification should render the repo-local-tooling harness, run the generated validation suite/driver, and confirm the summary is fully green with no `test produced no TAP output` failure.\n\nConflict notes\n- No ref mismatch was found; planning is on the correct integration branch.\n- The issue lists `scripts/validate_driver.sh` as a likely change, but current code already intentionally treats zero-TAP output as a failure and only excludes helper scripts from discovery. The smallest corrective path is template/test-side TAP compliance, not relaxing the driver.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c5fc4cfe53a69df15ebef70daa734664fcc103cfe5b0f630708da8f4cc70f2ba",
+  "lineage": {
+    "issue_number": 1564,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24839107281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24839107281",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1564"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260423135829_9ebb7b8177",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1564,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24839107281"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1564",
+  "timestamps": {
+    "created_at": "2026-04-23T13:58:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:196-202 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `floor_tags.txt` is described inconsistently as advisory in one section and non-skippable in another.\n  WHY: The reviewer outputs agree this creates conflicting instructions about whether floor findings must be addressed, and the highest severity/confidence among reviewers is high/5.\n- scripts/review_apply_fixes.sh:201-206 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: `CONSOLIDATOR_OVERRIDDEN` no longer includes the issue ID in its output format.\n  WHY: Multiple reviewers flagged the format change as a traceability regression because overrides can no longer be reliably mapped back to a specific finding.\n- scripts/review_apply_fixes.sh:190-196 | severity=low | confidence=3\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `ledger_status.txt` is categorized as advisory in the input authority contract.\n  WHY: This reviewer says the label is misleading because the ledger carries stateful information that should not be treated as ignorable.\n- tests/test_detect_editor_changes_lost.py:144-150 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The test checks that `floor_tags.txt` is listed as advisory input but does not verify consistency with the consolidator section.\n  WHY: The reviewer says the test can pass even when the prompt contains an internal contradiction.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/review_apply_fixes.sh:196 and 202 | severity=4 | confidence=4\n  PROBLEM: Contradictory treatment of `floor_tags.txt` makes it advisory in one section and non-skippable in another.\n  WHY: The editor receives conflicting instructions about how to handle security-critical floor findings, which can cause them to be ignored or misapplied.\n- scripts/review_apply_fixes.sh:161 | severity=3 | confidence=3\n  PROBLEM: `floor_tags.txt` is described as `(optional; floor findings)`, which implies optionality.\n  WHY: This wording conflicts with the non-skippable requirement later in the prompt and creates confusion about whether floor findings are mandatory.\n- tests/test_detect_editor_changes_lost.py:144-150 | severity=3 | confidence=3\n  PROBLEM: The test only checks that `floor_tags.txt` is listed as advisory input in the input authority contract.\n  WHY: It does not verify consistency with the consolidator and ledger context section, so it can miss prompt contradictions.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_apply_fixes.sh:198 | severity=5 | confidence=5\n  PROBLEM: `floor_tags.txt` is redefined as advisory only.\n  WHY: This contradicts the floor-rule system\u2019s non-skippable intent and allows the model to ignore security-critical findings.\n- scripts/review_apply_fixes.sh:201-202 | severity=4 | confidence=4\n  PROBLEM: `CONSOLIDATOR_OVERRIDDEN` was changed from `<issue_id> - <short reason>` to just `<reason>`.\n  WHY: Dropping the issue ID weakens traceability and makes it harder to map overrides back to specific findings.\n- scripts/review_apply_fixes.sh:190-196 | severity=3 | confidence=3\n  PROBLEM: `ledger_status.txt` is categorized as advisory in the input authority contract.\n  WHY: The reviewer says this is misleading because the ledger contains stateful information that the model should not treat as ignorable.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/-review_agents_agents.agents:185-209 | severity=4 | confidence=4\n  PROBLEM: The prompt treats `floor_tags.txt` as advisory only rather than non-skippable floor findings.\n  WHY: The reviewer identifies this as a design change that could be unacceptable because floor findings are meant to be mandatory.\n- scripts/ review_agents_agents.agents:207-208 | severity=3 | confidence=3\n  PROBLEM: The `CONSOLIDATOR_OVERRIDDEN` format drops the issue ID and keeps only the reason.\n  WHY: This reduces traceability because overrides can no longer be tied to a specific issue cleanly.\n- tests/test_detect_editor_changes_lost.py:139-151 | severity=5 | confidence=5\n  PROBLEM: The test validates the new prompt text.\n  WHY: The reviewer says the added test appears correct and matches the new contract.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_apply_fixes.sh:202 | severity=4 | confidence=4\n  PROBLEM: `floor_tags.txt` is weakened to advisory only.\n  WHY: This conflicts with the design docs, which state floor tags are non-skippable and meant to preserve security-critical findings.\n- scripts/review_apply_fixes.sh:202 | severity=4 | confidence=4\n  PROBLEM: The `CONSOLIDATOR_OVERRIDDEN` format change is ignored.\n  WHY: The reviewer says this was not a real issue because the old format was never implemented.\n- scripts/review_apply_fixes.sh:202 | severity=4 | confidence=4\n  PROBLEM: The `.codex-workflow-src` mirror was updated and matches the current file.\n  WHY: The reviewer says the mirror concern is not valid because the files are identical.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/review_apply_fixes.sh:202 | severity=4 | confidence=4\n  PROBLEM: `floor_tags.txt` was softened from non-skippable floor findings to advisory only.\n  WHY: The reviewer says this weakens the documented contract and risks editors skipping critical issues.\n- scripts/review_apply_fixes.sh:206 | severity=4 | confidence=4\n  PROBLEM: `CONSOLIDATOR_OVERRIDDEN` was restored to include `<issue_id> - <short reason>`.\n  WHY: The reviewer says this is needed so overrides can be correlated with specific findings.\n- tests/test_detect_editor_changes_lost.py:149 | severity=4 | confidence=4\n  PROBLEM: The test assertion now expects `CONSOLIDATOR_OVERRIDDEN: <issue_id> - <short reason>`.\n  WHY: The reviewer says this aligns the test with the restored specification.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "c7cd6d7784ed9200ba86b96a7866b8842c1aae6383e5ac43e7f860e8f9fbc77f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1425,
+    "run_id": "24626241064",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626241064",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419101411_3f459f3527",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1425,
+    "run_id": "24626241064"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T10:14:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

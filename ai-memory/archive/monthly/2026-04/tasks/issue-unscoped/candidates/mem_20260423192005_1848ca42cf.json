@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:184 and 196 | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Duplicate \"Validation harness template-mode toggle\" entries create confusing documentation.\n  WHY: The same `VALIDATION_USE_TEMPLATES` contract is documented twice, so one entry is redundant.\n\n- scripts/validate_process.sh:670-683 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `is_validation_harness_runnable` no longer verifies `validation/validate.env` exists.\n  WHY: A partially rendered harness can pass the runnable check and fail later with less obvious errors.\n\n- scripts/validate_process.sh:1121-1133, 2264-2272 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: Exit code 14 is reused for both the Python-version check and renderer execution failure.\n  WHY: The same status code covers two different root causes, so operators must inspect logs to distinguish them.\n\n- tests/test_validate_preflight_canary_tools_scope.py:4-5 | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The test comment is now generic and less precise after removing the specific validation-prompt line references.\n  WHY: The contract being enforced is harder to trace for maintainers.\n\n- prompts/mode-validate-generate.txt:10-11 | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The prompt says freehand generation is removed but still contains freehand-generation guidance.\n  WHY: The opening instructions are internally inconsistent about whether freehand generation is still part of the contract.\n\n- .github/workflows/validate.yml:520-529 | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The renderer dependency-install step now runs whenever `scripts/render_validation_templates.py` exists, even if `VALIDATION_USE_TEMPLATES=false`.\n  WHY: This removes the previous opt-out behavior and makes the dependency install unconditional for that workflow branch.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md:184 and 196 | confidence=4\n  PROBLEM: Duplicate \"Validation harness template-mode toggle\" entries create confusing documentation.\n  WHY: The same `VALIDATION_USE_TEMPLATES` contract is documented twice, so one entry is redundant.\n- prompts/mode-validate-generate.txt:10-11 | confidence=3\n  PROBLEM: The prompt says freehand generation is removed but still contains freehand-generation guidance.\n  WHY: The opening instructions are internally inconsistent about whether freehand generation is still part of the contract.\n- scripts/validate_process.sh:671-680 | confidence=3\n  PROBLEM: `is_validation_harness_runnable` no longer checks for `validation/validate.env`.\n  WHY: A partially rendered harness missing `validate.env` could be treated as runnable, delaying failure.\n- scripts/validate_process.sh:1124, 1133, 2264-2272 | confidence=2\n  PROBLEM: Exit code 14 is reused for both Python version failures and renderer execution failures.\n  WHY: The same status code covers two different root causes, making troubleshooting harder.\n- tests/test_validate_preflight_canary_tools_scope.py:4-5 | confidence=1\n  PROBLEM: The test comment refers to old validation prompt line numbers, making it vague.\n  WHY: The comment no longer points to the specific contract text being enforced, reducing maintenance clarity.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:184 and 196 | confidence=4\n  PROBLEM: Two identical documentation entries for `VALIDATION_USE_TEMPLATES`.\n  WHY: The toggle was added twice during the documentation update, so one entry is redundant.\n- .github/workflows/validate.yml:520-529 | confidence=3\n  PROBLEM: The dependency-install step now always runs when `scripts/render_validation_templates.py` exists, regardless of `VALIDATION_USE_TEMPLATES`.\n  WHY: This removes the previous opt-out behavior and installs renderer dependencies unconditionally for that path.\n- scripts/validate_process.sh:670-683 | confidence=3\n  PROBLEM: `is_validation_harness_runnable` no longer verifies `validation/validate.env` exists.\n  WHY: A partially rendered harness could still be considered runnable, causing later failures with less obvious errors.\n- scripts/validate_process.sh:2264 | confidence=2\n  PROBLEM: Exit code 14 is used for both Python version failures and renderer execution failures.\n  WHY: The same status code hides which root cause occurred, making troubleshooting harder.\n- tests/test_validate_preflight_canary_tools_scope.py:4-5 | confidence=2\n  PROBLEM: The test comment is now generic and less precise after removing the specific line references.\n  WHY: The contract being enforced is harder to trace during maintenance.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:184 and 196 | confidence=4\n  PROBLEM: Duplicate \"Validation harness template-mode toggle\" documentation entries.\n  WHY: The same `VALIDATION_USE_TEMPLATES` behavior is described twice, which can confuse maintainers.\n- scripts/validate_process.sh:670-681 | confidence=3\n  PROBLEM: `is_validation_harness_runnable()` no longer checks for `validation/validate.env`.\n  WHY: A partially rendered harness can pass the runnable check even when `validate.env` is missing for a family that requires it.\n- scripts/validate_process.sh:1121-1132 | confidence=3\n  PROBLEM: Exit code 14 is returned for two different failure conditions: Python < 3.9 and renderer script execution failure.\n  WHY: Operators cannot distinguish the two root causes without inspecting the log file, so root-cause identification is slower.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- agents.md:184 and 196 | confidence=5\n  PROBLEM: Duplicate \"Validation harness template-mode toggle\" documentation entries.\n  WHY: The same toggle is documented twice, so the second entry is redundant and can confuse maintainers.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "401abb6aea1776e5f712509398a0eec22a9eb5faa7354e6e971389ca91611666",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24850856212",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24850856212",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423192005_1848ca42cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24850856212"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T19:20:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

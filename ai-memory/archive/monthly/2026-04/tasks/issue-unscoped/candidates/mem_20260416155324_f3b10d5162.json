@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24519112249-1-6602/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/\n.github/workflows/review_autofix.yml",
+  "fingerprint": "c300784d9b7d0d11c5ff8b210e88d7ba1083714cddcd8681b09b03b970756508",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1195,
+    "run_id": "24519112249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24519112249",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416155324_f3b10d5162",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1195,
+    "run_id": "24519112249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T15:53:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

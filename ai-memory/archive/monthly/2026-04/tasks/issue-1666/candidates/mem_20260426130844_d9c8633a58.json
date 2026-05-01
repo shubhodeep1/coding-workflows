@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `da848f1de49d484be8ab00e10930aa9918076150` on `orchestrator/project-1647`. Integration-branch metadata matches the checked-out ref. Clarification: none required; continuation was auto-confirmed.\n\n**Conflict Note**\n- [docs/audit-gate-and-orchestrator-hardening-plan.md#L44](docs/audit-gate-and-orchestrator-hardening-plan.md#L44) is stale relative to the current branch: it describes the identity-key change and script vendoring as future work, but the current branch already has the canonical audit-gate script and the new identity key (`severity|package|advisoryId`) in [check-npm-audit.js](workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js). This issue is therefore scoped to the A2 regeneration/write path only.\n\n**Representative Pattern**\n- Follow the existing canonical audit-gate implementation in [check-npm-audit.js](workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js) and extend the existing fixture-driven behavior tests in [test_audit_gate_identity.py](tests/test_audit_gate_identity.py). No template-apply or docs work is needed here.\n\n**Files Likely To Change**\n- [check-npm-audit.js](workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js)\n- [test_audit_gate_identity.py](tests/test_audit_gate_identity.py)\n\n**Implementation Plan**\n- Add CLI flag handling to [check-npm-audit.js](workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js) so the default `audit:ci` path remains validation-only, while `npm run audit:ci -- --write` routes into a regeneration path.\n- Extend the allowlist-loading logic so it can build lookup state from existing entries under both:\n  - the current identity key (`severity + package + advisoryId`), and\n  - a temporary legacy fallback key that still incorporates normalized `viaPackages`, used only when the new key misses.\n- Regenerate the on-disk allowlist array from the current `normalizeAuditFindings(...)` output, carrying forward audit-derived fields (`package`, `severity`, `advisoryId`, informational `viaPackages`) and preserving curated metadata from the matched prior entry. At minimum preserve `reason`, `owner`, and `expiresOn`; do not drop these during the legacy-key migration.\n- Prefer current-key matches over legacy-key matches. The legacy fallback should exist only to preserve metadata during the first post-migration rewrite when `viaPackages` changed.\n- Make serialization deterministic so identical audit input produces identical output ordering/formatting, then compare the rendered JSON against the existing file contents before writing. If bytes are unchanged, skip the write entirely so the second `--write` run is a true no-op.\n- Keep the non-write validation path unchanged: the same canonical script entrypoint in [contract.json](workflow-templates/audit-gate/contract.json) already exposes `audit:ci`, so no package-script contract change is required.\n\n**Data Structures Affected**\n- On-disk `security/dependency-audit-allowlist.json` entries remain a JSON array of objects.\n- Required identity fields stay `package`, `severity`, and `advisoryId`.\n- `viaPackages` remains informational, not part of the new identity.\n- Curated metadata survives rewrites via carry-forward matching from the prior file.\n- No MongoDB collections or DB contracts are affected.\n\n**API / Interface Changes**\n- Additive CLI behavior only: `npm run audit:ci -- --write`.\n- Existing `npm run audit:ci` behavior stays backward compatible.\n\n**Risks / Edge Cases**\n- `npm audit --json` can return useful JSON while exiting non-zero; write mode must still use stdout when parsing succeeds.\n- Multiple audit records can collapse to the same current identity while contributing different `viaPackages`; regeneration must preserve the current de-dup/merge behavior rather than reintroducing churn.\n- If both a new-key and legacy-key match exist, the new-key match should win so migrated metadata does not keep preferring stale legacy identity.\n- Do not widen scope into [README.md](README.md), [agents.md](agents.md), template-apply code, or planner/prompt policy; the issue explicitly excludes that work.\n\n**Testing Considerations**\n- Extend [test_audit_gate_identity.py](tests/test_audit_gate_identity.py); it already uses captured audit JSON plus a temp repo and fake `npm audit --json`, which matches the issue\u2019s determinism requirement.\n- Add a fresh-regeneration test: empty allowlist + captured audit JSON + `--write` should create a valid file, and a follow-up non-write run should exit 0 against that file.\n- Add a current-key preservation test: when the new identity key matches an existing entry, curated fields survive the rewrite.\n- Add a legacy-fallback migration test: when only the legacy `viaPackages`-sensitive key matches, curated metadata survives the first regeneration.\n- Add an idempotency test: a second `--write` with unchanged audit input must leave the file untouched byte-for-byte and should not rewrite the file.\n- Keep coverage for existing non-write reporting behavior, including `viaPackages` context on unmatched findings.\n- Expected verification command: `python -m pytest tests/test_audit_gate_identity.py`\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3de75a14b38f06ef0af75ebe54b49ebfd41d4bbd86fe74f3cacfa8bfb0853dc5",
+  "lineage": {
+    "issue_number": 1666,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24957229542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24957229542",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1666"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426130844_d9c8633a58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1666,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24957229542"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1666",
+  "timestamps": {
+    "created_at": "2026-04-26T13:08:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

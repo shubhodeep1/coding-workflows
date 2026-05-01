@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 8\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/orchestrate_poll_process.sh (line ~2561)\n      Problem: None - implementation correctly implements bounded retry budget for final integration merge; N/A - implementation is correct\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: README.md, agents.md\n      Problem: None - documentation accurately reflects implementation; N/A; **HARDENING_SUGGESTIONS:** None required. The implementation is complete and correct. Minor observability improvements (adding final_merge_error to transient paths) are not required for runtime correctness per minimal change philosophy.; **CONCLUSION:** The PR \"Add retry budget for final integration\u2192default merge in validation\" is correctly implemented. The retry budget mechanism properly distinguishes transient deferrals from hard blocking failures, prevents silent advancement to complete status when merge can't land, and escalates to ai:blocked after budget exhaustion. No runtime correctness issues identified.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: `scripts/orchestrate_poll_process.sh`\n      Problem: Empty `integration_branch` returns 0 (success) without performing any merge, yet sets `FINAL_MERGE_BUDGET_ELIGIBLE=\"0\"`.; If a project should have had an integration branch but it's missing from the state, this function returns success (0). `mark_validation_complete` then marks the project `complete` without verifying that any merging actually happened. While legacy flows might omit the branch, a missing value in a modern orchestrator context should likely be an error. At minimum, the status should be reflected accurately in the state file.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: `scripts/orchestrate_poll_process.sh`\n      Problem: Multiple path-check failure paths (e.g., mergeable=false, checks-not-ready) return 1 but do not set `final_merge_error`.; When the project eventually exhausts its budget and escalates to `ai:blocked` (around line 3163), the escalation comment will say \"No specific error recorded\" because `_final_err` will be empty. Operators lose the context that the merge failed specifically due to `mergeable=false` vs `checks-not-ready`.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: `scripts/orchestrate_poll_process.sh`\n      Problem: `existing_pr_state` and `existing_pr_merged` are fetched using `gh_retry _safe_gh_jq` which might fail.; If the GH API call fails, the values become an empty string. The check at line 2598 (`if [ \"${existing_pr_state}\" = \"closed\" ] && [ \"${existing_pr_merged}\" = \"true\" ]`) will simply fail, and the function continues. However, later at line 2656, it fetches them again. This is redundant and increases API pressure.; ### HARDENING_SUGGESTIONS\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: `scripts/orchestrate_poll_process.sh`\n      Problem: Location: `finalize_integration_merge_if_needed` (beginning); Issue: `FINAL_MERGE_BUDGET_ELIGIBLE` is not declared as a `local` variable.; Suggested minimal fix: Add `local FINAL_MERGE_BUDGET_ELIGIBLE=\"1\"` at the top of the function to prevent leaks into the global shell scope.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [7] File: `scripts/orchestrate_poll_process.sh`\n      Problem: Location: `finalize_integration_merge_if_needed` (lines 2619, 2623); Issue: `gh pr create` failure isn't specifically handled for \"already exists\" errors.; Suggested minimal fix: Capture the error output from `gh pr create`. If it fails with an \"already exists\" error, attempt to extract the PR number from that error message to avoid the \"Unable to create or locate\" failure path.; Estimated lines changed: 5; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [8] File: `scripts/orchestrate_poll_process.sh`\n      Problem: Location: `mark_validation_complete` (line 3122); Issue: `ensure_integration_conflict_state_fields` is called before checking if legacy/empty integration branch flows apply.; Suggested minimal fix: Move the `integration_branch` empty-check and `finalize_status` check above `ensure_integration_conflict_state_fields` to avoid unnecessary I/O/I on projects where no merge-tracking is required.; Estimated lines changed: 3; HARDENING_RISK_SCORE: 1; ### SYSTEM BEHAVIOR REASONING; The `FINAL_MERGE_BUDGET_ELIGIBLE` variable acts as a bridge between the inner merge logic and the outer attempt-counting logic. While the variable is correctly set in most paths, the inconsistency in error reporting (`final_merge_error`) significantly degrades the observability of the new \"blocked due to budget\" state. A human operator seeing the `ai:blocked` label will often find the \"No specific error recorded\" message unhelpful if the reason was a non-ready check or a known conflict.; ### RUNTIME BEHAVIOR ANALYSIS; At runtime, the most common failure path will be `FINAL_MERGE_BUDGET_ELIGIBLE=\"0\"` being set due to `pr_mergeable != \"true\"` (status `unknown`). The poller will defer and retry. The attempt counter will correctly remain static. However, if a PR remains in `mergeable=false` and `heal_integration_branch_conflict` fails to resolve it or hits a cooldown, the project will eventually time out via `MAX_JUDGE_CYCLES` or similar, but the `MAX_FINAL_MERGE_ATTEMPTS` budget won't be triggered. This is intentional (healing gets its own budget/cooldowns), but it confirms the \"budget\" is strictly for the `gh pr merge` operation itself and its immediate preconditions.\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nREADME.md, agents.md\n`scripts/orchestrate_poll_process.sh`\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "e6758d952416cda88490623c3b1293ea75c878df543b9e9c443165b575af5c0a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1253,
+    "run_id": "24562778393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24562778393",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417115923_e0cb99f3cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1253,
+    "run_id": "24562778393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T11:59:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

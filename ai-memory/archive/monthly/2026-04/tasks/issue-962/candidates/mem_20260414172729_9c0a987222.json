@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No `Q<ID>` clarification questions were asked in clarify phase.\n- `/answer [auto-answered-by-clarify]` means proceed with the issue scope exactly as written.\n\nConflict detection (issue vs repo):\n- `scripts/orchestrate_poll_lib.sh` does not exist in this repo. Relevant sync/comment logic is in `scripts/orchestrate_poll_process.sh`.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh` (primary fix).\n- `tests/test_orchestrate_poll_process.py` only if a targeted regression case is needed beyond the three failing tests (do not relax assertions).\n- `README.md` / `agents.md`: likely no change, unless behavior contract is intentionally updated (current intent is to restore existing contract).\n\n2. Functions/modules to implement or adjust\n- `sync_default_into_integration_branch` (around current sync status/fingerprint/comment flow).\n- `evaluate_sync_superseded_by_main` (superseded detection should be robust when refs/state are partial).\n- `merge_tree_conflict_paths_json` and/or ref-resolution callsites (`resolve_branch_analysis_ref` usage) to prevent empty conflict-path extraction when branch refs cannot be resolved in local git state.\n- Add/align a small sync-state initialization path so legacy/missing `.sync` objects are safe and idempotent.\n\n3. Data structures affected\n- Tracking state `.sync` object:\n  - `status`\n  - `last_sync_outcome`\n  - `last_conflict_paths`\n  - `last_conflict_fingerprint`\n  - `superseded_notified`\n  - `superseded_at`\n  - `superseded_reason`\n  - `affected_paths`\n- Ensure backward-compatible defaults when `.sync` is missing.\n\n4. API/interface changes\n- No external API or workflow input/output contract changes.\n- Restore expected tracking-comment contract:\n  - conflict comment must include parsed conflict file list\n  - conflict comment must include rebuild runbook link\n  - dedupe must re-post when conflict-set fingerprint changes, and suppress exact repeats.\n\n5. Potential risks and edge cases\n- Local git refs may be missing/stale even when branch exists remotely; fallback behavior must still produce deterministic sync state and safe comments.\n- Fingerprint stability depends on normalized conflict path JSON; ordering/format drift can break dedupe.\n- Superseded path must remain one-time notification (`set once`) and skip future sync attempts without repeated posts.\n- Keep conflict-healing flow (`heal_integration_branch_conflict`) behavior unchanged except for restored contract fields/comments.\n\n6. Testing considerations\n- Run targeted regression tests:\n  - `python3 tests/test_orchestrate_poll_process.py` (verify the three named failing tests now pass).\n- Validate adjacent behavior:\n  - `test_sync_conflict_dedupe_skips_identical_warnings`\n  - nearby superseded/conflict/final-merge sync tests in the same file.\n- Run full custom sequence equivalent (`10_custom_tests.sh` path) to ensure no regressions in poller orchestration behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0ca8a017af997a632a8daf7d20cc5b400f732e3c90cc4deb935ab9878291c44a",
+  "lineage": {
+    "issue_number": 962,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24412790200",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24412790200",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/962"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414172729_9c0a987222",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 962,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24412790200"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #962",
+  "timestamps": {
+    "created_at": "2026-04-14T17:27:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

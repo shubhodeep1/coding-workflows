@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/validate.yml:4-9 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The manifest still uses `python-mongo-repo-checks` with `custom_tests` instead of the new `python-repo-checks`/`entry` setup, so validation runs the wrong family.\n  WHY: The PR added the repo-checks family for this repository, but `.ai/validate.yml` was never switched over.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:6 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The compose template hardcodes `validation/Dockerfile.app` instead of `{{ output_root_name }}/Dockerfile.app`, so non-default output roots point at the wrong Dockerfile.\n  WHY: The default `validation/` path works, but the template stops being relocatable when rendered with `--output-root`.\n- docs/validation-templates-plan.md:118-128 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The `python-repo-checks` docs table omits `tests/10_family_marker.sh` even though the template and fixture exist.\n  WHY: This is documentation-only, but it leaves the docs out of sync with the actual template set.\n- scripts/run_validation_repo_checks.sh:9 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The script runs `python3 tests/test_validate_process_template_mode.py`, which depends on the broader validation framework rather than just the repo-checks path.\n  WHY: That command may fail in the validation container if the imported validation modules or mocks are unavailable.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .ai/validate.yml:4 | confidence=5\n  PROBLEM: The manifest still uses `python-mongo-repo-checks` instead of the repo-checks family this repository needs.\n  WHY: Validation stays on the wrong MongoDB/Flask harness instead of the new repo-checks path.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:6 | confidence=4\n  PROBLEM: The compose template hardcodes `validation/Dockerfile.app` instead of `{{ output_root_name }}/Dockerfile.app`.\n  WHY: Rendering with a different output root breaks the Docker build.\n- docs/validation-templates-plan.md:118-128 | confidence=3\n  PROBLEM: The `python-repo-checks` docs table omits `tests/10_family_marker.sh`.\n  WHY: The docs no longer match the shipped template/fixture layout.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .ai/validate.yml:4-9 | confidence=5\n  PROBLEM: The validation manifest still specifies `type: python-mongo-repo-checks` with `custom_tests` instead of `type: python-repo-checks` with an `entry` script.\n  WHY: The repo stays on the MongoDB validation family instead of the new repo-checks family.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:6 | confidence=4\n  PROBLEM: The dockerfile path is hardcoded as `validation/Dockerfile.app` instead of `{{ output_root_name }}/Dockerfile.app`.\n  WHY: A custom `--output-root` render would point at the wrong Dockerfile and break the build.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .ai/validate.yml:4-9 | severity=critical | confidence=5\n  PROBLEM: The manifest still uses `type: python-mongo-repo-checks` with `custom_tests` instead of `type: python-repo-checks` with `entry`.\n  WHY: Validation will run the wrong family for this repo.\n- scripts/run_validation_repo_checks.sh:9 | severity=low | confidence=3\n  PROBLEM: `python3 tests/test_validate_process_template_mode.py` depends on the broader validation framework rather than the standalone repo-checks path.\n  WHY: That command may fail in the validation container if the imported validation modules or mocks are unavailable.\n- docs/validation-templates-plan.md:118-128 | severity=low | confidence=4\n  PROBLEM: The `python-repo-checks` docs table omits `tests/10_family_marker.sh`.\n  WHY: The documentation is incomplete and no longer matches the actual template/fixture set.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .ai/validate.yml:4 | confidence=5\n  PROBLEM: The manifest still uses `type: python-mongo-repo-checks` instead of `type: python-repo-checks`.\n  WHY: The new repo-checks family was added for this repository, but the manifest was not switched over.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:6 | confidence=4\n  PROBLEM: The compose template hardcodes `validation/Dockerfile.app` instead of `{{ output_root_name }}/Dockerfile.app`.\n  WHY: A non-default `--output-root` render would point at the wrong Dockerfile and break the build.\n- docs/validation-templates-plan.md:118-128 | confidence=4\n  PROBLEM: The `python-repo-checks` docs table omits `tests/10_family_marker.sh`.\n  WHY: The documentation no longer matches the template and fixture layout.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1208564e3b128379e35eee38569506a14b72c4dbf0f68c46c26d19fa53437cf6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1562,
+    "run_id": "24860829401",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24860829401",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423223816_33e6544d6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1562,
+    "run_id": "24860829401"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T22:38:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/promote-main-to-stable.yml:139 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The comment is grammatically awkward because \u201cReleasing tags the just-fast-forwarded commit on stable\u201d is missing a preposition.\n  WHY: This is comment-only and does not affect behavior, but the wording should be corrected for clarity.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/promote-main-to-stable.yml:139 | severity=low | confidence=4\n  PROBLEM: The comment has a grammatical error \u2014 \u201cReleasing tags the just-fast-forwarded commit\u201d is missing a preposition.\n  WHY: This is a comment only, not affecting runtime behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "db4c25079fbad6473d0d6a727b52a0f3e5044281cb94da75eef52a58982da652",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1821,
+    "run_id": "25157898736",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25157898736",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430095236_0e66c509f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1821,
+    "run_id": "25157898736"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-30T09:52:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

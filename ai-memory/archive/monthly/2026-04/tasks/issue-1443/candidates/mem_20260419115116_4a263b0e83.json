@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `3246b6f66d690097ce21868d2e8fe5d4f2e760c0`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Mismatch: `false` (planning can proceed)\n\nClarification interpretation\n- No explicit Q<ID> clarification questions were asked in this issue thread.\n- Interpreted `/answer [auto-answered-by-orchestrator]` as: proceed with original issue scope unchanged (no added constraints).\n\nConflict detection (issue vs current branch)\n- The requested behavior appears already present in code:\n- `scripts/validate_process.sh` already has `attempt_render_recovery_after_preflight_failure()` and routes preflight failure to render-phase self-heal on return code `2`.\n- `attempt_self_heal_and_reexec()` already recognizes `render` phase.\n- `prompts/mode-validate-self-heal.txt` already constrains render failures to prompt-only self-heal and keeps harness recovery renderer-driven.\n- `scripts/self_heal_validation.sh` already enforces target allow-list + additive-only patch checks.\n- `tests/test_validate_process_render_recovery.py` already contains success/fail-open/non-template render-recovery scenarios.\n- Plan implication: implementation should be a gap-closure/hardening pass, not a net-new feature build.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/validate_process.sh` (only if gap found in render recovery or routing)\n- `scripts/self_heal_validation.sh` (only if render-phase logging/guards need alignment)\n- `prompts/mode-validate-self-heal.txt` (only if wording still allows accidental freehand harness edits)\n- `tests/test_validate_process_render_recovery.py` (add/adjust coverage if any acceptance criterion is not strictly asserted)\n- `README.md` and/or `agents.md` only if behavior actually changes\n\n2. Functions/modules to implement or adjust\n- `attempt_render_recovery_after_preflight_failure` in `scripts/validate_process.sh`\n- Phase-2 preflight block in `scripts/validate_process.sh` that dispatches `attempt_self_heal_and_reexec(\"render\"|\"preflight\")`\n- `attempt_self_heal_and_reexec` phase normalization (must continue accepting `render`)\n- Guardrails in `scripts/self_heal_validation.sh` (`ALLOWED_TARGETS`, additive-only patch enforcement, single-target scope enforcement)\n\n3. Data structures affected\n- Preflight/runtime state vars:\n- `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`\n- `PRE_FLIGHT_FAILURE_KIND`\n- `PRE_FLIGHT_FAILURE_REASON`\n- `PRE_FLIGHT_APPEND_LOG`\n- Self-heal decision/ledger metadata:\n- `SELF_HEAL_FAILURE_PHASE` (must preserve `render`)\n- JSONL patch ledger entries with `failure_phase`, `target_prompt`, and `patch`\n- No schema changes planned for validation result JSON or diagnose output\n\n4. API/interface changes\n- No external API, workflow input, or env var contract changes expected.\n- Internal behavior contract to preserve:\n- Template-mode lint failure path: preflight fail -> deterministic rerender -> relint\n- Render recovery terminal failures route to self-heal with phase `render`\n- No freehand harness edits in render-phase recovery path\n\n5. Risks and edge cases\n- Regressing non-template paths (`HARNESS_MODE != template_generate`) into render recovery by mistake.\n- Misclassifying non-lint failures as lint and triggering unintended rerender.\n- Accidentally weakening self-heal allow-list/additive-only safety checks.\n- Double-attempt/loop behavior if `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED` handling regresses.\n- Log-based classification drift causing wrong failure reason tags.\n\n6. Testing considerations\n- Keep `tests/test_validate_process_render_recovery.py` as the representative test module for this feature area.\n- Ensure coverage explicitly proves:\n- rerender + relint success continues pipeline\n- rerender failure fail-opens to `render` self-heal\n- rerender success but relint failure fail-opens to `render` self-heal\n- non-template mode keeps legacy `preflight` self-heal path\n- no route in this phase performs freehand harness edits\n- Run focused tests:\n- `tests/test_validate_process_render_recovery.py`\n- `tests/test_validate_process_template_mode.py`\n- If no gaps are found after test verification, implementation outcome should be documented as no-op (acceptance already satisfied on this branch).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3f6a65d5ecc837020ebc45ee25a447695a25d73d79c7ff383af5cec95970ac16",
+  "lineage": {
+    "issue_number": 1443,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24628345190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24628345190",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1443"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419115116_4a263b0e83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1443,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24628345190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1443",
+  "timestamps": {
+    "created_at": "2026-04-19T11:51:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

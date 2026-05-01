@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n\n- HEAD: `35766a2a0e186414dbcb3503a8383e6901e0eb06`\n- Checked-out branch: `orchestrator/project-1608`\n- Integration branch metadata: `orchestrator/project-1608`\n- Integration branch mismatch: `false`\n\nBaseline inspected\n\n- `scripts/validation_selftest_matrix.py` + `tests/test_validation_selftest_runner.py` as the representative existing pattern for argparse-driven JSON generation and subprocess-style unit tests.\n- `.github/workflows/workflow-log-analysis.yml` as the representative existing pattern for \u201cstage one generated file, skip empty commit via `git diff --cached --quiet`, then commit/rebase/push\u201d.\n\nCodebase facts relevant to the plan\n\n- `analysis/validation-selftest-status.json` does not currently exist, which matches the issue background.\n- `.github/workflows/nightly-validation-selftest.yml` currently uploads artifacts and writes the step summary, but it cannot publish commits because `permissions.contents` is only `read`.\n- `.github/workflows/ci.yml` already enforces the nightly self-test runner and workflow-contract tests, but there is no dedicated status-writer test yet.\n- The issue references a `files_touched` allowlist, but the literal list is not present in the planning context. This plan stays inside the explicitly scoped workflow/script/test/analysis files only.\n\nImplementation plan\n\n1. Files likely to change\n\n- New: `scripts/validation_selftest_status.py`\n- New: `analysis/validation-selftest-status.json`\n- Update: `.github/workflows/nightly-validation-selftest.yml`\n- New: `tests/test_validation_selftest_status.py`\n- Update: `tests/test_nightly_validation_selftest_workflow_contract.py`\n- Update: `.github/workflows/ci.yml`\n\n2. Functions/modules to implement\n\n- Add a small standalone status-writer script, following the `validation_selftest_matrix.py` style:\n  - parse `--summary-path` and `--status-path`\n  - load the current matrix summary\n  - load the previously committed status file if present\n  - compute the next consecutive-green count\n  - write a stable JSON document with sorted keys and a trailing newline\n- Keep the writer deterministic:\n  - derive all output fields from the input summary plus previous status\n  - do not stamp a fresh `now()` timestamp in the new file, or reruns with identical inputs will create false diffs\n- Seed `analysis/validation-selftest-status.json` in-tree with a schema-compatible zero/unknown baseline so README/badge consumers always have a tracked file to read.\n\n3. Data structures affected\n\n- New status artifact at `analysis/validation-selftest-status.json`, with a small stable schema centered on:\n  - `schema_version`\n  - `consecutive_green_runs`\n  - `latest_run`\n  - `latest_run.overall_status`\n  - `latest_run.generated_at`\n  - `latest_run.totals`\n- Reuse the existing matrix output `artifacts/validation-selftest-summary.json` as the single source of truth for latest-run status/totals/timestamp.\n- Keep the status file summary-level only; do not duplicate the full per-fixture payload unless strictly needed.\n\n4. Workflow/interface changes\n\n- Update `.github/workflows/nightly-validation-selftest.yml` to:\n  - grant `contents: write`\n  - invoke the new status writer after the matrix/artifact/step-summary flow, with `if: always()` so failure runs still publish a failure/reset streak\n  - stage only `analysis/validation-selftest-status.json`\n  - reuse the existing changed-only commit pattern:\n    - `git add <status-file>`\n    - `if git diff --cached --quiet; then ... exit 0; fi`\n    - commit, rebase, push\n- Keep the existing artifact upload and `GITHUB_STEP_SUMMARY` behavior intact; this change should add status publication, not replace those surfaces.\n- Guard the push path the same way other generated-metadata workflows do: branch ref only, narrow file scope only.\n\n5. Risks and edge cases\n\n- Determinism is the main risk. If the new status file includes a writer-generated timestamp, the workflow will create avoidable churn even when the logical status is unchanged.\n- The matrix step already exits non-zero on failing fixtures. The status publication steps must still run under `if: always()` so a failing nightly run resets/publishes the streak without masking the overall workflow failure.\n- Previous-status handling should distinguish:\n  - missing file/bootstrap state: initialize from defaults\n  - malformed committed JSON: fail loudly rather than silently corrupting streak history\n- The workflow currently checks out with `fetch-depth: 1`; reuse the existing commit/rebase/push pattern rather than inventing broader git behavior.\n- These status commits will likely trigger normal push-based workflows on the target branch. Do not add `[skip ci]` or broader workflow suppression without explicit approval.\n\n6. Testing considerations\n\n- Add `tests/test_validation_selftest_status.py` to cover at least:\n  - first successful run from empty/seeded baseline => streak becomes `1`\n  - previous green + current green => streak increments\n  - previous green + current fail => streak resets to `0`\n  - deterministic serialization for identical inputs\n- Update `tests/test_nightly_validation_selftest_workflow_contract.py` to assert:\n  - the workflow calls the new status writer\n  - `analysis/validation-selftest-status.json` is the only staged metadata file\n  - `permissions.contents` is `write`\n  - the commit step uses the no-op guard (`git diff --cached --quiet`)\n  - artifact upload and step-summary steps remain present\n- Update `.github/workflows/ci.yml` to run the new status-writer unit test. The updated workflow contract test is already enforced by the existing CI invocation.\n- No README/docs changes should be planned in this issue; that remains intentionally reserved for the follow-up docs/glue issue.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3b33aec42f81bd23eaa7b502522cf335f23559eca5f0aa33ee61e9f4fab8d10f",
+  "lineage": {
+    "issue_number": 1621,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24933038691",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24933038691",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1621"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260425143434_59f14e27b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1621,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24933038691"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1621",
+  "timestamps": {
+    "created_at": "2026-04-25T14:34:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

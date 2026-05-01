@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/ci.yml\n.github/workflows/implement.yml\n.github/workflows/review_autofix.yml\nscripts/ai_memory.py\nscripts/gh_helpers.sh\nscripts/validate_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/orchestrate_clarify_respond.yml\nscripts/ai_memory_lib.py\nscripts/memory_helpers.sh\nscripts/orchestrate_poll_process.sh\nscripts/review_rb_judge.sh\ntests/test_orchestrate_clarify_loop_guard.py",
+  "fingerprint": "17562d97c98b0c7ec092a3f25e32056dbd87ade47cbcbac1f52a1e238f970ffc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1068,
+    "run_id": "24463295088",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24463295088",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415155025_6d91f86c2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1068,
+    "run_id": "24463295088"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 6 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T15:50:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

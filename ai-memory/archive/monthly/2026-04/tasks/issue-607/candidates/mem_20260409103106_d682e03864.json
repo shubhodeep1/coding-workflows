@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: How should standalone stall-recovery state (`status_since_ts`, `stall_recovery_count`, `last_seen_phase`) be persisted across runs?**\nChoices:\n- **A** \u2014 Store per-issue state in a hidden machine-readable issue comment marker on each standalone issue (RECOMMENDED)\n- **B** \u2014 Store per-issue state in a dedicated repo state file committed/updated by the poller\n- **C** \u2014 Avoid explicit persistence and infer from issue timeline/comments each run\nReply: `Q1: A`",
+  "fingerprint": "c475cb081de3f37faeab4c96f92bc5218b227b5d4c47275ed5e580b8ae0af9e4",
+  "lineage": {
+    "issue_number": 607,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24185427927",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24185427927",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260409103106_d682e03864",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 607,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24185427927"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #607 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-09T10:31:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

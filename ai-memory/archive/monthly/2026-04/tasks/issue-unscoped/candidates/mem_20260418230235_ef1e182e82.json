@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/Workflows/validate. yml (line ~250)\n      Problem: None - the change correctly adds orchestrate_ lib. py to resolve the missing file error in canary preflight; N/A - this change fixes a runtime failure, does not introduce one; ISSUE_ CONFIDENCE: 5\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\n  [2] File: .github/workflows/validate.yml (line ~250)\n      Problem: None - the change correctly adds orchestrate_lib.py to the script fetch list; This change does not introduce any runtime issues. orchestrate_lib.py is an executable Python script (has shebang) used by orchestrate_poll_process.sh, and making it available in the validate workflow workspace addresses the reported canary preflight failure; **Analysis Summary:**; The change adds `orchestrate_lib.py` to the list of support scripts fetched in the validate workflow. This is correct because:; 1. **Issue being fixed**: Validation canary fails because `scripts/orchestrate_lib.py` is not found (per PR comments), causing preflight check failures.; 2. **File verification**: `orchestrate_lib.py` exists at `scripts/orchestrate_lib.py` with:; - Proper shebang (`#!/usr/bin/env python3`); - Execute permissions (already set in repo); - It's imported by `orchestrate_poll_process.sh` for DAG management and wave computation functions; 3. **Pattern consistency**: Other workflows (orchestrate.yml, orchestrate_poll.yml) already include orchestrate_lib.py in their script fetch lists. This change brings validate.yml into alignment.; 4. **chmod +x appropriateness**: All Python files in this list (ai_labels.py, ai_memory.py, ai_memory_lib.py, openrouter_prompt_cache.py, orchestrate_lib.py) have shebangs and are executable scripts, not pure library modules. The chmod is consistent with repository conventions used in other workflows (e.g., clarify.yml uses `install -m 0755` which also sets executable permissions).; **No changes are needed.**\n      Confidence: avg 5.0\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/Workflows/validate. yml\n.github/workflows/validate.yml",
+  "fingerprint": "8870c7e51265a1180bba6e097ba36d9454e8b65ce1fe5bdf3c36b3467fe547e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1349,
+    "run_id": "24615441048",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24615441048",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418230235_ef1e182e82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1349,
+    "run_id": "24615441048"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T23:02:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

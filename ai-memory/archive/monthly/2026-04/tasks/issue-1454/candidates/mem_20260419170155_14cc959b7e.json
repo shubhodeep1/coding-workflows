@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `HEAD`: `1d0e39afbabf0df7e6324660ea18a5b826f98680`\n- Checked-out branch: `orchestrator/project-1299`\n- Integration branch metadata: `orchestrator/project-1299`\n- Integration mismatch: `false` (safe to proceed)\n\nClarification mapping\n- No clarification Q-IDs were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as: proceed with planning using issue scope/constraints as authoritative.\n\nImplementation plan\n\n1. Files likely to change\n- `README.md`\n- `agents.md`\n- `CHANGELOG.md`\n\n2. Functions/modules to align docs with (source of truth)\n- Representative flow used for planning: `.github/workflows/review_autofix.yml` (stage wiring + env defaults).\n- `scripts/review_floor_rules.sh` (floor-tags generation, keyword override fallback, fail-open behavior).\n- `scripts/review_consolidate.sh` (consolidator enable/disable + fail-open + output behavior).\n- `scripts/review_parse_consolidator.sh` (parser fail-open contract via `REVIEW_PARSER_FAILOPEN`).\n- `scripts/review_issue_ledger.sh` (ledger lifecycle states, `accepted-residual`, persist threshold, ledger path/reset behavior).\n- `scripts/review_apply_fixes.sh` (authoritative vs advisory contract, non-skippable floor tags, override-line convention `CONSOLIDATOR_OVERRIDDEN: <reason>`, authoritative `Change status:` signal).\n\n3. Data structures/operational artifacts affected (docs only)\n- Runtime artifacts to document clearly:\n- `floor_tags.txt` (floor-rule classifier output).\n- `consolidator_raw.txt` (consolidated findings output).\n- `review_issues.txt` (parsed consolidator issues; advisory).\n- `ledger_status.txt` and ledger file at `REVIEW_LEDGER_PATH` (persistence lifecycle).\n- Ledger status model: `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, `accepted-residual`, including `REVIEW_LEDGER_PERSIST_LIMIT` transition semantics.\n- No DB schema/contract changes.\n\n4. API/interface changes to document\n- No runtime API changes; documentation-only contract publication.\n- Add/update review-pipeline contract text in `README.md` and `agents.md`:\n- floor rules as non-skippable classifier output (when present),\n- consolidator/parser/ledger fail-open boundaries,\n- authoritative vs advisory precedence (`reviewer_bundle` authoritative; parsed artifacts advisory),\n- accepted-residual semantics and persistence behavior,\n- override line convention: `CONSOLIDATOR_OVERRIDDEN: <reason>`.\n- Ensure env vars and defaults are documented exactly as implemented:\n- `REVIEW_FLOOR_RULES_ENABLED` (`1`)\n- `REVIEW_FLOOR_KEYWORDS_FILE` (`''`/unset; built-in fallback)\n- `REVIEW_CONSOLIDATOR_ENABLED` (`1`)\n- `REVIEW_CONSOLIDATOR_MODEL` (`openai/gpt-5.4-mini`)\n- `REVIEW_CONSOLIDATOR_REASONING` (`medium`)\n- `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` (`300`)\n- `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` (`16000`)\n- `REVIEW_PARSER_FAILOPEN` (`1`)\n- `REVIEW_LEDGER_ENABLED` (`1`)\n- `REVIEW_LEDGER_PERSIST_LIMIT` (`2`)\n- `REVIEW_LEDGER_PATH` (`.ai/review_issue_ledger.txt`)\n- `REVIEW_REVIEWER_CHECKLIST_ENABLED` (`1`)\n- `REVIEW_REVIEWER_ITERATION_SCOPING` (`1`)\n- Add explicit backward-compatibility + rollback guidance (toggle-based rollback, no interface renames/removals).\n\n5. Risks and edge cases\n- Doc drift risk between workflow-level defaults and script-level fallbacks.\n- Contradictory wording risk around \u201cfail-open\u201d vs parser hard-fail mode (`REVIEW_PARSER_FAILOPEN=0`).\n- Ambiguity risk if \u201cnon-skippable floor rules\u201d is phrased as globally mandatory instead of mandatory when classifier emits findings.\n- Duplicate-entry risk in env-var tables (must update existing rows if present; avoid duplicate definitions).\n- Keep changes append-only under stable anchors/comments in `agents.md` to avoid merge conflict with parallel orchestrator edits.\n\n6. Testing/verification considerations (for implementation phase)\n- Diff-scan to confirm only `README.md`, `agents.md`, `CHANGELOG.md` changed.\n- Cross-check every documented default against `.github/workflows/review_autofix.yml` and corresponding scripts.\n- Validate README/agents consistency for same variable names/defaults/semantics.\n- Verify changelog entry is user-visible and scoped to this rollout (documentation contract publication).\n- Verify rollback section is explicit and non-breaking.\n\nFactual conflict to surface\n- Issue says \u201cappend all new env vars,\u201d but several of these variables are already present in `README.md`. Implementation should update/normalize existing entries and append only missing ones to avoid duplicate or conflicting documentation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fca7b33e961de2937af7150a35058e7aa14788e78fe262dd5d20bbb6acb9a552",
+  "lineage": {
+    "issue_number": 1454,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24634300659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24634300659",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1454"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419170155_14cc959b7e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1454,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24634300659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1454",
+  "timestamps": {
+    "created_at": "2026-04-19T17:01:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

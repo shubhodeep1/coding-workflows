@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpretable as \u201cproceed with the issue-defined scope as-is.\u201d\n\nConflict detected:\n- The issue says \u201cconsolidate eight orchestrator poll fetch sites,\u201d but current `scripts/orchestrate_poll_process.sh` has 3 direct `actions/runs` fetch blocks (plus separate `actions/workflows/*/runs` probes for validation). Plan will consolidate all current `actions/runs` sites.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `scripts/ai_memory.py`\n- `scripts/ai_memory_lib.py`\n- `ai-memory/schemas/actions_runs_cache.v1.json` (new)\n- `README.md`\n- `agents.md` (env-var reference section is present, so update is required)\n- `tests/test_orchestrate_poll_process.py` (or equivalent poller tests)\n- `tests/test_ai_memory_processed_command_entry.py` or a new focused ai-memory cache test file\n\n2. Functions/modules to implement\n- In `scripts/ai_memory_lib.py`:\n- Add schema-backed validator for actions-runs cache payloads.\n- Add safe repo-key/path resolver for per-repo cache file storage under `ai-memory`.\n- Add read/write helpers used by CLI commands.\n- In `scripts/ai_memory.py`:\n- Add `actions-runs-cache` command group with:\n- `get --repo <owner/repo>`\n- `put --repo <owner/repo> --runs-file <path> --etag <string>`\n- Wire both commands into `build_parser()`.\n- Implement fail-open behavior: schema mismatch/corruption returns cache miss and emits `rate_limit_audit_fallback` warning.\n- In `scripts/orchestrate_poll_process.sh`:\n- Add `ACTIONS_RUNS_CACHE_TTL_SECONDS` default/sanitization block (default `60`, invalid -> warning + fallback).\n- Add `_load_actions_runs_cached` that:\n- Reads cache via `ai_memory.py actions-runs-cache get`.\n- Returns cached blob when fresh.\n- Otherwise performs one `GET /repos/{owner}/{repo}/actions/runs?per_page=100`, sending `If-None-Match` when cached etag exists.\n- On `304`, refreshes `fetched_at` via `put` without changing runs.\n- On `200`, persists latest runs + etag via `put`.\n- Refactor all current `actions/runs` consumers (`build_active_issue_set`, `cancel_zombie_runs_for_issue`, `invoke_stall_judge`) to jq-filter the shared blob while preserving current selection behavior.\n\n3. Data structures affected\n- New schema: `ai-memory/schemas/actions_runs_cache.v1.json`:\n- `schema_version` const `v1`\n- `repository`, `fetched_at`, `ttl_seconds`, nullable `etag`\n- `runs[]` with required fields: `id`, `status`, `conclusion`, `name`, `workflow_id`, `created_at`, `updated_at`, `head_branch`, `event`, `run_attempt`, `html_url`\n- Include schema evolution guidance in `description`/`$comment` fields.\n- Persisted cache artifact per repository on `ai-memory` branch (repo-scoped file).\n\n4. API/interface changes\n- New CLI surface:\n- `python3 scripts/ai_memory.py actions-runs-cache get --repo owner/repo`\n- `python3 scripts/ai_memory.py actions-runs-cache put --repo owner/repo --runs-file /tmp/runs.json --etag \"<etag>\"`\n- New env var:\n- `ACTIONS_RUNS_CACHE_TTL_SECONDS` (default `60`)\n- New warning contract for fail-open cache read/write issues:\n- structured `rate_limit_audit_fallback` warning emission (cache miss fallback, no hard failure).\n\n5. Risks and edge cases\n- ETag may be missing on responses; loader must still cache/fetch correctly.\n- `304` with corrupted/missing cached runs must fail-open to one fresh `200` fetch path.\n- Must preserve existing run-selection semantics despite changing from multiple endpoint calls to one shared blob:\n- keep equivalent status filtering and list bounds where applicable.\n- ai-memory branch push races: rely on existing `persist_memory_operation` retry path; never fail poll tick on cache persistence failure.\n\n6. Testing considerations\n- Add ai-memory tests:\n- valid payload passes schema\n- invalid schema_version/field types fail validation\n- `get` returns miss + warning on corruption/mismatch (fail-open)\n- `put` rejects malformed runs file and accepts valid one\n- Add poller tests:\n- two consecutive poll ticks within TTL reuse cache (no duplicate `GET /actions/runs`)\n- stale cache performs at most one conditional `200/304` check per tick\n- behavior parity for:\n- active run detection (queued/in_progress)\n- zombie cancellation target selection\n- stall judge workflow outcome extraction\n- Update/extend any doc/env-var assertion tests if present.\n\n7. Documentation updates\n- `README.md`:\n- Add `ACTIONS_RUNS_CACHE_TTL_SECONDS` to env-var tables.\n- Add `H5` changelog section alongside existing H3/H4 operational notes.\n- `agents.md`:\n- Append new env-var bullet in section 4 env-var reference list (without reordering existing bullets).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7d3f314dcbe196818055d60a038e199efbd7a7a3c9f7fcaf21bec1ccabd0ebcf",
+  "lineage": {
+    "issue_number": 1156,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24496771577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24496771577",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1156"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416071408_45494c3674",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1156,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24496771577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1156",
+  "timestamps": {
+    "created_at": "2026-04-16T07:14:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

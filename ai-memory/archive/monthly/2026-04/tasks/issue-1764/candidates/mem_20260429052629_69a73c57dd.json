@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What scope should this issue have?**\nChoices:\n- **A** \u2014 One specific workflow or script only (RECOMMENDED)\n- **B** \u2014 One repo area with a few related files\n- **C** \u2014 Cross-cutting improvement across multiple areas\nReply: `Q1: A`\n**Q2: Which area should the change target?**\nChoices:\n- **A** \u2014 Review/autofix and conflict resolution (`workflow-templates/ai-review.yml`, `scripts/review_*`, `scripts/check_external_branch_advance.sh`) (RECOMMENDED)\n- **B** \u2014 Orchestrator/poller/stall recovery/integration sync (`workflow-templates/ai-orchestrate*.yml`, `scripts/orchestrate_poll_process.sh`) (RECOMMENDED)\n- **C** \u2014 Validation/runtime harness/self-heal (`workflow-templates/ai-validate.yml`, `scripts/validate_process.sh`) (RECOMMENDED)\n- **D** \u2014 Clarify/plan/implement/update-workflows/memory/log-analysis/docs\nNote: If you choose `Q1: C`, still pick the primary area here.\nReply: `Q2: A`\n**Q3: What should \u201cbetter\u201d mean for that target?**\nChoices:\n- **A** \u2014 Fix a specific failing issue, PR, workflow run, or flaky behavior; I will identify it in the same reply (RECOMMENDED)\n- **B** \u2014 Make one internal reliability/observability improvement with no intended behavior change\n- **C** \u2014 Make one internal speed/cost improvement with no intended behavior change\n- **D** \u2014 Make one intentional behavior/feature change; I will summarize the desired behavior in one sentence\nReply: `Q3: A`",
+  "fingerprint": "90637d8f354d911ac6f69f1028d1b35adca2b6a3ba5c502a4c7f14748929ccce",
+  "lineage": {
+    "issue_number": 1764,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25092337535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25092337535",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260429052629_69a73c57dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1764,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25092337535"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #1764 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-29T05:26:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

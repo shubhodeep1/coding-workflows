@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:183-228 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: agents.md contains contradictory VALIDATION_USE_TEMPLATES guidance, with the older bullet still describing freehand Codex fallback and the newer bullet saying that path was removed.\n  WHY: The stale documentation misstates `VALIDATION_USE_TEMPLATES=false`, so operators may expect a fallback path that now hard-fails with `raw_status=harness_error`.\n- scripts/validate_process.sh:1948-2166 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: scripts/validate_process.sh checks `VALIDATION_USE_TEMPLATES_ENABLED` only after Phase 0 discovery, so template-disabled runs can still invoke Codex discovery before failing.\n  WHY: Because the failure is deterministic once templates are disabled, moving the gate earlier would avoid unnecessary Codex calls and retries.\n=== END CONSENSUS FINDINGS ===\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:183-196 | severity=critical | confidence=5\n  PROBLEM: agents.md contains contradictory VALIDATION_USE_TEMPLATES documentation, with the older entry saying non-truthy values fall through to freehand Codex generation and the newer entry saying that path was removed.\n  WHY: The two bullets give incompatible instructions for `VALIDATION_USE_TEMPLATES=false`, which will confuse operators and cause unexpected `harness_error` failures.\n- scripts/validate_process.sh:2159-2166 | severity=low | confidence=4\n  PROBLEM: The `VALIDATION_USE_TEMPLATES_ENABLED` gate runs after Phase 0 discovery.\n  WHY: Template-disabled runs can still invoke Codex discovery before the inevitable hard-fail, wasting time and tokens.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:184-196 | severity=critical | confidence=5\n  PROBLEM: agents.md still contains contradictory VALIDATION_USE_TEMPLATES guidance, because the older bullet says non-truthy values fall through to freehand Codex generation while the newer bullet says that path was removed.\n  WHY: The stale entry tells operators that `VALIDATION_USE_TEMPLATES=false` still falls back to freehand generation, which no longer matches the documented runtime behavior.\n- scripts/validate_process.sh:2160-2166 | severity=low | confidence=4\n  PROBLEM: The `VALIDATION_USE_TEMPLATES_ENABLED` hard-fail happens after Phase 0 discovery.\n  WHY: The script can still spend time and tokens on Codex discovery before failing, even though the failure is deterministic once templates are disabled.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- agents.md:183-196\n  PROBLEM: agents.md contains contradictory VALIDATION_USE_TEMPLATES behavior guidance.\n  WHY: One entry says non-truthy values fall through to freehand Codex generation, while a later entry says that path was removed.\n- scripts/validate_process.sh:2159-2166\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` check happens after Phase 0 discovery.\n  WHY: Template-disabled runs can still invoke Codex discovery before failing, wasting time and tokens.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n=== FINDINGS FROM z-ai_glm-5 ===\n- agents.md:184-196 | severity=critical | confidence=5\n  PROBLEM: agents.md contains contradictory VALIDATION_USE_TEMPLATES documentation, with an older bullet saying non-truthy values fall through to freehand Codex generation and a newer bullet saying that path was removed.\n  WHY: The stale guidance conflicts with the current runtime behavior, so `VALIDATION_USE_TEMPLATES=false` will not behave as the older bullet claims.\n- scripts/validate_process.sh:1949-2166 | severity=low | confidence=4\n  PROBLEM: The `VALIDATION_USE_TEMPLATES_ENABLED` check runs after Phase 0 discovery.\n  WHY: Template-disabled runs can still spend time and tokens on discovery before the script hard-fails.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d15e6a4bc71640ac04354456903d0ec2200a9d543b88b78e05906e8d45cb48b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1540,
+    "run_id": "24838399949",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24838399949",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423142013_a08d4da1a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1540,
+    "run_id": "24838399949"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T14:20:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

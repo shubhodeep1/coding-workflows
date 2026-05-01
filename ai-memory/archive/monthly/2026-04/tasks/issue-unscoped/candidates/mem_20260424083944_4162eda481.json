@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:184 and 196 | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Duplicate `Validation harness template-mode toggle` documentation entry in `agents.md`.\n  WHY: Three reviewers confirmed the duplicate bullet; one said the `(supersedes)` entry is intentional, so the issue is disputed but still present in the review set.\n- scripts/validate_process.sh:61-65 and 2159-2172 | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Potential inconsistency in `VALIDATION_USE_TEMPLATES` / `VALIDATION_USE_TEMPLATES_ENABLED` handling around the `false` path.\n  WHY: All reviewers ultimately said the runtime behavior is already correct and returns `harness_error`; deepseek's note was only a low-confidence naming concern.\n- docs/validation-templates-plan.md:504 | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Stale TODO reference in `docs/validation-templates-plan.md`.\n  WHY: Reviewers could not verify the referenced `test_noop_success.py` / `test_family_repo_local_tooling.py` text and noted the file only has 321 lines or the reference is absent.\n- .ai/validate.yml:1 | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Duplicate header comment in `.ai/validate.yml`.\n  WHY: Reviewers said the current file has a normal header plus description lines or a single clean header, so the duplicate-header claim was not present / already fixed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md:184 and 196 | confidence=5\n  PROBLEM: Duplicate `Validation harness template-mode toggle` documentation entry in `agents.md`.\n  WHY: The second `(supersedes)` bullet duplicates the first and could violate the append-only anchor rule.\n- scripts/validate_process.sh:61-65 and 2160-2168 | confidence=1\n  PROBLEM: Potential inconsistency in `VALIDATION_USE_TEMPLATES` / `VALIDATION_USE_TEMPLATES_ENABLED` handling around the false path.\n  WHY: The reviewer concluded the path is actually implemented correctly and does not fail at runtime.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:184 and 196\n  PROBLEM: Duplicate environment variable documentation entry for `VALIDATION_USE_TEMPLATES`.\n  WHY: The two bullets contain identical content and violate the append-only anchor rule.\n- scripts/validate_process.sh:2160-2168\n  PROBLEM: `VALIDATION_USE_TEMPLATES=false` path might not return `harness_error`.\n  WHY: The code correctly checks `VALIDATION_USE_TEMPLATES_ENABLED != \"true\"` and writes `harness_error`; already satisfied.\n- docs/validation-templates-plan.md:504\n  PROBLEM: Stale TODO reference to `test_noop_success.py` / `test_family_repo_local_tooling.py`.\n  WHY: The file has only 321 lines and the referenced text could not be found.\n- .ai/validate.yml:1\n  PROBLEM: Duplicate header comment in `.ai/validate.yml`.\n  WHY: The current file shows a header plus description lines, not a duplicate header.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:184 and 196 | confidence=1\n  PROBLEM: Duplicate `Validation harness template-mode toggle` entry.\n  WHY: The second `(supersedes)` entry was judged intentional, so the reviewer said this is not a valid issue.\n- scripts/validate_process.sh:2159-2168\n  PROBLEM: `VALIDATION_USE_TEMPLATES=false` path was questioned.\n  WHY: The code correctly returns `harness_error`; already satisfied.\n- docs/validation-templates-plan.md:504 | confidence=1\n  PROBLEM: Incorrect TODO reference in `docs/validation-templates-plan.md`.\n  WHY: The reviewer could not verify it and noted the file only has 321 lines.\n- .ai/validate.yml:1 | confidence=1\n  PROBLEM: Duplicate header comment in `.ai/validate.yml`.\n  WHY: The reviewer said the current file has a single header plus description lines, so the duplicate claim is not valid.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- agents.md:184 and 196 | confidence=5\n  PROBLEM: Duplicate environment variable documentation in `agents.md`.\n  WHY: Two bullets describe the same env var and the second `(supersedes)` entry overlaps the first.\n- scripts/validate_process.sh:2160-2172\n  PROBLEM: `VALIDATION_USE_TEMPLATES=false` handling was questioned.\n  WHY: The code correctly returns `raw_status=harness_error`; the reviewer verified the contract.\n- docs/validation-templates-plan.md:504\n  PROBLEM: Stale cross-pollination TODO reference in `docs/validation-templates-plan.md`.\n  WHY: The referenced pattern was not found and the finding appears to have been addressed or was incorrect.\n- .ai/validate.yml:1\n  PROBLEM: Duplicate header comment in `.ai/validate.yml`.\n  WHY: The current file has a single clean header line; the duplicate was already fixed.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cb835f9acaacbf4d5cf05d2d6283df113060792e90f306bdbb8291a917c57b17",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24878332759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24878332759",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424083944_4162eda481",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24878332759"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T08:39:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/workflow-log-analysis.yml\nscripts/analyze_workflow_logs.py\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24383338610-1-22231/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**",
+  "fingerprint": "f91797d8a9d749a931f3fc8b286b28aa7725823394b34d25e84fad2c4af2d4cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 894,
+    "run_id": "24383338610",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24383338610",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414060544_fd0e3a968c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 894,
+    "run_id": "24383338610"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T06:05:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

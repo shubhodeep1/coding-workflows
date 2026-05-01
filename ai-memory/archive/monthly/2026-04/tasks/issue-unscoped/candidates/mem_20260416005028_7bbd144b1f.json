@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n`scripts/verify_integration_fingerprints.py`**\nscripts/orchestrate_poll_process.sh\nscripts/verify_integration_fingerprints.py\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.\n/tmp/codex-pr-24485722992-1-7087/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24485722992-1-7087/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24485722992-1-7087/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n/tmp/codex-pr-24485722992-1-7087/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n`.github/workflows/review_autofix.yml`**\nscripts/orchestrate_poll_process.\nscripts/verify_integration_fingerprints.py",
+  "fingerprint": "4e4b099215ec77d6154db8c3a542413a4e13522c7d153809bd1606d4323c7359",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1133,
+    "run_id": "24485722992",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24485722992",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416005028_7bbd144b1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1133,
+    "run_id": "24485722992"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T00:50:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

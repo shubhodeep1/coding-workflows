@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n`scripts/collect_workflow_logs.py`\nscripts/collect_workflow_logs.py\nscripts/collect_workflow_logs.py**\n\nLow confidence files (mentioned by 1 reviewer):\ntests/test_collect_workflow_logs.py\ntests/test_collect_workflow_logs.py**\ntests/test_collect_workflow_logs.py**",
+  "fingerprint": "71eff8e234dbc6c3531148dcee34872d9c504caac89060bf225e009e49f670f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1179,
+    "run_id": "24507051321",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24507051321",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416112440_33097fe70d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1179,
+    "run_id": "24507051321"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T11:24:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

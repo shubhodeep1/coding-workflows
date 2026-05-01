@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Adjust the dependency-audit harness to import `scripts/semantic_cache.py` in a Python-compatible way that matches real runtime import semantics. Recommended harness changes: 1) In the dependency audit script (the step producing `not ok 2 - semantic_cache module import audit failed`, likely `validation/08_dependency_auditing.sh` or its inline Python), avoid raw `exec_module` without module registration. 2) Prefer standard import validation (`import scripts.semantic_cache`) with correct `PYTHON",
+  "fingerprint": "935138b44d6f217f301b5ded254033c95d52c1187bf4904a44a881822ec6fbf6",
+  "lineage": {
+    "issue_number": 1145,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24489899880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24489899880",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260416033007_39940cd082",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1145,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24489899880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-16T03:30:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

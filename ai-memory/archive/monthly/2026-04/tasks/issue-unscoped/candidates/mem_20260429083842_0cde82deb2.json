@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:138-144 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The README wording about retry budget and watchdog-kill behavior is still potentially misleading and needed clarification.\n  WHY: One reviewer called it technically accurate/cosmetic while another noted the retry-budget phrasing could be read more strongly than intended; highest confidence was 3.\n- tests/test_implement_post_codex_recovery.py:1241-1280 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The test fixture assumes the Codex CLI prints the `exec` command on exactly one line immediately after `exec`.\n  WHY: Multiple reviewers noted `getline cmd` only consumes the next physical line, so Codex output-format drift could break recap extraction.\n- tests/test_implement_post_codex_recovery.py:1196-1221 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The test checks marker strings and awk fragments but not the end-to-end file I/O and retry-prompt wiring it is meant to protect.\n  WHY: The reviewer explicitly said the remaining concerns are integration-level and infeasible to unit-test; highest confidence was 3.\n- tests/test_implement_post_codex_recovery.py:1270-1280 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The result assertion does not fully validate the recap ordering semantics if the implementation changes.\n  WHY: The reviewer noted the current dedup/order behavior could still drift while the fixture remains green; confidence was 2.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:1129 | severity=low\n  PROBLEM: The expanded regex is functionally correct but less readable than a grouped form.\n  WHY: This was described as purely cosmetic.\n- tests/test_implement_post_codex_recovery.py:1241-1261 | confidence=4\n  PROBLEM: The fixture assumes a one-line Codex CLI format immediately after `exec`, so format drift could break extraction.\n  WHY: `getline cmd` reads only the next physical line.\n- tests/test_implement_post_codex_recovery.py:1196-1221 | confidence=3\n  PROBLEM: The test does not verify `codex_prompt_retry.txt` creation or retry-prompt file I/O end to end.\n  WHY: It only checks marker strings and awk fragments, leaving integration-level behaviors untested.\n- README.md:138-144 | confidence=3\n  PROBLEM: The README wording update about EDITOR_MAX_WALL and retry behavior still needs clarification.\n  WHY: The reviewer said the text is accurate but focused on the retry-budget edge case.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_implement_post_codex_recovery.py:1241-1280 | confidence=2\n  PROBLEM: The synthetic fixture assumes Codex prints the exec command on exactly one line after `exec`, so format drift or multi-line commands could break extraction.\n  WHY: `getline` only reads the next physical line.\n- README.md:141 | confidence=1\n  PROBLEM: The README retry-budget wording is technically accurate but could still be read as potentially misleading to operators.\n  WHY: This was called a documentation-clarity issue only.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_implement_post_codex_recovery.py:1241-1261 | confidence=3\n  PROBLEM: The fixture commands end with `succeeded in 0ms:` while real Codex logs may append a variable `tokens used` suffix, so the fixture may not catch parser breakage from that format.\n  WHY: `getline` would capture a different command line if the suffix shifts.\n- tests/test_implement_post_codex_recovery.py:1270-1280 | confidence=2\n  PROBLEM: The exact chronological dedup/order behavior is not fully validated by the fixture.\n  WHY: The reviewer noted order could still be lost if the implementation changes, while the test would still pass.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "adf6298014883d22b580422bc419bfb3fca058e87fa79e2f9622660c1267ed85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1771,
+    "run_id": "25097925897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25097925897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429083842_0cde82deb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1771,
+    "run_id": "25097925897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T08:38:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

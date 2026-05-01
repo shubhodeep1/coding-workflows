@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification Mapping\n- No Q<ID> questions were issued in Clarify; the auto-response `/answer [auto-answered-by-clarify]` indicates the scope is considered fully specified, so planning proceeds without additional clarification.\n\nImplementation Plan\n\n1. Files Likely To Change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n- Optional, only if this behavior is documented elsewhere: `README.md` (likely not needed unless a branch-scope statement exists outside script comments)\n\n2. Functions/Modules To Implement Or Update\n- `scripts/orchestrate_poll_process.sh`:\n- Standalone conflict sweep block (around the `# Standalone PR conflict sweep` section).\n- Keep using the existing helper `_dispatch_review_for_conflicts()` (do not replace flow).\n- Representative pattern to follow: existing two-stage conflict handling already used in tracked PR flows (`update-branch` first, dispatch review on failure). Reuse this behavior in standalone sweep exactly.\n- `tests/test_orchestrate_poll_process.py`:\n- `_run_poller(...)` harness and embedded `gh` mock behavior to simulate:\n- `pulls/{pr}/update-branch` success/failure.\n- Review workflow dispatch calls (`gh workflow run ai-review.yml|internal-review.yml|review_autofix.yml`).\n- Optional active-run checks (`gh run list`) if validating that guard explicitly.\n- Add new standalone-sweep-focused tests and adjust existing standalone test coverage.\n\n3. Planned Logic Changes\n- Remove the hard branch-name filter in standalone sweep:\n- Delete/replace `if [[ \"${S_HEAD}\" != ai/issue-* ]]; then continue; fi`.\n- Preserve current safety guards:\n- Continue skipping orchestrator internal PRs by base pattern (`orchestrator/project-*`).\n- Continue gating by `mergeable_state == dirty`.\n- Continue two-stage handling:\n- Stage 1: `PUT /repos/{owner}/{repo}/pulls/{pr}/update-branch`.\n- Stage 2 fallback: `_dispatch_review_for_conflicts`.\n- Add defensive eligibility checks for safety/races:\n- Explicitly skip when PR state is no longer open after detail fetch (race-safe even if list was open).\n- Keep handling missing/unavailable head refs as non-fatal skip with warning log.\n- Ensure failures are fail-open:\n- Fork/permission/head-ref dispatch failures should log warning and continue loop.\n- Do not terminate script on these failures.\n- Update comments in the standalone section to reflect new scope:\n- From \u201cAI-generated branches (ai/issue-*)\u201d to \u201call eligible open PRs\u201d.\n\n4. Data Structures Affected\n- Shell/runtime variables in standalone sweep:\n- `S_PR`, `S_HEAD`, `S_BASE`, `S_PR_JSON`, `S_MERGEABLE_STATE`, plus any new `S_STATE`-style guard variable.\n- Test harness store object in `tests/test_orchestrate_poll_process.py`:\n- Likely add fields to track review dispatches and configurable update-branch failure behavior.\n- No persistent DB schema/index/contracts impacted.\n\n5. API/Interface Changes\n- No external user-facing API change.\n- Operational behavior change:\n- Standalone conflict sweep eligibility expands from `ai/issue-*` head branches to all eligible open PRs.\n- Existing GitHub API/workflow interfaces remain:\n- `pulls/{pr}/update-branch` attempt first.\n- `gh workflow run <review-workflow> --ref <head_ref> -f pr_number=<pr>` fallback.\n- Duplicate-dispatch and active-run protections remain enforced via `_dispatch_review_for_conflicts`.\n\n6. Risks And Edge Cases\n- Increased sweep scope may increase API calls and dispatch attempts on large repos.\n- Fork PRs or inaccessible head refs can fail dispatch; must remain warning-only.\n- `mergeable_state` can be transient (`unknown`); continue skipping until stable to avoid false actions.\n- Race condition: PR can close/change between list and detail fetch; explicit open-state check prevents unintended handling.\n- Avoid regressions in orchestrator-managed PR handling by preserving base-branch exclusion.\n\n7. Testing Considerations\n- Add/adjust tests to cover required acceptance criteria:\n- Non-`ai/issue-*` dirty open PR now enters conflict handling path.\n- Existing `ai/issue-*` dirty behavior still works.\n- Orchestrator internal exclusion still skips (`baseRefName=orchestrator/project-*`).\n- Duplicate-dispatch/active-run guard still prevents duplicate review dispatch.\n- Closed PRs are skipped safely.\n- Harness updates needed so tests can assert fallback dispatch behavior deterministically (current mock should explicitly model update-branch + review dispatch outcomes).\n- Suggested test execution:\n- `PYTHONDONTWRITEBYTECODE=1 pytest tests/test_orchestrate_poll_process.py`\n\nConflict Detection Notes\n- Found pre-existing comment/code drift in standalone sweep comments: comments describe AI-branch-only scope and direct Codex resolution, while current flow is update-branch + review workflow dispatch. This should be corrected as part of this change so docs/comments match actual behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "80c95e0eae28dd1b657258254d516a50af9152cea432505969141649ac7e6a33",
+  "lineage": {
+    "issue_number": 776,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24304754195",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24304754195",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/776"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260412104914_3e5408295e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 776,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24304754195"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #776",
+  "timestamps": {
+    "created_at": "2026-04-12T10:49:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

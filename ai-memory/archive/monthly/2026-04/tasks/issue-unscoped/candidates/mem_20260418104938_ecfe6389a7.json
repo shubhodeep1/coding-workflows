@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/render_validation_templates.py (line ~147)\n      Problem: The helper produces a non-standard, ambiguous path format (e.g., `$.foo[0]`) instead of a valid RFC 6901 JSON Pointer (`/foo/0`). It escapes `~` and `/` in string segments, then joins them with `.` and uses `[i]` for array indices. Since `.`, `[`, and `]` are valid characters in JSON keys, the output is ambiguous: e.g., key `\"a.b\"` and nested keys `[\"a\",\"b\"]` both produce `$.a.b`.; Not a crash, but validation error messages become ambiguous. When a manifest key contains `.` or `[`/`]`, users may misread the location as nested structure, leading to debugging confusion and potentially incorrect manifest edits, undermeining operational correctness and developer experience.; No other issues are present in the last-run changed code.\n      Confidence: avg 3.7\n      Flagged by: google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: scripts/render_validation_templates.py\n      Problem: Function produces custom path format (`$.key[0]`) instead of standard RFC 6901 JSON Pointer (`/key/0`). Keys containing `.` or `[`/`]` create ambiguous output that could be misinterpreted in error messages.; Validation error messages show non-standard, ambiguous paths that could confuse users or tools expecting standard JSON Pointer format for debugging manifest validation errors.; The `write_outputs` change in the last run diff is correct and addresses the cross-platform newline translation issue properly.; Let me also check if there are any other issues in the changed file. Let me look at the `write_outputs` function more carefully to see if there are any other issues:; The function uses `open(target, \"w\", encoding=\"utf-8\", newline=\"\")` which is correct for preserving LF newlines. However, I should consider the hardening suggestion about atomic writes. But according to the instructions, hardening suggestions must be \u226410 lines and low risk. The atomic write suggestion would be more complex.; Actually, looking at the cross-pollination summary, the `write_outputs` change is already correct and addresses the core issue. The atomic write suggestion is a hardening improvement but not required for correctness.; Now let me provide my complete review output:\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: scripts/render_validation_templates.py\n      Problem: `_json_pointer_from_path` produces non-standard path format (`$.key[0]`) instead of RFC 6901 JSON Pointer (`/key/0`). Function name is misleading and output format ambiguous for keys containing `.` or `[`/`]`.; Validation error messages show confusing, non-standard paths that hinder debugging and could mislead tools/users expecting standard JSON Pointer format.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: scripts/render_validation_templates.py\n      Problem: Location: `write_outputs` function (lines 366-368); Issue: Non-atomic file write could leave partial corrupted files if interrupted.; Suggested minimal fix: Use atomic write via temporary file then rename.; Estimated lines changed: 8; HARDENING_RISK_SCORE: 1; The atomic write hardening would look like:; ```python; import os; temp = target.with_suffix(target.suffix + \".tmp\"); with open(temp, \"w\", encoding=\"utf-8\", newline=\"\") as handle:; handle.write(rendered_file.content); os.replace(temp, target); except:; if temp.exists():; temp.unlink(); However, this is a hardening suggestion, not a critical bug. The main issue is the `_json_pointer_from_path` function.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: scripts/render_validation_templates.py\n      Problem: Location: `_json_pointer_from_path` body; Issue: Non-standard and ambiguous JSON path generation for validation errors.; Suggested minimal fix: Convert to standard RFC 6901 JSON Pointer format: start with `/`, join escaped segments with `/`, and represent array indices as integer strings.; Estimated lines changed: 7; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: `scripts/render_validation_templates.py`\n      Problem: Lines: 366-368; The change replaces:; ```python; target.write_text(rendered_file.content, encoding=\"utf-8\"); ```python; with open(target, \"w\", encoding=\"utf-8\", newline=\"\") as handle:; handle.write(rendered_file.content); **This is a correct and minimal fix.**; The runtime failure path was:; - `_normalize_newlines()` normalizes all line endings to Unix LF (`\\n`); - `Path.write_text()` on Windows uses default text-mode translation, converting `\\n` to `\\r\\n`; - This corrupts shell scripts rendered for Unix runners, causing \"bad interpreter\" errors; The `newline=\"\"` parameter disables all newline translation, preserving the exact bytes produced by the normalization function. The context manager ensures proper file handle cleanup.; ### Scope-Adherent Findings; **No issues found in LAST RUN DIFF.**; The cross-pollination summary identifies concerns about `_json_pointer_from_path` producing non-standard path format (`$.foo[0]` instead of RFC 6901 `/foo/0`). However:; 1. This function was already present in the ORIGINAL PR (line 154 of original diff), not introduced by the last run; 2. Per review scope rules: \"If an issue appears in the ORIGINAL PR DIFF but is not affected by LAST RUN DIFF... do not report it again\"; 3. It's used only for error message formatting, not runtime behavior - not a critical failure; ### System Integration Verification; The `write_outputs` function correctly integrates with:; - `_normalize_newlines()` at line 133 - ensures content uses LF before writing; - `RenderedFile` dataclass - receives pre-normalized content; - `OutputWriteError` exception handling - properly propagates write failures; ## OUTPUT; No changes are needed. The last run modification correctly addresses the cross-platform newline translation issue while maintaining UTF-8 encoding and proper error handling. All tests pass. The code is production-ready.\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/render_validation_templates.py\n\nLow confidence files (mentioned by 1 reviewer):\n`scripts/render_validation_templates.py`",
+  "fingerprint": "49455633325af778cd4acbdee45632d55da9471194e718a10d243abfefe9d147",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1295,
+    "run_id": "24602726128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24602726128",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418104938_ecfe6389a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1295,
+    "run_id": "24602726128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T10:49:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

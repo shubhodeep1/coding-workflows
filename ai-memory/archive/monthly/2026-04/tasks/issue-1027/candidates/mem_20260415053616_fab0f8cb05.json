@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Mapping**\n- No `Q<ID>` clarification questions were asked in this issue.\n- Interpreted answer: `/answer [auto-answered-by-clarify]` means \u201cno additional constraints beyond the issue body.\u201d\n\n**Conflict Detected (Code vs Issue Text)**\n- The issue references `STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION` and `ENABLE_STALL_HUMAN_TERMINALIZATION`, but these are not present in the current repo snapshot.\n- Current code shows `STALL_RECOVERY_ACTIONS` terminal entries are `escalate_human` across phases in `scripts/orchestrate_lib.py` and the poller handles both `close_and_reissue` and `escalate_human` actions in `scripts/orchestrate_poll_process.sh`.\n- Plan assumption: documentation will be aligned to current code behavior unless maintainers explicitly want a separate runtime change.\n\n**Implementation Plan**\n\n1. Files likely to change\n- `README.md` only.\n- Targeted areas:\n  - Variable table entry around `MAX_STALL_RECOVERIES_PER_ISSUE` / stall-recovery controls (early table).\n  - Duplicate variable summary table in the environment/config section.\n  - Section 12 \u201cStall detection and self-healing\u201d narrative.\n\n2. Functions/modules to use as source of truth\n- `scripts/orchestrate_lib.py`\n  - `STALL_RECOVERY_ACTIONS` (phase ladders and terminal action).\n  - `detect_stalls` (ladder selection by `stall_recovery_count`, clamping, judge switch behavior).\n- `scripts/orchestrate_poll_process.sh`\n  - `execute_stall_recovery_action` (action behavior semantics).\n  - Stall-judge action dispatch/fallback path (judge output handling and fail-open behavior).\n\n3. Data structures affected\n- Documentation structures only (Markdown tables + narrative text).\n- No runtime data/state changes (no JSON schema, no DB contract, no workflow state format changes).\n\n4. API/interface changes\n- None.\n- Docs-only correction; no new env vars, no behavior changes, no script changes.\n\n5. Risks and edge cases\n- README has multiple places describing stall recovery; updating only one can reintroduce contradictions.\n- Terminology drift risk between \u201cdeclarative ladder,\u201d \u201cjudge escalation,\u201d and terminal action wording.\n- If the team still expects `ENABLE_STALL_HUMAN_TERMINALIZATION` behavior, that is a scope mismatch and requires a separate non-docs change.\n\n6. Testing/validation considerations\n- Verify every README mention of stall ladder behavior matches current code constants/flow.\n- Confirm no contradiction between variable tables and section 12 narrative.\n- Confirm diff is docs-only (`README.md`), with no runtime files changed.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a66062a042e82062a274bc1581d7ea6d51fe46022aa2512ffe0e143530dfc870",
+  "lineage": {
+    "issue_number": 1027,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24438158361",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24438158361",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1027"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415053616_fab0f8cb05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1027,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24438158361"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1027",
+  "timestamps": {
+    "created_at": "2026-04-15T05:36:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

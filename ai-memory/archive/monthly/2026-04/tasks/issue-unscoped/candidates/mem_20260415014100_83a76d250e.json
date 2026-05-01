@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\ntests/test_validate_harness_rpc.py\n\nLow confidence files (mentioned by 1 reviewer):\ndocs/validation-phase-spec.md\ndocs/validation-phase-spec.md**\nprompts/mode-validate-fix-harness.txt\nprompts/mode-validate-fix-harness.txt\nprompts/mode-validate-fix-harness.txt**\ntests/test_validate_harness_rpc.py**",
+  "fingerprint": "a7df8bfa3787d98b59f63e9b94f9f41520201b576a078ee1da6ffae42fda7dbc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 985,
+    "run_id": "24431717963",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24431717963",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415014100_83a76d250e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 985,
+    "run_id": "24431717963"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T01:41:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

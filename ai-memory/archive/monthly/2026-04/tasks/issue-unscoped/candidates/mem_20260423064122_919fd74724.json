@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `scripts/validate_process.sh`:491 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `comment_body=\"${comment_body//\\\\n/$'\\n'}\"` can mangle intended literal `\\n` sequences when normalizing comment text.\n  WHY: All five reviewers flagged the same root cause at the same line; severity differs only in one review and the highest stated severity was medium.\n- `.github/workflows/validate.yml`:512,547 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `VALIDATION_USE_TEMPLATES` now defaults to `true`, changing workflow behavior for repos that have not opted into template mode.\n  WHY: The reviewer says this is a backward-compatibility break because unprepared repos may fail validation instead of falling back to freehand generation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- (No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `scripts/validate_process.sh`:491 | severity=medium | confidence=5\n  PROBLEM: `comment_body=\"${comment_body//\\\\n/$'\\n'}\"` performs a global literal-`\\n` to newline replacement that can corrupt intended backslash-n content.\n  WHY: The reviewer states it mangles literals, mishandles escaped backslashes, and relies on bash-specific quoting in a way that is unsafe for comment bodies.\n- `.github/workflows/validate.yml`:512,547 | severity=medium | confidence=4\n  PROBLEM: `VALIDATION_USE_TEMPLATES` defaults to `true` instead of the previous `false`.\n  WHY: The reviewer says this breaks backward compatibility for repositories that have not prepared template-mode assets and now may fail validation by default.\n- `scripts/validate_process.sh`:494 | severity=low | confidence=1\n  PROBLEM: `gh api` failures are silently ignored with `|| true`.\n  WHY: The reviewer suggests adding logging or warning so failed comment posts are observable.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `scripts/validate_process.ash`:line 491 | severity=medium | confidence=5\n  PROBLEM: `comment_body=\"${comment_body//\\\\n/$'\\n'}\"` does not handle escaped backslashes correctly.\n  WHY: The reviewer says input such as `\\\\n` is still transformed into a real newline, corrupting the comment body.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `scripts/validate_process.sh`:491 | severity=medium | confidence=3\n  PROBLEM: `comment_body=\"${comment_body//\\\\n/$'\\n'}\"` unconditionally converts every literal `\\n` sequence to a newline.\n  WHY: The reviewer says this can corrupt JSON-derived content and creates a fragile contract with callers that must pre-process inputs.\n- `scripts/validate_process.sh`:491 vs 2946 | severity=low | confidence=2\n  PROBLEM: Newline handling is inconsistent between bash parameter expansion and `sed`.\n  WHY: The reviewer says both approaches work but the mismatch could confuse maintainers.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `scripts/validate_process.sh`:491 | severity=medium | confidence=5\n  PROBLEM: `comment_body=\"${comment_body//\\\\n/$'\\n'}\"` is unsafe and can mangle comment payloads containing escaped newline sequences.\n  WHY: The reviewer says the substitution can behave inconsistently in non-interactive shells and corrupt markdown/code formatting, and notes the script already uses `sed` elsewhere for the same conversion.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "b1747f93b4df4aa95f1f42a572d096621974f6b40bd3c5acfbe05b1fb201ec0b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24819385319",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24819385319",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423064122_919fd74724",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24819385319"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T06:41:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

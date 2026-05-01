@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` questions were asked in clarify.\n- `/answer [auto-answered-by-clarify]` is interpretable as \u201cscope is clear; proceed with planning as-is.\u201d\n\nAudit result (current repo state):\n- `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `prompts/mode-orchestrate.txt`, and `prompts/mode-clarify.txt` already use Serena include placeholders.\n- `prompts/serena-efficiency-block.txt` already exists with canonical `[READ_ONLY]` and `[READ_WRITE]` blocks.\n- `scripts/render_prompt.sh` already resolves both Serena placeholders and fails on unresolved tokens.\n\nFactual conflict detected:\n- `docs/serena-mcp-optimization-plan.md` still describes G1-G5 as open gaps, but code indicates these are largely already implemented.  \n- Plan should treat this as a documentation/state reconciliation task plus targeted wording/verification checks, not a broad prompt refactor.\n\nImplementation plan:\n\n1. Confirm G1-G5 status with a strict delta audit\n- Verify each gap against current files and capture concrete evidence snippets for PR notes:\n  - G1: `mode-implement` uses canonical include.\n  - G2: `mode-plan` uses canonical include.\n  - G3/G4: only harden wording in `mode-orchestrate`/`mode-clarify` if any non-mandatory phrasing remains.\n  - G5: canonical Serena guidance remains centralized in `prompts/serena-efficiency-block.txt` and referenced from mode prompts.\n\n2. Apply only missing prompt deltas (conditional)\n- Files likely to change only if audit finds residual drift:\n  - `prompts/mode-plan.txt`\n  - `prompts/mode-implement.txt`\n  - `prompts/mode-orchestrate.txt`\n  - `prompts/mode-clarify.txt`\n  - `prompts/serena-efficiency-block.txt`\n- Keep edits minimal and wording-only; no unrelated prompt/tooling changes.\n\n3. Keep include/render behavior stable\n- `scripts/render_prompt.sh` change only if strictly required by acceptance checks (currently appears sufficient).\n- Preserve existing placeholder names and include mechanism.\n\n4. Verify rendering and byte stability\n- Render affected mode prompts via `scripts/render_prompt.sh`.\n- Assert no unresolved `{{SERENA_EFFICIENCY_BLOCK_*}}` tokens in rendered output.\n- Extract rendered Serena sections and compare byte hashes:\n  - Read-only group should match across phases that consume `READ_ONLY`.\n  - Read-write variant should be consistent where `READ_WRITE` is used.\n- Record exact verification result in PR notes (hashes + pass/fail).\n\n5. Close documentation gaps explicitly\n- Update `docs/serena-mcp-optimization-plan.md`:\n  - Mark G1-G5 as closed.\n  - Add concise evidence per gap (file/path + what was verified).\n  - Note any \u201cno-change needed\u201d items (e.g., already compliant at audit time).\n\n6. Validation/testing\n- Run existing repository tests in `tests/` (per acceptance criteria).\n- Run prompt rendering checks for affected prompts.\n- Ensure no new env vars and no filename changes.\n\nFiles likely to change:\n- Required: `docs/serena-mcp-optimization-plan.md`\n- Conditional: `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `prompts/mode-orchestrate.txt`, `prompts/mode-clarify.txt`, `prompts/serena-efficiency-block.txt`, `scripts/render_prompt.sh`\n- Likely unchanged unless behavior docs materially changed: `README.md`, `agents.md`\n\nFunctions/modules in scope:\n- `scripts/render_prompt.sh`:\n  - `extract_section`\n  - placeholder substitution branch for `SERENA_EFFICIENCY_BLOCK_READ_ONLY` / `READ_WRITE`\n  - unresolved-placeholder guard\n\nData structures affected:\n- Prompt placeholder tokens:\n  - `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}`\n  - `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}`\n- Serena canonical block section format:\n  - `[READ_ONLY]`\n  - `[READ_WRITE]`\n- No MongoDB collections/contracts affected.\n\nAPI/interface changes:\n- None expected (no external API, CLI, env var, or schema changes).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fe64c46e47cd58d7761795251c616219453c3c4732dc94aafeddbb66476f07e5",
+  "lineage": {
+    "issue_number": 884,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24380153302",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24380153302",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/884"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414040133_e3a8b84649",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 884,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24380153302"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #884",
+  "timestamps": {
+    "created_at": "2026-04-14T04:01:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

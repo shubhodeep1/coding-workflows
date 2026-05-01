@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- analysis/workflow-optimization-2026-04-28-3.md:N/A | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The last AI autofix run created an unrelated analysis file instead of modifying tests/e2e_smoke_canary.txt.\n  WHY: The task explicitly required only modifying tests/e2e_smoke_canary.txt, so touching a different file leaves the requested fix undone.\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The canary file still contains a fourth bait-comment line, so it is not exactly the required three lines.\n  WHY: The linked issue requires exactly three lines with no extra content, and the extra line will fail validation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- N/A | severity=high | confidence=5\n  PROBLEM: The last AI autofix run modified analysis/workflow-optimization-2026-04-28-3.md instead of the actual target tests/e2e_smoke_canary.txt.\n  WHY: The task explicitly required only modifying tests/e2e_smoke_canary.txt.\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines because the bait comment line is still present.\n  WHY: The issue requires exactly three lines, so the fourth line violates the requirement.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- analysis/workflow-optimization-2026-04-28-3.md | severity=high | confidence=5\n  PROBLEM: The last AI autofix run created analysis/workflow-optimization-2026-04-28-3.md instead of modifying the actual target file tests/e2e_smoke_canary.txt.\n  WHY: The task explicitly required only modifying tests/e2e_smoke_canary.txt.\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The canary file contains 4 lines instead of the required exactly 3 lines because the bait comment remains.\n  WHY: The issue explicitly requires exactly three lines with no extra content.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- analysis/workflow-optimization-2026-04-28-3.md (newly created) | severity=high | confidence=5\n  PROBLEM: The last AI autofix run created an entirely new file instead of modifying tests/e2e_smoke_canary.txt.\n  WHY: The task states that only tests/e2e_smoke_canary.txt should be modified.\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains a fourth bait-comment line, violating the exact-three-lines requirement.\n  WHY: The linked issue requires exactly three lines with no comments or extra content.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0957b0d1e0035433de6c7da02afe5928b219219b5854f5417b29433369f6b51d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1735,
+    "run_id": "25075379491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25075379491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428204243_eaf16756c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1735,
+    "run_id": "25075379491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T20:42:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

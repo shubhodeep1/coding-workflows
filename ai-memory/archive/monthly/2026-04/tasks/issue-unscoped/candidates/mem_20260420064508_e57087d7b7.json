@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:883 | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The reviewer command previously used `--full-auto`, which allowed reviewer writes to pollute the pre-editor snapshot.\n  WHY: This can make the diff detector miss legitimate editor changes and trigger `EDITOR_CHANGES_LOST`; reviewers agree the read-only sandbox fix addresses the root cause.\n- tests/test_orchestrate_poll_process.py:3588-3592 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The test anchor was relaxed to match only the echo line, removing the adjacency requirement with the `close_and_reissue)` case label.\n  WHY: PR #1452 inserted an ancestor-chain no-op cap block between the label and echo, so the old anchor no longer matched; reviewers agree the new anchor preserves the intended coverage.\n- scripts/review_run_reviewers.sh:140-141 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The cache probe calls still use `--full-auto` without `--sandbox read-only`.\n  WHY: This was called out as a maintainability inconsistency only, not a runtime failure, because the probe prompts do not attempt file writes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_run_reviewers.sh:883 | severity=high | confidence=5\n  PROBLEM: The reviewer command was previously using `--full-auto`, which implicitly allowed workspace writes.\n  WHY: When a reviewer model autonomously writes proposed fixes to the workspace, those changes pollute the pre-editor snapshot and can trigger `EDITOR_CHANGES_LOST` when the editor later applies legitimate fixes.\n- tests/test_orchestrate_poll_process.py:3591 | severity=medium | confidence=5\n  PROBLEM: The test anchor was updated to match only the echo line, dropping the requirement for adjacency with the `close_and_reissue)` case label.\n  WHY: PR #1452 inserted an ancestor-chain no-op cap block between the case label and the echo statement, so the old consecutive-line anchor would no longer match in the script text.\n- scripts/review_run_reviewers.sh:883 | severity=low | confidence=1\n  PROBLEM: The `codex` command is invoked with a redundant `exec` subcommand: `exec \"${codex_bin}\" --ask-for-approval never exec ...`.\n  WHY: The structure may effectively call `codex exec` twice if the binary is already the `codex` CLI.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:140-141 | severity=low | confidence=2\n  PROBLEM: The cache probe calls at lines 140-141 still use `--full-auto` without `--sandbox read-only`.\n  WHY: The inconsistency in sandbox modes within the same file could confuse future maintainers, although the probes do not fail at runtime because their prompts only request the literal string `CACHE_PROBE_OK`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No issues identified.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "03ec41ea312a35967fe2d9c8fa0b13b30e63d55803583ffa2115d877f7932b06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1449,
+    "run_id": "24651519662",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24651519662",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420064508_e57087d7b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1449,
+    "run_id": "24651519662"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T06:45:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

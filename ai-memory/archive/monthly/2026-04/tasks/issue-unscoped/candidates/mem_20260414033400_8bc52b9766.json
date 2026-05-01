@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24379308898-1-6609/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24379308898-1-6609/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\nscripts/validate_driver.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/validate.yml\n/tmp/codex-pr-24379308898-1-6609/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n/tmp/codex-pr-24379308898-1-6609/previous_reviews/review_moonshotai_kimi-k2_5.txt:1.\n/tmp/codex-pr-24379308898-1-6609/previous_reviews/review_moonshotai_kimi-k2_5.txt:2.\n/tmp/codex-pr-24379308898-1-6609/previous_reviews/review_moonshotai_kimi-k2_5.txt:3.\nscripts/validate_driver.sh\nscripts/validate_process.sh\nscripts/validate_process.sh",
+  "fingerprint": "32f57005dbfe1b8c7a0bb555d702da8c2f8d0e8b19c1e8329c17880c4e6042f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 874,
+    "run_id": "24379308898",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379308898",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414033400_8bc52b9766",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 874,
+    "run_id": "24379308898"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T03:34:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nREADME.md\n`tests/test_validate_process_driver_guard_scope.py`\nscripts/validate_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\nREADME.\nscripts/validate_process.sh\ntests/test_validate_process_driver_guard_scope.py",
+  "fingerprint": "d319e49fa227a43cf9ba35fbf47ede707796ba03ee0f3e313c93896d3eca9b22",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 979,
+    "run_id": "24427130123",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24427130123",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414231311_83c0a4a8c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 979,
+    "run_id": "24427130123"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T23:13:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

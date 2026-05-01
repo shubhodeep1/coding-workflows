@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 4\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: Location: 2040 (and 2086); Issue: Inconsistent filtering of non-substantive lines compared to the apply script.; Suggested minimal fix: Update the grep filter to include the missing \"No changes\" patterns: `grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)|^[[:space:]]{2,}-'`; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1; Files checked:; - .github/workflows/review_autofix.yml; - scripts/review_apply_fixes.sh\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview, stepfun_step-3_5-flash\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: The `substantive` line filter in the workflow is less comprehensive than its counterpart in `scripts/review_apply_fixes.sh`. Specifically, it lacks the exclusion for `No .* modified|No changes` patterns.; If an editor produces a top-level bullet like `- No files modified` that is not the first line of the section (thus bypassing the `first_line` check at line 2044), it will remain in the `substantive` variable and potentially trigger the `edit_claim_regex` if it contains words like \"modified\" or \"changes\". The script counterpart at `scripts/review_apply_fixes.sh:640` correctly filters these out, leading to inconsistent claim detection between the job-level summary logic and the in-script retry logic.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: The substantive filter in the workflow lacks patterns to remove informational bullets like \"- No files modified\" or \"- No changes\" that may appear after a \"- none\" declaration. The script version includes these. Without them, such lines remain in the substantive set and may trigger the edit_claim_regex on words like \"modified\" or \"changes\", causing false positives.; An editor outputting:; Changes made:; - none; - No files modified; would keep the second bullet in substantive; \"modified\" matches edit_claim_regex and could falsely indicate claimed changes when combined with `Change status: not-edited`.\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: The warning check uses the same broad edit_claim_regex that matches substrings (e.g., \"changes\", \"updated\") in descriptive text. Legitimate explanatory sentences after a \"- none\" (e.g., \"(considered changes to X)\") can trigger a warning even though no edit is claimed.; Produces noise in workflow logs and may raise unwanted warnings for valid editor explanations, reducing signal quality.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "3c0b060b1d7597bf12f119777f944f8df8dcac7046a37e644758cf947f62e3cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1240,
+    "run_id": "24535818523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24535818523",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416220855_d53367bdfd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1240,
+    "run_id": "24535818523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T22:08:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

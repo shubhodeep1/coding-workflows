@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Comprehensive test-and-release follow-up (workflow analysis 2026-04-21)\",\"issues\":[{\"id\":\"secure-integration-ref-resolution-loading\",\"title\":\"Harden integration-ref resolver loading in issue-phase workflows (SEC-001/DUP-001)\",\"priority\":1},{\"id\":\"harden-test-and-mark-stable-plan-run-polling\",\"title\":\"Fix numeric-safe Plan run polling in test-and-mark-stable (BUG-001)\",\"priority\":2},{\"id\":\"implement-failure-path-jobs-json-cache\",\"title\":\"Deduplicate implement failure-path run-jobs API fetches (API-001/REUSE-003 subset)\",\"priority\":3},{\"id\":\"atomic-phase-label-transitions-and-pr-fallback-parsing\",\"title\":\"Use shared phase-label transition helper and remove avoidable PR fallback refetches (BUG-002/REUSE-001)\",\"priority\":1},{\"id\":\"review-autofix-push-preflight-and-fallback-artifacts\",\"title\":\"Add early push preflight and deterministic fallback path to review_autofix\",\"priority\":3},{\"id\":\"orchestrate-poller-batch-current-prior-wave-issue-lookups\",\"title\":\"Batch current/prior wave issue metadata lookups in orchestrate poller (BATCH-001/BATCH-003)\",\"priority\":1},{\"id\":\"orchestrate-poller-batch-blocker-issue-state-lookups\",\"title\":\"Batch blocker issue state lookups in implementation-failed recovery (BATCH-002)\",\"priority\":4},{\"id\":\"update-workflows-fail-fast-validation\",\"title\":\"Stabilize update_workflows with pre-mutation validation and explicit failure classification\",\"priority\":2},{\"id\":\"collect-workflow-logs-softfail-404-and-miss-cache\",\"title\":\"Harden workflow log collector against transient/missing log archives (404 soft-fail path)\",\"priority\":2},{\"id\":\"docs-sync-for-2026-04-21-followup\",\"title\":\"Document follow-up behavior changes and operational guidance from 2026-04-21 remediation\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"secure-integration-ref-resolution-loading\",\"to\":\"implement-failure-path-jobs-json-cache\"},{\"from\":\"atomic-phase-label-transitions-and-pr-fallback-parsing\",\"to\":\"review-autofix-push-preflight-and-fallback-artifacts\"},{\"from\":\"orchestrate-poller-batch-current-prior-wave-issue-lookups\",\"to\":\"orchestrate-poller-batch-blocker-issue-state-lookups\"},{\"from\":\"secure-integration-ref-resolution-loading\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"harden-test-and-mark-stable-plan-run-polling\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"implement-failure-path-jobs-json-cache\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"atomic-phase-label-transitions-and-pr-fallback-parsing\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"review-autofix-push-preflight-and-fallback-artifacts\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"orchestrate-poller-batch-current-prior-wave-issue-lookups\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"orchestrate-poller-batch-blocker-issue-state-lookups\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"update-workflows-fail-fast-validation\",\"to\":\"docs-sync-for-2026-04-21-followup\"},{\"from\":\"collect-workflow-logs-softfail-404-and-miss-cache\",\"to\":\"docs-sync-for-2026-04-21-followup\"}]}",
+  "fingerprint": "9f517af6690950db019f47cc604426a27b9f34a7a56bab5870d351ccc07e5d8c",
+  "lineage": {
+    "issue_number": 1479,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24704533241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24704533241",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260421045937_b56e0fca7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1479,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24704533241"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Comprehensive test-and-release follow-up (workflow analysis 2026-04-21)' into 10 issues (tracking #1479)",
+  "timestamps": {
+    "created_at": "2026-04-21T04:59:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- HEAD: `e4bab2b7b39d8956f27d7072cb81143d1301632d`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Mismatch: `false`\n\nClarification mapping:\n- No Q<ID> clarification questions were issued in this cycle.\n- `/answer [auto-answered-by-orchestrator]` means proceed with the issue scope as written.\n\nConflict detected (issue vs current codebase):\n- The requested render-phase recovery behavior already exists on this ref.\n- `scripts/validate_process.sh` already has `attempt_render_recovery_after_preflight_failure()` and routes preflight lint failure through deterministic rerender + relint before terminal handling.\n- `scripts/validate_process.sh` already routes render-recovery terminal failures to `attempt_self_heal_and_reexec \"render\"` (not `\"preflight\"`).\n- `scripts/self_heal_validation.sh` already preserves prompt-target allow-list and additive-only patch guardrails.\n- `prompts/mode-validate-self-heal.txt` already includes explicit render-phase guidance to keep harness recovery renderer-driven and prompt-only.\n- Integration-style tests already exist in `tests/test_validate_process_render_recovery.py` and contract checks in `tests/test_validate_process_template_mode.py`.\n\nImplementation plan (verification-first; no-op likely):\n1. Validate acceptance criteria against existing logic in `scripts/validate_process.sh` (render attempt path, one-shot rerender guard, relint rerun, fail-open logging, and render-phase self-heal dispatch semantics).\n2. Reconfirm self-heal safety constraints are unchanged in `scripts/self_heal_validation.sh` (allowed prompt targets only, additive-only patch enforcement, no non-prompt edits).\n3. Reconfirm prompt guidance in `prompts/mode-validate-self-heal.txt` keeps render failures out of freehand harness editing paths.\n4. Run/verify the existing integration tests covering render success, render fail-open, relint failure, relint fail-open, and non-template legacy path:\n   - `tests/test_validate_process_render_recovery.py`\n   - `tests/test_validate_process_template_mode.py`\n5. Only if any acceptance gap is found, apply minimal targeted edits limited to:\n   - `scripts/validate_process.sh`\n   - `scripts/self_heal_validation.sh`\n   - `prompts/mode-validate-self-heal.txt`\n   - the two existing test files above\n\nData structures affected (only if edits are needed):\n- Preflight state vars in `validate_process.sh`: `PRE_FLIGHT_FAILURE_CLASS`, `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `PRE_FLIGHT_APPEND_LOG`\n- Self-heal phase tag flow: `SELF_HEAL_FAILURE_PHASE`\n- Self-heal decision JSON contract remains unchanged (no schema changes)\n\nAPI/interface changes:\n- None expected; behavior is internal to validate/self-heal flow.\n\nRisks and edge cases to watch:\n- Non-lint preflight failures must not trigger render rerender path.\n- Render rerender must remain single-attempt to avoid loops.\n- Fail-open path must preserve observability (clear log markers) and correct phase tagging (`render` vs `preflight`).\n- No regression of prompt allow-list/additive-only enforcement.\n\nTesting considerations:\n- Prioritize deterministic integration-style tests already in repo over adding new harnesses.\n- Assert both behavioral outcomes and phase-tag/log semantics.\n- Confirm no path introduces freehand harness edits during render-phase recovery.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7dd5e40efe6ce972047f5e05aa99083a337d59e142de59d777cc5ad79e7159f7",
+  "lineage": {
+    "issue_number": 1439,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24627865818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24627865818",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1439"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419112558_99f54e442f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1439,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24627865818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1439",
+  "timestamps": {
+    "created_at": "2026-04-19T11:25:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

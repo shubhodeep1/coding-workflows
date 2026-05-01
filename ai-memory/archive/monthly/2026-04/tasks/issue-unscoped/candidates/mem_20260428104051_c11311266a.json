@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:390 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `wc -l < \"${FILE}\" 2>/dev/null` can emit a \"No such file or directory\" error before stderr is redirected away.\n  WHY: Bash applies redirections left-to-right, so the input redirection failure reaches stderr before `2>/dev/null` takes effect.\n- scripts/render_prompt.sh:68 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The unresolved-placeholder check uses a loose regex that can flag placeholder text appearing inline in user content.\n  WHY: The validation regex matches `{{...}}` anywhere in the output even though substitution only targets standalone placeholder lines, causing false-positive aborts.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_conflict_resolve.sh:390 | confidence=5\n  PROBLEM: Redirection ordering causes error message to leak to logs when file doesn't exist\n  WHY: Bash processes redirections left-to-right. The `< \"${FILE}\"` redirection fails and emits an error to stderr before `2>/dev/null` takes effect.\n- scripts/render_prompt.sh:68 | confidence=5\n  PROBLEM: The validation check `grep -E '{{[A-Z_]+}}'` matches placeholder strings anywhere in the output, but the substitution logic only replaces lines that EXACTLY equal the placeholder\n  WHY: When PR descriptions or comments contain placeholder names as documentation/examples, the substitution correctly skips them, but the validation check incorrectly flags them as unresolved placeholders and aborts rendering.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "71ffe7f5450905ca004a201122fa2e01a596e18eb11c17617f3cb03b978509db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1716,
+    "run_id": "25047231061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25047231061",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428104051_c11311266a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1716,
+    "run_id": "25047231061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-28T10:40:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

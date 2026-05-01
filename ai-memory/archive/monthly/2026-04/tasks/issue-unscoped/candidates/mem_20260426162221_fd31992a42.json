@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_cross_cycle_escalation.py:187-231 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The audit-gate prompt tests only assert that forbidden/required phrases appear, but they do not verify the phrases are framed in the intended prohibitive or concrete-remediation context.\n  WHY: A future prompt change could keep the same phrases while removing the intended MUST NOT / MUST include framing, and the tests would still pass.\n- tests/test_validate_process_cross_cycle_escalation.py:183-187 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: There are extra blank lines before `test_audit_gate_prompt_contract_forbids_unsatisfiable_wording`, violating the two-blank-lines convention between top-level Python functions.\n  WHY: This is a PEP 8 style issue only and does not affect runtime behavior.\n- tests/test_validate_process_cross_cycle_escalation.py:206-208\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: There is a blank-line spacing style issue before `test_audit_gate_prompt_contract_requires_concrete_supported_remediation`.\n  WHY: This is a PEP 8 style issue only and has no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_cross_cycle_escalation.py:187-231 | severity=low | confidence=3\n  PROBLEM: The tests `test_audit_gate_prompt_contract_forbids_unsatisfiable_wording` and `test_audit_gate_prompt_contract_requires_concrete_supported_remediation` check phrase presence after the \"audit-gate carve-out\" heading, but they do not verify the phrases are framed with the correct semantic intent.\n  WHY: The actual prompt content is correct, but the assertions are weaker and would still pass if the same phrases appeared in a permissive context.\n- tests/test_validate_process_cross_cycle_escalation.py:185 (and surrounding area) | severity=low | confidence=4\n  PROBLEM: There are three blank lines before `test_audit_gate_prompt_contract_forbids_unsatisfiable_wording` instead of the standard two blank lines between top-level Python functions.\n  WHY: This violates PEP 8 spacing conventions and may trigger linter warnings, though it does not affect runtime behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validate_process_cross_cycle_escalation.py:188-207 | severity=low | confidence=3\n  PROBLEM: The test `test_audit_gate_prompt_contract_forbids_unsatisfiable_wording` verifies the forbidden phrases appear after the \"audit-gate carve-out\" heading, but does NOT verify these phrases are framed as prohibited.\n  WHY: A future prompt change could remove the \"MUST NOT\" framing while keeping the forbidden phrases, and the test would still pass.\n- tests/test_validate_process_cross_cycle_escalation.py:184-187 | severity=low | confidence=1\n  PROBLEM: There are 4 blank lines before `test_audit_gate_prompt_contract_forbids_unsatisfiable_wording` instead of the conventional 2 blank lines between top-level Python functions.\n  WHY: May trigger style/linter checks; does not affect runtime behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_validate_process_cross_cycle_escalation.py:183-186\n  PROBLEM: PEP 8 style - 3 blank lines before `test_audit_gate_prompt_contract_forbids_unsatisfiable_wording` instead of 2.\n  WHY: Style-only; no runtime impact.\n- tests/test_validate_process_cross_cycle_escalation.py:206-208\n  PROBLEM: PEP 8 style - 2 blank lines needed before `test_audit_gate_prompt_contract_requires_concrete_supported_remediation`.\n  WHY: Style-only; no runtime impact.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "35691e946db08c2885e11305981078c8aefd37ef9509275b537c42d6d536c135",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1669,
+    "run_id": "24960554833",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24960554833",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426162221_fd31992a42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1669,
+    "run_id": "24960554833"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T16:22:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

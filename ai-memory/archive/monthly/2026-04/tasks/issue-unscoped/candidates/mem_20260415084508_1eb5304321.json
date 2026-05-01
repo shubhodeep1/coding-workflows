@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nprompts/mode-validate-generate.txt\nprompts/mode-validate-self-heal.txt\nprompts/mode-validate-self-heal.txt,\nscripts/validate_process.sh\nscripts/validate_process.sh,\n\nLow confidence files (mentioned by 1 reviewer):\nprompts/mode-validate-generate.txt,\nprompts/mode-validate-generate.txt,\nprompts/mode-validate-self-heal.txt,\nscripts/validate_process.sh,\nscripts/validate_process.sh,\nscripts/validate_process.sh,",
+  "fingerprint": "7b5c891f88e8d33c49c00706a0c7f32e16d96fdc51d294a7162ce98336a8d076",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1065,
+    "run_id": "24444752193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24444752193",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415084508_1eb5304321",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1065,
+    "run_id": "24444752193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T08:45:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n/tmp/codex-pr-24442954974-1-9796/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\nscripts/validate_changed_files_syntax.sh\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24442954974-1-9796/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**",
+  "fingerprint": "ffb9dca373b79747bddd9826ca64cff3f27c18f00a516a936eaa15bea72f2ebe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1053,
+    "run_id": "24442954974",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24442954974",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415080633_4a42d2c12a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1053,
+    "run_id": "24442954974"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T08:06:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

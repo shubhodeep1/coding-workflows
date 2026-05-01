@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation: no `Q<ID>` questions were issued in Clarify, and `/answer [auto-answered-by-clarify]` indicates the scope is accepted as-is: implement the LLM analyzer script for dated optimization reports.\n\n1. Files likely to change  \n[scripts/analyze_workflow_logs.py](scripts/analyze_workflow_logs.py) (new) for analyzer logic; [tests/test_analyze_workflow_logs.py](tests/test_analyze_workflow_logs.py) (new) for unit coverage; [.github/workflows/ci.yml](.github/workflows/ci.yml) to add `py_compile` + test execution for the new script; optional doc alignment in [docs/workflow-llm-analysis-plan.md](docs/workflow-llm-analysis-plan.md) only if this issue includes contract sync.\n\n2. Functions/modules to implement  \nIn [scripts/analyze_workflow_logs.py](scripts/analyze_workflow_logs.py): implement `build_parser`, `load_input_data`, `prepare_analysis_context`, `build_prompt_messages`, `truncate_to_budget`, `call_openrouter`, `resolve_dated_output_path`, `write_report_atomic`, and `main`; follow existing patterns from [scripts/collect_workflow_logs.py](scripts/collect_workflow_logs.py) (CLI + atomic writes + exit codes) and [scripts/ai_memory_lib.py](scripts/ai_memory_lib.py) (OpenRouter HTTP + retry pattern).\n\n3. Data structures affected  \nInput contract consumed is the existing collector JSON schema (`workflow_log_collector.v1`) produced by [scripts/collect_workflow_logs.py](scripts/collect_workflow_logs.py); internal normalized payload should include summary metrics, per-repo/per-workflow-family rollups, slow/failing run slices, and error summaries; output is markdown report files named `analysis/workflow-optimization-YYYY-MM-DD.md` with same-day collision suffixing (`-2`, `-3`, ...); no MongoDB collections or `db/contracts` artifacts are involved.\n\n4. API/interface changes  \nNew CLI interface for [scripts/analyze_workflow_logs.py](scripts/analyze_workflow_logs.py) should accept input path/data-dir, output path or output dir, model override, and prompt token budget; environment usage should require `OPENROUTER_API_KEY` and default model from `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.3-codex` fallback); external API call should target OpenRouter chat completions (`POST https://openrouter.ai/api/v1/chat/completions`) with `Authorization: Bearer` and JSON payload fields `model`, `messages`, `temperature`, `max_tokens`, plus reasoning control in the supported format, then parse `choices[0].message.content` (and optionally `usage` for diagnostics).\n\n5. Potential risks/edge cases  \nPrimary risk is contract drift: design docs reference `run_metrics.json`/`summary_stats.json` + deep-dive logs while current collector emits a single `workflow_log_report.json`; prompt-size overflow risk must be handled by deterministic trimming order (drop verbose run detail before summary metrics); handle API failures (`401/403/429/5xx`, timeouts, empty `choices`) with clear stderr and non-zero exits; ensure empty data windows still produce a valid, explicit \u201cinsufficient data\u201d report; prevent overwrite on same-day reruns.\n\n6. Testing considerations  \nAdd focused tests in [tests/test_analyze_workflow_logs.py](tests/test_analyze_workflow_logs.py) for dated filename generation and suffix collision behavior, prompt budget truncation order, request payload assembly, response parsing, and failure paths (missing API key, malformed JSON, HTTP/API error handling); mirror the existing standalone test harness style from [tests/test_collect_workflow_logs.py](tests/test_collect_workflow_logs.py); update [.github/workflows/ci.yml](.github/workflows/ci.yml) so the new script is compiled and tested in CI.\n\nConflict detection (explicit): [docs/workflow-llm-analysis-plan.md](docs/workflow-llm-analysis-plan.md) describes analyzer inputs that do not match the current collector output shape, and references workflow/script deliverables that are not fully present yet; implementation should either support both input shapes for compatibility or align docs in the same change set.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "82c9731265999993dea449de500d108038f139280d25a1e2ccfdfbcd0dc6e01c",
+  "lineage": {
+    "issue_number": 724,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24281001526",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24281001526",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/724"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411110808_aafeaf94d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 724,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24281001526"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #724",
+  "timestamps": {
+    "created_at": "2026-04-11T11:08:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

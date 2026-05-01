@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:Line 2 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The run_id value is `alt-25088532565` instead of the required `25088532565`.\n  WHY: The required exact three-line content is `status: ok`, `run_id: 25088532565`, `updated-by: ai-pipeline`, so the `alt-` prefix will cause exact-match validation to fail.\n- analysis/workflow-optimization-2026-04-29.md:Entire file (500 lines added) | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: A new analysis file was created even though issue #1744 explicitly says to modify only `tests/e2e_smoke_canary.txt`.\n  WHY: This violates the task\u2019s explicit single-file scope restriction and introduces an unauthorized file change.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:Line 2 | confidence=5\n  PROBLEM: The run_id value is `alt-25088532565` instead of the required `25088532565`.\n  WHY: The diff shows the incorrect `alt-` prefix, and issue #1744 explicitly requires exact file content.\n- analysis/workflow-optimization-2026-04-29.md:Entire file (500 lines added) | confidence=5\n  PROBLEM: An analysis file was created even though issue #1744 explicitly states: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n  WHY: This violates the explicit scope constraint in the task and adds unnecessary changes outside the authorized file.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:Line 2 | confidence=5\n  PROBLEM: The run_id was changed to `alt-25088532565` instead of the required `25088532565`.\n  WHY: The smoke test validates exact file content, and the `alt-` prefix causes a string mismatch failure in the E2E validation gate.\n- analysis/workflow-optimization-2026-04-29.md:Problem: A 500-line analysis file was created even though issue #1744 explicitly states: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\" | confidence=5\n  PROBLEM: A 500-line analysis file was created even though issue #1744 explicitly states: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n  WHY: This is a direct scope violation; creating any other file is outside the authorized scope of this PR and could cause unintended CI/test behavior or conflicts.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:Line 2 | confidence=5\n  PROBLEM: The `run_id` value has an incorrect `alt-` prefix.\n  WHY: The task explicitly requires the exact content `run_id: 25088532565`, so any exact-equality check will fail.\n- analysis/workflow-optimization-2026-04-29.md:Entire file (500 lines added) | confidence=5\n  PROBLEM: The linked issue #1744 explicitly states: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\" This constraint was violated by creating a new 36KB analysis file.\n  WHY: This file should not exist at all, and creating additional files violates the PR's stated intent.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "70de0c698cf77437f0e4f5d730128790136468190248b047ac557e29305d535e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1749,
+    "run_id": "25089325371",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25089325371",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429035530_08d271d11d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1749,
+    "run_id": "25089325371"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T03:55:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

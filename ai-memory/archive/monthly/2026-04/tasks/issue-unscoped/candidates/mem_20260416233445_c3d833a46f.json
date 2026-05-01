@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 8\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: First-bullet no-change detection missing \"no files changed\" pattern; Editor output \"- No files were changed\" won't trigger short-circuit logic, causing false-positive EDITOR_CHANGES_LOST errors\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: Contradiction detection missing \"no files changed\" pattern; \"No files were changed but updated X\" won't be detected as contradiction; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 2012, first-bullet check; Issue: Missing \"no files changed\" pattern in first-bullet detection; Suggested minimal fix: Update regex to include \"no (repository )?files (were )?changed\"; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 2025, contradiction detection; Issue: Missing \"no files changed\" pattern in contradiction detection; Suggested minimal fix: Update regex to include \"no (repository )?files (were )?changed\"; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 2006, edit_claim_regex; Issue: Missing \"ying\" variant for \"modif\" pattern; Suggested minimal fix: Change modif(y|ied|ies) to modif(y|ied|ies|ying); Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: scripts/review_apply_fixes.sh\n      Problem: First-bullet no-change detection missing \"no files changed\" pattern and has incorrect end-of-line regex; Same as above - inconsistent with comprehensive no_change_phrase_regex\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: scripts/review_apply_fixes.sh\n      Problem: Location: Line 650, first-bullet check; Issue: Missing \"no files changed\" pattern and incorrect end-of-line regex; Suggested minimal fix: Update regex to include pattern and fix end matching; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [8] File: `.github/workflows/review_automate.yml`\n      Problem: Problem:; ```bash; _linked_Retmp=\"$(mktemp)\"; if gh_Retry \"${_linked_tmp}\" api graphql \\; -f owner=\"${{ github.repository_owner }}\" \\; The `gh_Retry` function is defined to take the command as `$@` (see `scripts/gh_helpers. sh` line 341 - runs `\"$@\"`). When called with `\"${_linked_Retmp}\"` as the first argument, it tries to execute the temp file path as a command, which will fail with \"command not found\" or \"permission denied\".; The temp file path gets interpreted as a command name. The `if` block handles failure by falling back to `_linked_raw='[]'`, so it fails silently - but the optimization (early population of LINKED_ISSUES_JSON) is bypassed and no linked issue context is fetched.; This is consistent with what `google_gemini-3-flash-preview` identified in pass 1.; ### Additional Observations; 1. The PR intent (fixing false positives for EDITOR_CHANGES_LOST when editor declares no changes) is correctly addressed in the current code.; 2. The implementation now:; - Properly detects explicit \"no changes\" declarations; - Uses `strong_edit_claim_regex` with `modif*|change*` for contradiction detection; - Has a short-circuit for first-bullet no-change declarations; - Handles mixed-claim lines correctly; 3. The issue consensus builder (`build_issue_consensus.py`) appears functional.; ### Summary; **Fixed in current code:**; - `strong_edit_claim_regex` now includes `modif*|change*`; - `no_change_phrase_regex` includes \"files changed\"; - Script filter `No .* modified` removed; **Remaining issue requiring attention:**; - `gh_Retry \"${_linked_Retmp}\" api graphql` - passes temp file path as command name; HARDENING_SUGGESTIONS:; - File: `.github/workflows/review_automate.yml`, Location: around line 701; - Issue: gh_Retry called incorrectly; - Suggested fix: Use `gh_Retry gh api graphql ...` instead of `gh_Retry \"${_linked_Retmp}\" api graphql ...`, or if output to file is needed, use `gh_Retry_Reto_file`; - Estimated lines changed: 1; HARDENING_RISK_SCORE: 3\n      Confidence: avg 5.0\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n`.github/workflows/review_automate.yml`\nscripts/review_apply_fixes.sh",
+  "fingerprint": "eccc5e5584ae8dc876cb31d83d6a5743c179aec9ae89d19510985d436d283bb6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1184,
+    "run_id": "24538666581",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24538666581",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416233445_c3d833a46f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1184,
+    "run_id": "24538666581"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-16T23:34:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

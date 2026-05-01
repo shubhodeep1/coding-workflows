@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/truncate_to_utf8_byte_cap.py:60-75 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The helper treats `cap == 0` and `cap < 0` identically by returning the input unchanged, which does not match the CLI\u2019s explicit rejection of negative caps.\n  WHY: This creates an inconsistent contract between direct library callers and the CLI entry point; the reviewer notes mixed users could be surprised even though the consolidator\u2019s direct calls avoid negatives.\n- .github/workflows/test-and-mark-stable.yml:3988-3993 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `wc -c | tr -d '[:space:]'` pipeline is still fragile if `wc` ever emits unexpected whitespace-padded output.\n  WHY: Under `set -euo pipefail`, a non-numeric `MSG_BYTES` would make the comparison fail, aborting the Telegram step and potentially leaving the message untruncated.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/truncate_to_utf8_byte_cap.py:60-75 | severity=low | confidence=[3]\n  PROBLEM: Docstring now correctly qualifies the cap<=0 no-op (output may exceed cap), but the implementation treats cap==0 and cap<0 identically without distinguishing the documented CLI rejection of negative caps (exit 2).\n  WHY: Library callers passing cap<0 get full input (matching cap==0), but CLI explicitly rejects negatives \u2014 inconsistent contracts could surprise mixed users (e.g. consolidator calls library directly).\n- .github/workflows/test-and-mark-stable.yml:3988-3993 | severity=medium | confidence=[4]\n  PROBLEM: tr -d '[:space:]' strips ALL whitespace including trailing newline from wc -c, but wc -c always emits trailing newline \u2014 now MSG_BYTES lacks it, but printf|wc -c|tr chain is still vulnerable if future wc impls embed other whitespace/padding.\n  WHY: If wc -c emits unexpected output (e.g. runner image change), MSG_BYTES becomes non-numeric; [ \"${MSG_BYTES}\" -gt 4000 ] fails under set -euo pipefail, skipping truncation and potentially exceeding Telegram 4096-char cap (API rejection).\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "09c9c4a991306d4c066244521fa6edd501f4b47c562f02b8104084e6ebf877cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1824,
+    "run_id": "25167757683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25167757683",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430134517_23371db1a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1824,
+    "run_id": "25167757683"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-30T13:45:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

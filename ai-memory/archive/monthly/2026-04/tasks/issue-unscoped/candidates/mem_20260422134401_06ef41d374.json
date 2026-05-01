@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/comprehensive-test-and-release.yml:121-127,359-362 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The workflow treats dispatch/polling errors for the downstream workflow run as an undifferentiated failure, so missing or not-yet-visible workflow runs surface as ambiguous or unresolved run-id errors.\n  WHY: Multiple reviewers identified the same root cause in both phase 2 and phase 3: the baseline/run-resolution logic depends on GitHub API visibility and can fail when the target workflow is absent, delayed, or concurrently triggered; severity is raised to medium and confidence reflects the overlap.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/comprehensive-test-and-release.yml:51,99,129,172,279,320,364,399 | severity=medium | confidence=3\n  PROBLEM: The workflow dispatch logic assumes the target workflow files exist and are visible without any explicit validation before calling `gh workflow run`.\n  WHY: If `workflow-log-analysis.yml` or `internal-orchestrate.yml` is missing in a consumer repository, the dispatch step fails with a generic GitHub CLI error and the later polling loop cannot resolve a run id cleanly.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/comprehensive-test-and-release.yml:121 | severity=medium | confidence=4\n  PROBLEM: The run-id resolution logic can fail when GitHub Actions has not yet reported the newly dispatched run or when concurrent triggers create more than one candidate.\n  WHY: The workflow exits with \u201cUnable to resolve dispatched run id\u201d if the new run is not visible within the polling window, or with \u201cAmbiguous run selection\u201d if multiple new runs are detected.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/comprehensive-test-and-release.yml:121 | severity=medium | confidence=4\n  PROBLEM: The workflow dispatch-and-wait pattern depends on the target workflow existing and being visible, which is an operational requirement rather than a correctness bug in this PR.\n  WHY: The reviewer concluded the reported issue is pre-existing behavior and not a runtime correctness problem introduced by the change.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/comprehensive-test-and-release.yml:124-127,359-362 | severity=medium | confidence=4\n  PROBLEM: The baseline run-id list is populated from a possibly failed `list_dispatch_runs` call but failures are silently converted to an empty array.\n  WHY: That makes it impossible to distinguish a real empty baseline from API visibility or permission failures, which can cause the workflow to monitor the wrong run or waste time before failing with an unresolved or ambiguous run-id error.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "c2233cf9c69dcb152caa8a277aeeee13ad1742a38033ada480c73cf9cf568701",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1520,
+    "run_id": "24780607995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24780607995",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422134401_06ef41d374",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1520,
+    "run_id": "24780607995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T13:44:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context:\n- `git rev-parse HEAD`: `b1acdc1f0de06dfa132c17d6c737a1d2fd59ced0`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1292`\n- Resolved checkout ref: `orchestrator/project-1292`\n- Integration-branch mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` clarifications were issued in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the provided scope as-is.\u201d\n\nConflict detection (codebase vs issue/docs):\n- `docs/validation-templates-plan.md` names `tests/10_http_smoke.py`, but the runtime driver in `scripts/validate_process.sh` executes only `validation/tests/*.sh`. Plan: generate `10_http_smoke.sh` as the executable test and call a sidecar Python helper from it.\n- Shared `workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2` is currently static and does not encode family-specific TAP integration detail; family-level override will be used to keep this issue family-scoped.\n\nImplementation plan:\n\n1. Files likely to change\n- `workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/00_canary.sh.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/10_http_smoke.sh.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/_lib/http_smoke.py.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/_lib/import_audit.py.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/30_graceful_shutdown.sh.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/90_tap_report.sh.j2`\n- `tests/test_render_validation_templates.py`\n- `tests/test_family_python_mongo_flask.py` (new)\n- `tests/fixtures/validation_harness/python_mongo_flask/*` (new golden fixtures)\n\n2. Functions/modules to implement\n- Implement python-family Jinja templates so `type: python-mongo-flask` renders a full runnable harness tree (not only family marker).\n- Keep renderer plumbing unchanged (`collect_templates`, `resolve_family`, `build_render_context`) and follow existing `_shared` + family override precedence.\n- Encode family logic in templates:\n- Dockerfile with deterministic base/runtime setup and no service-CLI leakage into app canary expectations.\n- Compose with `app` + `mongo`, readiness checks using `/bin/sh -c`, and `init: true` for long-running services.\n- Canary assertions scoped to app-container tools and deterministic TAP output.\n- HTTP smoke wrapper using Flask host-header support (`TEST_HOST_HEADER`) and deterministic failure messages.\n- Import-audit helper using isolated subprocess pattern for dependency auditing checks.\n- Graceful shutdown helper + test script with bounded polling and bounded log tails.\n- TAP report integration script producing stable summary lines.\n\n3. Data structures affected\n- Family template tree under `workflow-templates/validation-harness/python-mongo-flask/**`.\n- Rendered output set for manifest `type: python-mongo-flask` (expanded file list and deterministic content).\n- Manifest slot consumption (existing schema remains backward compatible; optional slots read from `slots` with safe defaults).\n\n4. API/interface changes\n- No CLI/API changes to `scripts/render_validation_templates.py`.\n- Behavioral change: renderer now emits complete python-mongo-flask harness assets instead of minimal marker-only output.\n- No environment variable renames/additions required for this milestone.\n\n5. Potential risks and edge cases\n- Shell-mode mismatch (`-lc` vs `-c`) can cause false negatives; templates must consistently use non-login shell where expected.\n- Host-header handling must be explicit so Flask ALLOWED_HOSTS-style checks do not fail when using compose service names.\n- TAP numbering/order must stay deterministic and compatible with runner expectations.\n- Overriding shared templates must stay family-scoped and avoid unintended impact on node family.\n\n6. Testing considerations\n- Extend renderer tests to assert full file presence for python family and deterministic output hash across repeated renders.\n- Add family-focused golden tests validating exact rendered content for known regression guards:\n- canary tool scope (no service CLI leakage)\n- compose readiness + `init: true`\n- Flask host-header injection logic\n- import-audit isolation pattern\n- graceful-shutdown bounded retry/tail behavior\n- TAP report integration shape\n- Keep existing unknown-family and dispatch-routing tests passing.\n\nScope checklist (from issue):\n- [ ] Add python-mongo-flask templates for Dockerfile/compose/canary/http smoke/import-audit/graceful-shutdown/TAP integration.\n- [ ] Encode Flask host-header handling in generated test assets.\n- [ ] Add family-focused golden and invariant regression tests.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0c3cbb0d7d91abe753c31ca8362fc4742443227be4bcf25e93cd66830e39e7b2",
+  "lineage": {
+    "issue_number": 1327,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24603890517",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24603890517",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1327"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418114855_822ab89229",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1327,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24603890517"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1327",
+  "timestamps": {
+    "created_at": "2026-04-18T11:48:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

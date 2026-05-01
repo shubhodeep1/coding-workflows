@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 12\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/validate_process.sh\n      Problem: Missing \"harness_error\" raw_status parameter for invalid diagnosis payload failure. Diagnosis LLM returned \"needs_fixes\" with empty fix_issues, which is a harness infrastructure defect.; Without raw_status=\"harness_error\", the workflow exits with code 1 (generic failure) instead of code 2 (harness defect), preventing orchestration from distinguishing harness infrastructure failures from application-side failures.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: scripts/validate_process.sh\n      Problem: Missing \"harness_error\" raw_status parameter for GitHub API failure when creating consolidated fix-up issue.; Without raw_status=\"harness_error\", this API failure is misclassified as a generic failure (exit code 1) instead of a harness defect (exit code 2).\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: scripts/validate_process.sh\n      Problem: Missing \"harness_error\" raw_status parameter for unknown DIAG_STATUS value.; Unrecognized diagnosis status indicates a harness issue, but without raw_status=\"harness_error\", it exits with code 1 instead of code 2.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: scripts/validate_process.sh\n      Problem: Incorrect raw_status for \"needs_fixes\" diagnosis outcome. Should pass \"needs_fixes\" as raw_status instead of defaulting to normalized status \"fail\".; The raw_status field doesn't accurately reflect the diagnosis classifier (\"needs_fixes\"), reducing its utility for downstream consumers who need to distinguish application-side failures from harness defects.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: scripts/validate_process.sh\n      Problem: Incorrect raw_status for \"infeasible\" diagnosis outcome. Should pass \"infeasible\" as raw_status instead of defaulting to normalized status \"fail\".; The raw_status field doesn't accurately reflect the diagnosis classifier (\"infeasible\"), reducing its utility for downstream consumers who need to distinguish validation infeasibility from harness defects.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: scripts/validate_process.sh\n      Problem: Location: Line 2106; Issue: Missing \"harness_error\" raw_status for invalid diagnosis payload failure.; Suggested minimal fix: Change `write_result_files \"fail\" \"Runtime validation failed\" \"${failure_summary}\"` to `write_result_files \"fail\" \"Runtime validation failed\" \"${failure_summary}\" \"harness_error\"`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 5\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: scripts/validate_process.sh\n      Problem: Location: Line 2178; Issue: Missing \"harness_error\" raw_status for API failure creating fix-up issue.; Suggested minimal fix: Change `write_result_files \"fail\" \"Runtime validation failed\" \"${failure_summary}\"` to `write_result_files \"fail\" \"Runtime validation failed\" \"${failure_summary}\" \"harness_error\"`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 5\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [8] File: scripts/validate_process.sh\n      Problem: Location: Line 2221; Issue: Missing \"harness_error\" raw_status for unknown diagnosis status.; Suggested minimal fix: Change `write_result_files \"fail\" \"Validation failed\" \"${failure_summary}\"` to `write_result_files \"fail\" \"Validation failed\" \"${failure_summary}\" \"harness_error\"`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 5\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [9] File: scripts/validate_process.sh\n      Problem: Location: Line 2193; Issue: Incorrect raw_status for \"needs_fixes\" diagnosis outcome.; Suggested minimal fix: Change `write_result_files \"fail\" \"Validation needs fixes\" \"${failure_summary}\"` to `write_result_files \"fail\" \"Validation needs fixes\" \"${failure_summary}\" \"needs_fixes\"`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 3\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [10] File: scripts/validate_process.sh\n      Problem: Location: Line 2212; Issue: Incorrect raw_status for \"infeasible\" diagnosis outcome.; Suggested minimal fix: Change `write_result_files \"fail\" \"Validation marked infeasible\" \"${failure_summary}\"` to `write_result_files \"fail\" \"Validation marked infeasible\" \"${failure_summary}\" \"infeasible\"`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 3\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [11] File: scripts/validate_process. |\n      Problem: When diagnosis returns \"needs_fixes\" but fix_issues array is empty (invalid LLM output), the code writes result files without passing \"harness_error\" as raw_status. This is an AI diagnostic harness failure (invalid output contract), not an application failure.; The diagnostic LLM produced invalid output (empty fix_issues array), which is a harness/AI logic error. Without raw_status=\"harness_error\", it exits with code 1 instead of code 2, making it indistinguishable from application-side test failures.; ISSUE:\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\n  [12] File: scripts/validate_process.\n      Problem: When creating the consolidated fix-up issue fails (GitHub API error), this is an infrastructure/API failure, not an application validation failure. The code writes result without raw_status=\"harness_error\".; This failure is due to GitHub API issues when creating the fix-up issue - a harness/infrastructure problem. Without raw_status=\"harness_error\", downstream orchestration cannot distinguish this from application test failures.; These two remaining paths represent infrastructure/API failures or AI diagnostic harness failures that should be classified as harness_error to properly distinguish them from application-side validation failures.\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/validate_process.\nscripts/validate_process. |\nscripts/validate_process.sh",
+  "fingerprint": "4b702365e6c31cc32b87ae8e3de7ea39d5e2f8e7826df0fbba8bf74440d6cf69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1257,
+    "run_id": "24548408918",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24548408918",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417053109_2edd4207b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1257,
+    "run_id": "24548408918"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T05:31:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

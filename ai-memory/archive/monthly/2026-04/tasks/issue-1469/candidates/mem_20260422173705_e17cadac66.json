@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=error; raw_status=harness_error; summary=Validation harness generation failed; failure_summary=Freehand harness generation has been removed. Set VALIDATION_USE_TEMPLATES=true (or leave it unset) to use template rendering.",
+  "fingerprint": "e74fad621720d7d21eb5f9e7b4a15183e6932bd1a56e0d512da91396327de26a",
+  "lineage": {
+    "issue_number": 1469,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24792430914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24792430914",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260422173705_e17cadac66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1469,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24792430914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation harness generation failed",
+  "timestamps": {
+    "created_at": "2026-04-22T17:37:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

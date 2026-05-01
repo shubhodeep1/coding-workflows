@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:10751 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3-coder-plus, z-ai_glm-5]\n  PROBLEM: The autofix removed the backticks from the fingerprint display, so the GitHub comment no longer renders the fingerprint as inline code.\n  WHY: The repeat-fingerprint breaker posts that failure comment to GitHub, and without the backticks the fingerprint renders as plain text instead of monospace, reducing readability.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:10751 | confidence=5\n  PROBLEM: Incorrect markdown formatting: backticks were removed instead of preserving the single-backslash escape needed for code span rendering.\n  WHY: When the judge repeat-fingerprint breaker posts the comment to GitHub, the SHA-256 fingerprint renders as plain text instead of code-formatted text, reducing readability and debuggability.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:10751 | confidence=4\n  PROBLEM: The autofix removed backticks from the fingerprint display, causing a markdown rendering regression.\n  WHY: When this error message is posted to a GitHub issue as a comment, the fingerprint value no longer renders as monospace code, which makes debugging harder.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:10751 | confidence=5\n  PROBLEM: The autofix removed the backticks entirely from the fingerprint display instead of using the correct single-backslash escape, causing a markdown regression.\n  WHY: When the judge repeat-fingerprint breaker posts the tracking comment, the fingerprint renders as plain text rather than inline code, reducing readability for operators.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n- scripts/orchestrate_poll_process.sh:10751 | confidence=4\n  PROBLEM: The autofix removed backticks entirely from the fingerprint display, causing markdown formatting regression in GitHub issue comments.\n  WHY: Fingerprint values will not render as code-formatted text in GitHub comments, reducing readability and debuggability of error messages.\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:10751 | confidence=5\n  PROBLEM: The autofix removed the backticks entirely from the fingerprint display, causing a markdown rendering regression.\n  WHY: When this error message is posted to GitHub as an issue comment, the fingerprint value will no longer be rendered as code-formatted text, reducing readability and debuggability.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "523105ce4668420063394c1a5bf3e73f95f5876c5e3688e3c225efd29169542f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1679,
+    "run_id": "24964267229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24964267229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426193240_d84438a3a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1679,
+    "run_id": "24964267229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T19:32:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

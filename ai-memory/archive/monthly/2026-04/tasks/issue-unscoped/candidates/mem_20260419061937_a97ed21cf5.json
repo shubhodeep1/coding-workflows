@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/validate_process.sh\n      Problem: The `attempt_render_recovery_after_preflight_failure` function uses OR logic:; ```bash; if [ \"${HARNESS_MODE}\" != \"template_generate\" ] || [ \"${HARNESS_GENERATOR_MODE}\" != \"templates\" ]; then; return 1; This is **CORRECT**. The function should return 1 (not applicable) when EITHER:; - `HARNESS_MODE` is not \"template_generate\", OR; - `HARNESS_GENERATOR_MODE` is not \"templates\"; The reviewer from pass-1 (deepseek) incorrectly claimed this should be AND logic. AND logic would be wrong because it would only return 1 when BOTH conditions are non-template, meaning template mode with freehand generator would incorrectly enter recovery. The OR logic correctly short-circuits for any non-template configuration.; **Issue 2: Minor test mock discrepancy in PRE_FLIGHT_STATUS initialization**\n      Confidence: avg 5.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [2] File: tests/test_validate_process_render_recovery.py\n      Problem: The mock `run_preflight_checks` sets `PRE_FLIGHT_STATUS=\"running\"` at function start, which matches production behavior. However, when returning failure (the `*` case), it sets `PRE_FLIGHT_STATUS=\"fail\"` but the production code would have already set `PRE_FLIGHT_STATUS=\"fail\"` via the `_emit_preflight_tail` function or explicit assignments.; This is a **cosmetic discrepancy** that does not affect test validity \u2014 the tests are testing flow control of render recovery, not status variable behavior.; **No other issues found.**; **CORRECTNESS VERIFICATION:**; 1. **Exit code semantics are correct:**; - Return 0 = recovery succeeded, pipeline continues; - Return 1 = not applicable (wrong mode or already attempted) \u2192 triggers \"preflight\" phase self-heal; - Return 2 = recovery attempted but failed \u2192 triggers \"render\" phase self-heal; 2. **Guard logic is correct:**; - `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED` prevents multiple recovery attempts per invocation; - Template mode guards (`HARNESS_MODE` and `HARNESS_GENERATOR_MODE`) ensure recovery only runs in template mode; 3. **Log preservation is correct:**; - `PRE_FLIGHT_APPEND_LOG=\"true\"` ensures second preflight run appends to log rather than truncating; - Initial failure diagnostics are preserved for the self-heal LLM diagnosis; 4. **Integration point is correct:**; - `render_recovery_exit=$?` correctly captures the exit code; - The condition `[ \"${render_recovery_exit}\" -eq 2 ]` correctly distinguishes render-phase failures from non-applicable cases; **SUMMARY:**; The implementation is correct and well-tested. The deepseek reviewer's claim about OR vs AND logic is **incorrect** \u2014 the current implementation uses the proper logic for the intended behavior.; Changes are:; - Minimal and focused on the stated goal; - Properly tested with integration tests covering success, failure, and legacy (non-template) paths; - Documented in README.md and agents.md; - Backward compatible (non-template mode uses existing \"preflight\" phase); **Recommendation: No changes needed.** The implementation satisfies the PR intent and all findings from pass-1 reviewers have been verified.\n      Confidence: avg 2.0\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/validate_process.sh\ntests/test_validate_process_render_recovery.py",
+  "fingerprint": "88c952c2c27b12cf2fa6bb62ff4094bb3a473352622494af50dabe4a87dfd560",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1369,
+    "run_id": "24622379905",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622379905",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419061937_a97ed21cf5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1369,
+    "run_id": "24622379905"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-19T06:19:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

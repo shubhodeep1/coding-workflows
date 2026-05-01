@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping used for planning:\n- `Q1: A` interpreted as: for the same `clarify_hash`, escalate on the second occurrence (first repeat), and cite `prior clarify comment ID + current clarify comment ID`.\n\nImplementation checklist:\n- [ ] Add clarify-loop metadata persistence into the existing processed-command ledger path.\n- [ ] Extend processed-command schema/helpers (additive) and expose query support for prior auto-answer entries.\n- [ ] Add duplicate-hash loop breaker in `orchestrate_clarify_respond` (block on second occurrence).\n- [ ] Add cycle-budget guard with `ORCHESTRATOR_MAX_CLARIFY_CYCLES` (default `3`).\n- [ ] Escalation path: apply `ai:blocked`, remove `ai:planning`/`ai:clarification`, post one loop-break comment, send Telegram alert, exit success.\n- [ ] Add unit tests for duplicate-hash, cycle budget, and schema/helper compatibility.\n- [ ] Update docs for env var + behavior changes.\n\nFiles likely to change:\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `scripts/ai_memory_lib.py`\n- `scripts/ai_memory.py`\n- `scripts/memory_helpers.sh`\n- `ai-memory/schemas/processed_command_entry.v1.json` (additive metadata shape only)\n- `ai-memory/examples/sample_processed_command_entry.v1.json`\n- `scripts/label_helpers.sh`\n- `.github/ai/label_contract.v1.json`\n- `README.md`\n- `agents.md`\n- `tests/...` (new/updated unit tests)\n\nRepresentative patterns to follow:\n- `plan.yml` processed-command check/claim/complete flow for idempotent command ledger usage.\n- `scripts/orchestrate_poll_process.sh` label safety pattern (`ensure_label_exists` + controlled label transitions).\n\nFunctions/modules to implement:\n1. Processed-command ledger query support\n- Add helper in `scripts/ai_memory_lib.py` to list processed-command entries for an issue (filtered by command/workflow/status).\n- Add CLI subcommand in `scripts/ai_memory.py` (e.g., `processed-command-list`).\n- Add shell wrapper in `scripts/memory_helpers.sh`.\n\n2. Clarify hash + answer hash normalization\n- Add deterministic normalization and hashing logic used by `orchestrate_clarify_respond`:\n  - normalize whitespace/case\n  - strip markdown tokens consistently\n  - `sha256` hash output\n- Compute `clarify_hash` from clarification comment text and `answer_hash` from chosen answer payload before posting `/answer`.\n\n3. Workflow loop-breaker/cycle guard\n- In `.github/workflows/orchestrate_clarify_respond.yml`:\n  - evaluate prior auto-answer entries for same issue from processed-command ledger.\n  - duplicate-hash rule (Q1=A): if same `clarify_hash` already completed once, escalate instead of auto-answering.\n  - cycle budget rule: if next cycle would exceed `ORCHESTRATOR_MAX_CLARIFY_CYCLES`, escalate even when hashes differ.\n  - escalation behavior:\n    - ensure `ai:blocked` exists via `label_helpers.sh`\n    - add `ai:blocked`, remove `ai:planning` + `ai:clarification`\n    - post one loop-break comment citing prior clarify comment id + current clarify comment id\n    - send Telegram alert in existing tracked-alert style\n    - terminate successfully (`exit 0`) without posting `/answer`\n  - non-escalation behavior:\n    - claim/complete processed-command entry for the clarify comment with loop metadata.\n\nData structures affected:\n- `processed_command_entry.v1` remains additive-compatible.\n- Metadata keys to persist (inside `metadata`, no parallel store):\n  - `clarify_hash`\n  - `answer_hash`\n  - `clarify_comment_id`\n  - `auto_answer_comment_id` (after posting)\n  - `cycle`\n  - `source`/`kind` marker for orchestrator clarify auto-answer records\n\nAPI/interface changes:\n- New env var:\n  - `ORCHESTRATOR_MAX_CLARIFY_CYCLES` default `3` (workflow-level guard).\n- New ai-memory CLI surface:\n  - processed-command listing/filtering command for loop detection.\n- Label contract expansion:\n  - add `ai:blocked` to contract/helper catalog for explicit support.\n\nPotential risks/edge cases:\n- `ai:blocked` does not currently exist in label contract/helpers; without contract updates, behavior can drift across workflows.\n- Existing historical ledger entries may lack new metadata keys; loop logic must treat missing keys safely.\n- Over-aggressive markdown normalization may collapse distinct clarifications into same hash; normalization rules must be deterministic and conservative.\n- If memory branch/read fails, guard behavior must avoid infinite auto-answer loops (prefer safe escalation path).\n- Semantic-cache hit path must still run loop guard before posting answer.\n\nTesting considerations:\n- Unit: duplicate clarify body twice -> second occurrence escalates (no second auto-answer), comment IDs referenced correctly.\n- Unit: `N+1` distinct clarifies with `ORCHESTRATOR_MAX_CLARIFY_CYCLES=N` -> escalation on `N+1`.\n- Unit: processed-command schema/helper compatibility:\n  - old entries still validate\n  - new metadata persists and round-trips\n  - list/filter helper returns expected entries.\n- Workflow-level regression tests (static/behavioral) to ensure:\n  - `ORCHESTRATOR_MAX_CLARIFY_CYCLES` default is wired\n  - escalation path adds/removes correct labels and posts/sends notifications.\n\nFactual conflict noted:\n- Issue requires `ai:blocked`, but current repository label taxonomy defines `ai:needs-human`/`ai:review-blocked` and does not define `ai:blocked`. Plan includes explicit contract/helper updates to align codebase with the issue requirement.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "42d965a09e0b04fea928dfe166f3b3fffebaadb0b1d3302dd9e2deef77cb815e",
+  "lineage": {
+    "issue_number": 1049,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24442055625",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24442055625",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1049"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415074128_1d13966255",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1049,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24442055625"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1049",
+  "timestamps": {
+    "created_at": "2026-04-15T07:41:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

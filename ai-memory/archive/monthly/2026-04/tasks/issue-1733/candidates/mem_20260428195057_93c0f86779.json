@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E smoke canary update for run 25074100587\",\"issues\":[{\"id\":\"set-smoke-canary-status-ok\",\"title\":\"Set e2e smoke canary status line to ok\",\"priority\":1},{\"id\":\"append-smoke-canary-decompose-run-25074100587\",\"title\":\"Append e2e smoke canary decompose-run marker for 25074100587\",\"priority\":2}],\"dependency_edges\":[{\"from\":\"set-smoke-canary-status-ok\",\"to\":\"append-smoke-canary-decompose-run-25074100587\"}]}",
+  "fingerprint": "16e905142ccd7e524a9b2b8a368bfba182d9964d3611ffe4e82524b7026f4822",
+  "lineage": {
+    "issue_number": 1733,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25074114838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25074114838",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260428195057_93c0f86779",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1733,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25074114838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E smoke canary update for run 25074100587' into 2 issues (tracking #1733)",
+  "timestamps": {
+    "created_at": "2026-04-28T19:50:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

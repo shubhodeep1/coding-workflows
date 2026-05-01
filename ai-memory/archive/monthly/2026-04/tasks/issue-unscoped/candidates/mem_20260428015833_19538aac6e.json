@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2:14-31 | confidence=[5]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The RPC probe script never sources `validate.env`, so it uses host-shell defaults for `APP_SERVICE` and `RPC_URL` and can override the manifest-provided compose/container values with incorrect ones.\n  WHY: All three reviewers identified that the script reads `APP_SERVICE`/`RPC_URL` from defaults, then passes them into `docker compose exec`, which can target the wrong service and RPC endpoint at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2:14-16, 28-30 | confidence=[5]\n  PROBLEM: The RPC probe script does not source `validate.env`, so `APP_SERVICE` and `RPC_URL` fall back to host-shell defaults and can override manifest-provided values.\n  WHY: When `env_overrides` sets custom values, the script passes the host defaults into `docker compose exec`, which can make the probe use the wrong service or RPC endpoint.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2:14-16, 28-30 | confidence=[5]\n  PROBLEM: The RPC probe script never sources `validate.env`, so manifest overrides for `APP_SERVICE` and `RPC_URL` are ignored and the script passes incorrect defaults into the container.\n  WHY: If a manifest sets custom `env_overrides`, the probe uses `APP_SERVICE=app` and `RPC_URL=http://anvil:8545` instead of the rendered values, causing validation failures or false negatives.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2:14-16 and 28-31 | confidence=[5]\n  PROBLEM: The RPC probe script sets default values for `APP_SERVICE` and `RPC_URL` from the host shell environment but never sources `validate.env` to pick up manifest overrides.\n  WHY: The compose template correctly bakes the overrides into the container, but `docker compose exec -e RPC_URL=\"http://anvil:8545\"` can override the correct manifest value with the wrong default.\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2:30 | confidence=[4]\n  PROBLEM: The RPC probe uses `\"${APP_SERVICE}\"` for the docker compose exec service name without sourcing `validate.env`.\n  WHY: If a manifest sets `APP_SERVICE: \"custom-app\"`, the script will run `docker compose exec -T \"app\"` instead of targeting the manifest-provided service.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f2ec1796397c457efbc27e1edc9eb1e2c694817b5497353e4adbf619e91681aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1701,
+    "run_id": "25027554119",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25027554119",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428015833_19538aac6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1701,
+    "run_id": "25027554119"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T01:58:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

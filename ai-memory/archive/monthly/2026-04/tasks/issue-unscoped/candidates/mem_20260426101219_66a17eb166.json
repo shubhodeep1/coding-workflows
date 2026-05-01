@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:2251-2254 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The fingerprint-normalization regex only handles numeric line/column suffixes, so other suffix forms like `:2251-2254` or `:123:extra` can leave residue and produce different fingerprints for the same failure.\n  WHY: Both reviewers reported leftover path-suffix text in the same normalization block, which breaks repeat-fingerprint deduplication.\n- scripts/orchestrate_poll_process.sh:2251-2254 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The normalization regex does not deliberately handle Windows drive-letter paths.\n  WHY: Both reviewers noted Windows-style paths such as `C:\\...`/`D:\\...` may not normalize consistently, but the impact is limited to portability.\n- scripts/orchestrate_poll_process.sh:10668 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The `-gt` check allows one more identical fingerprint than `JUDGE_REPEAT_FINGERPRINT_MAX` suggests.\n  WHY: With the default max of 2, the breaker blocks on the 3rd identical fingerprint, which both reviewers described as an off-by-one semantic mismatch.\n- scripts/orchestrate_poll_process.sh:10548-10549 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The state file is read twice with separate `jq` invocations when one would suffice.\n  WHY: This is a small hot-path inefficiency with no correctness impact.\n- scripts/orchestrate_poll_process.sh:10554-10560 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: There is no explicit test covering the empty-justification fail-open path that resets the repeat counter to 0.\n  WHY: The code behavior is intentional and verified by reviewers, but none of the reviewed tests assert that empty or null justification leaves `judge_fingerprint_repeat_count` at 0.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:2251-2254 | confidence=5\n  PROBLEM: The regex pattern `((?:\\./|/)?(?:[^/\\s:]+/)*[^/\\s:]+)(?::\\d+)(?::\\d+)?` doesn't handle file:line ranges like `:2251-2254`.\n  WHY: It matches `:2251` but leaves `-2254:` resulting in `file.sh-2254:` with stray colon, which breaks fingerprint deduplication.\n- scripts/orchestrate_poll_process.sh:10668 | confidence=4\n  PROBLEM: The threshold check `if [ \"${JUDGE_FINGERPRINT_REPEAT_COUNT}\" -gt \"${JUDGE_REPEAT_FINGERPRINT_MAX}\" ]` with default max=2 allows 3 identical fingerprints before blocking.\n  WHY: The check uses `-gt`, so counts 1, 2, and 3 behave as allowed, allowed, blocked, which is an off-by-one mismatch with the max setting.\n- scripts/orchestrate_poll_process.sh:10548-10552 | confidence=3\n  PROBLEM: Separate `jq` calls for `PREV_JUDGE_FINGERPRINT` and `PREV_JUDGE_FINGERPRINT_REPEAT_COUNT` could be consolidated into one call.\n  WHY: This is unnecessary process/file-read overhead in a hot loop.\n- scripts/orchestrate_poll_process.sh:10554-10560 | confidence=3\n  PROBLEM: No test coverage for empty justification resets the repeat counter to 0.\n  WHY: The code resets `JUDGE_FINGERPRINT_REPEAT_COUNT=0` when the fingerprint is empty, but there is no explicit test for that behavior.\n- scripts/orchestrate_poll_process.sh:2251-2254 | confidence=3\n  PROBLEM: The regex might not fully handle Windows drive letters in all cases.\n  WHY: Windows paths may not normalize consistently across environments.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:2251-2254 | confidence=4\n  PROBLEM: The regex `(?::\\d+)(?::\\d+)?` only matches digit-only suffixes, so inputs like `src/file.py:123:extra` can leave a stray colon in the normalized fingerprint.\n  WHY: Equivalent failures with different suffix shapes will produce different normalized justifications, breaking deduplication.\n- scripts/orchestrate_poll_process.sh:2251-2254 | confidence=3\n  PROBLEM: Windows paths like `C:\\path\\file.py` or `D:\\projects\\repo\\script.sh:50` are not explicitly handled.\n  WHY: The regex expects paths starting with `./` or `/`, so Windows drive-letter paths may normalize inconsistently.\n- scripts/orchestrate_poll_process.sh:10548-10549 | confidence=2\n  PROBLEM: Two separate jq calls read from the state file where one consolidated call would suffice.\n  WHY: This adds avoidable process/file-read overhead in the hot loop.\n- scripts/orchestrate_poll_process.sh:10668 | confidence=3\n  PROBLEM: With `JUDGE_REPEAT_FINGERPRINT_MAX=2`, the breaker blocks only after the 3rd identical fingerprint.\n  WHY: The `-gt` comparison means the threshold is effectively max+1, which is counterintuitive.\n- scripts/orchestrate_poll_process.sh:10554-10560 | confidence=2\n  PROBLEM: There is no explicit test verifying the empty-justification fail-open behavior.\n  WHY: The reset-to-zero path is straightforward, but it should have test coverage.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_orchestrate_poll_process.py:Near test_judge_repeat_fingerprint_breaker_escalates_after_limit\n  PROBLEM: No explicit test for the empty-justification fail-open path.\n  WHY: The code is implemented correctly, but the reviewed tests do not assert that an empty or null justification leaves `judge_fingerprint_repeat_count == 0`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c4b91ba2fad5beaf525a6195e303a5dce0505efb5ae25a29817618196c76c97f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1659,
+    "run_id": "24953587910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24953587910",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426101219_66a17eb166",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1659,
+    "run_id": "24953587910"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T10:12:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

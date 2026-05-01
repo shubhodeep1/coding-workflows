@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: `scripts/validate_process.sh`\n      Problem: Lines: 976-979; ```bash; if [ ! -f \"${templates_root}/_shared/docker-compose.test.yml.j2\" ] \\; || [ ! -f \"${templates_root}/_shared/validate.env.j2\" ] \\; || [ ! -f \"${templates_root}/_shared/tests/00_canary.sh.j2\" ]; then; return 13; The files `docker-compose.test.yml.j2` and `validate.env.j2` are explicitly required by the bash wrapper's pre-flight check, but they do not exist in the repository's `workflow-templates/validation-harness/_shared/` directory.; When a user opts into template mode, `run_template_validation_harness_renderer` will always exit with code 13, causing the validation pipeline to fail with a generic `harness_error`.; ### **OTHER REVIEW FINDINGS**\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: `scripts/validate_process.sh`\n      Problem: Location: line 976 (run_template_validation_harness_renderer); Issue: Tight coupling between bash wrapper and specific template filenames.; Suggested minimal fix: Relax the check to only verify `${templates_root}` exists, and let the Python renderer (which has better error reporting) handle missing required templates.; Estimated lines changed: 4; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: `.github/workflows/validate.yml`\n      Problem: Lines: 287-293; The heredoc `EOF_TEMPLATE_FILES` contains leading spaces for the template paths.; ```yaml; while IFS= read -r template_path; do; copy_from_ref_or_local \"${template_path}\" \"${template_path}\" \"false\" \"true\" || true; done <<'EOF_TEMPLATE_FILES'; workflow-templates/validation-harness/_shared/docker-compose.test.yml.j2; workflow-templates/validation-harness/_shared/validate.env.j2; EOF_TEMPLATE_FILES; These leading spaces are preserved in the `template_path` variable. The `copy_from_ref_or_local` function (which likely uses `gh api` or `cp`) will attempt to fetch files with a literal space prefix (e.g., `\"  workflow-...\"`), which will fail. The `|| true` guard will hide the error, but the templates won't be staged, leading to failure later in the `scripts/validate_process.sh` check.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: `.github/workflows/validate.yml`\n      Problem: Location: line 287; Issue: Use of `<<-` heredoc vs `<<`.; Suggested minimal fix: Change `<<'EOF_TEMPLATE_FILES'` to `<<-'EOF_TEMPLATE_FILES'` and use tab indentation, or simply remove the leading spaces from the YAML.; Estimated lines changed: 7; HARDENING_RISK_SCORE: 1; ### **DISPOSITION OF PASS 1 FINDINGS**; - **DeepSeek V3 / Gemini**: Correctly identified the missing templates and heredoc indentation issue. (Confirmed); - **Minimax M2**: Reported missing `local` keyword. (False positive: `local_failure_summary` is a variable name, not a keyword usage).; - **Gemini**: Reported missing `ensure_validate_wrapper` call. (False positive: it is called at line 1731).; - **Minimax M2**: Reported unconditional deletion of `validation/`. (False positive: guarded by `.ai-validation-owned`).; ### **ACTIONS TAKEN**; - Verified filesystem for template existence.; - Audited Bash function structure for `ensure_validate_wrapper` and scoping.; - Audited Python renderer for dependency handling and path resolution.; ### **SUMMARY OF FILES CHANGED**; None (Review pass only). Recommendation is to apply the fixes for the missing templates and the heredoc indentation.\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: `scripts/render_validation_templates.py`\n      Problem: The `collect_templates` function assumes that if a template exists in both `_shared` and a family-specific directory, the family directory one should \"win\". It does this by updating a dictionary.; ```python; for relative_dir in template_dir_order:; for template_path in sorted(path for path in family_dir.rglob(\"*.j2\") if path.is_file()):; template_map[output_rel.as_posix()] = TemplateSpec(...); This logic is sound, but `collect_templates` raises `TemplateCollectionError` at line 203 if no templates are found at all. Given that the current PR is missing several `.j2` files in `_shared` as noted above, if a family directory is also empty of `.j2` files, the renderer will crash.; ### **SYSTEM BEHAVIOR REASONING**; The template mode is designed to provide a \"deterministic\" alternative to Codex-generated freehand harnesses. However, by making the bash wrapper (`scripts/validate_process.sh`) strictly check for the existence of three specific shared templates *before* calling the Python renderer, the system creates a hard dependency on a specific file layout that is currently incomplete in the PR.; ### **RUNTIME BEHAVIOR ANALYSIS**; In a standard GitHub Actions run:; 1. The `validate.yml` workflow will fail to stage the templates correctly due to the leading spaces in the heredoc.; 2. Even if staged, `scripts/validate_process.sh` will return exit 13 because the `.j2` files are missing from the repo.; 3. The tracking issue will move to `ai:validation-failed` with a `harness_error` label, which is the \"failure to generate\" state.; ### **HARDENING_SUGGESTIONS**\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/validate.yml`\n`scripts/render_validation_templates.py`\n`scripts/validate_process.sh`",
+  "fingerprint": "d13d0986e6f3817c67890b80bb7688f6d22a069967fb79bcbcd96981f7ff9ff3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1330,
+    "run_id": "24611300075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24611300075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418193150_d84c3bc859",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1330,
+    "run_id": "24611300075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T19:31:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

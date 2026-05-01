@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `f7f8b362aa7127820e458ca842fb015a7c3b825b`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1292`\n- Integration branch metadata: `orchestrator/project-1292`\n- Branch mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` questions were posted in the clarification phase.\n- Interpreted answer `/answer [auto-answered-by-orchestrator]` as: proceed with issue scope as written, with no extra constraints.\n\nConflict detection:\n- The requested rollout appears to be already present on this branch:\n- `scripts/validate_process.sh` already has `attempt_render_recovery_after_preflight_failure`, `render_recovery_exit` routing, and `attempt_self_heal_and_reexec \"render\"` for render-phase failures.\n- `scripts/self_heal_validation.sh` already records/logs `failure_phase` and preserves strict prompt allow-list + additive-only patch guards.\n- `prompts/mode-validate-self-heal.txt` already includes render-phase guidance that keeps harness recovery renderer-driven.\n- `tests/test_validate_process_render_recovery.py` already covers success, fail-open, and non-template legacy behavior.\n- Plan should therefore be gap-only (verify and patch only if any acceptance criterion is still unmet).\n\nImplementation plan\n\n1. Files likely to change (gap-only, only if verification finds drift)\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_render_recovery.py`\n- `tests/test_validate_process_template_mode.py`\n- `README.md` and `agents.md` only if behavior/contracts are adjusted\n\n2. Functions/modules to implement or adjust\n- `scripts/validate_process.sh`\n- `attempt_render_recovery_after_preflight_failure`\n- Preflight failure branch around `render_recovery_exit` and phase routing (`render` vs `preflight`)\n- `scripts/self_heal_validation.sh`\n- Decision logging/ledger write path for `failure_phase`\n- Guardrail enforcement blocks (`ALLOWED_TARGETS`, additive-only patch checks, target file restriction)\n- `prompts/mode-validate-self-heal.txt`\n- Render-phase guidance language (only if current wording is insufficient for observed failures)\n\n3. Data structures affected\n- `validation_status.json`/`validation_metadata.json` preflight fields (`pre_flight_status`) should remain backward-compatible\n- Self-heal patch ledger JSONL entries in `${RUNTIME_DIR}/self_heal_patches.jsonl` (ensure `failure_phase` keeps capturing `render` where applicable)\n- No schema/key renames\n\n4. API/interface changes\n- No external API changes expected\n- No new env vars expected\n- Preserve existing contract: template mode remains renderer-only and does not fall back to freehand harness generation in render-recovery flow\n\n5. Potential risks and edge cases\n- Accidentally reintroducing freehand harness edits in template-mode preflight failure path\n- Breaking self-heal allow-list/additive-only safety guards while touching phase plumbing\n- Regressing non-template (`freehand`) legacy preflight behavior\n- Losing fail-open behavior when renderer rerender fails (must still terminalize through existing path with correct phase tagging)\n\n6. Testing considerations\n- Run targeted tests:\n- `tests/test_validate_process_render_recovery.py` (success, fail-open, legacy path)\n- `tests/test_validate_process_template_mode.py` (contract assertions for template-mode routing)\n- If code changes are made, add/adjust only assertions needed to prove:\n- Preflight lint failure triggers deterministic rerender + relint first\n- Render-phase failures invoke self-heal with `phase=render`\n- No path in this phase performs freehand harness edits\n- Existing self-heal guardrails remain intact (allow-list + additive-only constraints)\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3c3ba8657845d31e18b8d3042c85c51872af39f8e5afb96dc3d7ba1131117f1e",
+  "lineage": {
+    "issue_number": 1394,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24624022292",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24624022292",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1394"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419074434_04f30a5826",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1394,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24624022292"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1394",
+  "timestamps": {
+    "created_at": "2026-04-19T07:44:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

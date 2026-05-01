@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nClarification mapping\n- No clarification QIDs were issued.\n- `/answer [auto-answered-by-clarify]` means proceed with the issue scope as-is.\n\nCodebase nuance/conflict to account for\n- `validate.yml` is often dispatched with `--ref <integration_branch>` from the poller, so it can already run on integration ref in the happy path, but its checkout step is still default-ref by definition and should be hardened.\n- `orchestrate_poll.yml` processes multiple tracking issues in one run, so one pre-checkout integration ref is not well-defined; this should be a documented audit allow-list exception, not forced resolver wiring.\n\n1. Files likely to change\n- `.github/workflows/plan.yml`\n- `.github/workflows/clarify.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/validate.yml`\n- `tests/test_workflow_checkout_integration_ref_audit.py` (new)\n\n2. Functions/modules to implement\n- Add a new pre-checkout step (`id: refctx`, name: `Resolve integration ref`) in each required workflow, placed immediately before `actions/checkout@v5`.\n- In resolver step: fetch issue body via GitHub API, extract integration branch metadata, validate branch format, verify branch exists, and emit `ref` output (empty on miss/failure).\n- Update checkout step to:\n  - `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}`\n  - Preserve existing `fetch-depth` per workflow.\n- Add a post-checkout logging step in each required workflow to print:\n  - resolved ref\n  - `git rev-parse HEAD`\n  - `git symbolic-ref --short HEAD` with detached fallback.\n- In `implement.yml`, keep existing `PR_BASE_BRANCH` logic but align it with resolver output so checkout/base-branch logic cannot drift.\n- In `validate.yml`, resolve from `inputs.tracking_issue` when present; fallback cleanly for standalone runs.\n\n3. Data structures affected\n- New step output contract: `steps.refctx.outputs.ref`.\n- New test classification maps/sets:\n  - required resolver workflows\n  - explicit checkout allow-list exceptions with rationale.\n\n4. API/interface changes\n- No external API/schema changes.\n- Internal workflow behavior change: orchestrator-managed issue_comment/validation paths will checkout integration branch when metadata is present and valid.\n- Observability change: each hardened workflow now logs resolved/actual checkout ref and commit.\n\n5. Potential risks/edge cases\n- Metadata format differences (`- Integration branch: ...` vs `**Integration branch:** \\`...\\``) causing parse misses; parser should support both.\n- Missing/invalid/nonexistent integration branch; must fail open to default branch with warning.\n- GitHub API/rate-limit failures before checkout; resolver must not block workflow (fallback to default).\n- `orchestrate_poll.yml` cannot safely use single integration ref; must be explicitly allow-listed in test to avoid false failures.\n- Multiple checkouts in one workflow file (for example release workflows) require explicit audit classification so new checkout usage cannot slip in silently.\n\n6. Testing considerations\n- Add `tests/test_workflow_checkout_integration_ref_audit.py` to:\n  - scan `.github/workflows/*.yml` for `actions/checkout@v5`\n  - fail if any checkout file is neither resolver-required nor allow-listed with rationale\n  - assert resolver-required workflows contain:\n    - `id: refctx`\n    - checkout `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}`\n    - required post-checkout git logging commands.\n- Run targeted tests:\n  - `pytest tests/test_workflow_checkout_integration_ref_audit.py`\n  - `pytest tests/test_orchestrate_poll_workflow_contract.py`\n  - `pytest tests/test_implement_post_codex_recovery.py`\n  - `pytest tests/test_review_autofix_merge_precheck.py`\n- Keep existing workflow tests green and do not change fetch-depth semantics.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "891753a8ddfe1764bd190026cdf819d1b776cae4e133c168abfd6097d4ec7d63",
+  "lineage": {
+    "issue_number": 1112,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24471511117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24471511117",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1112"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415184538_b66086deb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1112,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24471511117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1112",
+  "timestamps": {
+    "created_at": "2026-04-15T18:45:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

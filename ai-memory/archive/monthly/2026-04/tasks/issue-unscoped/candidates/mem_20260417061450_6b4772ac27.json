@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 3\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/zzz-zzz-zzz_zzz_zzz.zzz\n      Problem: The \"no linked PRs found\" diagnostic uses stderr (`>&2`), but other diagnostics in the same function (lines 34g0, 34g5, 34g8, 34g1) use stdout by default; Why it matters: Mixed output streams make log parsing harder; all diagnostics in this function should use consistent output stream; ## NO CRITICAL ISSUES FOUND; The implementation is correct:; - Word boundary regex `\\\\b` properly prevents `#25528` from matching issue `#25`; - Test correctly scopes assertions to function body; - Multi-source lookup unions three strategies with deduplication; - Fail-open behavior preserved with `|| true` guards; The changes from the last run are safe and improve precision of both the regex implementation and the structural test.; ## HARDENING_SUGGESTIONS; None required - the implementation is sound.\n      Confidence: avg 2.0\n      Flagged by: minimax_minimax-m2_5\n\n  [2] File: scripts/orchestrate_poll_process.sh\n      Problem: The \"no linked PRs\" diagnostic uses stderr (`>&2`) while other diagnostics in the same function use stdout (lines 3449, 3453, 3456); Inconsistent output streams can complicate log aggregation and parsing; some log processors may treat stderr differently from stdout; Suggested fix: Remove `>&2` to match other informational diagnostics in the function, or add `>&2` to all diagnostic echo statements for consistency; ## VERIFICATION OF OTHER FINDINGS; ### Regex Word Boundary (`\\\\b`); **Verified correctly implemented.** Testing confirms:; - `\"closes #123\"` matches issue #123 \u2713; - `\"closes #1234\"` does NOT match issue #123 (word boundary prevents it) \u2713; The shell escaping `\\\\b` \u2192 jq receives `\\b` works correctly for Oniguruma regex.; ### Test Assertion (`\"\\\\\\\\b\"`); **Verified correctly implemented.** The Python assertion checks for `\\\\b` in the extracted function body, which is the correct escaping pattern in the shell script file.; ## HARDENING SUGGESTIONS (Advisory)\n      Confidence: avg 2.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [3] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: Line 1116 (regex pattern in `_linked_prs_by_body_reference`); Issue: Regex might miss colon-prefixed keywords like \"Closes: #123\" which GitHub accepts; Suggested minimal fix: Add optional colon: `(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1 (minor improvement for completeness); ## CONCLUSION; No critical issues found. The changes from the last run are safe and correct. The implementation correctly addresses:; - Gap 1 (multi-source PR lookup with three strategies and deduplication); - Gap 2 (re-issue surfacing with four stable signal types); The minor output stream inconsistency is the only code hygiene issue worth noting.\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/orchestrate_poll_process.sh\nscripts/zzz-zzz-zzz_zzz_zzz.zzz",
+  "fingerprint": "b461ac4be37d2d525d17d194b420228b705c930d2a4714c3e43f64b7639195f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1259,
+    "run_id": "24549907443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24549907443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417061450_6b4772ac27",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1259,
+    "run_id": "24549907443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T06:14:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

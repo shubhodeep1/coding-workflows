@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/review_issue_ledger.txt:7-17 | severity=low | confidence=[3-4]\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The ledger contains an accepted-residual entry for README.md line 358, creating a self-referential/circular review entry about documentation that describes the review pipeline itself.\n  WHY: Reviewers disagreed on framing, but all flagged the same self-referential ledger entry; the highest reported severity was low and the entry is confusing rather than runtime-breaking.\n- .ai/review_issue_ledger.txt:7-17 | severity=low | confidence=[3]\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: FIRST_SEEN_ITERATION: 2, LAST_SEEN_ITERATION: 2, and PERSIST_COUNT: 2 are inconsistent for a single-iteration entry.\n  WHY: The reviewer identified a ledger integrity mismatch in the entry\u2019s persistence counters; no other reviewer reported this specific issue.\n- .ai/review_issue_ledger.txt:1-1 | severity=low | confidence=[2,4]\n  flagged_by: [moonshotai_kimi-k2_5, deepseek_deepseek-v3_2]\n  PROBLEM: PR_NUMBER: 1455 appears inconsistent with the PR context referenced by the reviewers.\n  WHY: Two reviewers independently noted a PR-number mismatch in the ledger header; severity stayed low because the impact is traceability/confusion only.\n- .gitignore:.ai/review_issue_ledger.txt | severity=low | confidence=[3]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `.ai/review_issue_ledger.txt` is both gitignored and tracked in Git, which is operationally confusing.\n  WHY: The reviewer reported the file as a runtime artifact that is nevertheless committed, creating ambiguity about whether it should be versioned.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .ai/review_issue_ledger.txt:7-17 | severity=low | confidence=3\n  PROBLEM: The ledger is tracking its own documentation as an accepted-residual issue, creating a circular reference.\n  WHY: The reviewer said the entry for README.md line 358 points to documentation being added or modified in this PR, so the ledger references itself.\n- .ai/review_issue_ledger.txt:1-1 | severity=low | confidence=2\n  PROBLEM: PR_NUMBER: 1455 does not match the PR context the reviewer was using.\n  WHY: The reviewer said the mismatch makes correlating the ledger with the PR harder.\n- README.md:61-76 | severity=low | confidence=1\n  PROBLEM: The added environment variable defaults are not actually a bug.\n  WHY: The reviewer explicitly marked this as correct additive behavior, so it is not a finding.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .ai/review_issue_ledger.txt:7-17 | severity=low | confidence=3\n  PROBLEM: The ledger shows an accepted-residual entry for README.md line 358, but that documentation is being added or modified by this PR.\n  WHY: The reviewer judged this as a documentation self-reference artifact with no runtime effect.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .gitignore:.ai/review_issue_ledger.txt | severity=low | confidence=3\n  PROBLEM: `.ai/review_issue_ledger.txt` is listed in `.gitignore` but is also tracked in Git.\n  WHY: The reviewer described this as a confusing runtime-artifact-versus-tracked-file state.\n- .ai/review_issue_ledger.txt:1-1 | severity=low | confidence=4\n  PROBLEM: PR_NUMBER: 1455 appears inconsistent with the PR being reviewed.\n  WHY: The reviewer said the ledger header likely came from a different PR or was not updated correctly.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .ai/review_issue_ledger.txt:7-17 | severity=low | confidence=3\n  PROBLEM: The ledger contains a self-referential accepted-residual entry for README.md line 358.\n  WHY: The reviewer said this creates a ledger entry about documentation that describes the ledger\u2019s own process contract.\n- .ai/review_issue_ledger.txt:7-17 | severity=low | confidence=3\n  PROBLEM: FIRST_SEEN_ITERATION: 2, LAST_SEEN_ITERATION: 2, and PERSIST_COUNT: 2 are inconsistent.\n  WHY: The reviewer said the counters do not line up for a single-iteration entry and could mislead automated analysis.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "2c3895db350a2b704ffca3224cf5df37373748a1ed6c0c990b0e6092c037e2e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1455,
+    "run_id": "24637188291",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24637188291",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419194820_72c1b1d518",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1455,
+    "run_id": "24637188291"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T19:48:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

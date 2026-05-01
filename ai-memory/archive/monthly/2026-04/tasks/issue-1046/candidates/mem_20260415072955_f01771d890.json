@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No Q<ID> questions were issued in Clarify; `/answer [auto-answered-by-clarify]` confirms planning can proceed without extra decisions.\n\nRepresentative pattern to follow:\n- Reuse the existing validation blocker gate in `scripts/orchestrate_poll_process.sh` (`validation-fixing` handling around `ACTIVE_FIX_ISSUES_JSON` and defer-until-merged flow) as the model for implementation-failed deferral behavior.\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n- `README.md` (orchestrator behavior section for implementation-failed recovery semantics)\n\n2. Functions/modules to implement\n- In `scripts/orchestrate_poll_process.sh`, extend the implementation-failed block (current close/reissue section around `IMPL_FAILED_STATE_CHANGED`) to:\n- Detect failure class for each `ai:implementation-failed` issue:\n- `no-op implementation` (existing path)\n- `post-Codex validation` (source issue has post-Codex fix-up metadata/comment markers)\n- Extract blocker issue numbers for post-Codex mode from source issue metadata/comments.\n- Resolve blocker status per issue (open vs non-open).\n- Defer close/reissue when any blocker is still open.\n- Emit explicit defer context to stdout + Telegram (issue, mode, blockers, statuses, reason).\n- Reissue only when blockers are non-open.\n- Split reissue guidance body by failure class:\n- Keep current no-op guidance text for no-op mode.\n- Add post-Codex-specific guidance text referencing syntax/validation failure context and blocker-first sequencing.\n- Preserve current no-op flow where no blockers exist.\n\n3. Data structures affected\n- Tracking state JSON (`STATE_FILE`) wave issue entry for the source task:\n- Reuse `.depends_on` if already present.\n- If absent, add additive dependency field (e.g. blocker issue-number list) without removing/renaming existing keys.\n- Ensure updates remain backward-compatible with existing `orchestrate_state.v1` comments and readers.\n- Do not require schema-breaking migrations.\n\n4. API/interface changes\n- No new external API or env vars.\n- Behavioral interface changes:\n- Reissue dispatch may be deferred while blockers are open.\n- Telegram/log messages gain structured deferral context.\n- Reissued issue body content differs by failure class (no-op vs post-Codex validation).\n\n5. Risks and edge cases\n- Missing/malformed blocker metadata: must fail safely (do not misclassify into wrong guidance path).\n- GitHub lookup failures for blocker state: avoid premature reissue; treat unknown as deferred.\n- No-op counter interaction: deferral must not incorrectly consume no-op retry budget.\n- Closed-vs-merged semantics: implement defined \u201cnot open\u201d rule consistently.\n- Repeated poll cycles: avoid noisy/ambiguous deferral messaging.\n\n6. Testing considerations\n- Add focused poller tests in `tests/test_orchestrate_poll_process.py` for:\n- Post-Codex mode + open blockers => no close/reissue, explicit deferral logs/alerts.\n- Post-Codex mode + blockers non-open => reissue proceeds with post-Codex guidance.\n- No-op mode => existing reissue behavior and guidance unchanged.\n- No-op cap behavior remains correct and unaffected by blocker deferral.\n- State dependency persistence:\n- uses existing `depends_on` when present\n- otherwise writes additive field only.\n- Unknown blocker status/API failure path defers safely.\n\nFactual conflicts found\n- The issue requests \u201creuse existing `depends_on` if present\u201d; current poller wave issue entries are generally stored as `{id, github_issue, status}` and do not consistently contain `depends_on`, so additive fallback is required for compatibility.\n- Post-Codex blocker metadata is not currently represented in poller state; it is emitted during implement diagnostics/comments, so poller-side extraction + state persistence is required to satisfy the dependency-gate requirement.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "18d9e477fda5269d2497e831c28ffead036fc58d6f758a2a959bc8093ba613e6",
+  "lineage": {
+    "issue_number": 1046,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24441037239",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24441037239",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1046"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415072955_f01771d890",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1046,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24441037239"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1046",
+  "timestamps": {
+    "created_at": "2026-04-15T07:29:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

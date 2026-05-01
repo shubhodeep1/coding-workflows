@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context\n- `git rev-parse HEAD`: `acbb422d523c7c57a853e3ece4cd88bdb11a83cc`\n- Checked-out branch: `orchestrator/project-1479`\n- Integration metadata branch: `orchestrator/project-1479`\n- Mismatch: `false` (planning can proceed on this ref)\n\nClarification mapping\n- No `Q<ID>` clarifications were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` indicates proceed with the provided scope as-is.\n\nRepresentative implementation pattern to follow\n- Reuse the guarded JSON pattern already present in `.github/workflows/test-and-mark-stable.yml` (`_jobs_json_valid` block around lines 1331-1403): fetch raw JSON first, validate shape with `jq -se`, then parse.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/test-and-mark-stable.yml`\n- `tests/test_test_and_mark_stable_plan_polling_guard.py` (new regression test)\n\n2. Functions/modules to implement\n- In `Phase 2: Wait for plan to complete` (`wait-plan` step), replace the fragile `OTHER_ACTIVE_PLAN_RUNS=$(gh api ... || echo \"0\")` pattern with:\n  - Raw JSON fetch assigned outside command substitution fallback.\n  - Local JSON shape guard (single JSON document, object, `.workflow_runs` array).\n  - Count extraction from validated JSON only.\n  - Explicit numeric guard before `-gt` comparison.\n- Keep existing branch/decision flow unchanged:\n  - Only in `PLAN_RUN_STATUS == completed` branch.\n  - Keep label recheck, waiting behavior, and `plan_failed` path exactly as today.\n\n3. Data structures affected\n- GitHub Actions runs payload contract used in this block:\n  - Top-level object with `.workflow_runs` array.\n  - Per-run fields consumed: `.name`, `.status`.\n- Shell variables in this step:\n  - `PLAN_RUN_STATUS` (unchanged semantics).\n  - `OTHER_ACTIVE_PLAN_RUNS` (now guaranteed numeric before arithmetic comparison).\n  - New temporary JSON/validation vars local to the step.\n\n4. API/interface changes\n- No workflow interface change (no new inputs, outputs, labels, env vars).\n- Same endpoint remains:\n  - `GET /repos/${TEST_REPO}/actions/runs?per_page=50&created=>...`\n- Polling semantics remain unchanged; this is a hardening-only change.\n\n5. Risks and edge cases\n- Error-body contamination / multi-document stdout from failed `gh api`.\n- Non-object or schema-invalid JSON payloads.\n- Empty/missing `.workflow_runs`.\n- Ensuring hardening does not alter current wait/fail decisions when valid data is returned.\n- YAML edit safety: preserve step ordering and 2-space indentation.\n\n6. Testing considerations\n- Add regression test `tests/test_test_and_mark_stable_plan_polling_guard.py` that asserts:\n  - Vulnerable command-substitution fallback pattern for `OTHER_ACTIVE_PLAN_RUNS` is absent.\n  - Guarded JSON validation exists before count extraction.\n  - Numeric sanitization exists before integer comparison.\n- Run targeted test:\n  - `python3 tests/test_test_and_mark_stable_plan_polling_guard.py`\n- Optional confidence check:\n  - Run existing workflow contract tests that read workflow YAML to ensure no collateral breakage.\n\nConflict note\n- The issue says \u201cstay strictly inside files_touched,\u201d but no explicit `files_touched` list is present in this planning context. This plan assumes only the two files above are in scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8c723a3cc60998e6e85cff289e218dd8d8f27e8af9ea2f74c468da3627b3a371",
+  "lineage": {
+    "issue_number": 1497,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24720380636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24720380636",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1497"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421114658_c22e1f2fe1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1497,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24720380636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1497",
+  "timestamps": {
+    "created_at": "2026-04-21T11:46:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

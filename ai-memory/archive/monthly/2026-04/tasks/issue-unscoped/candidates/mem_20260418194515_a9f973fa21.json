@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 3\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: Location: Lines ~298-300; ```bash; wf_source=\"shubhodeep1/coding-workflows\"; if [ \"${{ github.repository }}\" = \"${wf_source}\" ]; then; The original hardcoded check used `[[ \"${{ github.repository }}\" != *\"/coding-workflows\" ]]` (pattern matching - any repo ending with `/coding-workflows`). The new implementation uses exact equality `shubhodeep1/coding-workflows` only.; Why it matters: Forks of the repository (e.g., `someuser/coding-workflows`) would be treated as consumer repos with the new logic, but as source repos with the old logic. A fork that's developing its own workflows would have its edits to `.github/prompts` or `.github/scripts` incorrectly treated as \"leaked artifacts\" and unstaged.; Why it may be intentional: The PR description suggests \"workflow source repo\" means the canonical upstream repo. Forks might be intended as consumers that fetch from upstream.; ### Issue 2: Duplicate Warning Potential (Pre-existing, Now Gated)\n      Confidence: avg 3.0\n      Flagged by: minimax_minimax-m2_5\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: Location: Lines ~18~23 and ~18~28; ```bash; # First check; if [ \"${IS_WORKFLOW_SOURCE_REPO:-false}\" != \"true\" ] && printf '%s\\n' \"${STAGED_FILES}\" | grep -Eq '^\\.github/(prompts|scripts)/'; then; # Second check; if [ \"${IS_WORKFLOW_SOURCE_REPO:-false}\" != \"true\" ] && printf '%s\\n' \"${STAGED_FILES}\" | grep -Eq '^(prompts/|\\.serena/|\\.github/scripts/|\\.github/prompts/|ai-memory/|\\.codex-workflow-src/|\\.codex-workflow-src-main/)'; then; In consumer repos, if a file like `.github/scripts/foo` is staged, both conditions match, resulting in duplicate warning messages and redundant git reset calls. This is a pre-existing issue that now only manifests in consumer repos.; Why it doesn't fail: The `git reset` command is idempotent for already-unstaged paths.; ### CONFIRMED - No Issue: Variable Initialization; The `IS_WORKFLOW_SOURCE_REPO` variable is properly initialized in the workflow:; - Set at line ~305 based on repository name; - Exported to `$GITHUB_ENV` at line ~321; - Default fallback `:-false` handles any edge cases; This was a concern from pass 1 but is resolved by code inspection.; ### VERIFIED CORRECT: Last Run Changes; The most recent AI autofix changes at lines 18~23 and 3~178 are correct:; ```bash; if [ \"${IS_WORKFLOW_SOURCE_REPO:-false}\" != \"true\" ] && printf '%s\\n' \"${STAGED_FILES}\" | grep -Eq '^\\.github/(prompts|scripts)/'; then; This adds the proper guard so that protected path checking only happens in consumer repos, not in the source repo. This is consistent with:; 1. The broader artifact pattern check at lines 18~28/3~183; 2. The file's overall treatment of workflow source vs consumer repos; ### HARDENING_ suggestions:; **None required** - the logic is correct and appropriate for the use case.; ## SUMMARY; The last run changes (adding `IS_WORKFLOW_SOURCE_REPO` guard to the protected path check) are correct and complete. No blocking issues found.; **Classification:**; - Issue 1: Informational/behavior change (forks handled differently); - Issue 2: Minor cosmetic issue (duplicate warnings), pre-existing; **Actions taken:** None required - code is functionally correct.\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\n  [3] File: `.github/workflows/review_autofix.yml`\n      Problem: Location: \"Stage workflow support files\" step (lines 298-312); Observation: The check uses exact equality (`= \"shubhodeep1/coding-workflows\"`) instead of the original pattern match (`!= *\"/coding-workflows\"`). This means forks like `otheruser/coding-workflows` will be treated as consumer repos, not source repos.; This is a behavioral change, not necessarily a bug. Forks acting as workflow consumers (fetching from upstream) would benefit from consumer-repo treatment. Forks developing their own workflows should set up their own workflow wrappers.; ## Hardening Suggestions; None required. The code handles the primary use case correctly with appropriate fail-safes.; ## Conclusion; The changes in the last autofix run are correct. The `IS_WORKFLOW_SOURCE_REPO` guard added to lines 1823 and 3178 completes the consistency of protected-path handling across the workflow. No further changes are needed.\n      Confidence: avg 2.0\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n`.github/workflows/review_autofix.yml`",
+  "fingerprint": "a57dc1974bb648ec61d571a2001db2045989a5887594852388dd39e2406a3aae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1342,
+    "run_id": "24612114905",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24612114905",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418194515_a9f973fa21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1342,
+    "run_id": "24612114905"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T19:45:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

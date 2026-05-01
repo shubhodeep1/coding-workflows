@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1138-1179 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `attempt_render_recovery_after_preflight_failure` ends with an unreachable `return 0`.\n  WHY: The success path already returns from `attempt_template_render_recovery_after_preflight_lint`, and the failure path always reaches `return 2`, so the trailing `return 0` never executes; reviewers disagreed on whether to describe the surrounding check as redundant, but all agreed the dead return is present.\n- tests/test_validate_process_render_recovery.py:28-684 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: Older inline test mocks do not match the updated production render-recovery flow.\n  WHY: The affected tests still embed the pre-change shell logic instead of the new `classify_preflight_failure`/`attempt_template_render_recovery_after_preflight_lint` path, so they can pass without exercising the current behavior; one reviewer argued the newer tests are correct and only the older inline cases need updating, but the finding remains on the outdated mocks.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:1138-1179 | severity=low | confidence=5\n  PROBLEM: `attempt_render_recovery_after_preflight_failure` contains an unreachable trailing `return 0`.\n  WHY: The function returns `0` immediately on the success path and returns `2` on the failure path, so the final `return 0` is never reached.\n- tests/test_validate_process_render_recovery.py:28-285 | severity=medium | confidence=4\n  PROBLEM: Older inline test mocks do not reflect the current production logic.\n  WHY: The tests still use outdated inline implementations without the `classify_preflight_failure` gate and `PRE_FLIGHT_FAILURE_KIND` handling, so they may miss regressions in the updated recovery flow.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/validate_process.sh:1138-1181 | severity=low | confidence=5\n  PROBLEM: `attempt_render_recovery_after_preflight_failure` has unreachable code and redundant control flow.\n  WHY: The function returns immediately on success and returns `2` on failure, so the trailing `return 0` cannot be reached.\n- tests/test_validate_process_render_recovery.py:286-684 | severity=medium | confidence=4\n  PROBLEM: Inline mock implementations in the tests do not match the current production logic.\n  WHY: The embedded shell mocks use simplified logic that does not mirror the current state transitions and failure classification, reducing coverage for regressions in the updated flow.\n- scripts/validate_process.sh:1141 | severity=low | confidence=3\n  PROBLEM: `render_recovery_exit` is initialized redundantly.\n  WHY: The variable is overwritten in the failure branch before use, so the initial `0` assignment is unnecessary and contributes to muddled control flow.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:11/9 | severity=low | confidence=5\n  PROBLEM: The final `return 0` in `attempt_render_recovery_after_preflight_failure` is unreachable dead code.\n  WHY: The success branch returns immediately and the failure branch always reaches `return 2`, so the last return never executes.\n- tests/test_validate_process_render_recovery.py:28-155 and others | severity=medium | confidence=4\n  PROBLEM: The inline shell script definitions in the tests use an older implementation that no longer matches production.\n  WHY: The test stubs omit the `classify_preflight_failure` call and the newer failure-reason handling, so they may not catch regressions in the updated logic.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:1175-1179 | severity=low | confidence=5\n  PROBLEM: `attempt_render_recovery_after_preflight_failure` ends with an unreachable `return 0` after an always-true failure check.\n  WHY: The only path that reaches the check is the failure path from `attempt_template_render_recovery_after_preflight_lint`, which always makes the condition true and returns `2`, so the final `return 0` never runs.\n- scripts/validate_process.sh:1175-1176 | severity=low | confidence=4\n  PROBLEM: The `[ \"${render_recovery_exit}\" -ne 0 ]` check is redundant.\n  WHY: `render_recovery_exit` is assigned from a non-zero failure return before the check, so the condition is always true and could be replaced with a direct `return 2`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/validate_process.sh:~1175-1179 | severity=low | confidence=5\n  PROBLEM: `attempt_render_recovery_after_preflight_failure` contains an unreachable `return 0`.\n  WHY: The success path already returns from the helper call, and the failure path always returns `2`, so the trailing `return 0` never executes.\n- tests/test_validate_process_render_recovery.py:around line 28 and around line 212 | severity=medium | confidence=4\n  PROBLEM: The older inline test cases still replicate the pre-change shell logic.\n  WHY: They do not exercise the new `classify_preflight_failure` gate or the `attempt_template_render_recovery_after_preflight_lint` delegation, so they should be updated to mirror the current implementation.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "0088a5d4642e97ed903bbaf1545ae5c0e737f3a377869dac39e5e0624920de38",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1402,
+    "run_id": "24626968392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626968392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419104404_55856323a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1402,
+    "run_id": "24626968392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T10:44:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

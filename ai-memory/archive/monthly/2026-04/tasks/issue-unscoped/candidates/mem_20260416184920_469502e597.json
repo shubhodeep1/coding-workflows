@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: tests/e2e_smoke_canary.txt\n      Problem: status: ok; run_id: 24527687812; updated-by: ai-pipeline; None. The implementation is correct and complete.; Why it succeeds at runtime: The file content exactly matches the three lines requested in the task description. The run_id has been updated to 24527687812, and no extra characters, comments, or headers are present. The change is restricted solely to the requested file.; Summary of verification:; - Verified tests/e2e_smoke_canary.txt content against task requirements.; - Confirmed run_id matches 24527687812.; - Confirmed no other files were modified.; No issues found.; HARDENING_SUGGESTIONS:; HARDENING_RISK_SCORE: 0\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: tests/e2e_smoke_canary.txt\n      Problem: Content:; status: ok; run_id: 24527687812; updated-by: ai-pipeline; Issue #1241 requirements check:; - Required content: all three required lines present \u2713; - Line count: exactly 3 lines \u2713; - No extra content, comments, or headers \u2713; - Only this file modified in PR \u2713; - File overwritten (not created) \u2713; Diff evidence: The last run diff shows a single line change from run_id 24524951849 to 24527687812, preserving the surrounding lines intact. The file now contains exactly the three specified lines.; Runtime behavior: This is a static canary marker file consumed by the E2E smoke test infrastructure. The content format is validated by the CI workflow and must match the exact specification. Producing the exact expected three-line payload ensures the smoke-test gate operates correctly.; Classification: applied \u2014 The change correctly implements the task with zero deviations.; HARDENING_SUGGESTIONS:; None \u2014 the task is fully specified and implemented exactly.; HARDENING_RISK_SCORE: 0\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\ntests/e2e_smoke_canary.txt",
+  "fingerprint": "df7b31143d74c28bd3f34ffe9c59e6af028b7f314f755a6e7b91ec8ea7412a53",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1243,
+    "run_id": "24527921235",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24527921235",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416184920_469502e597",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1243,
+    "run_id": "24527921235"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-16T18:49:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

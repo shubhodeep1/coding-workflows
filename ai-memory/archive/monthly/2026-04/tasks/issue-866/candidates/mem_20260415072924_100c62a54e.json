@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Fix the validation harness dependency-auditing script/template that emits the inline Python block in `08_dependency_auditing.sh`. Required corrections: 1) Repair malformed f-string construction in the inline Python snippet (the marker list expression after `{` is syntactically incomplete). 2) Ensure marker formatting uses a valid expression (e.g., build the joined marker string before interpolation) so the script cannot fail at parse time. 3) Add a pre-execution syntax sanity check for genera",
+  "fingerprint": "81a03f304a29dbeed08bed9a9d0e8211e22c66431e5031a6b128e993ca8b894e",
+  "lineage": {
+    "issue_number": 866,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24440946157",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24440946157",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260415072924_100c62a54e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 866,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24440946157"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-15T07:29:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for this issue:\n\nClarification interpretation\n- `/answer [auto-answered-by-clarify]` means no unresolved Q-items; scope is fully defined by the issue text.\n\nConflict detected\n- The issue says the advisory token-hint approach is \u201calready used elsewhere,\u201d but there is currently no existing `TOKEN_BUDGET_HINT` emission/helper in `scripts/*.sh`. Plan is to implement the same advisory logic inline in `scripts/review_rb_judge.sh` using `scripts/codex_model_catalog.json`.\n\n1. Files likely to change\n- `scripts/review_rb_judge.sh`\n- No DB contract, workflow YAML, or API schema changes expected.\n\n2. Functions/modules to implement\n- Add a small local shell helper (or equivalent inline block) in `scripts/review_rb_judge.sh` to compute a token-budget advisory hint.\n- Update the RB judge prompt assembly block (where `TOOL_CALL_BUDGET` is written) to also write:\n  - `TOKEN_BUDGET_HINT: ...`\n\n3. Data structures affected\n- Read-only lookup in `scripts/codex_model_catalog.json` for `slug == MODEL_EDITOR`.\n- Fields used:\n  - `context_window`\n  - `effective_context_window_percent` (apply when present/valid)\n\n4. API/interface changes\n- Review-blocked judge prompt metadata adds one line:\n  - `TOKEN_BUDGET_HINT: ...`\n- No changes to judge action schema (`merge`/`fix`/`close_and_reissue`) or retry semantics.\n\n5. Implementation approach (fail-open, minimal)\n- Keep existing prompt build flow intact.\n- Ensure prompt always contains both metadata lines.\n- Compute hint advisory using:\n  - prompt token estimate from `wc -c / 4`\n  - model context from catalog for `MODEL_EDITOR`\n  - adjusted effective context when `effective_context_window_percent` is present\n- On missing/invalid catalog/model/context data:\n  - emit safe fallback advisory text\n  - continue without failing workflow.\n\n6. Risks and edge cases\n- `MODEL_EDITOR` not found in catalog.\n- Missing/non-numeric `context_window`.\n- Invalid `effective_context_window_percent`.\n- Catalog file unavailable in runtime path.\n- Slight token-estimate drift due to advisory-line inclusion (acceptable since advisory only).\n\n7. Testing considerations\n- Validate generated `RB_JUDGE_PROMPT` contains:\n  - `TOOL_CALL_BUDGET: ...`\n  - `TOKEN_BUDGET_HINT: ...`\n- Smoke scenarios:\n  - Valid catalog/model -> computed advisory text present.\n  - Missing catalog/model/context -> fallback advisory text present, no failure.\n- Regression check:\n  - Judge parsing and decision flow unchanged (no impact on merge/fix/close_and_reissue logic).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "add494aec328d5cfac7c36ef03c77af8b82d3361dbaef733ccce997c999b98d0",
+  "lineage": {
+    "issue_number": 911,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24384160848",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24384160848",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/911"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414062411_d960a998ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 911,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24384160848"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #911",
+  "timestamps": {
+    "created_at": "2026-04-14T06:24:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

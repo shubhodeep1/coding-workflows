@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification context: `/answer [auto-answered-by-clarify]` means no unresolved clarification questions; planning can proceed.\n\nConflicts detected between issue text and current code:\n- `.github/workflows/implement.yml` currently creates post-Codex fix-up issues without labels, and there is no `ai:implement-fix-up` label contract entry yet.\n- The implement diagnose path currently does not write orchestrator `STATE_FILE`; that file exists in poller/runtime flows, so metadata must be emitted in implement and persisted by poller.\n- No existing `fixup_issue_numbers` / `blocks_source_issue` state keys are present.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `scripts/orchestrate_poll_process.sh`\n- `.github/ai/label_contract.v1.json`\n- `scripts/label_helpers.sh`\n- `tests/test_implement_post_codex_recovery.py`\n- `tests/test_orchestrate_poll_process.py`\n- `README.md` (behavioral update note)\n\n2. Functions/modules to implement\n- In `implement.yml` post-Codex diagnose/fix-up creation block:\n  - Add both labels on created fix-up issues: `ai:clarification` and `ai:implement-fix-up`.\n  - Emit machine-readable blocker metadata on the failed source issue comment (JSON payload containing `fixup_issue_numbers` and `blocks_source_issue`).\n- In `scripts/orchestrate_poll_process.sh` (implementation-failed handling loop):\n  - Add helper(s) to extract latest blocker metadata payload from source issue comments.\n  - Persist additive fields into the current wave issue entry in `STATE_FILE`:\n    - `fixup_issue_numbers: [int,...]`\n    - `blocks_source_issue: int`\n  - Keep current close/reissue flow unchanged; metadata persistence is additive only.\n\nRepresentative pattern to follow:\n- Validation fix-up flow (`validation_active_fix_issues`) for \u201cissue creation + later state tracking\u201d.\n- Existing implementation-failed reissue block for state mutation pattern and backward-compatible jq updates.\n\n3. Data structures affected\n- Orchestrator state issue entry (`.waves[wave_idx].issues[]`) gains optional additive keys:\n  - `fixup_issue_numbers` (array, default absent/empty)\n  - `blocks_source_issue` (number, default absent)\n- No schema version bump; old state files remain valid because new fields are optional and guarded with defaults.\n\n4. API/interface changes\n- GitHub issue creation call in implement phase changes to include both labels:\n  - `gh issue create ... --label ai:clarification --label ai:implement-fix-up`\n- Label contract adds new non-phase marker label:\n  - `ai:implement-fix-up` (for ops/filtering visibility)\n- No renames/removals of existing labels, env vars, or state keys.\n\n5. Risks and edge cases\n- Partial fix-up creation failures: persist only successfully created numeric issue IDs.\n- Duplicate metadata writes across repeated poll cycles: dedupe by source issue when writing state.\n- Missing metadata comment (older runs/manual edits): poller must no-op and preserve existing behavior.\n- State compatibility: ensure jq writes tolerate absent keys and never fail on old state objects.\n\n6. Testing considerations\n- `tests/test_implement_post_codex_recovery.py`\n  - Assert fix-up issue creation includes both labels.\n  - Assert emitted blocker metadata comment contains `fixup_issue_numbers` and `blocks_source_issue`.\n  - Cover normal and fallback diagnose outputs.\n- `tests/test_orchestrate_poll_process.py`\n  - Add test that implementation-failed issue with blocker metadata is persisted into `latest_state`.\n  - Add test for backward compatibility when metadata is absent (behavior unchanged).\n  - Add dedupe/idempotency check across repeated poll cycles.\n- Keep existing tests for no-op/reissue semantics passing (no flow behavior regression).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "63b05f08b5dd41585a1cec85aaccb0bd33260692289501bdd62e1786a499e562",
+  "lineage": {
+    "issue_number": 1019,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24437662523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24437662523",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1019"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415052036_ba24db4d55",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1019,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24437662523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1019",
+  "timestamps": {
+    "created_at": "2026-04-15T05:20:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\n2. Functions or modules to implement\n- No code/module changes required.\n- Single file content replacement operation (full overwrite).\n\n3. Data structures affected\n- Plain-text canary marker content in `tests/e2e_smoke_canary.txt`.\n- Final file must be exactly:\n  - `status: ok`\n  - `run_id: 24389723368`\n  - `updated-by: ai-pipeline`\n\n4. API or interface changes\n- None.\n- No workflow logic, scripts, contracts, or runtime interfaces are changed.\n\n5. Potential risks or edge cases\n- Accidental modification of any file other than `tests/e2e_smoke_canary.txt` (must not happen).\n- Extra trailing/leading lines or additional whitespace causing mismatch with \u201cexactly three lines\u201d.\n- Missing final newline may affect strict text comparisons in some checks.\n- Path/file conflict check: no conflict detected from provided context; target path exists per issue statement.\n\n6. Testing considerations\n- Verify only one file changed via git diff/status.\n- Verify exact file content with a strict check (line-by-line or byte-for-byte):\n  - 3 lines, no extra content.\n  - Exact values for `status`, `run_id`, and `updated-by`.\n- Optional validation command equivalent:\n  - Compare file against expected literal text block and fail on any mismatch.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b66c6958fc4b4fa75aaf09263f35bef469eeb8f3a61b66130c7e6996b1a8c4a5",
+  "lineage": {
+    "issue_number": 925,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24389817962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24389817962",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/925"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414085008_0e7ff43062",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 925,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24389817962"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #925",
+  "timestamps": {
+    "created_at": "2026-04-14T08:50:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_template_mode.py:30-70 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The contract test only asserts substrings in the script text, so it does not prove the `VALIDATION_USE_TEMPLATES=false` path actually exits non-zero.\n  WHY: Substring checks can pass even if the conditional is inverted or unreachable, leaving the enforcement path insufficiently verified.\n- scripts/validate_process.sh:2262-2268 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Exit code 14 is overloaded for both Python version unavailability and renderer execution failures.\n  WHY: Operators cannot distinguish the failure cause from the exit code alone and must inspect the log to tell whether Python or the renderer broke.\n- agents.md:184, 196 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` documentation is duplicated in two locations.\n  WHY: Duplicate guidance risks documentation drift if one copy is updated without the other.\n- .github/workflows/validate.yml:520-533 | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The workflow always installs renderer dependencies even when `VALIDATION_USE_TEMPLATES=false`.\n  WHY: An explicit opt-out still pays the dependency-install cost before the script hard-fails.\n- scripts/validate_process.sh:123, 1101 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: `HARNESS_GENERATOR_MODE` is assigned `\"templates\"` in two places.\n  WHY: Repeating the same hardcoded value is redundant and adds unnecessary maintenance noise.\n- scripts/validate_process.sh:1151-1152 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The template-mode guard is now dead code because both compared variables are hardcoded to template mode.\n  WHY: The condition will never be true in the current architecture, so the branch is unreachable and can be simplified.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validate_process_template_mode.py:30-70 | severity=low | confidence=2\n  PROBLEM: The test relies on substring matching instead of running the script and asserting the non-zero exit path.\n  WHY: Text matching can succeed without proving the guard actually executes, so the enforcement contract is not fully behaviorally covered.\n- scripts/validate_process.sh:2262-2268 | severity=medium | confidence=3\n  PROBLEM: Exit code 14 covers both Python >=3.9 unavailability and renderer execution failures.\n  WHY: The overloaded code makes operational diagnosis ambiguous without checking the log output.\n- agents.md:184, 196 | severity=low | confidence=2\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` guidance appears twice with identical text.\n  WHY: Duplicate documentation increases the chance of drift if one copy changes independently.\n- .github/workflows/validate.yml:520-533 | severity=low | confidence=1\n  PROBLEM: The workflow now always installs `pyyaml`, `jsonschema`, and `jinja2` when the renderer script exists.\n  WHY: Users who explicitly disable template mode still incur the install cost before the hard-fail guard triggers.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/validate_process.sh:123, 1101 | severity=low | confidence=2\n  PROBLEM: `HARNESS_GENERATOR_MODE` is set to `\"templates\"` in two separate places.\n  WHY: The duplicate assignment is harmless but redundant and adds unnecessary code duplication.\n- scripts/validate_process.sh:1151-1152 | severity=low | confidence=2\n  PROBLEM: The `attempt_render_recovery_after_preflight_failure` guard is now always false under the template-only architecture.\n  WHY: Both sides of the condition are hardcoded to template mode, so the branch is dead code.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8cea0177061218db1ff2173918767c864f3c6e2790d02528332c7045791a0df7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24891158612",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24891158612",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424133619_4b976ae3eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24891158612"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-24T13:36:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

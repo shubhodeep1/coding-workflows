@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/clarify.yml\n.github/workflows/review_autofix.yml\n/tmp/codex-pr-24406186662-1-20794/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n\nLow confidence files (mentioned by 1 reviewer):\n/.github/workflows/ci.yml\n/.github/workflows/clarify.yml\n/.github/workflows/implement.yml\n/.github/workflows/orchestrate.yml\n/.github/workflows/orchestrate_clarify_respond.yml\n/.github/workflows/orchestrate_poll.yml\n/.github/workflows/plan.yml\n/.github/workflows/review_autofix.yml\n/.github/workflows/validate.yml\n/.github/workflows/workflow-log-analysis.yml\n/.gitignore\n/README.md\n/agents.md\n/docs/serena-mcp-optimization-plan.md\n/scripts/ai_memory_lib.py\n/scripts/analyze_workflow_logs.py\n/scripts/openrouter_prompt_cache.py\n/scripts/orchestrate_poll_process.sh\n/scripts/semantic_cache.py\n/tests/test_analyze_workflow_logs.py\n/tests/test_review_autofix_reasoning_schedule.py\n/tests/test_semantic_cache.py\n/tmp/codex-pr-24406186662-1-20794/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n/tmp/codex-pr-24406186662-1-20794/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\nscripts/semantic_cache.py",
+  "fingerprint": "8844ed8a926276d35dea2376d7fd15b2959a2e3b3044b0eca8a9ac4ee181eb3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 926,
+    "run_id": "24406186662",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24406186662",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414151608_dcd1fa82c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 926,
+    "run_id": "24406186662"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T15:16:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

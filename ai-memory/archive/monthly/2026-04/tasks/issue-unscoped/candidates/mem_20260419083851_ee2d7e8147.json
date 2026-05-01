@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_template_mode.py:64 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: The test assertion expects a prompt substring with backticks around `failing_phase=render`, and these reviewers reported that the prompt text does not match that exact string.\n  WHY: Both reviewers identified the same string-mismatch assertion in the new prompt-scope test as the runtime failure point; one reviewer disagreed and treated it as a false positive, so the merged severity keeps the highest reported level while noting the disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_template_mode.py:64 | severity=1 | confidence=1\n  PROBLEM: Reported issue is invalid; the assertion correctly checks for backticks around `failing_phase=render`.\n  WHY: The reviewer says the prompt file contains the backticks and the test passes, so no bug remains.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- tests/test_validate_process_template_mode.py:64 | severity=critical | confidence=5\n  PROBLEM: The assertion expects backticks around `failing_phase=render`, but the prompt text contains `For failing_phase=render...`.\n  WHY: The reviewer says the mismatch causes an `AssertionError` in pytest and blocks the new test.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validate_process_template_mode.py:~66 | severity=critical | confidence=5\n  PROBLEM: Assertion string mismatch - test expects backticks around `failing_phase=render` in prompt text, but the prompt file likely doesn't contain the exact matching substring.\n  WHY: The reviewer says this will cause the new prompt-scope test to fail immediately at runtime.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "775b41c219855fdffd4055f0a49e0739552371fa804a9f8e4076dccfc199c45f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1387,
+    "run_id": "24623446268",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "24623446268",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419083851_ee2d7e8147",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1387,
+    "run_id": "24623446268"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T08:38:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

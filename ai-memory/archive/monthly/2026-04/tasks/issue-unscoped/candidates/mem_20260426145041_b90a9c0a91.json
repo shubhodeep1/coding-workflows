@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_cross_cycle_escalation.py:203-221 | severity=critical | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The regression test does not verify that the prompts contain `scripts/security/check-npm-audit.js`.\n  WHY: This leaves the canonical supported audit path unguarded, so removing that marker from the prompts would not fail the test; reviewers disagreed on severity (one called it critical, others low), so the highest severity is retained.\n- tests/test_validate_process_cross_cycle_escalation.py:190-211 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The tests use `.lower()`, which could mask case-sensitive file path issues.\n  WHY: On case-sensitive filesystems, an incorrect path casing in the prompts could still pass these assertions.\n- prompts/mode-judge.txt:40-64; prompts/mode-validate-diagnose.txt:176-207 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The audit-gate carve-out wording is not identical across the two prompts.\n  WHY: The semantic meaning is the same, but the phrasing differs between the judge and diagnose prompts, which is a consistency/readability issue only.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_cross_cycle_escalation.py:206-210 | severity=critical | confidence=4\n  PROBLEM: Test doesn't verify `scripts/security/check-npm-audit.js` marker is present in prompts\n  WHY: The canonical supported audit path specification in both prompts includes this file; if missing, LLM won't have complete guidance for audit-gate failures\n- tests/test_validate_process_cross_cycle_escalation.py:190-211 | severity=low | confidence=3\n  PROBLEM: Tests use `.lower()` which could mask case-sensitive file path issues\n  WHY: File paths in Unix/Linux are case-sensitive; wrong case in prompts could lead to confusion about actual file locations\n- prompts/mode-judge.txt:51-59 and prompts/mode-validate-diagnose.txt:192-200 | severity=low | confidence=2\n  PROBLEM: Minor wording inconsistencies: \"prefer GHSA, fallback CVE\" vs \"prefer GHSA IDs, fallback CVE IDs\"\n  WHY: Could cause subtle LLM confusion but doesn't affect core functionality; still worth fixing for consistency\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- prompts/mode-judge.txt:40-64 and prompts/mode-validate-diagnose.txt:176-205 | severity=low | confidence=2\n  PROBLEM: The audit-gate carve-out sections in both prompts have minor wording differences.\n  WHY: This is a stylistic inconsistency that could cause minor confusion but does not affect functionality.\n- tests/test_validate_process_cross_cycle_escalation.py:204-221 | severity=low | confidence=3\n  PROBLEM: The test `test_audit_gate_prompt_contract_requires_concrete_supported_remediation()` does not verify that the prompts mention `scripts/security/check-npm-audit.js`.\n  WHY: Without this assertion, the contract that the canonical path must be named in the prompts could regress silently.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- prompts/mode-judge.txt:40-64 and prompts/mode-validate-diagnose.txt:176-207 | severity=low | confidence=2\n  PROBLEM: The \"prefer GHSA\" wording differs between prompts.\n  WHY: This is a minor inconsistency; while functionally equivalent, it could confuse models parsing the instructions.\n- tests/test_validate_process_cross_cycle_escalation.py:204-215 | severity=low | confidence=3\n  PROBLEM: The regression test does not verify the `scripts/security/check-npm-audit.js` marker.\n  WHY: This creates a regression risk if the prompts are edited to remove or alter this path reference.\n- tests/test_validate_process_cross_cycle_escalation.py:183-184 | severity=low | confidence=1\n  PROBLEM: The test file contains extra blank lines between function definitions.\n  WHY: This is a minor style inconsistency.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_validate_process_cross_cycle_escalation.py:203-217 | severity=low | confidence=4\n  PROBLEM: The test `test_audit_gate_prompt_contract_requires_concrete_supported_remediation` does not verify the presence of `scripts/security/check-npm-audit.js`.\n  WHY: If this marker were removed from the prompts, the test would still pass, leaving a gap in the prompt contract enforcement.\n- prompts/mode-judge.txt:40-64 and prompts/mode-validate-diagnose.txt:176-207 | severity=low | confidence=2\n  PROBLEM: The two prompts use slightly different phrasing for equivalent concepts.\n  WHY: The semantic meaning is consistent, but the different phrasing could confuse readers or future maintainers.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5fec1314fca09c679c7dfc789382c104345c64f921a5dff18a107cf2a76b51c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1669,
+    "run_id": "24958950012",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24958950012",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426145041_b90a9c0a91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1669,
+    "run_id": "24958950012"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T14:50:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

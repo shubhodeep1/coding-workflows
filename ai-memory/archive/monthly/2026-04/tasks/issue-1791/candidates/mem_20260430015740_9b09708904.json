@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nRef context\n- HEAD: `0459b230fcbdcce0b1062ce9341bbca76e057480`\n- Checkout ref: `orchestrator/project-1790`\n- Integration branch metadata matches checkout: `orchestrator/project-1790`\n- Clarification status: continuation already confirmed via `/answer [auto-answered-by-orchestrator]`\n\n`files_touched`\n- `scripts/review_parse_consolidator.sh`\n- `tests/test_review_parse_consolidator.py`\n- `tests/test_review_pipeline_integration.py`\n- `tests/fixtures/review_pipeline/reviewer_bundle_passthrough_floor.txt` (new, preferred over mutating shared baseline fixtures)\n\nRepresentative existing pattern\n- Reuse the floor-tag anchor parsing pattern already present in `scripts/review_issue_ledger.sh` as the reference implementation for optional `floor_tags.txt` consumption, but keep the actual enrichment logic in `scripts/review_parse_consolidator.sh`. The ledger already consumes `LENS` from `review_issues.txt`, so the missing handoff is in parser passthrough emission, not in ledger schema/output.\n\nParser work\n- Extend `scripts/review_parse_consolidator.sh` so the reviewer-bundle anchor scan retains enough context for enrichment, not just `file`, `line`, `excerpt`. The parser needs reviewer id and the nearest reviewer lens/checklist heading for the same anchor so `reviewer_bundle.txt` stays authoritative.\n- Add an optional floor-tag loader keyed by exact `file:line`, sourced from the existing `FLOOR_TAGS_FILE` / `${RUNTIME_DIR}/floor_tags.txt`. Missing, empty, unreadable, or malformed floor-tag rows must be ignored fail-open.\n- When an uncovered anchor is emitted as `=== ISSUE PASSTHROUGH ... ===`, enrich it only if there is an exact same-anchor floor-tag match.\n- Derive `LENS` from reviewer-bundle evidence first. If the matched reviewer context does not expose a lens, fall back to deterministic floor-tag category mapping:\n  - `SECURITY` or `AUTH` -> `SECURITY & INPUT VALIDATION`\n  - `CONCURRENCY` -> `CONCURRENCY / RACES / IDEMPOTENCY`\n  - `RESOURCE` -> `PERFORMANCE & RESOURCE USE`\n  - `DATA_LOSS` -> `ERROR PATHS & EDGE CASES`\n  - `MONGO` -> `INDEX-CONTRACT / DB RULES`\n  - `NAMING` -> `NAMING / BACKWARD COMPATIBILITY`\n- Upgrade `CLASSIFICATION` deterministically for enriched passthroughs:\n  - any `FLOOR_CRITICAL_KEYWORD:*` or `FLOOR_HIGH_CONFIDENCE` match -> `must-fix`\n  - `FLOOR_MULTI_REVIEWER` without stronger tags -> `nice-to-have`\n  - otherwise keep legacy passthrough behavior\n- Populate `FLAGGED_BY` from the matched floor-tag reviewer ids when available.\n- Keep block markers, parser stats keys, ledger field names, and env var names unchanged. `SEVERITY` can stay on the existing fallback unless there is an unambiguous deterministic mapping; the acceptance issue is the `UNKNOWN_LENS` / `unclassified` handoff.\n\nData structures and downstream impact\n- `review_issues.txt` passthrough blocks will carry stronger metadata via existing fields (`LENS`, `FLAGGED_BY`, `CLASSIFICATION`) instead of remaining bare passthroughs when floor evidence matches.\n- The parser will need one richer internal anchor context map, likely keyed by exact anchor and reviewer, plus one floor-tag aggregation map keyed by exact `file:line`.\n- `ledger_status.txt` output shape should not change. It should improve automatically because `scripts/review_issue_ledger.sh` already reads `LENS` from `review_issues.txt`.\n- No public API, workflow interface, env var, README, `agents.md`, or DB-contract changes are expected.\n\nRisks and edge cases\n- Multiple floor-tag rows can exist for one anchor. Tags and reviewer ids need deterministic aggregation and dedup so output stays byte-stable.\n- Do not reuse the floor-rule `\u00b13` line tolerance here. The issue explicitly asks for same-anchor enrichment.\n- Floor tags must only enrich anchors already surfaced from `reviewer_bundle.txt`; they must not invent new findings.\n- Malformed `floor_tags.txt` must degrade to the current passthrough path, not fail the review pipeline.\n- If reviewer-bundle context and floor tags disagree, keep `reviewer_bundle.txt` authoritative and use floor tags only as additive confidence metadata.\n\nTesting\n- `tests/test_review_parse_consolidator.py`\n- Extend `_run_parser(...)` so a test can optionally stage `floor_tags.txt`.\n- Add an enriched passthrough test using the existing partial-coverage consolidator fixture and a matching floor-tagged uncovered anchor. Assert the passthrough block now includes strong `LENS` and `CLASSIFICATION`, and no longer degrades to bare `unclassified`.\n- Add a malformed-floor-tags fail-open test asserting exit code stays `0` and the legacy passthrough output remains unchanged.\n- `tests/test_review_pipeline_integration.py`\n- Parameterize the stage-chain helper so it can use a dedicated reviewer bundle fixture whose uncovered `src/module.py:4` anchor is floor-tagged by the floor-rules stage while `consolidator_well_formed.txt` still only covers `2-3`.\n- Assert `review_issues.txt` contains an enriched passthrough block for that uncovered anchor and the corresponding `ledger_status.txt` row no longer shows `UNKNOWN_LENS`.\n- Keep the existing disabled/empty-consolidator fail-open cases intact; they already cover the broader pipeline degradation path and should continue to pass unchanged.\n\nConflict check\n- No repo/issue mismatch found. The current codebase matches the reported failure mode: floor tags are already available downstream, but passthrough enrichment is missing in `scripts/review_parse_consolidator.sh`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c3bb4f1ade9201c56801fc3b7a16f9e27d0db5a130f4c7c8a10070376d88807e",
+  "lineage": {
+    "issue_number": 1791,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25142990208",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25142990208",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1791"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260430015740_9b09708904",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1791,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25142990208"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1791",
+  "timestamps": {
+    "created_at": "2026-04-30T01:57:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

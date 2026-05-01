@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:126-127,1180-1181,1721-1722 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: `PRE_FLIGHT_FAILURE_KIND` and `PRE_FLIGHT_FAILURE_REASON` are set but no longer read after the deleted functions, leaving dead state and potentially misleading failure values.\n  WHY: The reviewer reports these variables are still initialized but never consumed after the cleanup, which preserves obsolete state without runtime benefit.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:126-127,1180-1181,1721-1722 | severity=medium | confidence=4\n  PROBLEM: `PRE_FLIGHT_FAILURE_KIND` and `PRE_FLIGHT_FAILURE_REASON` are set but no longer read after the deleted functions, leaving dead state and potentially misleading failure values.\n  WHY: The reviewer reports these variables are still initialized but never consumed after the cleanup, which preserves obsolete state without runtime benefit.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "0e5036f162e08993946f9d18e228a6861a38a2f47f628c67a0818bd6405cca63",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1404,
+    "run_id": "24624795157",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24624795157",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419085034_75b94bdca7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1404,
+    "run_id": "24624795157"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-19T08:50:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

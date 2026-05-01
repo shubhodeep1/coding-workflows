@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:108-151 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The newly added regression test `tests/test_test_and_mark_stable_workflow_contract.py` is missing from the CI workflow's test enumeration, so it never runs on pull requests.\n  WHY: Multiple reviewers confirmed the file is absent from the allowlist, which means the workflow hardening fix is not automatically verified in CI.\n- tests/test_test_and_mark_stable_workflow_contract.py:21-27 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The new regression test uses exact substring matching with `in`, making its assertions brittle to non-functional formatting changes.\n  WHY: Several reviewers noted that whitespace, quote-style, or line-break changes could cause false negatives even when the workflow logic remains correct.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/ci.yml:108-151 | severity=high | confidence=5\n  PROBLEM: The newly added regression test `tests/test_test_and_mark_stable_workflow_contract.py` is not included in the CI workflow's test enumeration.\n  WHY: CI won't execute the test, so the workflow hardening fix won't be validated on PRs.\n- tests/test_test_and_mark_stable_workflow_contract.py:21-27 | severity=medium | confidence=4\n  PROBLEM: The test uses exact substring matching (`in` operator) to check for code fragments, making it brittle to formatting changes.\n  WHY: Whitespace, quote style, or line break changes could cause false test failures even when logic is correct.\n- .github/workflows/test-and-mark-stable.yml:639-649 | severity=low | confidence=1\n  PROBLEM: `IMPL_RUN_ID_LATEST` could theoretically be non-numeric and cause the `gh_api_safe` call to fail.\n  WHY: The reviewer considered this an edge case, but also noted `gh_api_safe` likely has its own error handling and the variable is usually empty or a valid ID.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/ci.yml:108-151 | severity=high | confidence=5\n  PROBLEM: The newly added regression test `tests/test_test_and_mark_stable_workflow_contract.py` is missing from the CI workflow's test enumeration.\n  WHY: The test exists in the repository but is never executed during pull request CI runs, so the contract it enforces is not verified.\n- .github/workflows/test-and-mark-stable.yml:638-639 | severity=low | confidence=1\n  PROBLEM: `IMPL_RUN_ID_LATEST` could theoretically capture non-numeric data if the JSON structure is malformed but passes the `-n` check.\n  WHY: The reviewer treated this as a hardening suggestion only and noted it is not a correctness bug.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/ci.yml:108-151 | severity=high | confidence=5\n  PROBLEM: The newly added regression test `tests/test_test_and_mark_stable_workflow_contract.py` is not included in the CI workflow's test script allowlist.\n  WHY: The test script exists in the repository but is never executed during pull request CI runs, so the workflow hardening fix is not automatically verified.\n- tests/test_test_and_mark_stable_workflow_contract.py:21-27 | severity=medium | confidence=3\n  PROBLEM: Test uses exact substring matching with the `in` operator to check for code fragments in the workflow YAML.\n  WHY: Non-functional formatting changes such as whitespace, line breaks, or quoting style could cause false test failures even when the logic remains correct.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:105-150 | severity=high | confidence=5\n  PROBLEM: The newly added regression test `tests/test_test_and_mark_stable_workflow_contract.py` is not included in the CI workflow test allowlist.\n  WHY: The allowlist explicitly enumerates which tests run on pull requests, so this file is absent from CI and the regression guard will never execute.\n- .github/workflows/test-and-mark-stable.yml:640-641 | severity=low | confidence=3\n  PROBLEM: `IMPL_RUN_STATUS` and `IMPL_RUN_ID_LATEST` are not used in arithmetic contexts, so numeric validation is unnecessary.\n  WHY: The reviewer confirmed these values are only used for logging, presence checks, and URL embedding, not for `-gt`, `-lt`, `-eq`, or `$((...))`.\n- tests/test_test_and_mark_stable_workflow_contract.py:21-27 | severity=medium | confidence=4\n  PROBLEM: The test's exact substring assertions are technically brittle to formatting changes.\n  WHY: The reviewer considered the patterns stable and acceptable, so this was explicitly treated as not a runtime correctness issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/ci.yml:85-150 | severity=high | confidence=5\n  PROBLEM: The new regression test `tests/test_test_and_mark_stable_workflow_contract.py` is not in the CI allowlist, so it is never executed on pull requests.\n  WHY: The workflow explicitly enumerates test scripts to run, and `grep` shows the new file is absent from that list.\n- tests/test_test_and_mark_stable_workflow_contract.py:21-27 | severity=medium | confidence=4\n  PROBLEM: The test uses exact `in` substring checks, which can fail on benign formatting changes.\n  WHY: The reviewer noted that whitespace, quoting, or line splitting in the workflow YAML could trigger false negatives.\n- .github/workflows/test-and-mark-stable.yml:640 | severity=low | confidence=3\n  PROBLEM: `IMPL_RUN_ID_LATEST` could produce an invalid API path if it were ever non-empty and non-numeric.\n  WHY: The reviewer also noted the existing empty-string guard makes this low risk and optional to harden.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "f76d347ffc5fb310bc9c75006b52e78ad415fc4816be54ede4f489818cb8fd35",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1486,
+    "run_id": "24707098220",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24707098220",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421063436_fe7635c318",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1486,
+    "run_id": "24707098220"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T06:34:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

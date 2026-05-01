@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:3607-3609 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The new assertion checks `close_linked_pr` with substring matching instead of the full call pattern, making the regression guard weaker than the surrounding checks.\n  WHY: Multiple reviewers flagged the same issue; a substring match can pass on comments or other incidental text instead of the actual invocation, so the higher-confidence consensus is to match `close_linked_pr \"${issue_num}\"` consistently.\n- tests/test_orchestrate_poll_process.py:3619 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: The standalone-case anchor hard-codes a specific log message, so a harmless wording change would break the test.\n  WHY: Two reviewers identified the same brittle anchor; the test is functionally correct today, but this literal message makes it unnecessarily sensitive to benign text changes.\n- tests/test_orchestrate_poll_process.py:3596-3599 | severity=medium | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: The `;;` case-terminator search is a literal string match that could theoretically truncate the extracted block if the same text appears in embedded shell content.\n  WHY: Three reviewers raised this as a brittleness concern; the current indentation makes it work for now, but the extraction is still dependent on a fragile literal terminator.\n- tests/test_orchestrate_poll_process.py:3596-3599 | severity=low | confidence=1\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: The `close_and_reissue)` anchor relies on the current indentation pattern to select the intended case block.\n  WHY: Two reviewers noted the same future-proofing concern; it is safe in the current script, but could become ambiguous if another identically indented case is added.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_orchestrate_poll_process.py:3607-3609 | severity=medium | confidence=4\n  PROBLEM: The added check uses substring matching `'close_linked_pr' in main_window` instead of matching the actual function call pattern.\n  WHY: A substring match can pass even if `close_linked_pr` appears in a comment or other incidental text, so the test should match the full call form for the regression guard to be reliable.\n- tests/test_orchestrate_poll_process.py:3596-3599 | severity=low | confidence=2\n  PROBLEM: The `;;` terminator search is a brittle literal substring lookup.\n  WHY: Searching for `\\n      ;;` can be fooled by the same text appearing inside embedded shell content, so the extraction is more fragile than necessary.\n- tests/test_orchestrate_poll_process.py:3619 | severity=low | confidence=2\n  PROBLEM: The standalone path uses a brittle literal anchor for the closing message.\n  WHY: A small wording change in that message would break the test even if the behavior stays correct.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- tests/test_orchestrate_poll_process.py:3607-3609 | severity=medium | confidence=3\n  PROBLEM: The `close_linked_pr` assertion uses substring matching instead of the full function-call pattern.\n  WHY: `close_linked_pr` is likely unique, but matching the full pattern would be more robust and consistent with the neighboring assertion.\n- tests/test_orchestrate_poll_process.py:3596 | severity=low | confidence=4\n  PROBLEM: The `\\n      ;;\\n` terminator search is a literal extraction boundary that is slightly brittle.\n  WHY: The current indentation makes it safe in practice, but a literal terminator could be confused by matching text inside comments or heredocs in future script variants.\n- tests/test_orchestrate_poll_process.py:3596 | severity=low | confidence=1\n  PROBLEM: The `close_and_reissue)` anchor depends on the current case-body layout.\n  WHY: The test assumes the first match is still the intended one, so adding another same-typed case at the same indentation could make the extraction less reliable.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/working-orders_orchestrate_workspace_automation_workspace_automation.working-orders:3606-3609 | severity=low | confidence=3\n  PROBLEM: The test uses full-pattern matching for `surface_reissue_closed_without_Pr` but only substring matching for `close_related_Pr`, which is inconsistent.\n  WHY: The weaker substring check could accept incidental text, so the guard is less robust than the neighboring assertion.\n- tests/working-orders_orchestrate_workspace_automation_workspace_automation.working-orders:3596 | severity=low | confidence=2\n  PROBLEM: The `script.find('\\n      ;;', main_start)` terminator search is brittle.\n  WHY: A literal `;;` boundary could be matched in the wrong place if the extracted shell body ever contains that sequence in embedded text.\n- tests/working-orders_orchestrate_workspace_automation_workspace_automation.working-orders:3593-3596 | severity=low | confidence=2\n  PROBLEM: The `close_and_reissue)` anchor currently depends on indentation to distinguish the intended case block.\n  WHY: It works today because the relevant occurrences have different indentation, but the test would be less future-proof if another same-indented case were added.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:3607-3609 | severity=medium | confidence=3\n  PROBLEM: The `close_linked_pr` check uses substring matching instead of the full call pattern.\n  WHY: A substring match can be satisfied by comments or other incidental text, so using `close_linked_pr \"${issue_num}\"` would make the ordering check more precise.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- tests/test_orchestrate_poll_process.py:3607 | severity=medium | confidence=4\n  PROBLEM: The `close_linked_pr` assertion uses substring matching while the `surface_reissue_closed_without_pr` check uses an exact argument-bearing pattern.\n  WHY: This inconsistency weakens the regression guard because the substring can match unrelated text rather than the actual invocation.\n- tests/test_orchestrate_poll_process.py:3619 | severity=medium | confidence=3\n  PROBLEM: The standalone anchor bakes in a specific log message that is not essential to the behavior under test.\n  WHY: A harmless wording change in the message would fail the test even if the functionality remains correct.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "a5ac263c1ddb5541f121a1aa6ea8db1f251e6b9f763c946ca9eb86a418b67be3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1462,
+    "run_id": "24657510730",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24657510730",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420094442_86eb45d274",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1462,
+    "run_id": "24657510730"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T09:44:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

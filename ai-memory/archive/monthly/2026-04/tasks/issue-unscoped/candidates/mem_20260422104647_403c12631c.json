@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_issue_ledger.py:~44 | severity=low | confidence=0\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The `_run_ledger` helper\u2019s default `ledger_path` still uses the legacy single-file path, which no longer matches the production default.\n  WHY: This is a maintainability/documentation drift issue only; the reviewer explicitly noted it does not cause a runtime failure and is a minor inconsistency.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- File: tests/test_review_issue_ledger.py | Location: `_run_ledger` function default parameter (line ~44)\n  PROBLEM: Default `ledger_path` in the test helper uses the legacy single-file ledger path, which no longer matches the production default.\n  WHY: Tests that rely on this default still pass because they read and write the same explicitly controlled path, but the reviewer noted the default is now out of sync with production and may confuse future maintainers.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "979b9ab1707676ce4446808667c82cfdac33b311069043a76fd18005d7f01e24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1517,
+    "run_id": "24772950774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24772950774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422104647_403c12631c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1517,
+    "run_id": "24772950774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-22T10:46:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

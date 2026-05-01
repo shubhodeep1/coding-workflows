@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/review_issue_ledger.txt:entire file | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The PR modifies `.ai/review_issue_ledger.txt` even though the task explicitly allowed only `tests/e2e_smoke_canary.txt`.\n  WHY: Both reviewers cite the task constraint \u201cOnly modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file,\u201d so this is an out-of-scope change; severity is high because it violates a hard requirement.\n- tests/e2e_smoke_canary.txt:line 3 | severity=low | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The file is missing a trailing newline.\n  WHY: The reviewer reports the byte-level diff ends with `updated-by: ai-pipeline` without a trailing `\\n`, which can fail strict byte-comparison or POSIX-style formatting checks.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .ai/review_issue_ledger.txt:Entire file | severity=unspecified | confidence=5\n  PROBLEM: The PR modifies this ledger file which was not requested in the task.\n  WHY: The task description for issue #1460 explicitly states: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\" Modifying .ai/review_issue_ledger.txt violates this constraint.\n- tests/e2e_smoke_canary.txt:Line 3 | severity=unspecified | confidence=5\n  PROBLEM: The file is missing a trailing newline.\n  WHY: The task specifies exactly three lines. While text editors often show three lines, the hexadecimal/byte-level content of the PR diff shows `updated-by: ai-pipeline` without a trailing `\\n`. Practical POSIX tools and strict byte-comparison tests (common in smoke tests) often consider a file without a trailing newline to be missing the end of the last line or incorrectly formatted.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .ai/review_issue_ledger.txt:Entire file change in PR commit 27c873b95; specifically lines 2 (PR_NUMBER 1350\u21921461) and lines 5\u201315 (new ENTRY block for tests/e2e_smoke_canary.txt) | severity=unspecified | confidence=5\n  PROBLEM: The PR modifies `.ai/review_issue_ledger.txt` even though the task scope explicitly permits only `tests/e2e_smoke_canary.txt`.\n  WHY: The linked issue #1460 states: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n- tests/e2e_smoke_canary.txt:File content verified as b'status: ok\\nrun_id: 24654028264\\nupdated-by: ai-pipeline\\n' (55 bytes, ends with \\n) | severity=unspecified | confidence=5\n  PROBLEM: No issue present.\n  WHY: Direct inspection shows the file correctly ends with a newline, matching the printf example in the task.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "ae07e1f01e10f0d431da94f250395d96cb7fd3f1e13498032e12bb12a1285755",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1461,
+    "run_id": "24655699278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24655699278",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420081503_21bde4a5ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1461,
+    "run_id": "24655699278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T08:15:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

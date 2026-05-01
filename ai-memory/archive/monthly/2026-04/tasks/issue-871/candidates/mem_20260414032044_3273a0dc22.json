@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: When an active orchestrator integration branch exists but the code path is about to create a PR to `main`, which hard-guard behavior should be enforced?**\nChoices:\n- **A** \u2014 Auto-retarget the PR base to the detected integration branch and continue (RECOMMENDED)\n- **B** \u2014 Abort PR creation and emit tracked failure (issue comment/log + Telegram warning)\n- **C** \u2014 Auto-retarget first; if retargeting fails, then abort with tracked failure\nReply: `Q1: A`",
+  "fingerprint": "e8470530f2c6344975f38f4d82b47989ea2319ed09096e2beb9ca5cb4694a2c8",
+  "lineage": {
+    "issue_number": 871,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24379156404",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379156404",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414032044_3273a0dc22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 871,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24379156404"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #871 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T03:20:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

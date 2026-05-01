@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `serena-clarify-orchestrate-prompts`\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued in this thread.\n- `/answer [auto-answered-by-clarify]` indicates the issue was considered clear and fully specified.\n\nChecklist:\n- [ ] Add a `SERENA MCP EFFICIENCY (MANDATORY)` block to `prompts/mode-orchestrate.txt`\n- [ ] Add a `SERENA MCP EFFICIENCY (MANDATORY)` block to `prompts/mode-clarify.txt`\n- [ ] Rewrite weak Serena guidance lines to point to the mandatory block\n- [ ] Keep existing output contracts unchanged in both prompt files\n- [ ] Verify wording consistency against existing mandatory-style prompt sections\n\n1. Files likely to change\n- `prompts/mode-orchestrate.txt` (current weak Serena guidance in Rules section, around the existing \u201cInspect the repo structure via Serena or file reads\u2026\u201d line)\n- `prompts/mode-clarify.txt` (current soft Serena guidance near top Rules section, around \u201cUse Serena MCP tools or targeted file reads\u2026\u201d)\n\n2. Modules/sections to implement\n- Insert `SERENA MCP EFFICIENCY (MANDATORY):` block in both files with these required bullets:\n- Do not call `onboarding`, `initial_instructions`, `check_onboarding_performed`\n- Prefer Serena symbol tools over raw file reads\n- Use `search_for_pattern` instead of shell `grep`/`rg` when Serena is available\n- Never read the same file region twice\n- Fall back to normal reads if Serena is unavailable/errors\n- Rewrite legacy weak lines in both files so they explicitly defer to the mandatory block instead of presenting Serena usage as optional.\n\nReference style to mirror for consistency:\n- `prompts/mode-judge.txt`\n- `prompts/mode-validate-diagnose.txt`\n- `prompts/mode-clarify-respond.txt` (for fallback phrasing pattern)\n\n3. Data structures affected\n- Prompt text only (instruction content in two `.txt` prompt files)\n- No workflow schema changes\n- No DB contracts/indexes/data model changes\n\n4. API/interface changes\n- No output contract/interface changes expected:\n- `mode-clarify.txt` must keep `STATUS/CONFIDENCE/RATIONALE/QUESTIONS` contract intact\n- `mode-orchestrate.txt` must keep strict JSON decomposition contract unchanged\n- Behavioral effect is limited to stronger internal tool-usage guidance for model execution.\n\n5. Risks and edge cases\n- Accidental edits to output contract sections could break downstream parsing.\n- Inconsistent fallback wording could conflict with acceptance criteria.\n- Omitting explicit `search_for_pattern` preference would fail scope requirements.\n- Leaving old weak wording in place could create contradictory guidance.\n\n6. Testing considerations\n- Diff review must show only the two target files changed.\n- Verify both files contain `SERENA MCP EFFICIENCY (MANDATORY):`.\n- Verify old weak Serena lines are removed or rewritten.\n- Verify required bullets are present in both files, including `search_for_pattern` and fallback behavior.\n- Verify no changes to clarify/orchestrate output contract blocks.\n\nFactual conflict check:\n- No conflicts found between issue description and repository state (both target files exist and contain the weak Serena references described).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "be904e272a70b6d20ad0a1cf674db4d652e1c3d18d3f6b9eb9be6a0a9728f09c",
+  "lineage": {
+    "issue_number": 564,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24174374809",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24174374809",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/564"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409054039_9e1184c629",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 564,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24174374809"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #564",
+  "timestamps": {
+    "created_at": "2026-04-09T05:40:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

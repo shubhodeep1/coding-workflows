@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/review_issue_ledger/pr-1524.txt | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: This per-PR review ledger file is tracked by git.\n  WHY: Tracking the ledger defeats the cache-backed persistence design and reintroduces the merge conflicts the PR is meant to eliminate.\n- .github/workflows/review_autofix.yml | severity=medium | confidence=4\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The save step attempts to cache the ledger without first checking that the ledger file exists.\n  WHY: `actions/cache/save` will error on a missing path; `continue-on-error: true` keeps the job alive, but the missing existence guard still creates avoidable log noise.\n- .github/workflows/review_autofix.yml | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The cache key includes `github.run_id` and `github.run_attempt`.\n  WHY: The reviewer \u0441\u0447\u0438\u0442\u0430\u0435\u0442 this creates redundant cache entries across runs and can consume cache quota, though the review did not claim the implementation is broken.\n- agents.md | severity=medium | confidence=3\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The documentation incorrectly claims the ledger can no longer reach a commit in the default configuration.\n  WHY: The reviewer says the doc should acknowledge that git-tracked state or explicit staging can still allow the ledger to be committed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .ai/review_issue_ledger/pr-1524.txt | severity=critical | confidence=5\n  PROBLEM: This per-PR review ledger file is tracked in git and was committed.\n  WHY: Tracking the ledger breaks the cache-backed persistence design and will cause the merge conflicts the PR is meant to fix.\n- .github/workflows/review_autofix.yml | severity=high | confidence=3\n  PROBLEM: The cache steps may be confusing or incomplete to reviewers.\n  WHY: The reviewer points to the new per-PR cache steps replacing the old single-file cache, but frames this as a potential implementation concern rather than a confirmed bug.\n- agents.md | severity=medium | confidence=3\n  PROBLEM: The documentation was previously incorrect about `ledger_reset=1` on missing cache.\n  WHY: The reviewer says this was fixed and now matches the code, so it is not a remaining bug.\n- .github/workflows/review_autofix.yml | severity=low | confidence=1\n  PROBLEM: The save step lacks a `hashFiles` guard.\n  WHY: The reviewer frames this as a minor hardening improvement to avoid saving empty cache entries.\n- scripts/review_commit_changes.sh | severity=low | confidence=2\n  PROBLEM: There is no validation that ledger files are not being committed.\n  WHY: The reviewer suggests a pre-commit or CI check to prevent `.ai/review_issue_ledger/` from being staged or committed.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .ai/review_issue_ledger/pr-1524.txt | severity=critical | confidence=5\n  PROBLEM: The per-PR ledger file is currently tracked by git.\n  WHY: Keeping the file tracked defeats the PR\u2019s goal of preventing merge conflicts, because git-tracked files override `.gitignore`.\n- .github/workflows/review_autofix.yml | severity=medium | confidence=4\n  PROBLEM: The cache key uses `github.run_id` and `github.run_attempt`, which the reviewer \u0441\u0447\u0438\u0442\u0430\u0435\u0442 creates redundant cache entries.\n  WHY: The reviewer says GitHub Actions caches are immutable and that this key design can waste cache quota across runs and retries.\n- agents.md | severity=medium | confidence=3\n  PROBLEM: The documentation incorrectly claims the ledger can no longer reach a commit in the default configuration.\n  WHY: The reviewer says the docs should reflect the intended state while acknowledging that the ledger can still be explicitly staged or otherwise reach a commit.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .ai/review_issue_ledger/pr-1524.txt | severity=critical | confidence=5\n  PROBLEM: The per-PR review ledger file is tracked in git.\n  WHY: The reviewer says this defeats the cache-backed persistence model and guarantees divergence on every autofix iteration.\n- .github/workflows/review_autofix.yml | severity=high | confidence=1\n  PROBLEM: The cache key design is correct, not a bug.\n  WHY: The reviewer explicitly rejects the claim that the key is unsuitable and says cache scope and restore-key behavior are intentional.\n- .github/workflows/review_autofix.yml | severity=high | confidence=1\n  PROBLEM: The restore/save steps are present, not missing.\n  WHY: The reviewer says the current workflow already has the restore step at line 1628 and the save step at line 1697.\n- .github/workflows/review_autofix.yml | severity=high | confidence=1\n  PROBLEM: `REVIEW_LEDGER_PATH` is defined, not missing.\n  WHY: The reviewer says the workflow-level env var exists at line 314 with the per-PR fallback path.\n- .github/workflows/review_autofix.yml | severity=high | confidence=1\n  PROBLEM: The retry behavior is intentional, not a bug.\n  WHY: The reviewer says including `github.run_attempt` avoids cache collisions across attempts.\n- .ai/review_issue_ledger/pr-1524.txt | severity=medium | confidence=1\n  PROBLEM: The file is tracked in git but is presented as acceptable.\n  WHY: The reviewer labels this as a minor edge case and says no action is needed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .ai/review_issue_ledger/pr-1524.txt | severity=medium | confidence=1\n  PROBLEM: The ledger file is tracked in git, but the reviewer considers this acceptable.\n  WHY: The reviewer says the cache model is correct and that the tracked file is only a minor edge case without runtime impact.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .ai/review_issue_ledger/pr-1524.txt | severity=critical | confidence=5\n  PROBLEM: This per-PR review ledger file is tracked by git.\n  WHY: Tracking it reintroduces the merge-conflict problem the PR is supposed to solve.\n- .github/workflows/review_autofix.yml (lines 1697\u20131705) | severity=medium | confidence=4\n  PROBLEM: The save step attempts to cache the ledger without first checking that the ledger file exists.\n  WHY: `actions/cache/save` will error on a missing path, and the reviewer recommends a `hashFiles(env.REVIEW_LEDGER_PATH) != ''` guard to avoid noisy failures.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "88b2a6669d3b343ebc950a6646b06cb8c725dbadbf56e6c982385c98bf0e3a38",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1524,
+    "run_id": "24791664302",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24791664302",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422182018_a727d94d32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1524,
+    "run_id": "24791664302"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T18:20:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

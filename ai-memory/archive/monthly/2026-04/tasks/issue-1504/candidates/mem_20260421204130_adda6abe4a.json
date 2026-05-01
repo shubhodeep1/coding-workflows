@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- Q-ID mapping: no clarification Q-IDs were asked in this issue; `/answer [auto-answered-by-orchestrator]` means proceed with planning on the provided scope.\n- Planning ref context: `HEAD=daa383987ad80d6f3c38457cb55fc474246836a1`, checked-out branch `orchestrator/project-1479`, integration metadata `orchestrator/project-1479`, mismatch `false`.\n\nImplementation plan:\n\n1. Files likely to change\n- [scripts/collect_workflow_logs.py](scripts/collect_workflow_logs.py)\n- [tests/test_collect_workflow_logs.py](tests/test_collect_workflow_logs.py)\n\n2. Functions/modules to implement\n- Update `_fetch_run_log_archive` to add archive-specific bounded retry/backoff handling for transient fetch failures.\n- Keep retries bounded and avoid retry multiplication by calling `gh_api_bytes(..., retries=1)` inside the new `_fetch_run_log_archive` retry loop.\n- Add a small classifier helper for missing archive conditions (404 / not found patterns) and normalize them into a structured soft-fail message like `partial_data:missing_log_archive ...`.\n- Add a shared log-error append helper (for `scope: logs`) and use it in both log-excerpt collection and categorized-log export paths to remove duplicated error-shape construction.\n- Apply the helper in current `except` blocks in `main` log excerpt fetch loop and `export_categorized_logs`.\n\n3. Data structures affected\n- Keep `errors[]` schema unchanged: `repository`, `run_id`, `scope`, `message`.\n- Change only `message` content for missing archives to a structured marker format (`partial_data:missing_log_archive ...`).\n- Preserve cache shape for `log_archive_cache` (`bytes | Exception`), but ensure cached exceptions include the new structured missing-archive classification when applicable.\n\n4. API/interface changes\n- No CLI argument changes.\n- No report schema changes.\n- Behavior change is internal: better error classification and retry behavior for log archive download path.\n\n5. Risks and edge cases\n- False-positive missing-archive classification if matching is too broad; keep marker checks narrow and tied to archive fetch error text.\n- Potential double-retry overhead if `_fetch_run_log_archive` and `gh_api_bytes` both retry; explicitly prevent this.\n- Must preserve fail-open behavior: log archive failures should append to `errors[]` and continue report generation.\n- Ensure dedupe behavior remains stable (`_dedupe_errors`) with new structured messages.\n\n6. Testing considerations\n- Add/extend tests in [tests/test_collect_workflow_logs.py](tests/test_collect_workflow_logs.py):\n- Transient archive fetch failure then success path with retry/backoff verification.\n- Missing-archive terminal classification path asserting `partial_data:missing_log_archive` message content.\n- Non-retryable archive failure path asserting no extra retries and proper error propagation.\n- End-to-end fail-open path asserting report generation continues with partial logs and `errors[]` contains `scope: logs` structured missing-archive record.\n- Validate existing log export/dedupe behavior still holds when a run appears in multiple categories.\n- Run: `pytest tests/test_collect_workflow_logs.py`.\n\nConflict detection:\n- Minor factual nuance: `_fetch_run_log_archive` is currently a single-call wrapper, but `gh_api_bytes` already has generic retry logic. The planned change still stands because archive-specific retry policy and explicit missing-archive soft-fail classification are currently absent.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f5f049bc1fa1a3e6c6031335e531457106a8cc89dcf51bfc15af803720aa4743",
+  "lineage": {
+    "issue_number": 1504,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24745161289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24745161289",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1504"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421204130_adda6abe4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1504,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24745161289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1504",
+  "timestamps": {
+    "created_at": "2026-04-21T20:41:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

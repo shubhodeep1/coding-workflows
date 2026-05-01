@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/label_helpers.sh\n      Problem: Location: `_AI_LABEL_COLORS` and `_AI_LABEL_DESCS` declarations; Issue: Partial removal of system-critical labels breaks contract-helper synchronization and test invariants.; Suggested minimal fix: Restore the nine removed failure labels to both arrays to re-synchronize with the label contract and Python orchestration logic.; Estimated lines changed: 18 lines (restoration); HARDENING_RISK_SCORE: 5 (Required to fix a certain CI failure and maintain system consistency)\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: scripts/label_helpers.sh (line ~29)\n      Problem: The most recent AI autofix run removed nine \"failure phase\" label definitions from the `_AI_LABEL_COLORS` and `_AI_LABEL_DESCS` associative arrays in `label_helpers.sh`. However, these labels are still defined in the canonical label contract (`.github/ai/label_contract.v1.json`), referenced in the Python orchestration library (`scripts/orchestrate_lib.py` constants `TERMINAL_PHASES`), and required by the test suite (`tests/test_ai_labels.py`).; Why it fails at runtime:; 1. The test `test_contract_labels_match_helper_color_and_description_catalogs` in `tests/test_ai_labels.py` performs a strict equality check between the labels in the contract and the keys in `label_helpers.sh`. This test will fail immediately in CI, blocking the PR.; 2. If a workflow attempts to apply one of these labels (e.g., `ai:plan-failed`) using `ensure_label_exists`, the helper will not find the specific color/description and will instead create a generically styled blue label (\"1d76db\", \"AI workflow label\"). This violates the repository's visual standards for failure states (which should be red \"e11d48\").; 3. The change contradicts the stated intent in issue #1314 (\"Harden workflows... and emit phase-scoped terminal failure markers\") by removing the very markers intended for that use.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/label_helpers.sh\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "629576b8553e6e06ed65a78594bc6814208c25847e203aec9e470f8050369ea7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1318,
+    "run_id": "24602396097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24602396097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418101955_c9ceed6b7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1318,
+    "run_id": "24602396097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T10:19:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

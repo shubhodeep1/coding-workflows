@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were asked in this issue.\n- `/answer [auto-answered-by-clarify]` indicates the request was judged fully specified, so planning is based directly on the issue requirements.\n\n1. Files likely to change\n- `.github/workflows/implement.yml` only.\n- Scope limited to the three specified steps:\n  - `Validate syntax of changed files`\n  - `Protect workflow files from implementation edits`\n  - `Commit changes`\n\n2. Functions/modules to implement\n1. `Validate syntax of changed files`\n- Add a deterministic step `id` (for downstream outcome inspection).\n- Add local capture helper logic in the step to:\n  - resolve capture target only when `RUNTIME_DIR` is set/usable,\n  - append to `${RUNTIME_DIR}/post_codex_validation_errors.txt`,\n  - write exact per-checker headers: `===== <file> (<checker>) =====`.\n- For each checker call (`python3 -m py_compile`, `node --check`, `bash -n`, YAML `yaml.safe_load`):\n  - capture stderr to temp file,\n  - on failure: keep existing `::error` emission, append stderr block, increment error counter,\n  - continue scanning remaining files.\n- Keep end-of-step semantics: fail once at end if any errors were found.\n\n2. `Protect workflow files from implementation edits`\n- Add a deterministic step `id`.\n- Add failure-capture logic (trap or command wrapper) so if the step fails, it appends:\n  - step name,\n  - failing command,\n  - stderr,\n  to the same capture file.\n- Preserve current behavior and failure semantics.\n\n3. `Commit changes`\n- Keep existing `id: commit_changes` (already deterministic).\n- Add equivalent failure-capture logic for step-level failures (step name + command + stderr).\n- Preserve no-op behavior (`did_commit=false`) and existing control flow exactly.\n\n3. Data structures affected\n- Runtime artifact file: `${RUNTIME_DIR}/post_codex_validation_errors.txt`.\n- Entry formats:\n  - Syntax checks: `===== <file> (<checker>) =====` + stderr body.\n  - Step failures (protect/commit): `===== <step name> =====`, `Command: <...>`, stderr body.\n- Step-local shell variables/temp files for capture buffering.\n\n4. API/interface changes\n- No external API changes.\n- No workflow input/output contract changes.\n- Deterministic step identity improved via explicit `id`s so `steps.<id>.outcome` can be referenced later.\n\n5. Potential risks and edge cases\n- `RUNTIME_DIR` unset/unwritable must not create a new crash path; capture writes must become no-op safely.\n- Capture/trap logic must not alter `set -euo pipefail` semantics.\n- Multiple syntax failures must aggregate; no early termination.\n- Some failures may have empty stderr; still record step name and command.\n- Keep strict scope: no changes to no-op handler semantics and no poller edits.\n\n6. Testing considerations\n1. Multi-file syntax failure test:\n- Introduce invalid changed `.py`, `.js`, `.sh`, `.yml/.yaml` files in one run.\n- Verify multiple blocks are appended and step exits non-zero at end.\n\n2. Aggregation test:\n- Confirm capture file retains all failing checker entries from one run.\n\n3. Protect-step failure test:\n- Trigger a controlled failure in that step and verify step-level capture block (name/command/stderr).\n\n4. Commit-step failure test:\n- Trigger a controlled failure in commit step and verify same capture format.\n\n5. Missing runtime-state test:\n- Simulate missing/unusable `RUNTIME_DIR`; verify no additional crash and original failure behavior remains intact.\n\nConflict check\n- No factual conflicts found between issue requirements and current workflow code.\n- Confirmed current gap matches issue: no existing `post_codex_validation_errors.txt` capture path in these steps, and two targeted steps currently lack explicit deterministic `id`s.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1f1ed75e9432a1005b18411e468563bbd58b504e93c1715ebd8b97a516c9fecd",
+  "lineage": {
+    "issue_number": 831,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375676957",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375676957",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/831"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414012219_ea2d590b00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 831,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375676957"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #831",
+  "timestamps": {
+    "created_at": "2026-04-14T01:22:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

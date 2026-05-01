@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"[E2E Orchestrate Smoke 25088532565] Two-step canary file update\",\"issues\":[{\"id\":\"set-first-line-status-ok\",\"title\":\"Set tests/e2e_smoke_canary.txt line 1 to status: ok\",\"priority\":1},{\"id\":\"append-decompose-run-25088532565\",\"title\":\"Append decompose-run marker 25088532565 to tests/e2e_smoke_canary.txt\",\"priority\":2}],\"dependency_edges\":[{\"from\":\"set-first-line-status-ok\",\"to\":\"append-decompose-run-25088532565\"}]}",
+  "fingerprint": "3acf0e43b45427c47a0863123cfef7a6d050035975e8d9d781a66d3ddc2c4379",
+  "lineage": {
+    "issue_number": 1747,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25088539295",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25088539295",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260429025817_c0a3969bed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1747,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25088539295"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project '[E2E Orchestrate Smoke 25088532565] Two-step canary file update' into 2 issues (tracking #1747)",
+  "timestamps": {
+    "created_at": "2026-04-29T02:58:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

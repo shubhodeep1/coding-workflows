@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: Lines: 2037, 2059, 2108; Missing No [^:]*changed and No [^:]*touched exclusion patterns present in script; Editor output \"- No files changed\" or \"- No files touched\" triggers false-positive EDITOR_CHANGES_LOST due to edit_claim_regex match\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: Lines: 2133-2135; Debug echo prints when substantive non-empty, not when has_real_changes=true, contradicting comment; Misleading debug output confuses EDITOR_CHANGES_LOST investigations\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml",
+  "fingerprint": "789072cfa43a55d71374cc73714efdbc0fe61bf6478a24f352e8a78bac11a050",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1228,
+    "run_id": "24540747360",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24540747360",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417003730_0a64f2f58d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1228,
+    "run_id": "24540747360"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T00:37:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

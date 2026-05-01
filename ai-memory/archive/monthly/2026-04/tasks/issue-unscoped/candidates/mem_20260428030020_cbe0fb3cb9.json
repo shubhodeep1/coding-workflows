@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:~247-255 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The `codex-agent` job name checks `needs.gate.outputs.claude_branch_review`, but the gate job only sets an environment variable, so the claude-branch suffix can never appear.\n  WHY: All three reviewers identified the same runtime bug: downstream `needs.<job>.outputs` cannot read a value that was only written to job-local env, so the expression will always fall back to the default name.\n- .github/workflows/review_autofix.yml:~247-255 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: Renaming the displayed check name for claude branches may conflict with branch protection rules that expect the original status check name.\n  WHY: Two reviewers raised this as a compatibility risk, while one reviewer said it is not a concern if protections key off the job ID; it only matters if matching is done on the displayed name.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:~247-255 | severity=critical | confidence=5\n  PROBLEM: The `codex-agent` job name references `needs.gate.outputs.claude_branch_review`, but the gate job only exports `CLAUDE_BRANCH_REVIEW_MODE` as an environment variable.\n  WHY: Because env vars do not populate `needs.<job>.outputs`, the expression will always evaluate falsy and the claude-branch suffix will never be shown.\n- .github/workflows/review_autofix.yml:~247-255 | severity=low | confidence=3\n  PROBLEM: The new displayed check name may interact badly with branch protection rules that expect the exact `codex-agent` check name.\n  WHY: If protections match on the visible check name, the suffixed variant could fail to satisfy them and block merges.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:Line or code reference: The `codex-agent` job name conditional and the `gate` job outputs | severity=critical | confidence=5\n  PROBLEM: The job name conditional reads `needs.gate.outputs.claude_branch_review`, but the gate job only exports `CLAUDE_BRANCH_REVIEW_MODE` as an environment variable, not a job output.\n  WHY: In GitHub Actions, env vars set in a job are not available through `needs.<job>.outputs`, so the suffix will never appear even on `claude/**` branches.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:lines ~247-255 per PR description | severity=critical | confidence=5\n  PROBLEM: The `name:` expression checks `needs.gate.outputs.claude_branch_review`, but the gate job only sets `CLAUDE_BRANCH_REVIEW_MODE=true` as an environment variable.\n  WHY: Environment variables written via `$GITHUB_ENV` do not populate `needs.<job>.outputs`, so the expression will always fall back to `codex-agent`.\n- .github/workflows/review_autofix.yml:~247-255 | severity=low | confidence=3\n  PROBLEM: Changing the displayed check name on claude branches may conflict with branch protection rules that expect `review / codex-agent`.\n  WHY: If branch protection matches the visible check name, the suffixed display name could fail required-status checks.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0a53fbf4e3f79ed982fd67442a67a7dbcc730aee0d0331c26b58411ff2216756",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1707,
+    "run_id": "25030969574",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25030969574",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428030020_cbe0fb3cb9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1707,
+    "run_id": "25030969574"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T03:00:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

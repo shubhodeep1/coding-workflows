@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `ebb0220ae50755387e9a221b0c429b738549eeee`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Integration mismatch: `false` (planning can proceed)\n\nClarification mapping\n- No explicit `Q<ID>` clarification prompts were present.\n- Interpreted answer input: `/answer [auto-answered-by-orchestrator]`.\n- Effective decision: proceed with issue scope as written.\n\nConflict detection\n- The requested behavior is already largely present in this branch:\n- Render recovery hook and rerender+re-lint flow exist in [scripts/validate_process.sh#L1127](scripts/validate_process.sh#L1127) and [scripts/validate_process.sh#L2336](scripts/validate_process.sh#L2336).\n- Render-phase self-heal tagging exists in [scripts/validate_process.sh#L2358](scripts/validate_process.sh#L2358).\n- Prompt guidance already constrains render-phase self-heal to prompt-only scope in [prompts/mode-validate-self-heal.txt#L26](prompts/mode-validate-self-heal.txt#L26).\n- Integration-style render recovery tests already exist in [tests/test_validate_process_render_recovery.py#L28](tests/test_validate_process_render_recovery.py#L28).\n\nImplementation plan\n\n1. Files likely to change\n- [scripts/validate_process.sh](scripts/validate_process.sh)\n- [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh)\n- [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt)\n- [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py)\n- [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py)\n\n2. Functions/modules to implement or harden\n- `attempt_render_recovery_after_preflight_failure()` in `validate_process.sh`: confirm deterministic rerender attempt only once, then mandatory re-run of `run_preflight_checks`.\n- Preflight failure dispatch block in `validate_process.sh`: keep `render` vs `preflight` phase routing exact (`render_recovery_exit==2` => `render`, else `preflight`).\n- `attempt_self_heal_and_reexec()` integration point in `validate_process.sh`: preserve non-render phase behavior and backward compatibility.\n- `self_heal_validation.sh` guardrails: ensure render-phase logging/ledger signals are preserved without expanding editable scope beyond allow-listed prompt files.\n- `mode-validate-self-heal.txt`: keep hard constraints explicit that render recovery is renderer-driven and self-heal is prompt-only.\n\n3. Data structures affected\n- Shell state flags: `HARNESS_MODE`, `HARNESS_GENERATOR_MODE`, `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `PRE_FLIGHT_APPEND_LOG`.\n- Self-heal phase tag values passed via `SELF_HEAL_FAILURE_PHASE` (`render` must remain valid).\n- Self-heal ledger JSONL entries (`failure_phase`, `target_prompt`, `failure_class`, `patch`) in runtime artifacts.\n- No MongoDB collections/contracts/indexes affected.\n\n4. API/interface changes\n- No public API changes expected.\n- No env var rename/removal; preserve existing defaults and semantics.\n- No workflow contract/schema changes; no freehand harness-edit path introduced in render recovery.\n\n5. Potential risks and edge cases\n- Accidental fallback into freehand harness generation during template-mode preflight failures.\n- Multiple rerender attempts causing loops if `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED` handling regresses.\n- Log overwrite vs append regression masking first-failure diagnostics.\n- Weakening self-heal allow-list/additive-only protections in `self_heal_validation.sh`.\n- Behavior drift in non-template modes (`generate`/`fix`) from shared preflight path edits.\n\n6. Testing considerations\n- Keep and extend integration-style coverage in `test_validate_process_render_recovery.py` for:\n- successful render recovery continues pipeline\n- renderer failure fail-open path invokes `attempt_self_heal_and_reexec \"render\"`\n- non-template preflight failure remains legacy (`\"preflight\"` phase, no renderer call)\n- Keep contract checks in `test_validate_process_template_mode.py` ensuring render recovery and render-phase self-heal routing are present.\n- Add/adjust targeted assertions for prompt hard constraints in `mode-validate-self-heal.txt` so prompt self-heal cannot expand into harness/workflow/script edits.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e17fca0829d0b59f589342edefe299e789cc8f03bd484365d5e7189aec137fc5",
+  "lineage": {
+    "issue_number": 1379,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24623119647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24623119647",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1379"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419065217_f45686ac48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1379,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24623119647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1379",
+  "timestamps": {
+    "created_at": "2026-04-19T06:52:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

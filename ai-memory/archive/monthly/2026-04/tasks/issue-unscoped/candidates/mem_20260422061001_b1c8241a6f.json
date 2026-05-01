@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:582-607 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: Documentation line references for the editor summary and failure notification steps are stale, and the described failure-comment wording does not match the implementation.\n  WHY: Multiple reviewers agreed the cited workflow lines have moved and the docs describe a more specific downstream-domain message than the code actually emits.\n- .github/workflows/review_autofix.yml:3192-3195 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: The failure comment wording can be misleading when an editor fallback summary was posted after the editor stage failed.\n  WHY: The message says the PR branch may not include intended editor changes even in cases where the summary explicitly indicates no editor changes were produced, creating an audit-trail contradiction.\n- scripts/review_conflict_resolve.sh:140-149 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The allowlist guard treats an existing empty allowlist file as enabled because `-f` matches any file, not just non-empty ones.\n  WHY: If an empty allowlist is supposed to mean \u201cno files allowed,\u201d the current check skips validation instead of enforcing that interpretation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:3194-3195 | severity=medium | confidence=4\n  PROBLEM: Failure comment wording \"PR branch may not include all intended editor changes\" implies editor changes were intended when `EDITOR_SUMMARY_POSTED=true`, but this flag only guarantees that a summary comment was posted.\n  WHY: The editor stage may have failed and produced only a fallback summary, so the current wording can mislead readers about whether editor changes actually existed.\n- scripts/review_conflict_resolve.sh:140 | severity=medium | confidence=3\n  PROBLEM: The allowlist file check uses `-f`, which returns true for any existing file, including empty files.\n  WHY: An empty allowlist file may be meant to mean \"no files allowed,\" but this guard would treat it as present and skip the stricter handling.\n- agents.md:579-611 | severity=low | confidence=2\n  PROBLEM: The documentation contains specific line-number references that may be outdated as the file evolves.\n  WHY: The cited workflow locations appear to have shifted, so the docs risk pointing readers at the wrong code.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- agents.md:582-607 | severity=low | confidence=5\n  PROBLEM: Documentation references stale line numbers and describes failure-comment wording that does not match the actual implementation.\n  WHY: The cited line references no longer match the workflow file, and the docs claim the failure body names downstream domains that the implementation does not enumerate.\n- .github/workflows/review_autofix.yml:3192-3195 | severity=medium | confidence=4\n  PROBLEM: The new failure body variant is vaguely worded and potentially misleading when an editor fallback summary is posted.\n  WHY: The fallback summary says no editor output was generated, while the failure body still suggests the PR branch may be missing editor changes, which weakens trust in the audit trail.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:585-596 | severity=low | confidence=4\n  PROBLEM: Documentation references stale line numbers.\n  WHY: The documented locations for the editor summary comment and failure notification step no longer match the current workflow implementation.\n- agents.md:592-593 | severity=low | confidence=3\n  PROBLEM: Documentation says the failure comment should name downstream domains, but the implementation does not.\n  WHY: The actual message is generic about the workflow failing after the editor summary, so the doc overstates what the code says.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- agents.md:582-607 | severity=low | confidence=5\n  PROBLEM: Documentation line references are stale and the described failure-message wording does not match implementation.\n  WHY: The editor summary and failure notification steps have moved, and the docs describe a downstream-domain-specific message that the code does not actually emit.\n- scripts/review_conflict_resolve.sh:149 | severity=low | confidence=3\n  PROBLEM: The allowlist condition is logically redundant because `[ -s ... ] || [ -f ... ]` collapses to `[ -f ... ]`.\n  WHY: `-s` implies `-f`, so the extra test does not change behavior and only adds noise.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "bf8e09d8251ae18fa393e529d52f3ff098fff99a65fb14c27185eee0e01714c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1493,
+    "run_id": "24762394707",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24762394707",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422061001_b1c8241a6f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1493,
+    "run_id": "24762394707"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T06:10:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

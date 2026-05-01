@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 11\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: tests/test_ai_label_precreation_contract.py\n      Problem: Regex patterns match anywhere in file including comments and string literals, causing false positives on documentation or commented-out code.; Developers cannot add comments like \"# Don't use: gh label create ai:needs-prompt-review\" or \"# source scripts/label_helpers.sh\" without breaking test.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: tests/test_ai_label_precreation_contract.py\n      Problem: Regex `(?:source|\\.)\\s+scripts/label_helpers\\.sh\\b` fails to match quoted paths like `source \"scripts/label_helpers.sh\"` due to `\\b` word boundary after `.sh`.; Workflow using `source \"scripts/label_helpers.sh\"` would pass contract test when it shouldn't (missing `label_helpers.sh` sourcing).\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: tests/test_ai_label_precreation_contract.py\n      Problem: Regex patterns don't catch variable-based label creation like `gh label create \"$LABEL\"` where `$LABEL=\"ai:needs-prompt-review\"`.; Developer could bypass contract by using variables instead of literal label names.\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: tests/test_ai_label_precreation_contract.py\n      Problem: Test only verifies pattern presence/absence, not ordering between `ensure_label_exists` and label mutations in same run block.; `ensure_label_exists` could be called after label mutation, causing \"label does not exist\" errors.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: tests/test_ai_label_precreation_contract.py\n      Problem: Static hard-coded list of workflows only covers 4 workflows, but there are 9 workflows that source `label_helpers.sh`.; New workflows or modifications to unchecked workflows won't be validated.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: _contains function and all regex patterns; Issue: Regex patterns match comments and string literals; Suggested minimal fix: Add line start anchor to patterns: change `re.compile(r'(?:source|\\.)\\s+scripts/label_helpers\\.sh\\b')` to `re.compile(r'(?m)^\\s*(?:source|\\.)\\s+scripts/label_helpers\\.sh\\b')` and similar for other patterns.; Estimated lines changed: 6-8; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: source script regex patterns; Issue: Regex fails on quoted script paths due to `\\b` word boundary; Suggested minimal fix: Remove `\\b` and handle quotes: `re.compile(r'(?m)^\\s*(?:source|\\.)\\s+(?:\"[^\"]*\"?|''[^'']*''?|scripts/label_helpers\\.sh)')`; Estimated lines changed: 4; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [8] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: Line 15 and similar must_contain patterns; Issue: The regex `(?:source|\\.)` uses a bare `.` which matches the literal dot character. In shell, `.` is a builtin equivalent to `source`. The pattern is correct but could be more explicit as `(?:source|\\. )` with a trailing space to avoid matching dots in other contexts.; Suggested minimal fix: Change to `re.compile(r'(?:source|\\s\\.)\\s+scripts/label_helpers\\.sh\\b')` to ensure the dot is a standalone command.; Lines changed: 4; ## CONCLUSION; The autofix changes are **correct and safe**. No runtime correctness issues. The regex improvements properly handle shell sourcing variations. The test passes.; **FINAL ASSESSMENT: No changes needed.**\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\n  [9] File: tests/test_ai_label_precreation_contract.py (line ~15)\n      Problem: The regex accepts a dot as an alternative for the sourcing command but does not anchor the pattern to the start of a line. This allows matching any dot character followed by whitespace and the script path in contexts other than an actual shell command (e.g., a numbered list item like \"2. scripts/label_helpers.sh\" or an example in a comment). Such occurrences would satisfy the must_contain check even if the real sourcing line is absent.; The contract test could incorrectly pass for a workflow that lacks the required `source scripts/label_helpers.sh` line. At runtime, `ensure_label_exists` would be undefined, causing the workflow to fail immediately.\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [10] File: .github/workflows/ci.yml\n      Problem: Test `tests/test_ai_label_precreation_contract.py` is not executed in CI.; Contract violations won't be caught automatically, allowing regressions to slip through.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [11] File: .github/workflows/ci.yml\n      Problem: Location: After other test execution steps (around line 140); Issue: Missing CI execution for label precreation contract test; Suggested minimal fix: Add step: `- name: AI label precreation contract test` with `run: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_label_precreation_contract.py`; Estimated lines changed: 5; HARDENING_RISK_SCORE: 0; The changes in the last run (converting strings to regex patterns) improved flexibility but didn't address the fundamental issues with regex matching in comments and the missing CI integration. The test passes currently but has false positive potential and lacks automated enforcement.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/ci.yml\ntests/test_ai_label_precreation_contract.py",
+  "fingerprint": "f896b2779f8dfb6013320c90f20c06b8e5e5bcef3baec92271d9477a103a0eb0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1319,
+    "run_id": "24605556531",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24605556531",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418134159_1fb8216236",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1319,
+    "run_id": "24605556531"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T13:41:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

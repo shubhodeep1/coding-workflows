@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Harden Codex workflow bootstrap against optional MCP handshake failures\",\"issues\":[{\"id\":\"mcp-init-failure-harness\",\"title\":\"Add local mock MCP initialize-failure reproduction harness\",\"priority\":1},{\"id\":\"optional-mcp-probe-setup-serena\",\"title\":\"Probe optional MCP initialize before writing Codex config\",\"priority\":1},{\"id\":\"acceptance-workflow-mcp-smoke\",\"title\":\"Smoke-test implement, validate, and review bootstrap against forced optional MCP failure\",\"priority\":2},{\"id\":\"remaining-workflow-mcp-knob-plumbing\",\"title\":\"Propagate the optional-MCP probe knob to remaining Serena-enabled workflows\",\"priority\":3},{\"id\":\"docs-optional-mcp-probe\",\"title\":\"Document optional MCP probing and Azure-safe fail-open behavior\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"mcp-init-failure-harness\",\"to\":\"optional-mcp-probe-setup-serena\"},{\"from\":\"optional-mcp-probe-setup-serena\",\"to\":\"acceptance-workflow-mcp-smoke\"},{\"from\":\"optional-mcp-probe-setup-serena\",\"to\":\"remaining-workflow-mcp-knob-plumbing\"},{\"from\":\"acceptance-workflow-mcp-smoke\",\"to\":\"docs-optional-mcp-probe\"},{\"from\":\"remaining-workflow-mcp-knob-plumbing\",\"to\":\"docs-optional-mcp-probe\"}]}",
+  "fingerprint": "cb24175d6089d0f9aac818a21a5fa7c7a1eb876d140bd681ff3b7124c22b71d2",
+  "lineage": {
+    "issue_number": 1794,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25142960487",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25142960487",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260430015120_ac4cbed5c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1794,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25142960487"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Harden Codex workflow bootstrap against optional MCP handshake failures' into 5 issues (tracking #1794)",
+  "timestamps": {
+    "created_at": "2026-04-30T01:51:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

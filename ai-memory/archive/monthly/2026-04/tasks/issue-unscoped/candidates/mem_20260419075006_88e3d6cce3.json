@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 8\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: README.md (line ~1330)\n      Problem: Updated documentation to reflect that template-mode rerender-recovery happens inside `validate_process.sh` and correctly distinguishes between deterministic recovery and self-healing.; Runtime behavior: Documentation fix only.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: agents.md\n      Problem: Updated documentation to match the new `scripts/validate_process.sh` logic.; Runtime behavior: Documentation fix only.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: prompts/mode-validate-self-heal.txt (line ~23)\n      Problem: Added a constraint to keep self-heal scope prompt-only for `failing_phase=render`, ensuring the LLM doesn't attempt to edit harness files which are owned by the deterministic recovery logic.; Runtime behavior: Improves LLM patch quality and prevents invalid patch attempts.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: scripts/validate_process.sh (line ~1162)\n      Problem: The variable `PRE_FLIGHT_APPEND_LOG` is defined as a `local` variable inside `attempt_render_recovery_after_preflight_failure`. In Bash, local variables are visible to called child functions (dynamic scoping). This is used correctly to ensure `run_preflight_checks` does not truncate the log file during a recovery attempt, preserving the initial failure diagnostics.; Runtime behavior: Correctly preserves logs across recovery reruns.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: scripts/validate_process.sh\n      Problem: The function correctly returns `0` on success, `1` if recovery is skipped (not template mode), and `2` if recovery is attempted but fails (triggering self-heal). The caller at line 2346 correctly handles these exit codes to route to either \"render\" or \"preflight\" self-heal phases.; Runtime behavior: Correctly routes failures to the appropriate self-heal logic.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: scripts/validate_process.sh\n      Problem: Location: line 1135 (inside `attempt_render_recovery_after_preflight_failure`); Issue: The function uses `return 2` to signal \"recovery attempted but failed\" and `return 1` for \"not applicable\". While the caller (line 2346) handles these correctly, adding explicit comments or using named constants for these exit codes in the function header would improve maintainability for future developers.; Suggested minimal fix: Add a docstring/comment block above the function defining the exit code contract.; Estimated lines changed: 4; HARDENING_RISK_SCORE: 1; Files changed:; README.md: 1330-1340, 1350-1353; agents.md: 346-350; prompts/mode-validate-self-heal.txt: 23-26; scripts/validate_process.sh: 123, 1133-1185, 2342-2368; tests/test_validate_process_render_recovery.py: 1-370; tests/test_validate_process_template_mode.py: 25-30\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [7] File: scripts/validate_process.sh\n      Problem: Function: attempt_render_recovery_after_preflight_failure; Location: at return statements lines ~1143, 1159, 1168, 1171; Issue: The exit code contract (0=success, 1=not_applicable_or_skip, 2=recovery_failed\u2192self_heal) is clear from the code and surrounding usage but is not documented in comments. Future maintainers may benefit from explicit inline documentation.; Suggested minimal fix: Add brief comments above each distinct return to document meaning, e.g.:; return 1   # not in template mode or already attempted \u2192 skip recovery; return 2   # rerender or relint failed \u2192 trigger render-phase self-heal; return 0   # recovery succeeded \u2192 continue pipeline; Estimated lines changed: 3-4 comment lines; HARDENING_RISK_SCORE: 1 (minor readability improvement; not required for correctness); CLASSIFICATION SUMMARY; - Core implementation: applied and verified; - Test coverage: already satisfied (comprehensive unit/integration tests present); - Documentation updates: already satisfied; - Advisory hardening suggestion: not essential; optional future improvement; No blocking issues. The PR is ready to merge.\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\n  [8] File: scripts/validate_process.\n      Problem: Location: function `attempt_render_Recovery_after_` (lines 11**); Issue: The exit code contract (1=skipped, 2=failed) is not explicitly documented in the function body. While the call site correctly handles these values, future maintainers may not understand why specific integer values matter.; Suggested minimal fix: Add a comment block inside the function explaining:; ```bash; # Returns: 0 = success (recovery worked), 1 = not applicable, 2 = failed (trigger render-phase self-heal); Estimated lines changed: 3; HARDENING_**SCORE: 1; ## CONCLUSION; No changes are needed. The PR correctly implements deterministic render recovery for template-mode preflight failures. All pass-1 findings are validated, and no additional runtime correctness issues were identified.\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nREADME.md\nagents.md\nprompts/mode-validate-self-heal.txt\nscripts/validate_process.\nscripts/validate_process.sh",
+  "fingerprint": "d2c2297df26b6b4d10631042a829d0284e6207671c86dbf8cf3792dd520438f6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1373,
+    "run_id": "24623231862",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24623231862",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419075006_88e3d6cce3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1373,
+    "run_id": "24623231862"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-19T07:50:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

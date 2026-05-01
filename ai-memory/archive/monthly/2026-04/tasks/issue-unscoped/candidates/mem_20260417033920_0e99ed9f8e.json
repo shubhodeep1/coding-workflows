@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 2\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: The `bullet_edit_regex` variable definition lacks word boundary anchors (`\\b...\\b`) around the verb alternation group, while the related `edit_claim_regex` variable (line 20,66) was correctly updated with these anchors in the same PR. This creates an inconsistency and leaves a false-positive path for edit verbs embedded inside identifiers.; The `bullet_edit_regex` pattern uses `([[:space:][:punct:]]|$)` as a terminator, and POSIX `[:punct:]` includes underscore. With case-insensitive grep matching, a bullet like `- WILL_FIX issues after code validation: 0` matches because:; 1. The regex starts with `^[[:space:]]*-[[:space:]]*` which matches the bullet prefix; 2. The alternation group includes `fix(ed|es|ing)?`; 3. \"fix\" appears as a substring in \"WILL_FIX\"; 4. It's followed by underscore which is a punctuation character; This causes the multi-line contradiction detection to incorrectly set `has_real_changes=\"true\"` when the editor's \"no files modified\" bullet is followed by or contains such identifiers, leading to false-positive suppression of legitimate EDITOR_CHANGES_LOST warnings.; **Issue 2: Comment placement creates maintainability confusion**\n      Confidence: avg 4.7\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5, stepfun_step-3_5-flash\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: Location: line 20,68; Issue: Missing word-boundary anchors in bullet_edit_regex; Suggested minimal fix: Change the definition to wrap the alternation group with `\\b` on both sides:; ```bash; bullet_edit_regex='^[[:space:]]*-[[:space:]]*\\b(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\\b'; Add a brief comment above explaining that word boundaries prevent false positives from identifiers like \"WILL_FIX\".; Estimated lines changed: 3 (one substitution line plus optional two-line comment); HARDENING_RISK_SCORE: 1; SUMMARY: The PR correctly implemented word boundary anchors for `edit_claim_regex` but missed applying the same fix to `bullet_edit_regex` at line 20,68, leaving an incomplete implementation of the stated goal.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Location: lines 2069, 2116, 2119, 2124 (no files modified regex patterns); Issue: Patterns like \"no [^:]*modified\", \"no [^:]*changed\", \"no [^:]*touched\" could potentially match identifiers like \"NO_FILES_MODIFIED\", \"MODIFIED_STATUS\", \"CHANGED_FILES\" as substring matches.; Suggested minimal fix: Add word boundaries or whitespace requirements: \"no[[:space:]]+[^:]*\\bmodified\\b\", \"no[[:space:]]+[^:]*\\bchanged\\b\", \"no[[:space:]]+[^:]*\\btouched\\b\". Also update the \"no changes\" pattern similarly.; Estimated lines changed: 4 (one pattern per line \u00d7 4 lines); HARDENING_RISK_SCORE: 2 (minor robustness improvement)\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: The `bullet_edit_regex` variable remains unanchored with word boundaries (`\\b`) around its verb alternation group, whereas the related `edit_claim_regex` and the inline grep at line 2037 were correctly updated in this PR.; The `bullet_edit_regex` uses `([[:space:][:punct:]]|$)` as a suffix. In POSIX/GNU grep, `[:punct:]` includes the underscore (`_`). Consequently, an identifier like `FIX_SOMETHING` appearing at the start of a bullet (e.g., in a parenthetical note \"- WILL_FIX_ISSUES: 0\") will produce a false-positive match because \"FIX\" is followed by a punctuation character. This can incorrectly set `has_real_changes=\"true\"` during the multi-line contradiction check, leading to spurious `EDITOR_CHANGES_LOST` warnings that block auto-merge.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: .github/workflows/review_autofix.yml\n      Problem: The comment block (lines 20,63-20,66) explains the word boundary fix for preventing substring matches in identifiers, but this comment immediately precedes `bullet_edit_regex` which lacks the same protection. Future developers may incorrectly assume both regex patterns have this safeguard.; Why it matters: When maintaining this code, someone might add new usage of `bullet_edit_regex` assuming it's already protected against the same false-positive issue documented in the comment above. This could lead to undetected regressions.; **Verification of PR scope:**; The PR description states the intent was to add word boundary anchors to \"the change detection regex patterns\" to prevent false positives from identifiers like \"WILL_FIX\". The fix correctly applied this to:; - Line 20,37: Inline grep pattern - FIXED; - Lines 20,60-20,67: edit_claim_regex variable - FIXED; But the fix was NOT applied to:; - Line 20,68: bullet_edit_regex variable - NOT FIXED; This appears to be an incomplete implementation of the stated PR intent.; **HARDENING SUGGESTIONS:**\n      Confidence: avg 3.0\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "dcaff6aa5c896dc990729d7577808fee3e1841b75e5a0458107f8e129f81dfd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1251,
+    "run_id": "24545344283",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24545344283",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417033920_0e99ed9f8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1251,
+    "run_id": "24545344283"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-17T03:39:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

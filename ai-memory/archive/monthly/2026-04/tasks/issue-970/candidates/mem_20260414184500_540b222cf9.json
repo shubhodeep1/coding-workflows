@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- `Q1 -> A`: target the current baseline (`orchestrator/project-857` intent) and implement the fix against equivalent current startup guard behavior, with regression coverage for allowing `scripts/validate_local.sh`.\n\nConflicts detected in current codebase:\n- The referenced legacy guard `enforce_no_renamed_driver_artifacts` and error text `\"Found non-canonical validate driver artifacts in scripts:\"` are not present in current `scripts/validate_process.sh`.\n- `scripts/validate_driver.sh` does not exist in this repository.\n- The issue\u2019s line anchors for the legacy guard do not match current `scripts/validate_process.sh`.\n- No `db/contracts/` directory exists; this change appears non-Mongo/non-contract-schema scoped.\n\n1. Files likely to change\n- `scripts/validate_process.sh`\n- `tests/test_validate_process_driver_guard_scope.py` (new regression test)\n- `.github/workflows/ci.yml`\n- `.github/workflows/mark-stable.yml`\n- `.github/workflows/test-and-mark-stable.yml`\n- `README.md` (contract language alignment for validation startup behavior)\n- `docs/validation-phase-spec.md` (managed-artifact contract note, if needed)\n\n2. Functions/modules to implement\n- In `scripts/validate_process.sh`, remove/narrow any broad `scripts/validate*.sh` startup rejection logic so unrelated consumer helpers are not blocked.\n- Implement/retain managed-artifact-only enforcement at startup:\n  - fail if `validation/validate.sh` is tracked.\n  - fail on tracked duplicates/copies of canonical managed validation artifacts.\n  - do not fail on unrelated helper scripts like `scripts/validate_local.sh` (especially untracked).\n- Keep existing ownership and safety checks (`validation/.ai-validation-owned`, non-`validation/` mutation guard, etc.) unchanged.\n- Ensure these checks execute before harness generation begins.\n\n3. Data structures affected\n- Shell-local managed-artifact allow/deny lists and tracked-file candidate lists (from `git ls-files`).\n- No persistent schema/index/state contract changes.\n\n4. API/interface changes\n- No external API surface changes.\n- Startup behavior change: `bash scripts/validate_process.sh` no longer fails solely due unrelated `scripts/validate*.sh`.\n- True contract violations continue to fail fast with non-zero exit and explicit error output.\n\n5. Potential risks / edge cases\n- Over-broad duplicate detection can reintroduce false positives for consumer scripts.\n- Under-broad detection can miss true tracked managed-artifact copies.\n- Non-standard git states (shallow checkout, detached HEAD, no git metadata) must remain fail-safe and deterministic.\n- Must avoid breaking existing validation phase labels/comments and orchestration lifecycle behavior.\n\n6. Testing considerations\n- Add regression coverage for:\n  - canonical scripts + unrelated `scripts/validate_local.sh` => startup does not fail with legacy non-canonical error.\n  - tracked `validation/validate.sh` => contract check fails.\n  - tracked copies of canonical managed artifacts => contract check fails.\n- Follow existing deterministic guardrail-test style (representative: `tests/test_review_autofix_merge_precheck.py`) rather than full runtime validation execution.\n- Update explicit test invocation lists in:\n  - `.github/workflows/ci.yml`\n  - `.github/workflows/mark-stable.yml`\n  - `.github/workflows/test-and-mark-stable.yml`\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ddd9ab6e5e56f945ab21ee4ca25d64b7eed80c2c3425092b34a3f4afdf3a30b1",
+  "lineage": {
+    "issue_number": 970,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24416159460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24416159460",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/970"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414184500_540b222cf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 970,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24416159460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #970",
+  "timestamps": {
+    "created_at": "2026-04-14T18:45:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 7\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: `.github/workflows/review_autofix.yml` (line ~1942)\n      Problem: Location: `no_change_phrase_regex`; Issue: Singular forms of change-related words (`change`, `modification`, `edit`) are not covered.; Suggested minimal fix: Change `(changes|modifications|edits)` to `(changes?|modifications?|edits?)` to make the 's' optional.; Estimated lines changed: 1 per file; HARDENING_RISK_SCORE: 1 - Low risk improvement to prevent future false positives; ## CLASSIFICATION; **APPLIED:**; - Punctuation-aware `- none` detection (`none([[:space:][:punct:]]|$)`); - Prefix separator expansion from `[;]` to `[;:-]`; - Bidirectional mixed-claim detection; - `strong_edit_claim_regex` for filtering investigative text; **ALREADY SATISFIED:**; - Case-insensitive handling via `-i` flag; - Mixed-claim preservation logic for contradictory lines; **IGNORED:**; - Various regex consolidation suggestions (speculative refactors beyond minimal fix scope); - PR description/documentation requests (out of scope for code fixes); ## FINAL ASSESSMENT; The changes in the LAST RUN DIFF effectively address the PR's stated goal. The bidirectional mixed-claim detection and expanded prefix separator coverage (`[;:-]`) are the key fixes that resolve the core issue. The alignment between `review_autofix.yml` and `review_apply_fixes.sh` is maintained, which is critical for consistent behavior.; **Overall: No blocking issues. The implementation is correct and minimal.**; The only identifiable gap is the singular vs plural noun coverage in `no_change_phrase_regex`, but this represents a minor hardening opportunity rather than a correctness defect.\n      Confidence: avg 3.0\n      Flagged by: minimax_minimax-m2_5, moonshotai_kimi-k2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: `.github/workflows/review_autofix.yml` and `scripts/review_apply_fixes.sh`\n      Problem: The regex matches plural forms like \"changes\", \"modifications\", and \"edits\", but misses their singular counterparts (\"change\", \"modification\", \"edit\").; If the editor outputs a line such as \"- No change required\" or \"- No edit needed\", it will fail to match `no_change_phrase_regex`. Consequently, it won't be filtered out as a no-change declaration and will be incorrectly counted as a claimed change, potentially causing an `EDITOR_CHANGES_LOST` failure.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: `scripts/review_apply_fixes.sh`\n      Problem: The script uses a hardcoded `grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified)'` which is not present in the workflow.; The `No .* modified` filter in the script is overly broad and unanchored. It might silently drop mixed-claim lines like \"- No files modified by default but I added a new test.py\" before the `mixed_claim_lines` restoration logic can process them. The workflow's approach is safer as it preserves these lines for the subsequent bidirectional contradiction check.; ### HARDENING_SUGGESTIONS\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: `scripts/review_apply_fixes.sh`\n      Problem: Location: Post-processing of `changes_section`; Issue: Inconsistent filtering compared to the workflow.; Suggested minimal fix: Remove the `No .* modified` pattern from the initial `grep -viE` filter to ensure all potential mixed claims reach the redirection/restoration logic.; Estimated lines changed: 1.; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: `scripts/review_apply_fixes.sh`\n      Problem: The script has an extra filter `grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified)'` that the workflow doesn't have. This filter runs BEFORE the mixed-claim detection and removes lines like \"- No files modified by default but I added test.py\" even though they contain valid edit claims.; A line such as \"No files modified by default but I added test.py\" would be incorrectly filtered out, causing the script to miss a legitimate change claim that the workflow would correctly detect. This creates inconsistent behavior between the workflow and the script.; **Issue 2: Singular \"modified\" not in no_change_phrase_regex**\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\n  [6] File: `scripts/review_apply_fixes.sh` and `.github/workflows/review_autofix.yml`\n      Problem: Location: `no_change_phrase_regex`; Issue: Missing singular forms for change-related nouns.; Suggested minimal fix: Update the alternation to `(changes?|modifications?|edits?)`.; Estimated lines changed: 1 per file.; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [7] File: `scripts/review_apply_fixes.sh` and `.github/workflows/review_autofix.yml`\n      Problem: Location: `no_change_phrase_regex`; Issue: Missing `modified` as a general change word (currently only handled in a specific trailing clause).; Suggested minimal fix: Add `modified` to the list of change words: `(changes?|modifications?|edits?|modified)`.; Estimated lines changed: 1 per file.; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n`.github/workflows/review_autofix.yml`\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/review_autofix.yml` and `scripts/review_apply_fixes.sh`\n`scripts/review_apply_fixes.sh`\n`scripts/review_apply_fixes.sh` and `.github/workflows/review_autofix.yml`",
+  "fingerprint": "41b5d18238983091d42dbd91048b6ed4865519aa4fcb0a6eff21d242ce491350",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1184,
+    "run_id": "24528916641",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24528916641",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416193852_acb914fdc2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1184,
+    "run_id": "24528916641"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T19:38:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

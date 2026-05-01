@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Adjust the validation harness shutdown path. 1) In the generated fallback app container startup/entrypoint used by validation, ensure PID 1 receives SIGTERM directly (exec-form command or explicit signal-forwarding init) so graceful stop yields 0/143 instead of timeout-driven 137. 2) In validation shutdown assertions (30_shutdown), separate outcomes: capture container State.OOMKilled, State.Error, and stop timeout context before classifying failure; treat forced-kill after timeout as harness",
+  "fingerprint": "28ffa07168b24c8dca0a8c056de8f0a586dda05ce6481109433b5fe6190508b9",
+  "lineage": {
+    "issue_number": 883,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24405176429",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24405176429",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260414152028_a39e45527f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 883,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24405176429"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-14T15:20:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

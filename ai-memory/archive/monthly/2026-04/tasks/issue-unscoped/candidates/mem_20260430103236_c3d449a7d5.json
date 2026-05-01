@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3800-3807 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The shell sanitization rejects `0`, so `SOFT_ERROR_TELEGRAM_BYTES=0` falls back to `2800` instead of disabling truncation as the Python helper allows.\n  WHY: This contradicts the Python-side `cap <= 0` no-truncation behavior and overrides an explicit operator setting; severity is critical because one reviewer labeled it critical while others reported medium/high or omitted severity.\n- .github/workflows/test-and-mark-stable.yml:3798-3810 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The shell regex rejects whitespace-padded integers, so valid numeric caps with incidental spaces fall back to `2800`.\n  WHY: A repo-var value containing leading or trailing whitespace is treated as invalid and replaced with the default, silently discarding operator intent; severity is critical per the strongest reviewer and others reported medium/high or no severity.\n- scripts/consolidate_soft_error_reports.py:157-177 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The truncation helper decodes with `errors=\"ignore\"`, so malformed UTF-8 bytes are silently dropped without any diagnostic.\n  WHY: This can mask upstream corruption in rare malformed-input cases; one reviewer considered the behavior acceptable, but the others flagged the silent-drop path as a bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:3801-3807 | confidence=4\n  PROBLEM: The shell sanitization block rejects `0` as invalid and falls back to `2800`.\n  WHY: The condition `[ \"${SOFT_ERROR_BYTES_RAW}\" -gt 0 ]` explicitly rejects `0`, but the Python code treats `max_bytes <= 0` as no truncation, so an operator setting `SOFT_ERROR_TELEGRAM_BYTES=0` gets unexpected truncation.\n- .github/workflows/test-and-mark-stable.yml:3802 | confidence=2\n  PROBLEM: The bash regex does not handle whitespace-padded integers.\n  WHY: `^[0-9]+$` rejects values like `\" 3000 \"`, so the sanitization falls through and silently replaces the intended cap with `2800`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:~3801 | confidence=4\n  PROBLEM: Workflow sanitization rejects `0` as invalid.\n  WHY: The `-gt 0` check rejects `0`, but `0` is a valid value that could mean disable truncation, so the operator's explicit intent is silently overridden.\n- .github/workflows/test-and-mark-stable.yml:~3801 | confidence=4\n  PROBLEM: Workflow sanitization rejects whitespace-padded integers.\n  WHY: `^[0-9]+$` requires the entire string to be digits, so values like `\" 3000 \"` or `\"3000 \"` fail validation and fall back to `2800`.\n- scripts/consolidate_soft_error_reports.py:~177 | confidence=3\n  PROBLEM: The truncation helper silently drops malformed trailing UTF-8 bytes with `errors=\"ignore\"`.\n  WHY: If artifact bytes are corrupted, the summary can be mangled without any diagnostic, obscuring upstream data corruption.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3801 | severity=critical | confidence=5\n  PROBLEM: The validation rejects `0` and whitespace-padded integers as invalid, forcing them to fall back to `2800`.\n  WHY: `0` is a valid operator intent meaning disable truncation, but it is rejected as invalid, and the regex also lacks whitespace tolerance for values like `\" 3000 \"`.\n- scripts/consolidate_soft_error_reports.py:176 | severity=minor | confidence=3\n  PROBLEM: `decode(\"utf-8\", errors=\"ignore\")` silently discards malformed UTF-8 bytes without diagnostic.\n  WHY: In the degenerate case where bytes become corrupted during processing, malformed sequences are silently dropped rather than replaced visibly, even though `_read_report_safe` uses `errors=\"replace\"` for visibility.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:3798-3810 | confidence=5\n  PROBLEM: `[[ \"${SOFT_ERROR_BYTES_RAW}\" =~ ^[0-9]+$ ]]` rejects whitespace-padded integers like `\" 3000 \"` or `\"3000 \"`.\n  WHY: Valid repo-var values with inadvertent whitespace are treated as invalid, forcing fallback to 2800 and potentially truncating summaries longer than intended.\n- .github/workflows/test-and-mark-stable.yml:3801-3807 | confidence=5\n  PROBLEM: `[ \"${SOFT_ERROR_BYTES_RAW}\" -gt 0 ]` explicitly rejects `0`, forcing fallback to 2800.\n  WHY: An operator cannot disable truncation via `SOFT_ERROR_TELEGRAM_BYTES=0`, so summaries are forcibly capped even when full text is desired.\n- scripts/consolidate_soft_error_reports.py:162-174 | confidence=3\n  PROBLEM: `encoded[:i].decode(\"utf-8\", errors=\"ignore\")` silently drops malformed trailing bytes post-truncation.\n  WHY: Corrupted artifacts can produce mangled summaries without a diagnostic, making it harder to distinguish truncation from upstream corruption.\n- scripts/consolidate_soft_error_reports.py:157-176 | confidence=3\n  PROBLEM: Existing `decode(\"utf-8\", errors=\"ignore\")` silently drops invalid UTF-8 sequences.\n  WHY: Non-UTF8 artifact content can mangle findings extraction without warning.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/test-and-mark-stable.yml:3800-3806 | confidence=5\n  PROBLEM: The bash sanitization logic rejects `0` as invalid and falls back to `2800`.\n  WHY: `0` is explicitly supported by the Python consolidator as disable/no truncation, so the workflow silently ignores an operator's documented setting.\n- .github/workflows/test-and-mark-stable.yml:3801 | confidence=4\n  PROBLEM: The regex `^[0-9]+$` does not handle whitespace-padded values like `\" 3000 \"`.\n  WHY: A repo var with accidental leading or trailing spaces fails validation and causes the workflow to use `2800` instead of the intended value.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "22912cf523aeeea57c18a333b7c47835cdda3beb71a77ad428a0400c5a2b8290",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1824,
+    "run_id": "25159596784",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25159596784",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430103236_c3d449a7d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1824,
+    "run_id": "25159596784"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T10:32:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

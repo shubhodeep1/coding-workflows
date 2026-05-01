@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning context interpreted\n- Clarification answers: none required; `/answer [auto-answered-by-orchestrator]` confirms planning can proceed without new QIDs.\n- Ref context: `HEAD=56fd255fac8978f66e6a3885eaa21994a777793e`, branch `orchestrator/project-1303`, integration metadata `orchestrator/project-1303`, mismatch `false`.\n\nDetected codebase conflicts/gaps\n- `.github/workflows/workflow-log-analysis.yml` still hard-codes Codex retry knobs (`max_attempts=3`, backoff base `10`) in multiple jobs, so it does not meet configurable retry/backoff requirements yet.\n- `workflow-log-analysis.yml` currently has no issue-context wiring for label/comment failure markers, so `AI_PHASE_FAILURE_V1` + label behavior cannot happen today when dispatched from issue-aware flows.\n- `scripts/validate_process.sh` uses fixed `for attempt in 1 2` loops for Codex-driven phases and has no `AI_PHASE_FAILURE_V1` emission path.\n- `.github/workflows/memory_maintenance.yml` appears to have no Codex execution path already and already logs `batch_noop`; this is mostly a contract/audit hardening task.\n\nImplementation plan\n\n1. Validate workflow failure semantics split (`ai:validate-failed` vs `ai:validation-failed`)\n- Files likely to change: `.github/workflows/validate.yml`, `scripts/validate_process.sh`.\n- Representative pattern to follow: Codex retry/empty-output handling loop style from `.github/workflows/implement.yml` (attempt loop + exponential backoff + terminal error classification).\n- Implement in `validate_process.sh` a shared Codex retry helper used by discover/generate/diagnose phases, driven by env defaults (`MAX_CODEX_ATTEMPTS`, `CODEX_RETRY_BACKOFF_BASE_SECS`) and classifying failures as non-zero exit, empty output, or parse/validator rejection.\n- Keep all existing runtime semantic failure paths (`ai:validation-failed`) unchanged.\n- Add a dedicated terminal Codex/workflow-failure path that applies `ai:validate-failed` and emits `AI_PHASE_FAILURE_V1` when tracking issue context exists.\n- In `validate.yml`, add fallback handling for cases where script exits before writing status artifacts, so workflow-level Codex failure still maps to `ai:validate-failed` (not `ai:validation-failed`).\n\n2. `AI_PHASE_FAILURE_V1` emission contract for validate\n- Files likely to change: `scripts/validate_process.sh` (primary), possibly `validate.yml` fallback step.\n- Add a marker-emission helper that posts one structured issue comment on terminal Codex failure, including phase/failure mode/attempt count/run id/run URL/timestamp.\n- Fail-open behavior when no issue context: emit warning only, do not fail additional steps.\n- Ensure marker emission is terminal-only (no duplicate comments on intermediate retries).\n\n3. Internal validate wrapper compatibility\n- File likely to change: `.github/workflows/internal-validate.yml` (only if required).\n- Verify wrapper remains compatible with new validate failure handling without breaking existing inputs (`tracking_issue`, `compose_file`, `validation_timeout`).\n- Keep interface backward-compatible; avoid requiring new wrapper inputs unless strictly necessary.\n\n4. Workflow-log-analysis retry controls + failure markers\n- File likely to change: `.github/workflows/workflow-log-analysis.yml`.\n- Replace all hard-coded Codex retry constants in analyze/deep-audit/api-redundancy Codex sections with env-controlled values (`MAX_CODEX_ATTEMPTS`, `CODEX_RETRY_BACKOFF_BASE_SECS`) plus numeric validation/fallback defaults.\n- Add issue-context-aware terminal failure handling: when issue context is present, apply `ai:log-analysis-failed` and emit `AI_PHASE_FAILURE_V1`; when absent, emit explicit fail-open warning and continue existing workflow failure behavior.\n- Keep retry bounded and deterministic (no unbounded loops).\n\n5. Memory maintenance contract alignment\n- File likely to change: `.github/workflows/memory_maintenance.yml`.\n- Since no Codex execution path is present, add/clarify explicit no-op guard logging/comments stating Codex failure-marker contract is not applicable here unless a Codex path is introduced in future.\n- Do not add failure labels for memory-maintenance in this workflow unless a Codex path is actually added.\n\n6. Data structures and interfaces affected\n- Labels: `ai:validate-failed` and `ai:log-analysis-failed` on workflow-level Codex failure; preserve `ai:validation-failed` for runtime semantic validation outcomes.\n- Issue comment marker payload: `AI_PHASE_FAILURE_V1` structured block.\n- Retry controls: repository vars `MAX_CODEX_ATTEMPTS` and `CODEX_RETRY_BACKOFF_BASE_SECS` consumed by validate/log-analysis paths.\n- Preserve existing validation status/metadata semantics; avoid breaking `validation_status.json` meaning.\n\n7. Risks and edge cases\n- Misclassification risk: runtime semantic failures could accidentally be labeled as workflow failures if classification boundary is weak.\n- Label cleanup risk: `ai:validate-failed` is in failure-phase group; stale runtime phase labels may remain unless explicitly removed where needed.\n- No-context dispatches (e.g., manual workflow_dispatch) must not fail due to missing issue number.\n- Duplicate marker spam risk if retries emit comments before terminal failure.\n- Invalid env var values must fail-open to defaults with warnings.\n\n8. Testing plan\n- Extend validate tests: `tests/test_validate_process_fixup_labels.py` to assert new split semantics (`ai:validate-failed` only for Codex/workflow failure; existing branches still use `ai:validation-failed`).\n- Add/extend static workflow tests for retry contract in `workflow-log-analysis.yml` to ensure hard-coded retry constants are removed and env-driven knobs are used in all Codex loops.\n- Add/extend tests to verify `AI_PHASE_FAILURE_V1` marker emission paths are present for validate/log-analysis issue-context flows and warn/fail-open without context.\n- Keep existing label-contract tests (`tests/test_ai_labels.py`) green to ensure no label-registry regressions.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4b2d07d5c3a05e10ba63e9f8c3dfa84f591dea755d76bbf2a408f585b4450c2b",
+  "lineage": {
+    "issue_number": 1315,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24601995467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24601995467",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1315"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418095115_30b4efd376",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1315,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24601995467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1315",
+  "timestamps": {
+    "created_at": "2026-04-18T09:51:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

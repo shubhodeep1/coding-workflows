@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_render_recovery.py:lines 577-581 | severity=low | confidence=[4-5]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The test checks log counts and presence but does not verify the chronological order of the key recovery events.\n  WHY: All three reviewers identified the same robustness gap; higher confidence reviewers noted this can miss ordering regressions, though they also described it as a low-priority test improvement.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_render_recovery.py:19 | severity=low | confidence=1\n  PROBLEM: The test helper uses a hardcoded `bash` interpreter invocation.\n  WHY: The reviewer flagged `[\"bash\", str(script_path)]` as a minor portability concern, although they also noted it is acceptable in CI.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- tests/test_validate_process_render_recovery.py:287+ | severity=low | confidence=0\n  PROBLEM: No change required for the test script shell invocation.\n  WHY: The reviewer explicitly treated the shell-path concern as unnecessary hardening rather than a defect.\n- scripts/validate_process.sh:1242 | severity=low | confidence=1\n  PROBLEM: The render-recovery exit-code-to-phase routing would benefit from a clarifying comment.\n  WHY: The reviewer viewed the current routing as correct but suggested documenting why a phase-2 pre-flight failure after rerender is treated as a rendering defect.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validate_process_render_recovery.py:361-366 | severity=low | confidence=3\n  PROBLEM: The render-recovery exit code semantics conflate two scenarios that both route to the same self-heal phase.\n  WHY: The reviewer described this as a maintenance/design concern rather than a test bug, noting that exit code 2 covers both renderer failure and post-rerender preflight failure.\n- tests/test_validate_process_render_recovery.ty:407-412 | severity=low | confidence=2\n  PROBLEM: The test does not verify the exact order of the logged recovery events.\n  WHY: The reviewer said order assertions would make the test more robust even though the current checks already cover the intended behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validate_process_render_recovery.py:328-341 | severity=low | confidence=5\n  PROBLEM: None - the mock script\u2019s exit-code routing matches production behavior.\n  WHY: The reviewer explicitly concluded the routing is correct and that the test aligns with the intended design.\n- tests/test_validate_process_render_recovery.py:577-581 | severity=low | confidence=4\n  PROBLEM: The test does not assert the chronological order of key log entries.\n  WHY: The reviewer noted that counting occurrences and checking substrings is weaker than asserting event order, which could hide a future regression.\n- tests/test_validate_process_render_recovery.py:288 | severity=low | confidence=5\n  PROBLEM: No hardcoded shell path issue is present.\n  WHY: The reviewer stated the script uses the portable `#!/usr/bin/env bash` shebang and that interpreter-path flexibility is preserved.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- tests/test_validate_process_render_recovery.py:328-341 | severity=low | confidence=5\n  PROBLEM: The test routing logic matches production behavior; no bug is present.\n  WHY: The reviewer verified the mock script\u2019s `exit 2 -> render` branch against `scripts/validate_process.sh` and concluded the behavior is intentional.\n- tests/test_validate_process_render_recovery.py:577-581 | severity=low | confidence=4\n  PROBLEM: The test does not assert the chronological order of key log entries.\n  WHY: The reviewer said this reduces robustness because count-based assertions can miss ordering regressions.\n- tests/test_validate_process_render_recovery.py:288 | severity=low | confidence=5\n  PROBLEM: No hardcoded interpreter-path defect exists.\n  WHY: The reviewer explicitly stated the `#!/usr/bin/env bash` shebang is portable and that the flagged hardcoded-path concern is a false positive.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "363e37cb3e8f45fe0df1858051316b627cb0281ab43dcea2f513490d3a948ff3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1385,
+    "run_id": "24623362048",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "24623362048",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419081607_d7412de013",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1385,
+    "run_id": "24623362048"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T08:16:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

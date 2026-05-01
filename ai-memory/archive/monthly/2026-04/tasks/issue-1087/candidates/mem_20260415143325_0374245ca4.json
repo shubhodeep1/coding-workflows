@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: The required dependency features appear absent on the current branch. Should this docs task proceed now or wait until those code changes are present?**\nChoices:\n- **A** \u2014 Wait for `implement-repair-step` and `reissue-dependency-gate` to be present on this branch, then document exact implemented behavior. (RECOMMENDED)\n- **B** \u2014 Proceed now and document the intended behavior from the issue text even if code is not yet present.\n- **C** \u2014 Proceed now but document only currently implemented behavior; defer new-flow documentation to a follow-up issue.\nReply: `Q1: A`",
+  "fingerprint": "a2fc9f0224788ec273b249d347674185c52a2a36e2a1913bc9d3d10075bb5fca",
+  "lineage": {
+    "issue_number": 1087,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24460431952",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24460431952",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260415143325_0374245ca4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1087,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24460431952"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1087 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-15T14:33:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

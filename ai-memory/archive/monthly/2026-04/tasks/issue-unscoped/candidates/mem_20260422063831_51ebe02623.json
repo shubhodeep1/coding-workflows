@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.github/workflows/review_autofix.yml:2760` | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The settle-seconds validation rejects leading-zero values like `05`, unlike the analogous peer-wait setting in the same workflow.\n  WHY: This can make `AUTOFIX_CONTINUATION_SETTLE_SECS=05` fall back to the default 10 seconds instead of honoring the configured value.\n- `.ai/review_issue_ledger.txt:entire diff` | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: A gitignored runtime artifact is being changed in the PR.\n  WHY: Committing a file explicitly listed in `.gitignore` creates invalid repository state and should not appear in the PR.\n- `agents.md:20.3` | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The Autofix Continuation docs do not explicitly state that the settle delay runs in the post-commit retrigger step and does not count toward `EDITOR_MAX_WALL`.\n  WHY: Multiple reviewers identified this as a documentation clarity gap; one reviewer disputed it as a bug and treated it as documentation-only, so the highest severity here is low.\n- `README.md:AUTOFIX_CONTINUATION_SETTLE_SECS table entry` | severity=low | confidence=5\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The settle-delay entry does not explicitly clarify that it does not count toward `EDITOR_MAX_WALL`.\n  WHY: This is a documentation clarity issue only and was not identified as a runtime bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `.github/workflows/review_autofix.yml:2760` | severity=medium | confidence=5\n  PROBLEM: Uses `^(0|[1-9][0-9]*)$`, which rejects leading-zero inputs like `05` for `AUTOFIX_CONTINUATION_SETTLE_SECS`.\n  WHY: This can cause `AUTOFIX_CONTINUATION_SETTLE_SECS=05` to be rejected and default to 10 seconds instead of using the configured 5 seconds.\n- `agents.md:20.3` | severity=low | confidence=3\n  PROBLEM: The Autofix Continuation docs do not explicitly state that the settle delay runs in the post-commit retrigger step and does not count toward `EDITOR_MAX_WALL`.\n  WHY: This is a minor documentation clarity issue; it may confuse readers about resource budgeting but does not affect runtime behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- (No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `.ai/review_issue_ledger.txt:entire diff` | severity=medium | confidence=4\n  PROBLEM: This gitignored runtime artifact is being updated in the PR.\n  WHY: The file is explicitly listed in `.gitignore`, so committing changes to it creates invalid repository state.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `agents.md:20.3` | severity=low | confidence=5\n  PROBLEM: The new Autofix Continuation section does not explicitly say the settle delay is outside the editor's wall-clock timeout budget.\n  WHY: The sleep happens in the post-commit retrigger step, so omitting this clarification may mislead operators about `EDITOR_MAX_WALL`.\n- `README.md:AUTOFIX_CONTINUATION_SETTLE_SECS table entry` | severity=low | confidence=5\n  PROBLEM: The settle-delay entry does not explicitly clarify that it does not count toward `EDITOR_MAX_WALL`.\n  WHY: This is a documentation clarity improvement only and does not imply a runtime bug.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "d8f77190de5b5683a9acf513d0be65c9e03cbb8acbf5c868c5f6103679e6f2fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1492,
+    "run_id": "24763163530",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24763163530",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422063831_51ebe02623",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1492,
+    "run_id": "24763163530"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T06:38:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

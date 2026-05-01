@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n`tests/test_implement_post_codex_recovery.py`\nscripts/orchestrate_poll_process.sh\nscripts/validate_changed_files_syntax.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/implement.2.yml\n.github/workflows/implement.3.yml\n.github/workflows/orchestrate_clarify_respond.yml\n`.github/workflows/implement.yml`,\n`.github/workflows/implement.yml`,\n`.github/workflows/implement.yml`,\n`.github/workflows/implement.yml`,\n`.github/workflows/implement.yml`,\n`.github/workflows/orchestrate_clarify_respond.yml`\nprompts/mode-implement-repair.txt\nscripts/orchestrate_poll_process.2.sh\nscripts/orchestrate_poll_process.sh\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "0f81c324c4fae3e45bd7e7d603c196c134e026d8272bf54dd4b27436b80d998e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1108,
+    "run_id": "24471541278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24471541278",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415190928_ddbeb4ed9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1108,
+    "run_id": "24471541278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T19:09:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

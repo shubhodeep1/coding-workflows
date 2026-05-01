@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- AGENTS.md section 13a | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The phase numbering is left unexplained despite the missing `phase1-*` job.\n  WHY: The text says the `phase2-*` / `phase3-*` names are kept for backward compatibility, but it does not explain the removed phase or the external references being preserved.\n- AGENTS.md section 13a | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Phase 3 is documented as not emitting the usual release metadata marker, but the replacement signaling path is not described.\n  WHY: The section explicitly says Phase 3 does not post `COMPREHENSIVE_RELEASE_METADATA_V1`, so downstream consumers have no documented signal to follow instead.\n- README.md variables table vs AGENTS.md \u00a713a | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The workflow-name conventions for validation/orchestration are documented inconsistently across the two files.\n  WHY: README.md uses `ai-validate.yml` / `internal-validate.yml`, while AGENTS.md \u00a713a describes `workflow-log-analysis.yml` and `internal-orchestrate.yml`, which makes the authoritative naming unclear.\n- AGENTS.md section 13 (implied from retention documentation) | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Report retention relies solely on filename dates, so a future-dated report filename can evade purge expectations.\n  WHY: The documentation says filename dates are authoritative and `mtime` is ignored, but it does not validate that parsed dates are not in the future.\n- scripts/analyze_workflow_logs.py (implied from AGENTS.md \u00a713) | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: Report-retention date parsing lacks a sanity check for future-dated filenames.\n  WHY: The suggested hardening notes that parsed filename dates are used for retention without validating that they are reasonable or non-future dates.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- AGENTS.md section 13a | severity=low | confidence=3\n  PROBLEM: The phase numbering is left unexplained despite the missing `phase1-*` job.\n  WHY: The text says the `phase2-*` / `phase3-*` names are kept for backward compatibility, but it does not explain the removed phase or the external references being preserved.\n- AGENTS.md section 13a | severity=low | confidence=2\n  PROBLEM: Phase 3 is documented as not emitting the usual release metadata marker, but the replacement signaling path is not described.\n  WHY: The section explicitly says Phase 3 does not post `COMPREHENSIVE_RELEASE_METADATA_V1`, so downstream consumers have no documented signal to follow instead.\n- README.md variables table vs AGENTS.md \u00a713a | severity=low | confidence=2\n  PROBLEM: The workflow-name conventions for validation/orchestration are documented inconsistently across the two files.\n  WHY: README.md uses `ai-validate.yml` / `internal-validate.yml`, while AGENTS.md \u00a713a describes `workflow-log-analysis.yml` and `internal-orchestrate.yml`, which makes the authoritative naming unclear.\n- AGENTS.md section 13 (implied from retention documentation) | severity=low | confidence=2\n  PROBLEM: Report retention relies solely on filename dates, so a future-dated report filename can evade purge expectations.\n  WHY: The documentation says filename dates are authoritative and `mtime` is ignored, but it does not validate that parsed dates are not in the future.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/analyze_workflow_logs.py (implied from AGENTS.md \u00a713) | severity=low | confidence=1\n  PROBLEM: Report-retention date parsing lacks a sanity check for future-dated filenames.\n  WHY: The suggested hardening notes that parsed filename dates are used for retention without validating that they are reasonable or non-future dates.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c94a77389d4d34e33a0abe743f1e34bbd39d505389dff03c89e6fc38826bdcc7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25039712010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25039712010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428074701_abbe6f64f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25039712010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-28T07:47:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

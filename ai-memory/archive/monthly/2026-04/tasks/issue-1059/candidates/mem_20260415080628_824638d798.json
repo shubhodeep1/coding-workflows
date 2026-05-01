@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nClarification interpretation\n- Clarify phase produced no Q<ID> questions and auto-posted `/answer [auto-answered-by-clarify]`.\n- No additional decisions are pending; implement directly against the issue requirements.\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/review_autofix.yml`\n- `.github/workflows/orchestrate.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `.github/workflows/orchestrate_poll.yml`\n\n2. Functions/modules to implement\n- Add a `SCRIPT_REF` resolver step in each workflow:\n  - `SCRIPT_REF=${{ github.sha }}` when `github.repository == <source-repo>`\n  - otherwise `SCRIPT_REF=stable`\n  - export via `$GITHUB_ENV`.\n- For each existing support bootstrap block, add checkout transport with fallback:\n  - primary: `actions/checkout@v5` of `${{ github.repository_owner }}/coding-workflows` at `${{ env.SCRIPT_REF }}` into `.codex-workflow-src` (`fetch-depth: 1`, `token: GH_PAT`)\n  - fallback: retry checkout at `ref: main` if primary checkout fails, then fail only if both fail.\n  - preserve existing step gates/conditions (`if:` / `continue-on-error`) per workflow.\n- Replace inline `_gh_api_fetch` contents loops (in replaced bootstrap blocks) with a single `Stage workflow support files` step that copies from `.codex-workflow-src` to current destinations.\n- Preserve existing behavior in staging:\n  - scripts executable mode stays `0755`\n  - keep `if [ ! -f ]` semantics for `ai-memory/schemas/*`, `codex_system_instructions.md`, `ai_pipeline.md`\n  - keep `scripts/codex_model_catalog.json` fallback-to-local behavior when source file is missing\n  - keep consumer `scripts/.gitignore` auto-block generation behavior (especially orchestrate_poll pattern).\n- Keep `/rate_limit` preflight calls unchanged.\n- Remove `_gh_api_fetch` loops only where replaced; do not remove `_rl_wait` / `_gh_retry` helpers if still referenced elsewhere.\n\n3. Data structures affected\n- Script file lists currently used in each workflow bootstrap loop.\n- Prompt file lists and schema file lists used in staging logic.\n- `_fetched_scripts` arrays (used to build `scripts/.gitignore`).\n- `FETCHED_MANIFEST` updates in `implement.yml` for caller cleanup safety.\n- New env var: `SCRIPT_REF`.\n- New optional staged schema entries with fail-open guards:\n  - `ai-memory/schemas/actions_runs_cache.v1.json`\n  - `ai-memory/schemas/workflow_log_analysis_cache.v1.json`\n\n4. API/interface changes\n- No `workflow_call` input/output contract changes.\n- No label, Telegram, or orchestration interface changes.\n- Transport for support artifacts changes from GitHub Contents API calls to `actions/checkout@v5` + local copy in normal execution path.\n- Fallback transport parity retained via `SCRIPT_REF -> main`.\n\n5. Potential risks / edge cases\n- `orchestrate_clarify_respond.yml` currently hardcodes `wf_source=shubhodeep1/coding-workflows`; moving checkout repository to `${{ github.repository_owner }}/coding-workflows` is a behavior shift for cross-owner callers and should be treated as intentional per issue requirement.\n- New cache schema files are not present yet; staging must guard source-file presence and stay fail-open.\n- Must preserve required-vs-optional bootstrap behavior in `review_autofix.yml` (required artifacts still hard-fail with explicit message).\n- Mode drift risk if copy logic misses `chmod 0755`.\n- Ensure `.codex-workflow-src` staging does not change downstream logs/messages/fallback wording.\n\n6. Testing considerations\n- Validate YAML syntax and workflow lint for all 7 workflows.\n- Run representative workflow executions in both contexts:\n  - source repo run (`SCRIPT_REF=github.sha`)\n  - consumer repo run (`SCRIPT_REF=stable`, fallback path available).\n- Force fallback path test (simulate missing `${SCRIPT_REF}` checkout) and confirm retry to `main`.\n- Verify support artifact parity:\n  - same runtime file paths as before\n  - same executable modes\n  - no behavior changes in labels/Telegram/logging.\n- Verify no normal-path Contents API support-file fetch calls remain (rate-limit delta/check around fetch+stage section); keep `/rate_limit` preflight calls intact.\n- Verify `scripts/.gitignore` output remains consistent with prior consumer safety behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "eb0931a9781ef9dc78d40e3cbc18105e321cc81c30652f551f0679fe3c7f4416",
+  "lineage": {
+    "issue_number": 1059,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24443270095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24443270095",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1059"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415080628_824638d798",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1059,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24443270095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1059",
+  "timestamps": {
+    "created_at": "2026-04-15T08:06:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

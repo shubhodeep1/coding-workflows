@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Interpretation**\n- `/answer [auto-answered-by-clarify]` is interpretable as: no blocking ambiguity remains and planning should proceed automatically.\n- No `Q<ID>` questions were issued in clarification, so there is no Q-to-answer mapping required for this issue.\n\n**Representative Pattern Chosen**\n- Use the existing canonical-fragment rendering pattern already used in [.github/workflows/orchestrate.yml](.github/workflows/orchestrate.yml) and [.github/workflows/orchestrate_clarify_respond.yml](.github/workflows/orchestrate_clarify_respond.yml): fetch canonical prompt assets, then render placeholders via [scripts/render_prompt.sh](scripts/render_prompt.sh) backed by [prompts/serena-efficiency-block.txt](prompts/serena-efficiency-block.txt).\n\n**Files Likely To Change**\n- [.github/workflows/clarify.yml](.github/workflows/clarify.yml)\n- [.github/workflows/plan.yml](.github/workflows/plan.yml)\n- [.github/workflows/implement.yml](.github/workflows/implement.yml)\n- [.github/workflows/review_autofix.yml](.github/workflows/review_autofix.yml)\n- Optional regression guards (recommended): [.github/workflows/ci.yml](.github/workflows/ci.yml) and [.github/workflows/test-and-mark-stable.yml](.github/workflows/test-and-mark-stable.yml)\n\n**Functions/Modules To Implement**\n- Update each target workflow\u2019s \u201cfetch support files\u201d step so reusable-workflow callers can obtain canonical Serena rendering assets needed at runtime.\n- In `clarify`, `plan`, and `implement` prompt assembly, replace inline Serena paragraphs with placeholder-driven rendering (`READ_ONLY` for clarify/plan, `READ_WRITE` for implement), while leaving non-Serena phase rules unchanged.\n- In `review_autofix`, replace reviewer/editor inline Serena guidance blocks with canonical-placeholder rendering in reviewer/editor prompt body assembly.\n- Keep existing judge path intact, since it already renders [prompts/mode-judge-review-blocked.txt](prompts/mode-judge-review-blocked.txt) through `render_prompt.sh`.\n\n**Data Structures Affected**\n- Runtime-generated prompt artifacts only:\n- `CODEX_PROMPT_FILE` in clarify/plan/implement.\n- `REVIEWER_PROMPT_BODY_FILE`, `EDITOR_PROMPT_BODY_FILE`, `REVIEWER_PROMPT_FILE`, `EDITOR_PROMPT_FILE` in review_autofix.\n- Placeholder tokens rendered at runtime:\n- `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}`\n- `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}`\n- No DB collections/contracts or persisted schema/data changes.\n\n**API Or Interface Changes**\n- No external workflow-call interface changes (inputs/outputs/secrets/vars remain unchanged).\n- Internal assembly contract change: target workflows depend on canonical Serena fragment rendering assets being present in reusable contexts.\n- No behavior change intended outside Serena text dedupe.\n\n**Potential Risks Or Edge Cases**\n- Phase-specific guidance regression if non-shared rules are accidentally removed while extracting only shared Serena content.\n- Placeholder resolution failure if token formatting deviates from exact line format expected by `render_prompt.sh`.\n- Consumer-repo compatibility risk if fetched prompt assets are missing or not executable in reusable workflow context.\n- Implement workflow cleanup risk if fetched-file tracking is incomplete for newly fetched assets.\n- Review pipeline risk if reviewer/editor prompts accidentally switch read-only vs read-write Serena block type.\n\n**Testing Considerations**\n- Prompt rendering smoke checks for each updated workflow path:\n- Confirm generated prompt contains resolved Serena block text and no unresolved `{{SERENA_EFFICIENCY_BLOCK_*}}` tokens.\n- Confirm no inline duplicated Serena section headings remain in target workflow YAML after refactor.\n- Run existing prompt integrity checks in CI and stable-mark workflows to ensure canonical assets are present and renderable.\n- Verify reusable-workflow behavior by ensuring fetch+fallback logic works when caller repo does not contain local `scripts/` or `prompts/` assets.\n- Spot-check prompt diffs before/after to verify only Serena shared section changed and phase-specific instructions stayed intact.\n\n**Factual Conflicts Detected**\n- `review_autofix.yml` is already partially deduped for the review-blocked judge prompt (it already uses `render_prompt.sh` + canonical Serena fragment); duplication remains in reviewer/editor body heredocs.\n- Canonical mode prompt files for clarify/plan/implement already exist in `prompts/`, but those three workflows still assemble large inline heredocs directly instead of using canonical render flow.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e6e1146c0cacf8d61788a7186fc41d5f2a03464abf10f5ea73245315b930f794",
+  "lineage": {
+    "issue_number": 747,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24285346009",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24285346009",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/747"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411152839_8f55861cf5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 747,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24285346009"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #747",
+  "timestamps": {
+    "created_at": "2026-04-11T15:28:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

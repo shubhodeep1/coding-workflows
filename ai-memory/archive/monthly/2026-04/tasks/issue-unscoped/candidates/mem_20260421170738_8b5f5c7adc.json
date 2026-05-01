@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2:16 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, stepfun_step-3_5-flash, google_gemini-3-flash-preview]\n  PROBLEM: The default module list contains `hardhat` and `ethers`, which are not importable Python modules.\n  WHY: `importlib.import_module()` will raise `ModuleNotFoundError` for Node package names, so the import audit fails in a normal Python runtime.\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_import_audit.sh.j2:10-12 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The test script unconditionally invokes `python3` even though the node-hardhat-solidity image does not install Python.\n  WHY: The Docker image includes foundry and basic utilities but not `python3`, so the script will abort with `command not found`.\n- scripts/validation_lint.py:609-613 | severity=medium | confidence=5\n  flagged_by: [stepfun_step-3_5-flash, google_gemini-3-flash-preview]\n  PROBLEM: `_check_test_script_prologue` accepts `set -euo pipefail` anywhere in the file instead of near the top.\n  WHY: This lets scripts pass lint even when earlier commands run without strict-mode protection, weakening the prologue check; reviewers disagreed only on whether this is a bug, not on the behavior.\n- scripts/validation_lint.py:44 | severity=low | confidence=4\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The strict-mode regex is used in a way that may miss valid same-line shell constructs in some cases.\n  WHY: The reviewer warned that relying on line-by-line `match()` is fragile for multi-command lines; this was a secondary concern rather than the main prologue issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/validation_lint.py:609-613 | severity=medium | confidence=5\n  PROBLEM: `_check_test_script_prologue` uses `any()` across all script lines to detect `set -euo pipefail`.\n  WHY: This allows the strict-mode directive to appear anywhere in the file, so commands before it run without `pipefail` protection and the prologue rule is weakened.\n- scripts/validation_lint.py:44 | severity=low | confidence=4\n  PROBLEM: The expanded regex `SET_EUO_PIPEFAIL_RE` is used with `match`, which only checks the start of a line.\n  WHY: The reviewer said valid shell scripts may combine strict mode with other commands on the same line, making the detection fragile for multi-command lines.\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2:16 | severity=high | confidence=5\n  PROBLEM: The default module list contains Node package names for a Python auditor.\n  WHY: `importlib.import_module()` will fail to import `hardhat` and `ethers` in Python, causing the audit to fail at runtime.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2:16 | severity=high | confidence=5\n  PROBLEM: The default module list `[\"hardhat\", \"ethers\"]` contains Node.js package names, not importable Python modules.\n  WHY: The script uses `importlib.import_module()`, so importing those names in Python raises `ModuleNotFoundError` and the audit fails.\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_import_audit.sh.j2:12 | severity=medium | confidence=4\n  PROBLEM: The test script unconditionally calls `python3` even though the Foundry-based image does not include Python.\n  WHY: The script will fail with `command not found: python3` in the minimal container.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2:16 | severity=high | confidence=5\n  PROBLEM: The hardcoded default module list uses Node.js package names that are not importable Python modules.\n  WHY: `importlib.import_module()` will raise `ModuleNotFoundError`, causing the import audit to fail in a standard Python environment.\n- workflow-templates/validation-harness/node-hardhat-solidity/tests/20_import_audit.sh.j2:10-12 | severity=high | confidence=5\n  PROBLEM: The test runner unconditionally invokes `python3`, but the node-hardhat-solidity Dockerfile does not install Python.\n  WHY: The binary will be missing, so the script aborts immediately with `command not found` and the harness run fails.\n- scripts/validation_lint.py:609-613 | severity=medium | confidence=4\n  PROBLEM: The linter checks for `set -euo pipefail` using `any()` across all script lines.\n  WHY: This lets the directive appear late in the file, so earlier commands execute without strict-mode protection and the prologue intent is undermined.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "31e9be8fdf101f49056cc0150a97f9de2cec7c42d31a5390156bff9bf9cb2af1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1501,
+    "run_id": "24734986186",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24734986186",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421170738_8b5f5c7adc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1501,
+    "run_id": "24734986186"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T17:07:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

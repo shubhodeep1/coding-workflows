@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_model_catalog.json:475-541 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The switch of three reviewer models from \"freeform\" to \"function\" is an undocumented scope deviation and lacks a stated rationale for selecting exactly those models.\n  WHY: Moonshot explicitly labeled the same change critical, and the other reviewers reported the same missing PR/commit documentation with confidence 4-5.\n- scripts/codex_model_catalog.json:475-541 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The three-model \"freeform\" to \"function\" switch is a one-off pattern deviation with no evidence that codex-cli supports it safely.\n  WHY: Reviewers warn that the change lacks tool-registration or schema-change evidence and could break patch payloads or validation at runtime.\n- .github/workflows/review_autofix.yml:116, 1636-1639 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: Raising CHECK_RUNS_WAIT_TIMEOUT_SECS from 600 to 1200 is a scoping change embedded in the compound PR.\n  WHY: Minimax marked it as a lower-priority scoping concern because it changes review_autofix behavior for all runs.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/codex_model_catalog.json:478, 508, 538 | confidence=5\n  PROBLEM: The model catalog modification switching three models from \"freeform\" to \"function\" is not mentioned in the PR title, description, or any of the 6 commits.\n  WHY: This appears to be an undocumented extra mutation bundled with the release-gate fixes, leaving no traceable rationale for why these specific models require \"function\" while 15 others use \"freeform\".\n- scripts/codex_model_catalog.json:478, 508, 538 | confidence=4\n  PROBLEM: The change introduces an unexplained one-off pattern deviation: only 3 of 18 model entries use \"apply_patch_tool_type: function\" while the remaining 15 use \"freeform\".\n  WHY: There is no documented rationale, no evidence of tool-registration or schema changes, and no testing evidence showing these models benefit from \"function\" over \"freeform\".\n- .github/workflows/review_autofix.yml:116, 1636-1639 | confidence=1\n  PROBLEM: The default value for CHECK_RUNS_WAIT_TIMEOUT_SECS was raised from 600 to 1200 inside a compound release-gate PR.\n  WHY: The reviewer treats this as a lower-priority scoping concern because it affects all PRs using review_autofix.yml.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/codex_model_catalog.json:478, 508, 538 | severity=critical | confidence=4\n  PROBLEM: The change from \"freeform\" to \"function\" for these three models is not mentioned anywhere in the PR title, description, or commit messages.\n  WHY: The PR scope explicitly covers release-gate/workflow fixes, so this catalog mutation is a silent configuration change that bypasses normal review scrutiny.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/codex_model_catalog.json:478, 508, 538 | confidence=4\n  PROBLEM: The last run diff modifies apply_patch_tool_type for three models from \"freeform\" to \"function\", but this change is not documented in any commit message, PR description, or stated intent in the release-gate bundle.\n  WHY: The PR scope summary enumerates workflow and timeout fixes only; this undocumented mutation controls codex-cli tool registration and may produce malformed patch payloads or schema-validation failures at runtime.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/codex_model_catalog.json:475-481, 505-511, 535-541 | confidence=4\n  PROBLEM: The catalog change creates an inconsistent pattern where these three models use \"function\" but all others remain \"freeform\".\n  WHY: No evidence shows runtime support for the switch, and codex-cli patch application may fail if the function-shaped tool registration or schema validation expects freeform strings for these models.\n- scripts/codex_model_catalog.json:475-541 | confidence=5\n  PROBLEM: The catalog change is completely absent from the PR title, description, commit history, and scope summary.\n  WHY: The release-gate bundle documents only workflow-log-analysis and timeout fixes, so this is an undocumented config mutation that risks codex-cli misconfiguration on deploy.\n- scripts/codex_model_catalog.json | confidence=4\n  PROBLEM: No rationale or evidence is provided for selecting exactly these three models for the tool type upgrade.\n  WHY: If the change targets a specific capability, the selection is unvalidated and could degrade other models silently.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "79e6dc554f4f60f69685b45631249f415f3b2c930b2ac6b2a51f079b3da7558b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1752,
+    "run_id": "25090934047",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25090934047",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260429045617_a05c1d49d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1752,
+    "run_id": "25090934047"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-29T04:56:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

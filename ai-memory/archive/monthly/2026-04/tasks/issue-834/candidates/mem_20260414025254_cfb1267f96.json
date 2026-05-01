@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- Q1: A \u2014 use the same first linked closing issue used for `original_issue.txt` when resolving `approved_plan.txt`.\n- Q2: A \u2014 fallback artifact contract is `implementation-plan` containing `implementation_plan.txt`; if unavailable, write explicit unavailable marker.\n\nImplementation plan:\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n- `scripts/review_run_reviewers.sh`\n- `scripts/review_apply_fixes.sh`\n\n2. Workflow/module changes\n- In `review_autofix.yml` runtime init, add:\n  - `ORIGINAL_ISSUE_FILE=${RUNTIME_DIR}/original_issue.txt`\n  - `APPROVED_PLAN_FILE=${RUNTIME_DIR}/approved_plan.txt`\n- Extend \u201cCollect PR metadata\u201d with fail-open resolution logic:\n  - Resolve first linked closing issue via GraphQL `closingIssuesReferences(first:1)`.\n  - Write `original_issue.txt` from linked issue body (`repos/{owner}/{repo}/issues/{issue_number}`), else write explicit unavailable marker.\n  - Resolve `approved_plan.txt` from latest linked-issue comment matching plan signature (`Implementation Plan` header).\n  - If no matching comment, attempt fallback artifact retrieval from implementation run:\n    - artifact name `implementation-plan`\n    - file `implementation_plan.txt`\n  - If fallback fails, write explicit unavailable marker.\n- Add size/hash logging for the two new context files so prompt artifact checks can assert presence without failing workflow.\n\n3. Prompt assembly updates\n- In `scripts/review_run_reviewers.sh`, inject after `pre_assembled_static.txt`:\n  - `=== ORIGINAL ISSUE ===`\n  - `=== APPROVED PLAN ===`\n- In `scripts/review_apply_fixes.sh`, inject the same two blocks after `pre_assembled_static.txt`.\n- Keep existing prompt flow and identifiers intact; insert before runtime-context hints/body assembly.\n- Ensure scripts are fail-open by tolerating missing/unset files and defaulting to unavailable markers.\n\n4. Data structures affected\n- New runtime files:\n  - `${RUNTIME_DIR}/original_issue.txt`\n  - `${RUNTIME_DIR}/approved_plan.txt`\n- New env vars:\n  - `ORIGINAL_ISSUE_FILE`\n  - `APPROVED_PLAN_FILE`\n- No DB/schema/index changes.\n\n5. API/interface changes\n- No external API changes.\n- Internal prompt contract gains two new sections in reviewer/editor prompts.\n- Additional GitHub API usage in metadata step:\n  - GraphQL `pullRequest.closingIssuesReferences(first:1)`\n  - REST issue + issue comments endpoints\n  - Actions artifact lookup/download for fallback.\n\n6. Risks and edge cases\n- No linked issue, empty issue body, or inaccessible issue must produce marker files (not errors).\n- Multiple linked issues must remain deterministic (first linked only).\n- Plan comment format drift may reduce match rate; fallback/marker path must always keep flow non-blocking.\n- Artifact fallback may fail due to missing artifact/permissions; must stay fail-open.\n- Prompt size growth from large issue/plan text should be monitored via prompt/file byte logs.\n\n7. Testing considerations\n- PR with linked issue + plan comment: both context files non-empty; both prompt files contain both headers.\n- PR without linked issue: both files contain explicit unavailable markers; prompts still include both blocks.\n- Linked issue without matching plan comment: artifact fallback attempted, then marker if unavailable.\n- Validate ordering: blocks appear after `pre_assembled_static.txt` and before runtime-context hints.\n- Run existing smoke PR review path (`[E2E Smoke Test]`) to confirm no regression in review/autofix success behavior.\n\nConflict check:\n- Prior note about template-owned path edits being no-op applies to consumer repos. This issue targets `coding-workflows` source paths, which are canonical here, so the requested file changes are valid.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "45087a7166a594fe48c61db3f05a89411365e27a6496a6cb7cbb80b4bf0b5579",
+  "lineage": {
+    "issue_number": 834,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378232954",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378232954",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/834"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025254_cfb1267f96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 834,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378232954"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #834",
+  "timestamps": {
+    "created_at": "2026-04-14T02:52:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

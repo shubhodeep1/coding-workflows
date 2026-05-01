@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #529\n\nClarification interpretation\n- The only answer signal is `/answer [auto-answered-by-orchestrator]` with \u201cissue description is sufficient,\u201d so there are no unresolved clarification decisions and planning can proceed.\n\nConflict check\n- No factual conflict with code behavior.\n- Minor note: exact line numbers in the issue are slightly shifted in current files, but the referenced logic blocks are present.\n\n1. Files likely to change\n- [.github/workflows/plan.yml](.github/workflows/plan.yml)\n\n2. Functions/modules to implement\n- Update the `Fetch workflow support scripts` step in `plan.yml` to include `ai_memory.py` and `ai_memory_lib.py` in the fetched script list (same canonical source/fallback behavior as existing scripts).\n- Update `Check and claim /answer command` in `plan.yml`:\n  - Compute `memory_enabled` from `AI_MEMORY_ENABLED` using truthy values (`1|true|yes|on`).\n  - If memory is disabled: treat claim as successful (`claimed=true`) even when claim output is empty.\n  - If memory is enabled: require valid JSON claim payload and require `claimed == true`.\n  - If memory is enabled and claim output is empty/malformed/missing a boolean `claimed`: fail the step explicitly (fail-closed), not skip.\n  - Preserve current skip behavior for:\n    - already processed (`memory_processed_command_check` => `exists=true`)\n    - not claimed by this run (`claimed=false`).\n\nRepresentative pattern to follow\n- Reuse the claim handling pattern already used in [.github/workflows/implement.yml](.github/workflows/implement.yml) for disabled-memory bypass, then harden parsing in `plan.yml` to fail on malformed enabled-mode output.\n\n3. Data structures affected\n- Script fetch list array in `plan.yml` (adds `ai_memory.py`, `ai_memory_lib.py`).\n- Claim JSON contract consumed in `plan.yml`: `.operation_result.claimed` or `.claimed` (must be valid boolean when memory is enabled).\n- Existing env flags remain unchanged: `AI_MEMORY_ENABLED`, `SKIP_PLAN`, `PROCESSED_ANSWER_CLAIMED`, `PROCESSED_ANSWER_COMPLETED`.\n\n4. API/interface changes\n- No external API/schema changes.\n- Internal workflow behavior change only:\n  - `AI_MEMORY_ENABLED=false` now correctly bypasses claim and continues planning.\n  - Enabled mode now treats malformed claim payload as an explicit error instead of duplicate-skip.\n\n5. Potential risks/edge cases\n- Risk: stricter parsing may surface latent memory-script output issues as hard failures (intended per acceptance criteria).\n- Edge case: `claimed=false` must still map to duplicate-run skip, not failure.\n- Edge case: empty output when enabled must fail; empty output when disabled must proceed.\n- Edge case: keep downstream completion steps safe when bypass path sets `PROCESSED_ANSWER_CLAIMED=true`.\n\n6. Testing considerations\n- Validate in a consumer repo without local memory scripts, with `AI_MEMORY_ENABLED=true`: `/answer` planning run completes.\n- Validate with `AI_MEMORY_ENABLED=false`: claim step does not set `SKIP_PLAN=true`; planning proceeds.\n- Validate malformed claim output in enabled mode (e.g., non-JSON/empty): workflow fails at claim step with explicit error.\n- Validate duplicate protections still hold:\n  - `exists=true` skips run.\n  - `claimed=false` skips run.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "24c515e5cb00a96c0b40bf99d4ac1cb7a7ff7033d926c00e5bcb208ae41fc37a",
+  "lineage": {
+    "issue_number": 529,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24168893851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24168893851",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/529"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409022004_892724985e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 529,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24168893851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #529",
+  "timestamps": {
+    "created_at": "2026-04-09T02:20:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

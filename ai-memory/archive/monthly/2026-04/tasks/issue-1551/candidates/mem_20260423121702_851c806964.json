@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Ref Context**\n\n`git rev-parse HEAD`: `303bdb7a57508d8f98018144b5b3b11ee1121e8c`  \n`git symbolic-ref --short -q HEAD`: `main`  \nIntegration branch metadata is empty, so there is no integration-ref mismatch to block planning.  \nClarification: no Q-IDs were issued; `/answer [auto-answered-by-orchestrator]` means proceed with the issue as written.  \nNo relevant `/db/contracts` are implicated because this is validation/workflow-only work.\n\n**Conflicts To Note**\n\n- [`.ai/validate.yml`](.ai/validate.yml) is explicitly a placeholder `python-mongo-flask` manifest, and this repo has no `app.py` / Flask entrypoint, so the rendered `FLASK_APP=app.py` startup cannot succeed.\n- [`scripts/render_validation_templates.py`](scripts/render_validation_templates.py) currently resolves only `python-mongo-flask` and `node-hardhat-solidity`; switching the manifest to a generic discovery type like `library`, `cli`, or `worker` would fail family resolution today.\n- The manifest schema allows `custom_tests` and `skip_tests`, but the shipped template trees currently do not consume those keys, so a manifest-only tweak will not create the repo-local checks this issue expects.\n\n**Implementation Plan**\n\n1. Introduce a new additive non-service Python validation family, using [`workflow-templates/validation-harness/python-mongo-flask`](workflow-templates/validation-harness/python-mongo-flask) plus [`tests/test_family_python_mongo_flask.py`](tests/test_family_python_mongo_flask.py) as the representative pattern. Register the new family in [`scripts/render_validation_templates.py`](scripts/render_validation_templates.py), add its template subtree under [`workflow-templates/validation-harness`](workflow-templates/validation-harness), and make its container stay healthy through the health phase via a deterministic long-lived command instead of `flask run`.\n\n2. Add a small repo-local validation helper under [`scripts`](scripts) or [`tests`](tests) that runs meaningful local checks for this repo. The safest starting set is the existing Python validation/tooling tests already run in CI, such as `python3 tests/test_render_validation_templates.py`, `python3 tests/test_validate_process_template_mode.py`, and `python3 tests/test_validate_workflow_validate_bootstrap.py`, because they exercise this repo\u2019s real validation/template machinery without needing a web app. Prefer this helper over trying to retrofit `custom_tests` into the existing Flask family.\n\n3. Switch [`.ai/validate.yml`](.ai/validate.yml) from the placeholder Flask type to the new family and replace the placeholder comments with real manifest intent. If the new family needs an `entry`, point it at the helper script/command explicitly; keep the existing `slots.project_name` and `canary_tools` structure additive rather than renaming keys.\n\n4. Wire the new family into template-mode bootstrap and selftest coverage. Update the explicit template asset allowlist in [`.github/workflows/validate.yml`](.github/workflows/validate.yml), the contract assertions in [`tests/test_validate_workflow_validate_bootstrap.py`](tests/test_validate_workflow_validate_bootstrap.py), and add a representative fixture manifest under [`examples/validation-fixtures`](examples/validation-fixtures). Extend [`tests/test_validation_selftest_runner.py`](tests/test_validation_selftest_runner.py), which currently hard-codes the two existing family names.\n\n5. Add renderer/family regression coverage for the new family. Mirror the current pattern in [`tests/test_render_validation_templates.py`](tests/test_render_validation_templates.py) and [`tests/test_family_python_mongo_flask.py`](tests/test_family_python_mongo_flask.py) so CI verifies the new compose file, healthcheck, generated repo-check script, and required tool installation. If it simplifies assertions, add a golden fixture tree under [`tests/fixtures/validation_harness`](tests/fixtures/validation_harness).\n\n6. Update docs to match runtime reality. [`README.md`](README.md) should document the new non-service family and when to use it, and [`docs/validation-templates-plan.md`](docs/validation-templates-plan.md) should be kept in sync with the renderer\u2019s actual supported families. `agents.md` should only change if implementation introduces a new contract or env var, which this fix should avoid.\n\n**Data Structures / Interface Changes**\n\n- [`.ai/validate.yml`](.ai/validate.yml): new supported `type` value for repo-local non-service validation.\n- [`scripts/render_validation_templates.py`](scripts/render_validation_templates.py): additive expansion of `FAMILY_REGISTRY` and any output alias map needed by the new family.\n- [`.github/workflows/validate.yml`](.github/workflows/validate.yml): bootstrap allowlist grows to include the new family\u2019s template files.\n- [`examples/validation-fixtures`](examples/validation-fixtures): one more representative manifest consumed by the selftest matrix.\n\n**Risks / Edge Cases**\n\n- Do not change `python-mongo-flask` semantics to fit this repo; that would risk breaking existing consumer repos. Add a new family instead.\n- If the repo-check helper uses external binaries like `ruff`, `yamllint`, or `actionlint`, the new Dockerfile and canary must install/assert them up front or validation will fail mid-run.\n- Forgetting any new template file in the validate-workflow bootstrap allowlist will make template mode fail in consumer-style runs even if local rendering works.\n- There is already a doc/runtime mismatch around generic manifest types; docs and runtime need to be updated together so future manifests do not drift again.\n\n**Testing Considerations**\n\n- Render the new family directly with [`scripts/render_validation_templates.py`](scripts/render_validation_templates.py) and verify the output tree.\n- Run the new family regression test(s) plus `python3 tests/test_render_validation_templates.py`.\n- Run `python3 tests/test_validate_workflow_validate_bootstrap.py` and `python3 tests/test_validation_selftest_runner.py`.\n- Re-run template-mode validation for this repo and confirm:\n  - the primary container stays healthy through the health phase,\n  - `validation/logs/app.log` no longer contains `Could not import 'app'`,\n  - `validation/validate.sh` advances past `startup_container_exited`,\n  - the executed output shows repo-local checks rather than Flask bootstrap only.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b7839b92af97ddef2955685ec9d3644f66797851f557b2a7006f9e5f36132f09",
+  "lineage": {
+    "issue_number": 1551,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24833936180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24833936180",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1551"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260423121702_851c806964",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1551,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24833936180"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1551",
+  "timestamps": {
+    "created_at": "2026-04-23T12:17:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

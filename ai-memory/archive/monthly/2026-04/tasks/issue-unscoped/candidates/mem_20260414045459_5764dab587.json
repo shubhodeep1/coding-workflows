@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24381388484-1-27214/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n`tests/test_orchestrate_poll_process.py`",
+  "fingerprint": "bdf21d323c93cd3041847d2c160cd7ef479e735a9c76c5720e54e8ac666d47eb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 850,
+    "run_id": "24381388484",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24381388484",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414045459_5764dab587",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 850,
+    "run_id": "24381388484"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T04:54:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:594,599 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The document uses `\u00a720.2` where it should refer to `\u00a720.3`.\n  WHY: Multiple reviewers confirmed these cross-references point operators to the wrong section for ledger-only commit auto-merge behavior.\n- README.md:65,67 | severity=high | confidence=[5]\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The ledger-only commit references still point to `\u00a720.2` instead of `\u00a720.3`.\n  WHY: The reviewer confirmed these README links were left on the old section number after renumbering, which misdirects readers.\n- scripts/orchestrate_poll_process.sh:4559-4563 | severity=low | confidence=[2]\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The `startswith` filter may still collapse the diagnostics array if `.body` is not a string.\n  WHY: The reviewer noted `(.body // \"\")` handles nulls but not other malformed non-string types, so a defensive type guard would isolate that failure.\n- scripts/check_external_branch_advance.sh:131-180 | severity=medium | confidence=[3]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The script may do unnecessary per-commit local git work for large external pushes.\n  WHY: The reviewer judged the loop efficient in the common case but still potentially slow on unusually large commit ranges.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md:599 | severity=low | confidence=5\n  PROBLEM: Incorrect section reference points to `\u00a720.2` instead of `\u00a720.3`.\n  WHY: The line describes ledger-only commit auto-merge behavior, which belongs in the later section.\n- scripts/orchestrate_poll_process.sh:4559-4564 | severity=1\n  PROBLEM: The reported truncation-limit bug is not present; the code already uses `length > 2000` with `.[:1988]`.\n  WHY: The reviewer says the implementation is correct as written and the `.body // \"\"` coercion makes `startswith` safe.\n- scripts/check_external_branch_advance.sh:131-180 | severity=2\n  PROBLEM: The review raised a performance/rate-limit concern for large commit ranges, but the implementation exits early in the common case.\n  WHY: The reviewer judged the edge case unlikely and the current approach acceptable.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- agents.md:594,599 | severity=5\n  PROBLEM: The document uses incorrect section references, pointing to `\u00a720.2` instead of `\u00a720.3`.\n  WHY: The reviewer confirmed both cross-references should point to the ledger-only commit auto-merge section.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:4563 | severity=critical | confidence=5\n  PROBLEM: The jq truncation logic is said to use incorrect numeric limits.\n  WHY: The reviewer claims `length > 20` and `.[:1988]` would truncate comments to about 20 characters instead of the intended 20,000.\n- agents.md:594,599 | severity=high | confidence=5\n  PROBLEM: Both lines reference `\u00a720.2` but should reference `\u00a720.3`.\n  WHY: The reviewer says these lines are in the section describing ledger-only commit auto-merge, not mid-run external-push gates.\n- scripts/check_external_branch_advance.sh:131 | severity=medium | confidence=3\n  PROBLEM: The script may iterate over every commit between the local and remote tips with repeated local git calls.\n  WHY: The reviewer says a large externally pushed range could be slow, even though API calls are avoided for non-autofix subjects.\n- scripts/orchestrate_poll_process.sh:4559 | severity=low | confidence=2\n  PROBLEM: `startswith` on `.body` could theoretically fail on a non-string value.\n  WHY: The reviewer considers this speculative because `// \"\"` should handle nulls, but malformed JSON could still trigger a jq type error.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:4563 | severity=none\n  PROBLEM: The truncation logic is correct and not a bug.\n  WHY: The reviewer explains that `length > 2000` plus `.[:1988]` and the suffix total 2000 characters.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- agents.md:594,599 | severity=high | confidence=5\n  PROBLEM: These references still point to `\u00a720.2` and should point to `\u00a720.3`.\n  WHY: The reviewer confirmed the lines describe ledger-only commit auto-merge, which belongs in the later section.\n- README.md:65,67 | severity=high | confidence=5\n  PROBLEM: Two README references still use `\u00a720.2` for ledger-only commit behavior.\n  WHY: The reviewer confirmed both internal cross-references were left on the old section number after renumbering.\n- scripts/orchestrate_poll_process.sh:4559-4563 | severity=low | confidence=1\n  PROBLEM: A defensive type guard could prevent malformed non-string comment bodies from collapsing diagnostics.\n  WHY: The reviewer notes `(.body // \"\")` handles nulls, but a non-string body could still make `startswith` error.\n- scripts/check_external_branch_advance.sh:131-180 | severity=medium | confidence=3\n  PROBLEM: The commit-range loop can do unnecessary local git work on large pushes.\n  WHY: The reviewer says the common case is efficient, but the loop still scales with the number of commits.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "cd1b4951039327c5b51854dae0df7f0de0e837a674af8b5079d7a66f89ad846a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1492,
+    "run_id": "24774616819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24774616819",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422113006_452c92a8e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1492,
+    "run_id": "24774616819"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T11:30:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

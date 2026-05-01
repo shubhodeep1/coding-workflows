@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `stall-judge-escalate-human-terminalize`\n\nClarification mapping\n- No Q1/Q2/... were asked in clarify; `/answer [auto-answered-by-clarify]` is interpreted as \u201cscope is clear; proceed with implementation planning.\u201d\n\nConflict detection (important)\n- The issue references `execute_stall_recovery_action()` and `run_stall_judge` on branch `orchestrator/project-865`.\n- In current code on `main`, those symbols are not present. The equivalent recovery points are:\n  - `recover_stalled_issue()` in `scripts/orchestrate_poll_process.sh`\n  - `run_standalone_stall_recovery()` in `scripts/orchestrate_poll_process.sh`\n  - phase/stall classification in `scripts/orchestrate_lib.py`\n- `escalate_human` is currently not handled in these `main`-branch recovery switches, so implementation should target these equivalent functions.\n\n1. Files likely to change\n- `.github/ai/label_contract.v1.json`\n- `scripts/label_helpers.sh`\n- `scripts/orchestrate_lib.py`\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_lib.py`\n- `tests/test_orchestrate_poll_process.py`\n- `README.md`\n\n2. Functions/modules to implement\n- `scripts/orchestrate_lib.py`\n  - Add `ai:needs-human` to `PHASE_LABELS_PRIORITY`.\n  - Add `ai:needs-human` to non-recoverable skip set (recommended: `DEDICATED_HANDLER_PHASES`; keeps issue open but excludes stall retries).\n  - Keep `detect_stalls()` behavior unchanged except it now naturally skips this phase.\n- `scripts/orchestrate_poll_process.sh`\n  - Managed path: extend `recover_stalled_issue()` with `escalate_human)` action:\n    - transition issue to `ai:needs-human` using contract-driven phase resolution (remove conflicting phase labels, add `ai:needs-human`);\n    - send one escalation notification/comment;\n    - do not schedule further auto-recovery for that issue while in `ai:needs-human`.\n  - Managed counter gate: exclude `escalate_human` from increment logic (same intent as \u201chandoff final action\u201d).\n  - Standalone path: extend `run_standalone_stall_recovery()` with parallel `escalate_human)` handling.\n  - Standalone skip list: include `ai:needs-human` in the explicit \u201cdo not recover\u201d phase guard.\n  - Standalone post-action counter gate: exclude `escalate_human` for consistency.\n- Label metadata\n  - Add `ai:needs-human` color/description in both label contract and `label_helpers.sh`.\n\n3. Data structures affected\n- Label contract:\n  - `labels[\"ai:needs-human\"]` entry.\n  - `phase_groups.issue_phase.members` includes `ai:needs-human`.\n- Poller/runtime phase model:\n  - `determine_phase()` may now return `ai:needs-human`.\n  - `last_seen_phase` in state/standalone marker may persist `ai:needs-human`.\n- No Mongo collections/contracts are impacted.\n\n4. API/interface changes\n- New operational label/interface: `ai:needs-human`.\n- Internal recovery action support: `escalate_human` becomes fully handled in both managed and standalone paths.\n- Human resume contract:\n  - autonomous retries remain paused while `ai:needs-human` is present;\n  - resume occurs only after human label/state change.\n\n5. Risks and edge cases\n- If `ai:needs-human` is added without removing prior phase labels, phase resolution may stay on old label. Mitigation: use contract-driven phase transition (`resolve-phase`) when escalating.\n- This phase is intentionally non-terminal for project completion; waves may pause indefinitely until human intervention.\n- Standalone detection has explicit hardcoded skip phases; missing `ai:needs-human` there would reintroduce looping even if core lib is updated.\n- Contract/helper drift risk; existing parity tests must stay green.\n\n6. Testing considerations\n- `tests/test_orchestrate_lib.py`\n  - Add/extend test to assert `detect_stalls()` does not emit recovery entries for `ai:needs-human`.\n  - Existing contract-vs-priority test should validate `PHASE_LABELS_PRIORITY` includes new phase-group member.\n- `tests/test_orchestrate_poll_process.py`\n  - Managed-wave test: stale issue labeled `ai:needs-human` is not recovered (no `/reclarify`/`/approved`/retry comments; no recovery-count bump).\n  - Standalone test: standalone candidate with `ai:needs-human` is skipped from recovery.\n  - Label contract/helper parity tests should pass with new label.\n- Regression scope\n  - Ensure no behavior change for other actions (`retrigger_*`, `close_and_reissue`, `skip`, `attempt_merge`).\n\nREADME/operator docs update\n- Update stall recovery section to document:\n  - `escalate_human` transitions to `ai:needs-human`;\n  - this is a deliberate human-handoff pause state (no autonomous stall retries);\n  - exact operator expectation for resuming automation (human relabel/state change).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "176c619a1e62f43b4a8c7f61bf5f8460cfb77ec0b3c739464e087e39b2d81a77",
+  "lineage": {
+    "issue_number": 964,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24413337992",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24413337992",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/964"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414173544_f4ca98fc30",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 964,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24413337992"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #964",
+  "timestamps": {
+    "created_at": "2026-04-14T17:35:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

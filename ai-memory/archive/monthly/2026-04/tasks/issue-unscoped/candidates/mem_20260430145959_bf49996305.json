@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/consolidate_soft_error_reports.py:71-93 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: NEXT_HEADING_RE is anchored to the analyzer's literal section headings, coupling the parser to prompt-specific stop markers.\n  WHY: Reviewers agree this is an intentional trade-off to prevent truncation from generic `##` matching; the disagreement is only about whether the coupling risk is acceptable.\n- scripts/consolidate_soft_error_reports.py:197-236 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Filtering whitespace-only lines before checking PLACEHOLDER_LINE_RE was alleged to misclassify bodies.\n  WHY: Reviewers agree the whole-line anchored placeholder check is correct and does not filter real prose that merely mentions the placeholder phrase.\n- tests/test_consolidate_soft_error_reports.py:279-346 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The test `test_pure_placeholder_body_still_filtered_with_bullet` was alleged to lack an assertion on the expected empty output.\n  WHY: Reviewers agree the assertion is present and the critique is factually incorrect.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/consolidate_soft_error_reports.py:74-82 | confidence=3\n  PROBLEM: NEXT_HEADING_RE now matches literal section names (Patterns to watch|Likely benign) from the analyzer prompt, creating coupling to the prompt format.\n  WHY: VALID OBSERVATION, NOT A BUG; the code intentionally trades this coupling for avoiding the proven truncation bug from generic `##` matching.\n- scripts/consolidate_soft_error_reports.py:231-235 | confidence=1\n  PROBLEM: Filtering whitespace-only lines before checking whether all lines match PLACEHOLDER_LINE_RE could misclassify bodies.\n  WHY: NOT VALID; whitespace-only lines carry no semantic signal and the anchored regex correctly requires every content line to be a pure placeholder.\n- tests/test_consolidate_soft_error_reports.py:338-346 | confidence=5\n  PROBLEM: The test lacks an assertion on the expected empty output.\n  WHY: FACTUALLY INCORRECT; `assert csr.extract_findings_section(md) == \"\"` is present.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/consolidate_soft_error_reports.py:74-79 | confidence=3\n  PROBLEM: NEXT_HEADING_RE is intentionally anchored to specific section names emitted by `analyze_soft_errors.py`, which is coupling to the analyzer prompt format.\n  WHY: NOT A BUG; the code comment documents the design intent and the target headings are treated as a stable contract.\n- tests/test_consolidate_soft_error_reports.py:330-337 | confidence=3\n  PROBLEM: The pass 1 finding says the test lacks an assertion on the expected empty output.\n  WHY: NOT A BUG; the test does contain `assert csr.extract_findings_section(md) == \"\"`.\n- scripts/consolidate_soft_error_reports.py:233-236 | confidence=2\n  PROBLEM: The whitespace-only filtering before placeholder matching could misclassify bodies.\n  WHY: NOT A BUG; the whole-line placeholder regex correctly requires every non-blank line to be a pure placeholder.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/consolidate_soft_error_reports.py:71-93 | confidence=5\n  PROBLEM: `NEXT_HEADING_RE` was changed from `^##\\s+\\S` to `^##\\s+(?:Patterns to watch|Likely benign)\\b`, which couples the parser to the analyzer's downstream headings.\n  WHY: Correct fix; the narrower regex prevents premature truncation when findings contain `##` in their body.\n- scripts/consolidate_soft_error_reports.py:197-222 | confidence=5\n  PROBLEM: The new whole-line placeholder detection could drop legitimate findings that mention placeholder phrases.\n  WHY: Correct fix; the anchored regex only filters lines that are entirely placeholder text, not prose mentioning the phrase.\n- tests/test_consolidate_soft_error_reports.py:279-346 | confidence=5\n  PROBLEM: The new regression test for the bulleted placeholder case was said to be missing an assert.\n  WHY: Incorrect; the test includes `assert csr.extract_findings_section(md) == \"\"`.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/consolidate_soft_error_reports.py:71-93 | confidence=5\n  PROBLEM: Anchoring `NEXT_HEADING_RE` to the two known section headings couples the consolidator to analyzer prompt output.\n  WHY: Already satisfied; this is the targeted fix that prevents generic `##` matching from truncating findings containing `##`.\n- scripts/consolidate_soft_error_reports.py:197-222 | confidence=5\n  PROBLEM: Filtering whitespace-only lines before applying `PLACEHOLDER_LINE_RE` could overfilter real content.\n  WHY: Already satisfied; the whole-line regex correctly filters only pure placeholders and keeps findings that merely mention placeholder text.\n- tests/test_consolidate_soft_error_reports.py:279-346 | confidence=5\n  PROBLEM: The bulleted placeholder regression test was said to be missing an assertion.\n  WHY: Already satisfied; the test explicitly asserts `csr.extract_findings_section(md) == \"\"`.\n- .github/workflows/test-and-mark-stable.yml | confidence=5\n  PROBLEM: No changes in last run.\n  WHY: Status: no issues; the workflow file was unchanged in this run.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/consolidate_soft_error_reports.py:71-93 | confidence=5\n  PROBLEM: `NEXT_HEADING_RE` is anchored to the literal headings emitted by `analyze_soft_errors.py`, creating prompt-format coupling.\n  WHY: NOT A BUG; this deliberate change fixes the prior truncation bug caused by matching any `##` heading.\n- scripts/consolidate_soft_error_reports.py:197-222 | confidence=5\n  PROBLEM: The placeholder check could misclassify bodies because whitespace-only lines are discarded first.\n  WHY: NOT A BUG; the regex requires every remaining non-blank line to be entirely placeholder text, so real prose survives.\n- tests/test_consolidate_soft_error_reports.py:279-346 | confidence=5\n  PROBLEM: The bulleted placeholder test was said to be missing the expected-empty-output assertion.\n  WHY: FACTUALLY INCORRECT; the test includes the assertion.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5ca4e35912728fea285a00061008a40cd96a6166c22a4679a202673482040822",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1824,
+    "run_id": "25170792689",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25170792689",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430145959_bf49996305",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1824,
+    "run_id": "25170792689"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T14:59:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/resilient-codex-failure-plan.md:~165 | severity=medium | confidence=[5]\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `comprehensive-test-and-release.yml` is still listed in the universal label auto-creation checklist even though this PR removed its label mutation behavior.\n  WHY: The reference is stale after the workflow was refactored to stop applying any `ai:*` labels, which can mislead maintainers into unnecessary label-precreation work.\n- .github/workflows/comprehensive-test-and-release.yml:~348 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: `REPORT_URL` is built from `REPORT_FILE` without explicit path normalization.\n  WHY: The reported concern is a latent edge-case fragility if `REPORT_FILE` ever contains malformed path components; reviewers disagreed on severity and applicability, with others noting the current source is controlled and sanitized.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- docs/resilient-codex-failure-plan.md:~165 | severity=medium | confidence=5\n  PROBLEM: Stale reference to comprehensive-test-and-release.yml in universal label auto-creation checklist\n  WHY: The workflow no longer applies any ai:* labels after the PR changes, but the documentation still lists it as requiring label pre-creation.\n- .github/workflows/comprehensive-test-and-release.yml:Line 348 (REPORT_URL construction) | severity=low | confidence=2\n  PROBLEM: Report URL construction doesn't normalize path components\n  WHY: While unlikely given the -maxdepth 1 constraint in find command, a path like \"analysis/../analysis/workflow-optimization-...\" could theoretically produce an invalid URL.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- docs/resilient-codex-failure-plan.md:165 | severity=medium | confidence=5\n  PROBLEM: The workflow `comprehensive-test-and-release.yml` is still listed in a checklist of workflows that must call `ensure_label_exists`.\n  WHY: The workflow still reads a label (`ai:orchestrator-tracking` on line 324), but it no longer applies or mutates any `ai:*` labels.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- docs/resilient-codex-failure-plan. md:~165 | severity=medium | confidence=5\n  PROBLEM: The workflow `comprehensive-test-and-release. yml` is still listed in the universal label auto-creation checklist even though this PR explicitly removed all label mutation from the workflow.\n  WHY: The reference is stale after the PR removed label application from `comprehensive-test- and-release. yml`, which can mislead future maintainers who refer to this document for understanding label creation requirements.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- docs/resilient-codex-failure-plan.md:~165 | severity=medium | confidence=5\n  PROBLEM: The universal label auto-creation checklist still includes `comprehensive-test-and-release.yml` in the list of workflows that need `ensure_label_exists` calls.\n  WHY: The PR removes all label application from `comprehensive-test-and-release.yml`, but the documentation still lists this workflow under the bullet point.\n- .github/workflows/comprehensive-test-and-release.yml:27-31, 252-254 | severity=unknown | confidence=unknown\n  PROBLEM: Dead `run_id` output reference cleanup is correct.\n  WHY: The last run correctly removes the `run_id` output from `phase2-collect-and-analyze-logs` job outputs and the corresponding echo line.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- docs/resilient-codex-failure-plan.md:~165 | severity=medium | confidence=5\n  PROBLEM: The \"Universal Label Auto-Creation\" checklist still includes `comprehensive-test-and-release.yml` as a workflow that must call `ensure_label_exists` before label mutation.\n  WHY: Since this workflow no longer applies any `ai:*` labels, this entry is stale and misleads maintainers.\n- .github/workflows/comprehensive-test-and-release.yml:~348 | severity=low | confidence=1\n  PROBLEM: REPORT_URL is constructed by simple string concatenation without basic path normalization.\n  WHY: If REPORT_FILE contained leading slashes or double slashes, the resulting URL could be malformed, though current sources are controlled.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "eb07ba2a32bf6af0531c8f3049285faca2fa9b3b44f2cb7738972cb2fb4e34ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1520,
+    "run_id": "24779302835",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24779302835",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422130851_6ed6b30b37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1520,
+    "run_id": "24779302835"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T13:08:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

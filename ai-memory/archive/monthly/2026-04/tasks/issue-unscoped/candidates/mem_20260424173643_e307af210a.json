@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1797-1800 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: classify_preflight_failure still greps for \"Missing validation/validate.env\" even though template mode intentionally omits that check, so the branch is dead code.\n  WHY: reviewers confirmed run_preflight_checks no longer emits this failure in template mode; this adds maintenance burden without affecting behavior.\n- agents.md:183-195 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: agents.md contains two VALIDATION_USE_TEMPLATES entries, with the later \"(supersedes)\" entry duplicating the earlier one.\n  WHY: this violates the append-only documentation rule and makes the authoritative entry ambiguous.\n- scripts/implement_diagnose_post_codex_failure.sh:191-192 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `grep -Iq .` misclassifies files containing only newline characters as binary/non-text.\n  WHY: `.` does not match newline, so newline-only files fall through to \"[binary file omitted]\" and lose diagnostic context.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:1798-1800 | severity=low | confidence=5\n  PROBLEM: The check for \"Missing validation/validate.env\" is obsolete because template mode may intentionally omit validate.env.\n  WHY: the preflight no longer validates validate.env in template mode, so this branch will never match.\n- agents.md:184-195 | severity=low | confidence=5\n  PROBLEM: There are duplicate VALIDATION_USE_TEMPLATES documentation entries, including a later \"(supersedes)\" entry.\n  WHY: this violates the append-only rule and creates confusion about which entry is authoritative.\n- scripts/implement_diagnose_post_codex_failure.sh:192 | severity=medium | confidence=5\n  PROBLEM: `grep -Iq .` can misclassify newline-only files as binary.\n  WHY: `.` does not match newline, so such files would be labeled \"[binary file omitted]\" incorrectly.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:1797-1800 | severity=low | confidence=4\n  PROBLEM: The `validate.env` check in `classify_preflight_failure()` will never match because template mode intentionally omits that file.\n  WHY: `run_preflight_checks()` no longer requires `validate.env` in template mode, so this code is dead and misleading.\n- agents.md:184-195 | severity=low | confidence=4\n  PROBLEM: `VALIDATION_USE_TEMPLATES` is documented twice, with a later \"(supersedes)\" entry.\n  WHY: the duplication violates the append-only documentation pattern and obscures the canonical entry.\n- scripts/implement_diagnose_post_codex_failure.sh:192 | severity=medium | confidence=5\n  PROBLEM: `grep -Iq .` fails to correctly handle files containing only newlines.\n  WHY: `.` does not match newline, so newline-only files can be misclassified as binary and lose useful diagnostics.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/validate_process.sh:1798-1800 | severity=low | confidence=4\n  PROBLEM: `classify_preflight_failure()` still checks for `\"Missing validation/validate.env\"` even though template mode may intentionally omit it.\n  WHY: the preflight no longer emits that message, so the grep is dead code and may confuse maintainers.\n- agents.md:183-195 | severity=low | confidence=5\n  PROBLEM: `VALIDATION_USE_TEMPLATES` appears twice in `agents.md`, once normally and once as a `(supersedes)` entry.\n  WHY: this duplicates documentation that should be append-only and makes the authoritative entry unclear.\n- scripts/implement_diagnose_post_codex_failure.sh:191 | severity=medium | confidence=5\n  PROBLEM: `grep -Iq .` does not correctly identify newline-only files as text.\n  WHY: `.` excludes newline, so such files can be mistaken for binary and reported as `[binary file omitted]`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8a7ca4c18af2b6ec336eb71ad5ff79a929344ca0afb754f0b9eded15349d1d8d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1569,
+    "run_id": "24901652421",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24901652421",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424173643_e307af210a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1569,
+    "run_id": "24901652421"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T17:36:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 8\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: `scripts/review_floor_rules.sh` (line ~8)\n      Problem: The script uses `set -u` (nounset), but the `warn` function references `$1` and implicitly `$2` (via `shift`). Several call sites pass only one argument (e.g., line 154: `warn \"bundle_missing_or_empty\" \"bundle=${BUNDLE_FILE}\"` \u2014 wait, looking closer at the shell word splitting, these call sites actually pass exactly two arguments because of the quotes. However, if a future or internal call passes only one, referencing an undefined `$2` would crash the script).; Actual Runtime Failure: The `warn` function at line 9 assigns `local event=\"$1\"`. If a call passes no arguments, `$1` is unbound. More importantly, the `shift || true` at line 10 followed by referencing `$*` is safe, but the `printf` on line 11 uses `${event}`, which will trigger an unbound variable error if `warn` is called without arguments. While the current call sites pass two arguments, the `warn \"fail_open\"` call at line 28 uses only two, which is fine. The real risk identified in pass 1 regarding `${2-}` is valid for future-proofing, but the immediate crash risk is in the `warn` call inside the `fail_open` function if `reason` is somehow empty and `set -u` is active.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: `scripts/review_floor_rules.sh`\n      Problem: Line reference: `normalize_file` (line 210); `match(p, /:[0-9]+$/)` fails to strip line numbers if any trailing characters (like a closing quote from a reviewer's hallucinated Markdown) remain at the end of the string.; If a reviewer reports `File: \"src/main.py:45\"`, the normalized path becomes `src/main.py:45`. If another reviewer reports `src/main.py:45`, they will not match, breaking the `FLOOR_MULTI_REVIEWER` logic.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: `scripts/review_floor_rules.sh`\n      Problem: Line reference: `keyword_matches` (lines 364-370); Keyword matching is done against `rec_text[i]`, which is `tolower(issue_text)`.; The builtin keywords (lines 40-108) are mixed case (e.g., `MONGO|collation mismatch`). The `keyword_matches` function does not `tolower` the `keyword` itself, so a match for \"collation mismatch\" (lowercase in the dictionary) will work against the lowercased issue text, but a match like `eval(` (if added) or any keyword with uppercase letters in a custom file would fail against the lowercased record text.; **HARDENING_SUGGESTIONS:**\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: `scripts/review_floor_rules.sh`\n      Problem: Location: `warn` function (line 8); Issue: Unbound variable risk with `set -u` if arguments are missing.; Suggested minimal fix: `local event=\"${1:-unknown_event}\"`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: `scripts/review_floor_rules.sh`\n      Problem: Location: `extract_line` (line 233); Issue: Incomplete line extraction for complex references like `L45-L50`.; Suggested minimal fix: Before generic matching, add `sub(/-.*$/, \"\", lower)` to focus on the starting line.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: `scripts/review_floor_rules.sh`\n      Problem: Location: `normalize_file` (line 213); Issue: Trailing punctuation can leak into file names.; Suggested minimal fix: Change `sub(/[,:;]+$/, \"\", p)` to `gsub(/[^[:alnum:]_./+-]+$/, \"\", p)`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2; **CLASSIFICATION:**; - Changes made: Verified `export LC_ALL=C` is present and correct.; - Already satisfied: Deterministic sorting and basic fail-open shell traps.; - Ignored suggestions: `O(n\u00b2) -> O(n)` optimization (not required for current bundle sizes).\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [7] File: scripts/Review_floor_rules.sh (line ~210)\n      Problem: The regex only matches colon+digits at the very end of the string. When a file path contains trailing context like `src/file.py:45 (existing)`, the regex fails to match and leaves the line number in the normalized filename.; Two reviewers reporting the same issue with different formats (`file.py:45` vs `file.py:45 (commentary)`) won't be recognized as the same issue for multi-reviewer agreement logic.; **Issue 2: LC_ALL=C locale for UTF-8 handling (low risk)**\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\n  [8] File: scripts/Review_floor_rules.sh (line ~3)\n      Problem: With LC_ALL=C, awk's toupper/tolower and POSIX character classes operate on single bytes. UTF-8 multi-byte characters in issue text, comments, or file paths could be misinterpreted.; International characters in reviewer findings would not be correctly case-converted or matched. However, the script's primary data (file paths, keywords, technical terms) is expected to be ASCII, making this low practical risk.; **Items already addressed in prior runs:**; - **warn function**: Fixed - now uses `shift || true` and `$*` to handle single argument calls (verified at lines 8-12); - **Keyword case sensitivity**: Fixed - keywords are lowercased at line 388 (`kw = tolower(...)`) and issue text is lowercased at line 331 (`rec_text[...] = tolower(issue_text)`); **CLASSIFICATION:**; - Changes made: Added `export LC_ALL=C` at line 3; - Already satisfied: warn function argument handling, keyword case sensitivity; - Ignored suggestions: N/A; **CONCLUSION**; One valid runtime bug remains: the normalize_file function doesn't handle trailing non-punctuation text after line numbers. The LC_ALL=C change is a minor improvement with low practical risk given the expected ASCII-only data. No other blocking issues found.\n      Confidence: avg 2.0\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n`scripts/review_floor_rules.sh`\nscripts/Review_floor_rules.sh",
+  "fingerprint": "bba18ab2ab3f5a72ea7914cffc1db2390959106bec95c1068eda8899f03596a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1308,
+    "run_id": "24603403168",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24603403168",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418113657_a24360a973",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1308,
+    "run_id": "24603403168"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T11:36:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

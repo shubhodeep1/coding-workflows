@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Clarification required\n\n<!-- ai:clarification-questions -->\nClarification required before planning.\n\nInterpreted answer mapping:\n- `Q1: A` \u2192 this issue is **tests-only** against an already-implemented post-Codex diagnose/fix-up flow.\n\nBlocking conflict:\n- In the current `main` checkout, the post-Codex flow artifacts requested by the issue are not present (no `post_codex_validation_errors.txt`, no `implement-fix-up (post-codex-validation)` metadata path, and no visible post-Codex diagnose/fix-up step wiring).  \n- Without the exact source ref for the \u201calready implemented\u201d flow, any file/function-level plan would be guesswork.\n\n**Q1: Which code reference should be treated as the source-of-truth implementation for this tests-only task?**\n\nChoices:\n- **A** \u2014 Use integration branch `orchestrator/project-829` as the baseline and plan tests against that flow. **(RECOMMENDED)**\n- **B** \u2014 Use current `main` and plan only for what exists today (generic implement failure path), even if it does not satisfy the post-Codex coverage list.\n- **C** \u2014 Use a different ref (branch/PR/commit) that you will provide, and plan against that.\n\nReply: `Q1: A`\n\nReply with:\n/answer",
+  "fingerprint": "0bcd7ccef631d8b2fe78fe2674844c65da65b7b602703f2899b104a6ed7e4a3e",
+  "lineage": {
+    "issue_number": 948,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24402629195",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24402629195",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/948"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414135553_8c3b86694b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 948,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24402629195"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #948",
+  "timestamps": {
+    "created_at": "2026-04-14T13:55:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

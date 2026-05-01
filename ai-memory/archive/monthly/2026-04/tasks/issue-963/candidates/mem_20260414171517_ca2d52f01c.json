@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nANSWERS:\nQ1: A\n\nRATIONALE:\nQ1: The repository\u2019s validation system already treats this failure class as a harness-generation concern: both `prompts/mode-validate-generate.txt` and `prompts/mode-validate-fix-harness.txt` explicitly call out exit `137` as a PID 1/signal-forwarding harness issue and prescribe TERM-safe Dockerfile/compose behavior. That aligns directly with targeting validation harness generation guidance rather than orchestration-only changes.",
+  "fingerprint": "79d4038d6eb500a08e4511be437fc486344f9ec60da8a1d00c6fbbfd4b503396",
+  "lineage": {
+    "issue_number": 963,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24412781216",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24412781216",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/963"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260414171517_ca2d52f01c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 963,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24412781216"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #963",
+  "timestamps": {
+    "created_at": "2026-04-14T17:15:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

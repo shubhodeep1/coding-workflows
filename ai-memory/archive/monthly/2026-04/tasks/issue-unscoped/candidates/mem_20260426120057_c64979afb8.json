@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:96-115,243-264 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Metavulnerabilities with string-only `via` entries are treated as missing advisory IDs and fail the audit gate.\n  WHY: All reviewers identified the same false \"missing advisory id\" path; one reviewer rated it critical while the others rated it high.\n- .github/workflows/ci.yml:172 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `tests/test_audit_gate_identity.py` is not run in CI.\n  WHY: All reviewers agreed the workflow only executes `test_audit_gate_template_atomicity.py`, so identity-matching regressions can slip through.\n- tests/test_audit_gate_identity.py:entire file | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The identity test file lacks a case for metavulnerabilities whose `via` contains only dependency-name strings.\n  WHY: Each review notes the existing tests cover other CVE/advisory shapes but not this exact path; severity was not stated in the source findings.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:96-108 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: Object-shaped CVE extraction pushes undefined values for missing fields before later filtering.\n  WHY: The source findings describe the same minor inefficiency rather than a correctness bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:253-264 | severity=critical | confidence=5\n  PROBLEM: Metavulnerabilities with string-only `via` entries cause false \"missing advisory id\" errors.\n  WHY: When `vulnerability.via` contains only dependency-name strings, `advisoryRecords` becomes empty and the fallback to `[vulnerability]` leaves no advisory metadata for `extractAdvisoryId()`.\n- .github/workflows/ci.yml:172 | confidence=5\n  PROBLEM: The new `tests/test_audit_gate_identity.py` file is not executed by CI.\n  WHY: The workflow only runs `test_audit_gate_template_atomicity.py`, so regressions in identity-matching coverage can merge unnoticed.\n- tests/test_audit_gate_identity.py | confidence=4\n  PROBLEM: No test case covers metavulnerabilities where `via` contains only dependency-name strings.\n  WHY: The current tests miss the exact code path that triggers the false \"missing advisory id\" failure.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:96-108 | severity=low | confidence=2\n  PROBLEM: Object-shaped CVE extraction pushes undefined placeholder values for missing fields.\n  WHY: The code appends several fields without checking whether they exist, so undefined values are later filtered out.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:243-253, 96-115 | severity=high | confidence=5\n  PROBLEM: Metavulnerability false positives remain because string-only `via` entries still lead to a missing advisory ID error.\n  WHY: The code filters out non-object `via` entries, falls back to the vulnerability object, and `extractAdvisoryId()` still returns null for metavulnerabilities.\n- .github/workflows/ci.yml:172 | severity=medium | confidence=5\n  PROBLEM: The new `tests/test_audit_gate_identity.py` test file is not executed by CI.\n  WHY: CI only runs `test_audit_gate_template_atomicity.py`, so regressions in identity-matching behavior can merge unnoticed.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:102-106 | severity=low | confidence=2\n  PROBLEM: The new CVE candidate extraction pushes undefined values for some object-shaped entries.\n  WHY: Those fields are later filtered, so the issue is minor inefficiency rather than a functional failure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:243-256 | severity=high | confidence=5\n  PROBLEM: Metavulnerabilities with string-only `via` entries fail identity extraction and report false \"missing advisory id\" errors.\n  WHY: Filtering `via` down to object entries leaves metavulnerabilities with no advisory metadata, so `extractAdvisoryId()` returns null and the gate fails.\n- .github/workflows/ci.yml:172 | severity=medium | confidence=5\n  PROBLEM: The new `tests/test_audit_gate_identity.py` test file is not executed by CI.\n  WHY: The workflow only runs `tests/test_audit_gate_template_atomicity.py`, leaving identity-matching tests unvalidated.\n- tests/test_audit_gate_identity.py | confidence=4\n  PROBLEM: No test case covers metavulnerabilities with string-only `via` entries.\n  WHY: The existing tests cover other CVE/advisory shapes but not the string-only metavulnerability path that triggers the false error.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:102-106 | severity=low | confidence=2\n  PROBLEM: Object-shaped CVE extraction pushes undefined values for missing fields.\n  WHY: The code pushes several properties from each object-shaped CVE entry even when some are undefined, which is only extra work.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:248-251 | severity=high | confidence=5\n  PROBLEM: Metavulnerabilities whose `via` entries are dependency-name strings are incorrectly treated as missing advisory IDs, causing false gate failures.\n  WHY: The code filters out string `via` entries, falls back to the vulnerability object, and `extractAdvisoryId()` returns null because the top-level metavulnerability object has no advisory metadata.\n- .github/workflows/ci.yml:172 | severity=medium | confidence=5\n  PROBLEM: The new `tests/test_audit_gate_identity.py` test file is not executed by CI.\n  WHY: CI only runs `test_audit_gate_template_atomicity.py`, so identity-matching regressions can merge unnoticed.\n- tests/test_audit_gate_identity.py | confidence=4\n  PROBLEM: No test case covers metavulnerabilities where `via` contains only dependency-name strings.\n  WHY: The existing tests do not exercise the string-only metavulnerability path that triggers the false \"missing advisory id\" error.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "15e2c61e9f3f30736880211d4abd9adea5ab14046a23544c451e5eaafe5864a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1662,
+    "run_id": "24955759617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24955759617",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260426120057_c64979afb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1662,
+    "run_id": "24955759617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-26T12:00:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

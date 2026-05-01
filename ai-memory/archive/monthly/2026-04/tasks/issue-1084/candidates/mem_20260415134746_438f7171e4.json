@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which exact two \u201cnew cache schema\u201d filenames must be added to the staged schema list (requirement #5)?**\nChoices:\n- **A** \u2014 You provide the exact two filenames now (RECOMMENDED)\n- **B** \u2014 Add placeholders/TODO entries and update later when H5/H6 lands\n- **C** \u2014 Skip schema-list update in this issue and handle in H5/H6 issue\nReply: `Q1: A`\n**Q2: For the changelog update, which release section should receive the H1 entry?**\nChoices:\n- **A** \u2014 Add under an existing `Unreleased` section (or create `Unreleased` if absent) (RECOMMENDED)\n- **B** \u2014 Add under the latest dated/versioned release section\n- **C** \u2014 Add a new dedicated H1 migration section\nReply: `Q2: A`\n**Q3: For internal/template audit scope, should I touch only wrappers that correspond to the listed workflows, or audit all `internal-*.yml` and all `workflow-templates/ai-*.yml` files?**\nChoices:\n- **A** \u2014 Only corresponding wrappers for listed workflows (`validate`, `issue_pr_status`, `memory_maintenance`, `workflow-log-analysis`, `cancel_on_pr_close`) (RECOMMENDED)\n- **B** \u2014 Audit all `internal-*.yml` and all `workflow-templates/ai-*.yml`, but edit only matching fetch-pattern files\n- **C** \u2014 Audit all wrappers and normalize any similar transport pattern found, even outside listed workflow counterparts\nReply: `Q3: A`",
+  "fingerprint": "c5c3cc89d2ff61742870004d17c6f994ceae5b45fab41154f2d28791c9618f6b",
+  "lineage": {
+    "issue_number": 1084,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24458084261",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24458084261",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260415134746_438f7171e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1084,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24458084261"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1084 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-15T13:47:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `HEAD`: `20eafd7794b5c71aa63b90759de1781d2a86c312`\n- Checked-out ref: `orchestrator/project-1170`\n- Integration metadata ref: `orchestrator/project-1170`\n- Integration mismatch: `false` (planning can proceed)\n\nClarification mapping\n- No `Q*` items were asked in clarify phase.\n- `/answer [auto-answered-by-orchestrator]` indicates no unresolved clarification blockers for planning.\n\nFactual conflicts to flag\n- `docs/comprehensive-test-and-release-plan.md` describes callback metadata usage, but no concrete metadata comment schema is currently implemented in `scripts/orchestrate_poll_process.sh`.\n- `.github/workflows/comprehensive-test-and-release.yml` is not present on this branch, so callback behavior must be implemented defensively (metadata optional, fallback-safe).\n- `ai:comprehensive-test-pending` is not in `.github/ai/label_contract.v1.json` phase groups (fine for passive detection/removal, but not phase-managed).\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n\n2. Functions/modules to implement\n- In `scripts/orchestrate_poll_process.sh`, add a focused callback helper in the terminal-status path (near existing `PROJECT_STATUS` terminal skip logic around `complete/failed/validation-failed`), reusing:\n  - existing `TRACKING_LABELS` fetch (`get_issue_labels_json` result),\n  - existing `COMMENTS` JSON (already loaded for the tracking issue),\n  - existing workflow-dispatch pattern from `dispatch_validation_workflow`.\n- Behavior for tracking issues labeled `ai:comprehensive-test-pending`:\n  - `PROJECT_STATUS=complete`: dispatch `test-and-mark-stable.yml` with `dry_run=false`; pass `version_tag` and `test_repo` only when parsed from metadata; otherwise rely on workflow defaults.\n  - `PROJECT_STATUS=failed` (and `validation-failed` terminal path): send CRITICAL Telegram message; do not dispatch release workflow.\n  - After callback handling, remove `ai:comprehensive-test-pending` from the tracking issue.\n- Keep behavior unchanged for tracking issues without that label.\n\n3. Data structures affected\n- No DB contracts/collections are involved.\n- Script-local additions only:\n  - parsed metadata values (`version_tag`, `test_repo`) from tracking comments/body,\n  - callback gate flag based on `TRACKING_LABELS`,\n  - no breaking change to orchestrator state schema required.\n- Test harness store object in `tests/test_orchestrate_poll_process.py`:\n  - add `release_dispatches` capture for mocked `gh workflow run test-and-mark-stable.yml`.\n\n4. API/interface changes\n- New dispatch from poller to GitHub Actions:\n  - `gh workflow run test-and-mark-stable.yml --repo <repo> -f dry_run=false`\n  - optional `-f version_tag=<value>` and `-f test_repo=<value>` when metadata is present.\n- Label cleanup call:\n  - `gh issue edit <tracking_num> --remove-label ai:comprehensive-test-pending`\n- No env var, CLI contract, or DB interface changes.\n\n5. Potential risks and edge cases\n- Metadata absent or malformed: must fail open to safe defaults (`version_tag` and `test_repo` omitted).\n- Dispatch failure on completion path: must not silently loop; callback should still be considered handled per acceptance intent, with explicit alert/logging.\n- Label removal failure: could cause re-trigger next poll; add warning and deterministic handling to minimize duplicates.\n- Validation-enabled projects complete via validation flow (`ai:validated` label, `status=complete`): callback should key off terminal status + pending label, not specific phase label text.\n\n6. Testing considerations (regression-focused)\n- Extend `tests/test_orchestrate_poll_process.py` mock `gh workflow run` handler to record release dispatches for `test-and-mark-stable.yml` (including captured inputs).\n- Add focused tests:\n  1. Terminal complete + `ai:comprehensive-test-pending` + metadata present:\n     - exactly one release dispatch recorded,\n     - `dry_run=false`,\n     - metadata values forwarded,\n     - label removed.\n  2. Terminal complete + pending label + metadata missing:\n     - release dispatch still occurs once,\n     - optional inputs omitted (fallback behavior),\n     - label removed.\n  3. Terminal failed (and/or validation-failed) + pending label:\n     - no release dispatch,\n     - label removed.\n  4. Terminal complete without pending label:\n     - no release dispatch (non-marked behavior unchanged).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7e20ff9553ff13a550a56c87927c88a82eb6867b23ce12f84908e2a340c2f2e3",
+  "lineage": {
+    "issue_number": 1174,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24504541403",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24504541403",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1174"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416102406_ec0c3b6208",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1174,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24504541403"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1174",
+  "timestamps": {
+    "created_at": "2026-04-16T10:24:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

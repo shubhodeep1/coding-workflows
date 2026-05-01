@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n/tmp/codex-pr-24525059534-1-26538/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24525059534-1-26538/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\nscripts/review_apply_fixes.sh\nscripts/review_apply_fixes.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml,\n/tmp/codex-pr-24525059534-1-26538/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\nscripts/review_apply_fixes.sh,",
+  "fingerprint": "6aa188313b87679532a02e3a8e918d8abda5a6507cd1b797e298c2c0c17125e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1184,
+    "run_id": "24525059534",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24525059534",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416181218_051029ae78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1184,
+    "run_id": "24525059534"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T18:12:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

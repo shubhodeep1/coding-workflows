@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `ce7282a1fc9499a4bc4055e4ec40d7db77298192`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration branch metadata: `orchestrator/project-1292`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` clarification questions were posted for this issue.\n- Interpreted answer: `/answer [auto-answered-by-orchestrator]` means proceed with the issue scope exactly as written (no extra constraints added).\n\nConflict detection (issue vs current code):\n- The requested render-phase recovery behavior appears already present in this branch:\n  - `scripts/validate_process.sh` already has `attempt_render_recovery_after_preflight_failure()`, lint-gated rerender + relint, and `attempt_self_heal_and_reexec \"render\"` routing.\n  - `scripts/self_heal_validation.sh` already enforces the four-prompt allow-list and additive-only patch checks.\n  - `prompts/mode-validate-self-heal.txt` already contains render-phase guidance that keeps harness recovery renderer-driven.\n  - `tests/test_validate_process_render_recovery.py` already includes render-recovery success/fail-open scenarios.\n- Plan implication: start with a strict gap audit; expected implementation may be no-op unless residual acceptance gaps are found.\n\nImplementation plan:\n\n1. Validate acceptance coverage against current implementation\n- Files to inspect/possibly update:\n  - `scripts/validate_process.sh`\n- Functions/modules:\n  - `run_template_validation_harness_renderer`\n  - `attempt_render_recovery_after_preflight_failure`\n  - preflight failure branch that sets `render_recovery_exit` and calls `attempt_self_heal_and_reexec`\n- Goal:\n  - Confirm lint failure in template mode triggers deterministic rerender + preflight relint before terminal failure.\n  - Confirm no render-phase path falls back to freehand harness generation.\n  - Confirm non-render and non-template paths remain backward compatible.\n\n2. Confirm self-heal plumbing and safety guardrails remain intact\n- Files to inspect/possibly update:\n  - `scripts/validate_process.sh`\n  - `scripts/self_heal_validation.sh`\n- Functions/modules:\n  - `attempt_self_heal_and_reexec`\n  - allow-list/additive patch enforcement in `self_heal_validation.sh`\n- Data structures affected:\n  - phase tag set (must include `render`)\n  - self-heal patch ledger entries (`phase`, `target_prompt`, `patch`)\n  - guard vars like `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `PRE_FLIGHT_FAILURE_CLASS`\n- Goal:\n  - Keep existing allow-list immutability (only four validation prompt files).\n  - Keep additive-only patch constraints and out-of-scope file rejection.\n\n3. Confirm prompt guidance for render phase is strict and non-freehand\n- Files to inspect/possibly update:\n  - `prompts/mode-validate-self-heal.txt`\n- Module/content focus:\n  - hard constraints section\n  - classification decision tree for `failing_phase=render`\n- API/interface impact:\n  - No external API changes.\n  - Internal contract remains JSON output shape + prompt-file target constraints.\n- Goal:\n  - Ensure wording clearly prohibits harness-file edits for render failures and keeps recovery renderer-driven.\n\n4. Ensure integration-style tests cover render recovery and fail-open behavior\n- Files to inspect/possibly update:\n  - `tests/test_validate_process_render_recovery.py`\n  - `tests/test_validate_process_template_mode.py` (contract assertions)\n- Testing considerations:\n  - Success path: rerender + relint passes; pipeline continues; no self-heal invocation.\n  - Fail-open path A: rerender command fails; self-heal phase logged as `render`.\n  - Fail-open path B: rerender succeeds but relint still fails; self-heal phase logged as `render`.\n  - Legacy compatibility: non-template preflight failures continue existing `preflight` self-heal behavior.\n  - Optional guard: ensure render recovery attempts are single-shot via `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`.\n\n5. Expected output/change profile\n- If audit confirms all acceptance criteria are already satisfied, implementation should be a no-op with evidence from targeted test execution.\n- If gaps are found, limit edits to the scoped files above and avoid unrelated workflow/prompt refactors.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d0790e4d0c3248394d6637bf841ad1f9583197d0d1eb6d1b692ef0cd07fd939d",
+  "lineage": {
+    "issue_number": 1427,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24626402536",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626402536",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1427"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419100109_04584905d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1427,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24626402536"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1427",
+  "timestamps": {
+    "created_at": "2026-04-19T10:01:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n.github/workflows/review_autofix.yml\n/tmp/codex-pr-24400559069-1-6036/previous_reviews/review_google_gemini-3-flash-preview.txt:-\n`.github/workflows/implement.yml`\nprompts/mode-validate-generate.txt\n\nLow confidence files (mentioned by 1 reviewer):\n.github/ai/label_contract.v1.json\n.github/workflows/implement.yml\n.github/workflows/validate.yml\n/tmp/codex-pr-24400559069-1-6036/previous_reviews/review_google_gemini-3-flash-preview.txt:-\n/tmp/codex-pr-24400559069-1-6036/previous_reviews/review_google_gemini-3-flash-preview.txt:-\n`.github/workflows/review_autofix.yml`\n`prompts/mode-validate-generate.txt`\n`scripts/validate_process.sh`\nprompts/mode-validate-fix-harness.txt\nscripts/validate_\nscripts/validate_\nscripts/validate_driver.sh\nscripts/validate_process.sh",
+  "fingerprint": "217e2d2ead8c1af69d51424bb8f46ca62335804c94f175cf41946d7e3f440ec3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 910,
+    "run_id": "24400559069",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24400559069",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414132415_da9aa5f10d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 910,
+    "run_id": "24400559069"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T13:24:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

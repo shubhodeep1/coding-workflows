@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/issue_pr_status.yml\n.github/workflows/review_autofix.yml\n.github/workflows/validate.yml\nscripts/gh_helpers.sh\n\nLow confidence files (mentioned by 1 reviewer):\nREADME.md\n`scripts/compare_issue_timeline_parity.sh`\n`scripts/fixtures/issue-timeline/rest_timeline_fixture.json`\n`scripts/gh_helpers.sh`\n`scripts/gh_helpers.sh`,\n`scripts/gh_helpers.sh`,\n`scripts/gh_helpers.sh`,\n`scripts/gh_helpers.sh`,",
+  "fingerprint": "84d15b4e9a26a717abf41e0bd8abe0bcfe51d01f6dfc1b2537bcc0aeca8a30aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1083,
+    "run_id": "24482992572",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24482992572",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415231811_41be600e01",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1083,
+    "run_id": "24482992572"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T23:18:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

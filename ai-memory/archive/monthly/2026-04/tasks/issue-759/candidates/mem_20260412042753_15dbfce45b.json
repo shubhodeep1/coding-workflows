@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: 1) Fix library-mode canary behavior: when `.ai/validate.yml` has `type: library`, do not require a persistent `app` container or `/health` endpoint before running tests; gate on environment readiness and execute declared `custom_tests` directly. 2) Standardize Docker Compose project scoping across all validation steps (`up`, `ps`, test scripts, `down`) by using one shared project name/context so `docker compose ps -q` inspects the same stack that was started. 3) Improve canary diagnostics bef",
+  "fingerprint": "a5490dc00cd9f11459f94e3b4b2e31e8f9731f74b0b866edc3d82cf2d3730f57",
+  "lineage": {
+    "issue_number": 759,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24298383762",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24298383762",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260412042753_15dbfce45b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 759,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24298383762"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-12T04:27:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:745-755 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `_fetch_run_log_archive` now raises `MissingLogArchiveError` immediately for missing log archives instead of honoring `LOG_ARCHIVE_FETCH_RETRIES`.\n  WHY: All reviewers identified that the missing-log path bypasses the retry budget, so 404/not-found cases are no longer retried even though the code still defines a retry mechanism.\n- tests/test_collect_workflow_logs.py:1102 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The test now asserts a single API call for a missing log archive instead of validating the retry budget.\n  WHY: All reviewers agreed the updated expectation codifies the broken behavior and masks the production regression by no longer checking that retries occur.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/collect_workflow_logs.py:745-755 | severity=medium | confidence=5\n  PROBLEM: Missing log archives (404/not found errors) immediately raise `MissingLogArchiveError` instead of honoring the configured `LOG_ARCHIVE_FETCH_RETRIES` (3) budget.\n  WHY: The condition `if missing_log_archive:` raises immediately, bypassing the retry loop, so transient 404s are not retried.\n- scripts/collect_workflow_logs.py:750 | severity=medium | confidence=5\n  PROBLEM: Retry condition `if attempt < LOG_ARCHIVE_FETCH_RETRIES and retryable:` excludes `missing_log_archive` from retries.\n  WHY: Missing logs won't be retried even though `LOG_ARCHIVE_FETCH_RETRIES` suggests all log archive fetches should be retried.\n- tests/test_collect_workflow_logs.py:1102 | severity=medium | confidence=5\n  PROBLEM: Test asserts 1 API call instead of `LOG_ARCHIVE_FETCH_RETRIES` (3) for missing log archive.\n  WHY: The test no longer validates that the retry mechanism works for missing logs, allowing the regression to go undetected.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/collect_workflow_logs.py:745-752 | severity=medium | confidence=5\n  PROBLEM: `_fetch_run_log_archive` terminates and raises `MissingLogArchiveError` on the very first attempt if `missing_log_archive` is true, bypassing the `LOG_ARCHIVE_FETCH_RETRIES` budget.\n  WHY: A 404/410 on the first request can be transient during workflow completion, so immediate failure prevents retries that would recover once the archive becomes available.\n- tests/test_collect_workflow_logs.py:1102 | severity=medium | confidence=5\n  PROBLEM: The test assertion for `log_call_counts` was updated to expect `1` call instead of `LOG_ARCHIVE_FETCH_RETRIES`.\n  WHY: This codifies the bug in the test suite by masking the regression where retries are skipped for missing archives.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/collect_workflow_logs.py:743-750 | severity=medium | confidence=5\n  PROBLEM: The `missing_log_archive` path raises immediately without checking the retry budget.\n  WHY: The retry loop exists, but when a 404-like error is detected the code raises on the first attempt instead of retrying up to `LOG_ARCHIVE_FETCH_RETRIES` times.\n- tests/test_collect_workflow_logs.py:1106-1108 | severity=medium | confidence=5\n  PROBLEM: The test asserts `store_after[\"log_call_counts\"] == {\"301\": 1}`, confirming that only 1 API call was made for a missing log archive.\n  WHY: This validates the bug rather than the intended retry behavior, so a correct retry fix would break the test unless the expectation is updated.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/collect_workflow_logs.py:745-755 | severity=medium | confidence=5\n  PROBLEM: The refactored logic for handling missing log archives immediately raises `MissingLogArchiveError` on the first attempt when `_is_missing_log_archive_message` returns true.\n  WHY: The retry budget `LOG_ARCHIVE_FETCH_RETRIES` is no longer honored for missing-archive scenarios, so 404 or \"not found\" responses now fail immediately instead of retrying.\n- tests/test_collect_workflow_logs.py:1102 | severity=medium | confidence=4\n  PROBLEM: The test assertion was changed from expecting `LOG_ARCHIVE_FETCH_RETRIES` API calls to expecting only 1 call.\n  WHY: This masks the regression rather than catching it, so the suite will not detect broken retry behavior.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/collect_workflow_logs.py:745-751 | severity=medium | confidence=5\n  PROBLEM: `missing_log_archive` raises immediately without honoring `LOG_ARCHIVE_FETCH_RETRIES`.\n  WHY: The retry condition excludes `missing_log_archive`, so 404/not-found responses fail on the first attempt instead of retrying up to the configured budget.\n- tests/test_collect_workflow_logs.py:1102 | severity=medium | confidence=5\n  PROBLEM: The test asserts `log_call_counts == {\"301\": 1}`, validating the buggy single-call behavior instead of the configured retry budget.\n  WHY: The assertion lets the regression pass unnoticed by matching the broken implementation rather than the intended retry semantics.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "dbb0fe4e491444bda42e490281d150000e7bde467dc31e59278e8291de69d3d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1489,
+    "run_id": "24737026233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24737026233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421175605_348f6ac41a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1489,
+    "run_id": "24737026233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T17:56:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

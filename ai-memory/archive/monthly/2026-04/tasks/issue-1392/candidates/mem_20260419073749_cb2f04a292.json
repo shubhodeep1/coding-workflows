@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `f7f8b362aa7127820e458ca842fb015a7c3b825b`\n- Checked out ref: `orchestrator/project-1292`\n- Integration metadata ref: `orchestrator/project-1292`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No explicit `Q<ID>` items were present in the clarification context.\n- `/answer [auto-answered-by-orchestrator]` indicates no additional human clarification is pending for planning.\n\nConflict detected (issue vs current branch state):\n- The requested render-recovery behavior is already present in [scripts/validate_process.sh](scripts/validate_process.sh) via `attempt_render_recovery_after_preflight_failure` and the preflight failure branch routing to `attempt_self_heal_and_reexec \"render\"` when recovery fails.\n- Self-heal plumbing already recognizes `render` phase in [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh) (phase enum comment + phase recorded in patch ledger).\n- Prompt guidance already constrains `failing_phase=render` to prompt-only self-heal scope in [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt).\n- Integration-style tests already exist in [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py).\n\nImplementation plan (minimal-change, acceptance-first):\n1. Validate acceptance against existing implementation before changing code.\n- Confirm preflight failure path always attempts deterministic rerender+relint once in template mode.\n- Confirm no preflight-render path performs freehand harness edits.\n- Confirm existing allow-list/additive-only prompt self-heal guardrails are unchanged.\n\n2. Patch only identified gaps (if any) in these likely files:\n- [scripts/validate_process.sh](scripts/validate_process.sh)\n- [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh)\n- [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt)\n- [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py)\n- [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py) (contract assertions only, if needed)\n\n3. Functions/modules to inspect/update:\n- `attempt_render_recovery_after_preflight_failure`\n- `run_preflight_checks`\n- Preflight failure branch (`if ! run_preflight_checks; then ...`)\n- `attempt_self_heal_and_reexec`\n- `is_allowed_target` and patch validation path in `self_heal_validation.sh`\n\n4. Data structures/flags affected:\n- `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED` (single rerender attempt guard)\n- `render_recovery_exit` (phase routing decision: `render` vs `preflight`)\n- `DIAGNOSE_RESULT_FILE` preflight failure payload (`harness_error`)\n- Self-heal patch ledger JSONL entry (`phase`, `target_prompt`, `patch`)\n\n5. API/interface changes:\n- No external API/interface changes expected.\n- Internal phase tagging/logging remains: `render` phase in self-heal invocation and preflight logs.\n\n6. Risks/edge cases to protect:\n- Infinite rerender loops (must stay bounded to one attempt).\n- Regressing non-template behavior (must remain legacy preflight path).\n- Accidentally reintroducing freehand harness edits in render recovery path.\n- Weakening prompt self-heal safety constraints (allow-list, additive-only patch checks).\n\n7. Testing considerations:\n- Keep and run existing render-recovery integration tests in [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py).\n- If a gap is found, add one targeted test only (most likely missing case): rerender succeeds but relint still fails, must route to `attempt_self_heal_and_reexec \"render\"` and terminalize fail-open.\n- Re-run template-mode contract assertions in [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py).\n- Run focused tests:\n  - `python3 tests/test_validate_process_render_recovery.py`\n  - `python3 tests/test_validate_process_template_mode.py`\n\nExpected outcome:\n- If acceptance is already fully met (likely), only test-level tightening or no-op confirmation is needed.\n- Any code change should be strictly constrained to render-phase recovery semantics and guardrail preservation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "dff2f765e995a58cd77db7687b51a97b00185e8f715668264c5fcce70a27a4d7",
+  "lineage": {
+    "issue_number": 1392,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24623885467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24623885467",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1392"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419073749_cb2f04a292",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1392,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24623885467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1392",
+  "timestamps": {
+    "created_at": "2026-04-19T07:37:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

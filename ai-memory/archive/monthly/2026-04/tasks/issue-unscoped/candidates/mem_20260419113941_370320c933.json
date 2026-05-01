@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/dev/replay_review_pipeline.sh:94 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: `runtime_dir` is canonicalized with `cd` without `--`, so a dash-prefixed path can be misparsed as an option.\n  WHY: Four reviewers flagged the same root cause; one reviewer called it safe, but the highest severity/confidence among reviewers points to a real option-parsing bug.\n- scripts/dev/replay_review_pipeline.sh:117 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: `workspace_dir` is passed to `cd` without `--`, so a dash-prefixed path can be misparsed as an option.\n  WHY: Three reviewers flagged the same root cause; the disagreement is only about mitigation, not the underlying option-parsing issue.\n- scripts/dev/replay_review_pipeline.sh:111-113 | severity=low | confidence=3\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: The git-repo warning can be misleading if `workspace_dir` disappears between the existence check and the `git -C` probe.\n  WHY: Two reviewers described the same race-condition/misleading-warning issue; severity stays low because it is only a warning-path correctness issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/dev/replay_review_pipeline.sh:94 | severity=medium | confidence=5\n  PROBLEM: `runtime_dir` is canonicalized with `cd` without `--`, so a dash-prefixed path can be misparsed as an option.\n  WHY: Added `--` is needed to prevent paths starting with `-` from being interpreted as options.\n- scripts/dev/replay_review_pipeline.sh:117 | severity=medium | confidence=5\n  PROBLEM: `workspace_dir` is passed to `cd` without `--`, so a dash-prefixed path can be misparsed as an option.\n  WHY: By canonicalizing workspace_dir to an absolute path first, the script mitigates the risk, but the `cd` call itself still needs the option separator.\n- scripts/dev/replay_review_pipeline.sh:111/121 | severity=low | confidence=3\n  PROBLEM: The warning message is less accurate when the workspace probe fails for reasons other than not being a git repository.\n  WHY: Removing stderr suppression and changing the warning text makes the failure more truthful when the directory is missing or otherwise invalid.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/dev/replay_review_pipeline.sh:94 | severity=medium | confidence=4\n  PROBLEM: The `cd` command used to canonicalize `runtime_dir` is missing `--`, so dash-prefixed paths can be treated as options.\n  WHY: A leading `-` path breaks canonicalization, and a failed subshell can leave `runtime_dir` invalid or empty for downstream path construction.\n- scripts/dev/replay_review_pipeline.sh:65-70 and 116 | severity=medium | confidence=3\n  PROBLEM: `workspace_dir` is used without canonicalizing it to an absolute path before later `cd`/`git -C` usage.\n  WHY: Relative `workspace_dir` values can become unstable after directory changes, which can break later path references.\n- scripts/dev/replay_review_pipeline.sh:106-114 | severity=low | confidence=1\n  PROBLEM: The workspace warning can be misleading if the directory disappears between the existence check and the git probe.\n  WHY: A race can make the message say the workspace is not a git repository when the directory is actually missing.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/dev/replay_review_pipeline.sh:94 | severity=medium | confidence=4\n  PROBLEM: `runtime_dir` canonicalization uses `cd` without `--`, so dash-prefixed paths are parsed as options.\n  WHY: A path like `-mydir` causes `cd` to misinterpret the argument and fail during canonicalization.\n- scripts/dev/replay_review_pipeline.sh:117 | severity=medium | confidence=4\n  PROBLEM: `workspace_dir` is changed with `cd` without `--`, so dash-prefixed paths are parsed as options.\n  WHY: The same option-parsing bug applies to the workspace directory.\n- scripts/dev/replay_review_pipeline.sh:111-113 | severity=low | confidence=2\n  PROBLEM: The workspace warning can be misleading if the directory is removed between the existence check and the git probe.\n  WHY: The warning may incorrectly say the workspace is not a git repository when the real issue is that the directory disappeared.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/dev/replay_review_pipeline.sh:94 | severity=medium | confidence=5\n  PROBLEM: `runtime_dir` canonicalization uses `cd` without `--`, so dash-prefixed paths are parsed as options.\n  WHY: A dash-prefixed `runtime_dir` can make `cd` fail or operate on the wrong target, breaking replay setup.\n- scripts/dev/replay_review_pipeline.sh:117 | severity=medium | confidence=5\n  PROBLEM: `workspace_dir` is passed to `cd` without `--`, so dash-prefixed paths are parsed as options.\n  WHY: The same option-parsing failure can break subsequent git operations that depend on the workspace directory.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "09cbe49e3b405361bd9982226f2329ee5687fcac6f4afc71a8cfa882f1f59e58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1430,
+    "run_id": "24627699520",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24627699520",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419113941_370320c933",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1430,
+    "run_id": "24627699520"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T11:39:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 2\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: tests/test_orchestrate_poll_process.py (line ~3267)\n      Problem: Test assertion checks for word-boundary pattern `\\\\b` anywhere in the script rather than specifically within the `_linked_prs_by_body_reference` function. While currently `\\\\b` only appears in that function, this creates a maintenance hazard - if `\\\\b` were added elsewhere unrelated, the test would still pass even if the function lost its word boundary guard.; Test validation is insufficiently precise; may pass incorrectly if unrelated `\\\\b` patterns are added to the script in the future.; **Additional Context**:; - The unrelated `\\bnot found\\b` pattern on line 1468 does NOT cause a false positive because it's `\\b` (single backslash) not `\\\\b` (double backslash).; - The jq regex `\\b` (word boundary) works correctly in the current jq version and prevents `#25528` from matching `#2552` as intended.; - The comment in the shell script (line 1103) correctly describes \"word-boundary regex\" now that the implementation uses `\\b`.; **HARDENING_SUGGESTIONS**:\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [2] File: tests/test_orchestrate_poll_process.py\n      Problem: Location: Line 3267 in test_multi_source_lookup_helpers_present; Issue: Test assertion `assert \"\\\\\\\\b\" in script` is too broad; checks for pattern anywhere in script rather than specifically in the jq regex of `_linked_prs_by_body_reference`.; Suggested minimal fix: Extract the `_linked_prs_by_body_reference` function body and verify `\\\\\\\\b` appears within it, similar to how the test checks `sort -u` within `_find_all_linked_prs`.; Estimated lines changed: 5-10; HARDENING_RISK_SCORE: 2 (test quality improvement); **Overall Assessment**: The PR implementation is functionally correct and addresses the stated gaps in stall recovery. The regex change from `(?![0-9])` to `\\b` is an improvement. The main issue is a test design weakness that should be addressed for better long-term maintainability.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [3] File: tests/test_orchestrate_poll_process.py\n      Problem: Test expects `\\b` word boundary pattern but implementation uses `(?![0-9])` negative lookahead. Test will fail because the target function doesn't contain `\\b`.; Assertion `\"\\\\\\\\b\" in script` evaluates to False when checking the actual `_linked_prs_by_body_reference` function body, causing pytest failure.\n      Confidence: avg 5.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [4] File: scripts/orchestrate_poll_process.sh (line ~1115)\n      Problem: While `(?![0-9])` effectively prevents matching `#25528` as `#2552`, it is inconsistent with the updated documentation in `agents.md` (which calls it a \"word-boundary guard\") and the updated test assertions in `tests/test_orchestrate_poll_process.py` (which expect `\\b`).; This creates a maintenance hazard where the code, tests, and documentation are out of sync. Furthermore, standard `jq` regex (Oniguruma-based) often behaves more predictably with `\\b` for word boundaries than with complex lookarounds in certain environments.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: _linked_prs_by_body_reference (line 1115); Issue: Inconsistency between code (`(?![0-9])`), docs (\"word-boundary\"), and tests (`\\b`).; Suggested minimal fix: Update the `jq` test pattern to use `\\\\\\\\b` instead of `(?![0-9])` to align with the intended project style and the new test assertions.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: `tests/test_orchestrate_poll_process.py`\n      Problem: **Problem:**; The last run diff changed the test assertion from:; ```python; assert \"(?![0-9])\" in script; ```python; assert \"\\\\\\\\b\" in script; However, the implementation in `scripts/orchestrate_poll_process.sh` at line 1116 still uses:; ```bash; | test(\"(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#\" + $n + \"(?![0-9])\"); **Evidence of Runtime Failure:**; - The test looks for literal `\\b` (backslash-b) in the script content; - The ONLY occurrence of `\\b` in the entire script is at line 1468: `\\bnot found\\b` - which is in a completely different grep error-handling pattern; - The actual `_linked_prs_by_body_reference` function being tested does NOT contain `\\b`; - **The test will FAIL** because the assertion cannot find `\\\\b` in the target function; **Why the Cross-Pollination Findings Are Correct:**; Multiple reviewer models identified this same issue. The test change was made without updating the corresponding implementation. Both `(?![0-9])` and `\\b` achieve the same goal (preventing \"#25528\" from matching issue \"#2552\"), but the test now expects one pattern while the code uses the other.; **Recommendation:**; Revert the test assertion at line 3267 from `\"\\\\\\\\b\"` back to `\"(?![0-9])\"` to match the actual implementation. The implementation is correct; only the test expectation needs adjustment.\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\ntests/test_orchestrate_poll_process.py\n\nLow confidence files (mentioned by 1 reviewer):\n`tests/test_orchestrate_poll_process.py`\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "0fd5cd9dc09db390d233fbaaf5ca74aaca4d5ee92c97d3fd6ed78b966ca66855",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1259,
+    "run_id": "24548576735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24548576735",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417053332_e1c6489b10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1259,
+    "run_id": "24548576735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-17T05:33:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

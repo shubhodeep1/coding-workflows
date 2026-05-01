@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Interpretation**\n- Clarification phase was `CLEAR`; there were no Q<ID> questions to map.\n- `/answer [auto-answered-by-clarify]` is sufficient to proceed with planning.\n\n**Conflict Detection (Issue vs Codebase)**\n- `prompts/serena-efficiency-block.txt` is currently missing.\n- `scripts/render_prompt.sh` is currently missing.\n- The 9 targeted mode prompts still contain inline `SERENA MCP EFFICIENCY (MANDATORY)` blocks.\n- Important scope mismatch: `mode-clarify.txt`, `mode-plan.txt`, and `mode-implement.txt` are not currently used by the runtime prompt assembly in their respective workflows (`clarify.yml`, `plan.yml`, `implement.yml` still use inline heredocs). This is not a blocker for Wave 2, but it means renderer wiring is required only where mode prompt files are actually emitted today.\n- Additional non-target prompt files also contain Serena blocks (`mode-validate-discover.txt`, `mode-validate-fix-harness.txt`, `mode-workflow-analysis.txt`), so validation must be scoped to the 9 requested files to avoid accidental scope expansion.\n\n**1) Files Likely to Change**\n- `prompts/serena-efficiency-block.txt` (new)\n- `prompts/mode-clarify.txt`\n- `prompts/mode-plan.txt`\n- `prompts/mode-implement.txt`\n- `prompts/mode-orchestrate.txt`\n- `prompts/mode-judge.txt`\n- `prompts/mode-judge-review-blocked.txt`\n- `prompts/mode-clarify-respond.txt`\n- `prompts/mode-validate-generate.txt`\n- `prompts/mode-validate-diagnose.txt`\n- `scripts/render_prompt.sh` (new)\n- `.github/workflows/orchestrate.yml`\n- `.github/workflows/orchestrate_poll.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `.github/workflows/review_autofix.yml`\n- `.github/workflows/validate.yml`\n- `scripts/orchestrate_poll_process.sh`\n- `scripts/validate_process.sh`\n- `.github/workflows/ci.yml`\n- `.github/workflows/test-and-mark-stable.yml`\n\n**2) Functions/Modules to Implement**\n1. Canonical Serena fragment\n- Add `prompts/serena-efficiency-block.txt` with two explicit sections: `READ_ONLY` and `READ_WRITE`.\n- Keep wording semantically equivalent to current behavior (read-only guidance for planning/judge-like modes, read-write guidance for implementation-like mode).\n\n2. Placeholder migration in 9 target mode prompts\n- Replace duplicated inline Serena blocks with canonical placeholders.\n- Use stable tokens, e.g. `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` and `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}`.\n- Preserve surrounding phase-specific instructions unchanged.\n\n3. Prompt renderer module\n- Create `scripts/render_prompt.sh` to:\n- Load canonical fragment.\n- Extract `READ_ONLY` and `READ_WRITE` sections.\n- Render placeholders in a target prompt file.\n- Fail on unresolved `{{SERENA_EFFICIENCY_BLOCK_*}}` tokens.\n- Output rendered prompt to stdout (for easy piping into existing prompt assembly).\n\n4. Wire renderer into actual runtime emission paths\n- Replace direct `cat prompts/mode-*.txt` with renderer calls in:\n- `orchestrate.yml` (`mode-orchestrate.txt`)\n- `orchestrate_clarify_respond.yml` (`mode-clarify-respond.txt`)\n- `scripts/orchestrate_poll_process.sh` (`mode-judge.txt`, `mode-judge-review-blocked.txt`)\n- `review_autofix.yml` (`mode-judge-review-blocked.txt`)\n- `scripts/validate_process.sh` (`mode-validate-generate.txt`, `mode-validate-diagnose.txt`)\n\n5. Ensure reusable-workflow fetching supports new artifacts\n- In workflows that fetch scripts/prompts from `wf_source`, add fetch/chmod for `scripts/render_prompt.sh` and fetch for `prompts/serena-efficiency-block.txt` so consumer repos do not depend on local copies.\n\n6. CI/stability validation hardening\n- Extend checks so CI fails if:\n- Canonical file is missing/empty.\n- Renderer script is missing.\n- Any of the 9 target mode prompts still contains inline duplicated Serena block text.\n- Rendering any of the 9 target prompts leaves unresolved `{{SERENA_EFFICIENCY_BLOCK_*}}` tokens.\n\n**Representative patterns used for planning**\n- Direct prompt-file emission pattern: `.github/workflows/orchestrate.yml`\n- Script-driven prompt assembly pattern: `scripts/validate_process.sh`\n\n**3) Data Structures Affected**\n- New canonical fragment structure in `prompts/serena-efficiency-block.txt` with two named sections (`READ_ONLY`, `READ_WRITE`).\n- Placeholder token contract in mode prompts:\n- `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}`\n- `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}`\n- CI validation target set for exactly the 9 requested mode prompt files.\n\n**4) API or Interface Changes**\n- New internal script interface: `scripts/render_prompt.sh <prompt-file>` (stdout rendered output, non-zero on unresolved Serena placeholders).\n- No external user-facing API/CLI command changes for issue comments (`/answer`, `/approved`, `/reclarify`) or workflow inputs/outputs.\n\n**5) Potential Risks and Edge Cases**\n- False-positive placeholder checks: prompts contain literal `{{...}}` examples unrelated to Serena (e.g., `{{.State.ExitCode}}`), so unresolved-token validation must target only `SERENA_EFFICIENCY_BLOCK_*`.\n- Semantic drift risk if canonical text is not equivalent; mitigation is preserving per-mode behavior and limiting changes to Serena block substitution only.\n- Consumer repo compatibility risk if new script/fragment are not fetched from `wf_source`; mitigation is updating fetch loops in each affected reusable workflow.\n- Runtime failure risk if renderer exits non-zero; mitigation is explicit error output and CI coverage before merge.\n\n**6) Testing Considerations**\n- Update `.github/workflows/ci.yml` to enforce canonical/renderer/placeholder invariants.\n- Update `.github/workflows/test-and-mark-stable.yml` prompt validation to include canonical/renderer presence and placeholder resolution checks.\n- Run existing lint gates against new script (`bash -n`, `shellcheck`) via CI\u2019s existing shell checks.\n- Run existing Python tests that exercise prompt-building scripts after wiring changes, especially `tests/test_orchestrate_poll_process.py`.\n- Validate that rendered outputs for all 9 target mode prompt files contain no unresolved Serena placeholder tokens.\n\n**Task Checklist Mapping (from issue scope)**\n- [ ] Add canonical `prompts/serena-efficiency-block.txt` with `READ_ONLY` and `READ_WRITE`.\n- [ ] Migrate the 9 specified mode prompts to canonical placeholders.\n- [ ] Add `scripts/render_prompt.sh` and wire it into prompt emission paths.\n- [ ] Add/adjust validation so missing canonical file, missing renderer, or unresolved Serena placeholders fail CI.\n- [ ] Verify no Serena-guidance semantic regression in runtime prompt payloads.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "97b55e6dfbb63e91b174b5d060286c1524114707f2a96dfa6c806667a735b499",
+  "lineage": {
+    "issue_number": 730,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24282689175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24282689175",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/730"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411125404_d4b51a2686",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 730,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24282689175"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #730",
+  "timestamps": {
+    "created_at": "2026-04-11T12:54:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

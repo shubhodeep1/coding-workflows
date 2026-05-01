@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:196 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `AUTOFIX_BOT_LOGIN` uses `:-codex`, so an explicitly empty value still falls back to `codex` instead of disabling identity matching.\n  WHY: The implementation contradicts the documented behavior that an empty value disables the skip, and reviewers agreed this is a real bug.\n- .github/workflows/review_autofix.yml:198 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The `case` pattern for `[ai-autofix]` is written as a quoted glob pattern that reviewers identified as unsafe/incorrect for literal prefix matching.\n  WHY: Multiple reviewers flagged this as a runtime matching bug that can cause the self-triggered skip logic to behave incorrectly, though one reviewer reported it as a false positive and the severity therefore reflects the highest reported level with disagreement noted.\n- README.md:65-66 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The README says an empty `AUTOFIX_BOT_LOGIN` disables identity matching, but the workflow implementation does not.\n  WHY: This is a documentation/implementation mismatch tied to the same empty-vs-default behavior bug, and only one reviewer reported it as a separate finding.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:198 | severity=critical | confidence=5\n  PROBLEM: Shell pattern uses unescaped brackets in the `case` match, creating ambiguous and potentially incorrect matching behavior.\n  WHY: Could cause false positives or false negatives in the self-triggered autofix skip logic.\n- .github/workflows/review_autofix.yml:196 | severity=high | confidence=5\n  PROBLEM: Documentation says empty `AUTOFIX_BOT_LOGIN` disables identity matching, but the code defaults empty to `codex` so identity check still runs.\n  WHY: Users setting `AUTOFIX_BOT_LOGIN=\"\"` expecting to disable identity check will find it still active with default `codex`, violating documented behavior and expectations.\n- README.md:65-66 | severity=medium | confidence=4\n  PROBLEM: The README contradicts implementation by stating that an empty value disables identity matching.\n  WHY: Users rely on the docs to understand behavior, and the inconsistency can cause misconfiguration and confusion.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:198 | severity=high | confidence=5\n  PROBLEM: The `case` pattern `\"[ai-autofix]\"*)` is treated as shell globbing rather than a literal prefix match.\n  WHY: Reviewers believed this could cause accidental matches or prevent intended `[ai-autofix]` prefixes from matching as expected.\n- .github/workflows/review_autofix.yml:196 | severity=high | confidence=5\n  PROBLEM: `bot_login` uses `${AUTOFIX_BOT_LOGIN:-codex}`, which treats empty and unset the same.\n  WHY: An empty repository variable cannot disable identity matching as documented, because the shell expansion falls back to `codex`.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:198 | severity=high | confidence=5\n  PROBLEM: The quoted `case` pattern works as intended, so the earlier shell-pattern finding is a false positive.\n  WHY: The reviewer explicitly verified the behavior and concluded the pattern is not a runtime bug.\n- .github/workflows/review_autofix.yml:196 | severity=high | confidence=5\n  PROBLEM: `AUTOFIX_BOT_LOGIN` cannot be disabled by setting an empty value because `:-codex` treats empty as default.\n  WHY: This contradicts the README\u2019s stated behavior and means the documented opt-out does not work.\n- README.md:65-66 | severity=high | confidence=4\n  PROBLEM: The README\u2019s empty-value guidance is the same bug as the `AUTOFIX_BOT_LOGIN` defaulting issue.\n  WHY: The reviewer treated this as part of the same documentation mismatch rather than a separate runtime bug.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:198 | severity=high | confidence=4\n  PROBLEM: The `case` pattern `\"[ai-autofix]\"*)` is unreliable for matching the literal `[ai-autofix]` prefix.\n  WHY: The reviewer reported that the identity guard may fail to match intended commits or may match unrelated subjects, breaking the optimization.\n- .github/workflows/review_autofix.yml:196 | severity=high | confidence=5\n  PROBLEM: `bot_login=\"${AUTOFIX_BOT_LOGIN:-codex}\"` makes an explicitly empty value fall back to `codex`.\n  WHY: This contradicts the documented opt-out behavior and prevents users from disabling the skip by setting an empty value.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:198 | severity=high | confidence=5\n  PROBLEM: The `case` pattern for `[ai-autofix]` does not reliably match the intended literal prefix.\n  WHY: The reviewer said this can cause false negatives for real autofix commits and false positives for unrelated subjects.\n- .github/workflows/review_autofix.yml:196 | severity=high | confidence=5\n  PROBLEM: `bot_login=\"${AUTOFIX_BOT_LOGIN:-codex}\"` treats empty and unset the same, so an empty value cannot disable identity matching.\n  WHY: This conflicts with the README and makes the documented configuration ineffective.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "26781e42d769113ffd58e753bb18504c1ec7f98d37420d380843df2f8862a416",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1459,
+    "run_id": "24654694004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24654694004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420093153_35329a440e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1459,
+    "run_id": "24654694004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T09:31:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

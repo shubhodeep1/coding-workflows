@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Mapping**\n- No `Q<ID>` questions were asked in Clarify.\n- `/answer [auto-answered-by-clarify]` maps to: \u201cissue context is sufficient; proceed with planning as written.\u201d\n\n**Representative Implementation Reviewed**\n- Schema validation + CLI flow in [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py) (`validate_decomposition`, `cmd_validate`, `cmd_compute_waves`, `cmd_build_tracking_body`).\n- Existing strict-schema test pattern in [tests/test_orchestrate_lib.py](tests/test_orchestrate_lib.py) (`test_validate_decomposition_invalid_schema`).\n\n**Implementation Plan**\n\n1. **Make decomposition validation backward-compatible for legacy missing `schema_version`**\n- File likely to change: [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py)\n- Functions/modules: `validate_decomposition` (and optionally a small helper for schema normalization).\n- Behavior: accept legacy payloads where `schema_version` is missing/`None`, treat as legacy-compatible input, then continue full field validation (`project_title`, `project_summary`, `issues`, `dependency_edges`) unchanged.\n- Keep strict rejection for explicitly wrong schema versions (for example `\"wrong\"`), to avoid silently accepting unknown formats.\n\n2. **Ensure normalized/canonical schema handling in validation flow**\n- File likely to change: [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py)\n- Functions/modules: `cmd_validate`, `cmd_compute_waves`, `cmd_build_tracking_body` (only if needed to use normalized output consistently).\n- Data structures affected: decomposition payload object (`schema_version`, `project_title`, `project_summary`, `issues[]`, `dependency_edges[]`).\n- Goal: migration verification should pass for legacy-or-current payloads without weakening validation of required business fields.\n\n3. **Add regression tests for legacy compatibility**\n- File likely to change: [tests/test_orchestrate_lib.py](tests/test_orchestrate_lib.py)\n- Tests to add:\n- Missing `schema_version` is accepted for otherwise valid decomposition.\n- `schema_version: null` (`None`) is accepted for otherwise valid decomposition.\n- Existing invalid-schema test (`\"wrong\"`) still fails.\n- Optional CLI-level test coverage (if current test style supports it) to mirror migration verification entrypoint behavior.\n\n4. **Producer consistency check (no broad refactor)**\n- Files to inspect/possibly touch if gaps found:\n- [prompts/mode-orchestrate.txt](prompts/mode-orchestrate.txt)\n- [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py)\n- [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh)\n- Keep/ensure explicit schema emission for new artifacts (`orchestrate_decomposition.v1` and `orchestrate_state.v1`) so compatibility logic is only for legacy inputs, not new outputs.\n\n**API / Interface Changes**\n- No CLI flag or external interface changes planned.\n- Contract change is internal validation tolerance for legacy decomposition inputs missing `schema_version`.\n\n**Risks / Edge Cases**\n- Risk: over-broad tolerance could accept malformed payloads.\n- Mitigation: only relax version check for missing/`None`; keep all existing field-level validations and cycle detection.\n- Risk: conflict between strict JSON Schema contract and backward-compatible runtime behavior.\n- Mitigation: treat JSON schema as producer contract for new outputs; Python validator handles legacy migration inputs.\n\n**Conflict Detection**\n- Conflict 1: [.github/ai/orchestrate_schema.v1.json](.github/ai/orchestrate_schema.v1.json) requires `schema_version`, while issue expects migration compatibility for missing `schema_version`.\n- Conflict 2: current in-repo producer paths reviewed already set explicit schema versions; failure likely comes from legacy persisted artifacts/fixtures rather than current producers.\n\n**Testing / Verification**\n- Run:\n- `pytest tests/test_orchestrate_lib.py tests/test_orchestrate_poll_process.py`\n- Migration verification path including `03_routes_errors_shutdown.sh` (or full validate flow).\n- Pass criteria:\n- No `Unsupported schema_version: None` in migration verification.\n- Existing strict invalid-schema behavior remains intact.\n- No regressions in orchestrate wave/status logic.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0fe9d534038a6318d0dd491a4ece27e97c967fb2608aae96b0c165478e8e7353",
+  "lineage": {
+    "issue_number": 644,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24222638046",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24222638046",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/644"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260410020743_e469efa8b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 644,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24222638046"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #644",
+  "timestamps": {
+    "created_at": "2026-04-10T02:07:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

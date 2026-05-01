@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `bdcdf58163963ca0ce095e790d52ae3c702f9547`\n- Resolved checkout ref: `orchestrator/project-1292`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1292`\n- Integration branch metadata: `orchestrator/project-1292`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No explicit `Q<ID>` items were asked in clarification.\n- `/answer [auto-answered-by-orchestrator]` indicates \u201cproceed with issue scope as written,\u201d so planning is based on the issue body + constraints only.\n\nRepresentative implementation to follow:\n- `scripts/validate_process.sh` template-mode renderer path (`run_template_validation_harness_renderer` + `HARNESS_MODE=template_generate`) as the deterministic harness-generation baseline.\n- `tests/test_validate_process_template_mode.py` as the existing validation-process integration-style test pattern.\n\n1) Files likely to change\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_template_mode.py` and/or a new targeted test file such as `tests/test_validate_process_render_recovery.py`\n- `README.md` (Validation self-healing section)\n- `agents.md` (Section 16 Validation Self-Healing)\n\n2) Functions/modules to implement\n- In `scripts/validate_process.sh`:\n  - Add a deterministic render-recovery step in Phase 2 preflight failure handling.\n  - Recovery flow: on lint/preflight failure, re-render harness from manifest/templates via `run_template_validation_harness_renderer`, then rerun `run_preflight_checks` before terminal failure.\n  - Bound retries (small fixed budget or tied to existing self-heal budget) to prevent loops.\n  - Ensure this recovery path does not route into freehand harness regeneration for the same failure path.\n- In `scripts/validate_process.sh` + `scripts/self_heal_validation.sh`:\n  - Extend self-heal phase tagging/logging to recognize `render` as a valid failure phase label.\n  - Preserve existing allow-list enforcement (only 4 validation prompt files editable by self-heal).\n- In `prompts/mode-validate-self-heal.txt`:\n  - Tighten guidance that harness recovery for render-phase failures is renderer-driven.\n  - Keep prompt self-heal constrained to prompt-file wording fixes only; no harness/script/workflow edits.\n\n3) Data structures affected\n- Runtime shell state in `validate_process.sh`:\n  - Add render-recovery attempt/status variables (additive).\n  - Capture/propagate render-phase failure label for logging/telemetry.\n- Self-heal patch ledger entries (`self_heal_patches.jsonl`) continue same schema; `failure_phase` may now include `\"render\"` (additive value, no schema break).\n- No MongoDB contracts/indexes/collections affected.\n\n4) API or interface changes\n- No external API/CLI contract changes expected.\n- No env var rename/removal expected.\n- Optional additive internal telemetry/log lines for render recovery (for diagnostics) without changing existing marker contracts.\n\n5) Potential risks or edge cases\n- Accidental fallback to freehand harness generation if recovery is wired through existing self-heal re-exec path incorrectly.\n- Infinite or excessive rerender/relint loops if retry budget is not bounded.\n- Renderer asset/manifest missing scenarios must fail open to existing terminal handling, not crash.\n- Preflight failure classification must avoid suppressing non-lint fatal errors silently.\n- Must preserve existing self-heal safety constraints: target allow-list, additive-only prompt edits, unchanged output schema expectations.\n\n6) Testing considerations\n- Add/extend integration-style tests to validate:\n  - Lint failure triggers deterministic rerender + relint before terminal failure.\n  - Successful rerender path proceeds to next phase without freehand harness edits.\n  - Renderer fail-open behavior: missing renderer/manifest or renderer nonzero still produces expected failure status/logging path.\n  - Self-heal plumbing accepts/logs `render` phase while keeping target allow-list unchanged.\n- Keep existing tests green:\n  - `tests/test_validate_process_template_mode.py`\n  - `tests/test_validate_preflight_canary_tools_scope.py`\n  - Any tests asserting self-heal contracts and validate-process branch structure.\n\nConflict detection:\n- No hard codebase conflict found with the requested behavior.\n- Constraint note: issue says \u201cSTAY INSIDE files_touched,\u201d but explicit `files_touched` list is not present in planning context; plan assumes the files listed above are the intended touched set.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b60bca777636e2f5bd0df01ae0c1674f419299d18218b2495dce8d75dc9d863b",
+  "lineage": {
+    "issue_number": 1366,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24622321308",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622321308",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1366"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419060540_b71c503ced",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1366,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24622321308"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1366",
+  "timestamps": {
+    "created_at": "2026-04-19T06:05:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

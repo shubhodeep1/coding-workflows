@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `git rev-parse HEAD`: `110e67e00781d595ed877c23ae86608a1afc8921`\n- Resolved checkout ref: `main`\n- `git symbolic-ref --short -q HEAD`: `main`\n- Integration branch metadata: not present in context (no explicit mismatch detected), so planning proceeds on `main`.\n\nClarification mapping\n- No `Q<ID>` questions were asked in clarify.\n- `/answer [auto-answered-by-clarify]` is interpreted as: issue scope is clear and planning can proceed.\n\nImplementation plan\n\n1. Files likely to change\n- [AUDIT_REPORT.md](AUDIT_REPORT.md) (only writable deliverable)\n\n2. Read-only files to audit (inputs)\n- [README.md](README.md)\n- [agents.md](agents.md)\n- [CLAUDE.md](CLAUDE.md)\n- `.github/ai/*.json` (4 files)\n- `.github/workflows/*.yml` (28 files)\n- `scripts/*.sh` and `scripts/*.py` (34 files)\n\n3. Functions/modules to inspect and use as representative patterns\n- [scripts/gh_helpers.sh](scripts/gh_helpers.sh) (`gh_retry`, `gh_retry_to_file`, `gh_api_json_to_file`, `curl_gh_api`, `_safe_gh_jq`) for canonical GH API retry/batching/fail-open behavior.\n- [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh) (`_fetch_candidate_issue_details_graphql`, `_fetch_linked_pr_status_graphql`, `ensure_integration_conflict_state_fields`) for batched GraphQL and cache-first loop patterns.\n- [scripts/label_helpers.sh](scripts/label_helpers.sh), [scripts/review_rb_judge.sh](scripts/review_rb_judge.sh), [scripts/validate_process.sh](scripts/validate_process.sh) for duplication analysis (`ensure_label_exists` variants).\n- [\\.github/workflows/review_autofix.yml](.github/workflows/review_autofix.yml) and [\\.github/workflows/orchestrate_poll.yml](.github/workflows/orchestrate_poll.yml) for expression-limit history and script extraction decisions.\n\n4. Data structures affected (in report only)\n- Define a normalized finding record in `AUDIT_REPORT.md` with:\n- `ID`, `File path`, `Line range`, `Severity`, `Category tag`, `Description`, `Recommended fix`\n- Section 2 findings additionally include:\n- `Current API call count`, `Proposed call count`, `Batching/caching pattern to extend`\n- Section 4 findings additionally include:\n- `Estimated expression chars`, `Headroom to 21,000`, `Mitigation option`\n- Optional suffix `[NEEDS VERIFICATION]` for uncertain findings.\n- Build two summary matrices at the end:\n- Severity count matrix (with IDs)\n- Remediation scope matrix (files touched + effort)\n\n5. API/interface changes\n- No runtime API, workflow behavior, schema, env var, or script interface changes.\n- Deliverable is documentation-only (`AUDIT_REPORT.md`), plus commit/push of that file.\n\n6. Audit execution sequence\n1. Build inventory and baseline counts for workflow/script scope and file sizes.\n2. Section 1 sweep: correctness/security checks across all workflows/scripts (quoting, `set -euo pipefail`, error handling, race/TOCTOU, YAML/`if:` logic, secret exposure/injection risk).\n3. Section 2 sweep: enumerate all GH API calls and detect per-loop calls, duplicate fetches, missed batching, missed cache reuse, retry issues; quantify current vs proposed call counts.\n4. Section 3 sweep: detect duplicated functions/inline blocks/repeated patterns and propose shared helper ownership + caller migration list.\n5. Section 4 sweep: estimate `${{ }}` expression sizes only where interpolation exists; flag >15k and >18k; check workflow file size against 800 KB warning threshold.\n6. Section 5 sweep: dead code, TODO/FIXME/HACK, consistency drifts, obvious ShellCheck classes.\n7. Write `AUDIT_REPORT.md` with required section order and mandatory field completeness for every finding.\n8. Validate report integrity: all sections present, IDs stable/unique, summary counts match finding lists, line ranges included, no workflow/script edits.\n9. Commit and push only `AUDIT_REPORT.md`.\n\n7. Risks and edge cases to handle in the audit\n- False positives from shell static inspection when failure is intentionally fail-open (`|| true`, guarded retries); verify surrounding context before labeling.\n- Dynamic shell constructs (`eval`, indirect vars, heredocs) may hide quoting/injection risks; mark uncertain cases `[NEEDS VERIFICATION]`.\n- Expression-size estimates are sensitive to multiline interpolation and template expansion; use consistent counting method and report as estimate.\n- Large files (notably `orchestrate_poll_process.sh` and `review_autofix.yml`) require targeted symbol/pattern inspection to avoid missing hotspots.\n- Duplicate logic may be intentional for bootstrap isolation; classify as tech-debt/consistency unless correctness impact is proven.\n\n8. Testing/verification considerations (for this audit task)\n- Confirm only [AUDIT_REPORT.md](AUDIT_REPORT.md) is modified.\n- Confirm every finding includes all mandatory fields and allowed category tags.\n- Confirm Section 2 findings include call-count delta and batching reference.\n- Confirm Section 4 includes both expression-limit and file-size-limit checks.\n- Confirm Section 6 severity totals and remediation scope are internally consistent.\n\nConflict check\n- No factual conflict found between issue instructions and repository layout/scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "373d3a1019eb4c2de3ace95b72f987aca3c44ebcd3e32d50872093c9cc305ce3",
+  "lineage": {
+    "issue_number": 1208,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24517047413",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24517047413",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1208"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416145703_52996ee5fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1208,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24517047413"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1208",
+  "timestamps": {
+    "created_at": "2026-04-16T14:57:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

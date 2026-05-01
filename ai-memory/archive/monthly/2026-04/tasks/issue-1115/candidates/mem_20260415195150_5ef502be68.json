@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- Q1: **B** \u2192 migrate **all** issue-timeline cross-reference call sites in `scripts/orchestrate_poll_process.sh`.\n- Q2: **A** \u2192 add the H3 changelog entry in `README.md`.\n- Q3: **A** \u2192 place fixtures under `scripts/fixtures/issue-timeline/`.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/gh_helpers.sh`\n- `scripts/orchestrate_poll_process.sh`\n- `scripts/compare_issue_timeline_parity.sh` (new manual script, non-CI)\n- `scripts/fixtures/issue-timeline/rest_timeline_fixture.json` (new)\n- `scripts/fixtures/issue-timeline/graphql_timeline_fixture.json` (new)\n- `README.md` (H3 changelog note in orchestrator/poller section)\n\n2. Functions/modules to implement\n- Add `gh_issue_timeline_with_cross_refs owner repo issue_number` in `scripts/gh_helpers.sh`.\n- Inside it, run GraphQL via `gh_retry gh api graphql` using:\n  - `timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT, CLOSED_EVENT])`\n  - PR fields needed by existing jq consumers.\n- Transform GraphQL response into legacy timeline JSON shape currently consumed by jq pipelines (array of timeline events).\n- Add fail-open fallback to legacy REST pagination+enrichment behavior when:\n  - GraphQL call fails after retry budget.\n  - `pageInfo.hasNextPage == true`.\n- Emit structured fallback warning with stable key:\n  - `::warning::rate_limit_audit_fallback ...`\n- In `scripts/orchestrate_poll_process.sh`, migrate all `issues/<n>/timeline` cross-reference call sites to this helper while keeping jq semantics unchanged (only input root/source changed).\n- Use existing GraphQL helper style as representative pattern: `_fetch_linked_pr_status_graphql` / `_fetch_candidate_issue_details_graphql` (batching + fail-open comments/logging conventions).\n\n3. Data structures affected\n- New helper output contract: timeline JSON array preserving fields used downstream:\n  - `.event`\n  - `.source.issue.number`\n  - `.source.issue.pull_request.url` / presence checks\n- GraphQL fixture structure for replay/parity script.\n- No orchestrator state schema change; no label contract change; no DB contract change.\n\n4. API/interface changes\n- New internal shell API in `gh_helpers.sh`:\n  - `gh_issue_timeline_with_cross_refs owner repo issue_number`\n- New manual operator utility:\n  - `scripts/compare_issue_timeline_parity.sh` to compare normalized REST-vs-GraphQL shape parity.\n- README changelog entry documenting H3 behavior, fallback conditions, and manual parity script path.\n\n5. Potential risks and edge cases\n- Event ordering differences between GraphQL and REST affecting `| last` jq logic; preserve ordering or explicitly normalize.\n- `hasNextPage=true` for >100 events must always trigger REST fallback to avoid truncated decisions.\n- Cross-referenced events that are not PRs must preserve null/absence semantics used by existing filters.\n- GraphQL partial/invalid payloads must fail open to REST without changing decisions.\n- New helper dependency in poller should remain safe if sourcing helper file fails (existing fallback behavior should be respected).\n\n6. Testing considerations\n- Add manual parity script (not CI-wired) that:\n  - Loads REST fixture and GraphQL fixture.\n  - Normalizes both via jq into decision-relevant shape.\n  - Verifies equality for:\n    - merged-PR evidence extraction path (validation check behavior),\n    - cross-ref PR URL/number extraction path (close-merged sweep behavior),\n    - latest linked PR selection (`| last`) behavior.\n- Manual fallback checks:\n  - GraphQL failure path \u2192 helper returns REST-equivalent shape.\n  - `hasNextPage=true` path \u2192 helper uses REST fallback and preserves prior behavior.\n- Smoke-check updated call sites by replaying fixture-derived outputs through the two acceptance decision paths:\n  - close-merged-issues sweep\n  - validation-linked issue checks\n\nConflict detection:\n- No blocking file/path/signature conflicts found.\n- Non-blocking scope note: issue acceptance examples highlight close-merged + validation checks, but clarified Q1 expands scope to all timeline cross-reference call sites; plan follows clarified scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4bbe52bef359d474ca06c81334a543cca134dd9b8fb71ca6c48c7a06ac58b93e",
+  "lineage": {
+    "issue_number": 1115,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24474775329",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24474775329",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1115"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415195150_5ef502be68",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1115,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24474775329"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1115",
+  "timestamps": {
+    "created_at": "2026-04-15T19:51:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

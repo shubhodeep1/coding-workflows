@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:1103 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The success-no-op detection regex is anchored to the full line, so legitimate success messages embedded in longer output will be missed.\n  WHY: This changes previous substring-style matching into a stricter full-line match, creating false negatives that can trigger unnecessary re-issues or failures.\n- scripts/review_consolidate.sh:131-132 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The consolidator still runs with `--full-auto` and lacks explicit `--sandbox read-only`, so it can write to the workspace.\n  WHY: Workspace writes in the consolidation phase can pollute the pre-editor snapshot and recreate the `EDITOR_CHANGES_LOST` false positive this PR is meant to fix.\n- scripts/review_consolidate.sh:82-85 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: The cleanup trap uses `rmdir` on `${consolidator_codex_root}` and silently ignores failures.\n  WHY: If the directory is not empty, cleanup can fail and leave temporary directories behind, which is an operational hygiene issue.\n- scripts/review_issue_ledger.sh:983-997,1028-1043 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: The rollback-preservation logic can leave `LAST_SEEN_ITERATION` ahead of the current iteration in replay/rollback scenarios.\n  WHY: The second loop preserves prior `last_seen` without clamping it to the current `ITERATION`, which can produce inconsistent ledger state.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/implement.yml:1103 | severity=high | confidence=4\n  PROBLEM: Success-no-op regex changed from substring matching to full-line matching with anchors (`^` and `$`).\n  WHY: This will miss legitimate success messages embedded in longer sentences and can trigger unnecessary re-issues or failure handling.\n- scripts/review_consolidate.sh:~82-85 | severity=medium | confidence=3\n  PROBLEM: Cleanup trap uses `rmdir` on `${consolidator_codex_root}` which may fail if the directory is not empty.\n  WHY: The `|| true` suppresses errors but does not fix the resource leak, so temporary directories can accumulate over time.\n- scripts/review_consolidate.sh:~132 | severity=high | confidence=5\n  PROBLEM: Consolidator still runs with `--full-auto` which grants workspace-write access.\n  WHY: If the consolidator writes to workspace files, those writes can pollute the pre-editor snapshot and recreate the `EDITOR_CHANGES_LOST` false positive.\n- scripts/review_consolidate.sh:~132 | severity=medium | confidence=3\n  PROBLEM: Missing `--sandbox read-only` flag on consolidator invocation.\n  WHY: Without explicit read-only sandboxing, the consolidator could potentially write to the workspace even without `--full-auto`.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_consolidate.sh:132 | severity=high | confidence=5\n  PROBLEM: The consolidator `codex exec` is missing `--sandbox read-only` and `--ask-for-approval never`.\n  WHY: Although the consolidator uses an isolated `consolidator_codex_home`, it still has write access to the repository workspace and can cause the same `EDITOR_CHANGES_LOST` false positive.\n- .github/workflows/implement.yml:1103 | severity=high | confidence=5\n  PROBLEM: The new success-no-op detection regex is anchored to the full line and expects specific leading formatting.\n  WHY: If the model returns the success phrase with a different prefix, the regex fails to match and a legitimate no-op is misclassified.\n- scripts/review_issue_ledger.sh:1031-1035 | severity=medium | confidence=4\n  PROBLEM: Iteration-rollback logic for `LAST_SEEN_ITERATION` can allow `last_seen` to be less than `first_seen` if `ITERATION` is rolled back below `first_seen`.\n  WHY: Setting `last_seen=\"${ITERATION}\"` first and only updating if `prior_last_seen` is greater can create an illegal ledger state after rollback.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- <No findings reported.>\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_consolidate.sh:~131 | severity=high | confidence=5\n  PROBLEM: The consolidator script still uses `--full-auto`, which implies workspace-write sandbox access.\n  WHY: Unlike the reviewers, the consolidator was missed and can still write to workspace files, polluting the pre-editor snapshot and causing the `EDITOR_CHANGES_LOST` false positive.\n- scripts/review_issue_ledger.sh:983-997 and 1028-1043 | severity=medium | confidence=3\n  PROBLEM: The rollback preservation logic for `LAST_SEEN_ITERATION` can leave `LAST_SEEN` in the future relative to the current iteration.\n  WHY: If the prior ledger had a higher `LAST_SEEN_ITERATION` than the current rollback iteration, the logic preserves that future value and creates confusing ledger state.\n- scripts/review_consolidate.sh:82-85 | severity=low | confidence=2\n  PROBLEM: The trap cleanup uses `rmdir` and silently ignores failures.\n  WHY: If the directory is not empty, cleanup can fail and temp directories may accumulate on long-running runners.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- <No findings reported.>\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "83744f04c9b8b31e74d7de79bfdf3721ed9860499823220850f59dc8e09b9298",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1449,
+    "run_id": "24665692881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24665692881",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420122950_c6df542bf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1449,
+    "run_id": "24665692881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T12:29:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

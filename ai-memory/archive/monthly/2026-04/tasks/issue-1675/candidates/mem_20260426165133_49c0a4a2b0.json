@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context: HEAD `b99c2a5cd1db84e8022153e705166600f81a4290` on `orchestrator/project-1647`; the resolved checkout ref matches the integration branch metadata, so planning can proceed on this branch.\n\nClarification mapping: no Q-IDs were asked; `/answer [auto-answered-by-orchestrator]` leaves the issue scope unchanged.\n\nConflicts already found\n- `README.md` still says `/judge_resume` resets `judge_stall_cycles` and `recovery_count`; `scripts/orchestrate_poll_process.sh` now preserves both by default and only resets them when `--reset-stall`, `--reset-recovery`, or `--force` is present.\n- `README.md` still says validation refresh skips repos with no `.ai/validate.yml`; `scripts/validation_refresh_runner.py` now bootstraps `.ai/validate.yml` from `examples/validation-fixtures/python-repo-checks.yml` and seeds executable `scripts/run_validation_repo_checks.sh`.\n- The canonical audit-gate delivery and regeneration contract is implemented in `update_workflows.yml`, `scripts/apply_audit_gate_assets.py`, and `workflow-templates/audit-gate/...`, but is not yet documented in the operator docs.\n\n1. Files likely to change: `README.md` and `agents.md` only. In `README.md`, keep edits scoped to the existing `ai-update-workflows` wrapper docs, `<!-- anchor:required-variables-table -->`, `<!-- anchor:orchestrator-pipeline-steps -->`, `### Manual Reset: /judge_resume`, `### Hints Configuration`, `### Validation Harness Lifecycle`, and `### Validation Refresh Automation`. In `agents.md`, keep changes under `<!-- anchor:agents-env-vars -->`; append-only where possible, and only tighten existing wording when duplicating a contract would be worse than editing in place. Do not edit `docs/audit-gate-and-orchestrator-hardening-plan.md`.\n\n2. Representative source of truth to mirror in the docs: `scripts/apply_audit_gate_assets.py` plus `workflow-templates/audit-gate/contract.json` for audit-gate delivery; `workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js` for identity matching and `--write`; `scripts/validation_template_bootstrap.py` plus `scripts/validation_refresh_runner.py` for manifest-less bootstrap; `scripts/orchestrate_poll_process.sh` for `/judge_resume` flags and the repeat-fingerprint breaker. The contract tests already covering this behavior are `tests/test_update_workflows_guardrails.py`, `tests/test_audit_gate_template_atomicity.py`, `tests/test_audit_gate_identity.py`, and `tests/test_validation_refresh_runner.py`.\n\n3. Data structures affected: docs only, no runtime schema or DB contract changes. The wording must match the existing contract/state surfaces: audit-gate `package_script` and `managed_files`, validation bootstrap artifacts `.ai/validate.yml` and `scripts/run_validation_repo_checks.sh`, bootstrap diagnostics (`manifest_bootstrapped_from`, `repo_check_entry_seeded`, `repo_check_entry_preserved_existing`), and judge state fields `judge_last_fingerprint` and `judge_fingerprint_repeat_count`.\n\n4. Interfaces and behavior to document: explain that `ai-update-workflows` now applies the canonical audit-gate contract atomically and idempotently, adding `scripts.audit:ci = node scripts/security/check-npm-audit.js` plus the managed files when `package.json` exists and the script is absent/canonical, while preserving custom `scripts.audit:ci` values and skipping repos with no `package.json`. Document the audit identity key as `severity|package|advisoryId`, with advisory ID preferring GHSA and falling back to CVE; make clear that `viaPackages` is no longer part of the current identity key and only survives as legacy carry-forward context for regeneration. Document `npm run audit:ci -- --write` as the supported regeneration path that preserves curated `reason`, `owner`, and `expiresOn` metadata and becomes a no-op when nothing changed. Update `/judge_resume` docs to say default resume preserves `judge_stall_cycles` and `recovery_count`, while `--reset-stall`, `--reset-recovery`, and `--force` opt into counter resets; keep the validation `/revalidate` carve-out explicit. Document the repeat-fingerprint breaker as `JUDGE_REPEAT_FINGERPRINT_MAX=2` by default, transitioning the project to `ai:blocked`, posting a breaker comment, and requiring manual intervention when the same normalized justification exceeds the cap. Document validation onboarding so manifest-less adopters understand that the bootstrap path seeds a placeholder `.ai/validate.yml` and `scripts/run_validation_repo_checks.sh`; the seeded script is only a pass-through placeholder, so a human still needs to replace it with real repo-specific checks and manifest values.\n\n5. Risks and edge cases: do not add a new `JUDGE_REPEAT_FINGERPRINT_MAX` row if the existing `README.md` or `agents.md` entry can be tightened in place; the issue wants one authoritative explanation per location, not another duplicate mention. Keep the validation bootstrap wording scoped to the refresh/bootstrap flow; runtime hint materialization in `scripts/validate_process.sh` is a different mechanism and should not be conflated with the stub onboarding behavior. Keep the audit-gate docs precise about the skip/preserve paths (`no_package_json`, custom script preserved, idempotent reapply) so the docs do not imply the updater mutates every repo unconditionally.\n\n6. Testing considerations: this is docs-only, so verification is consistency-focused rather than runtime-focused. After editing, diff only `README.md` and `agents.md`, search for the stale claims above to ensure they were replaced rather than duplicated, and confirm the final wording matches the cited source files exactly enough that an operator could use `npm run audit:ci -- --write`, `/judge_resume --reset-*`, and the validation bootstrap path without reading code.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1ffa5e73a84be733587a15f694849d31e9a10b00ff27c9546a5209445ca830e6",
+  "lineage": {
+    "issue_number": 1675,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24961565161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24961565161",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1675"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260426165133_49c0a4a2b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1675,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24961565161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1675",
+  "timestamps": {
+    "created_at": "2026-04-26T16:51:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

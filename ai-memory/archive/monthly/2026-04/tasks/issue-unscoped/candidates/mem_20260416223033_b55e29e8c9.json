@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 7\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/ai_memory. py\n      Problem: Lines: Removed `cmd_actions_ runs_ cache_get`, `cmd_actions_ runs_ cache_put` functions (lines 486-605), removed subparser registration (lines 910-925), removed imports of `get_ actions_ runs_ cache`, `put_ actions_ runs_ cache` (lines 24, 29); The entire `actions-runs-cache` CLI subcommand was removed from `ai_ memory. py`.; `scripts/orchestrate_ poll_ process. sh` (lines 31115, 3181, 3200) still calls:; ```bash; python3 scripts/ai_memory.py actions- runs- cache get --repo \"${repo}\"; python3 scripts/ai_memory.py actions- runs- cache put ...; The script has fallback (`|| echo '{}'`) so won't crash, but caching is completely broken, increasing GitHub API usage and potentially causing rate-limit issues.; ### ISSUE 2: CRITICAL - Removed gh_Pr_With_All_Comments breaks review-Blocked Judge\n      Confidence: avg 5.0\n      Flagged by: minimax_minimax-m2_5\n\n  [2] File: scripts/gh_helpers. sh\n      Problem: Lines: Removed entire functions `_gh_ pr_ with_ all_ comments_ rest` and `gh_ pr_ with_ all_ comments` (~220 lines, originally lines 610-837); The H4 PR comment hydration feature was deleted.; `scripts/review_ rb_ judge. sh` (lines 200-205) and `scripts/orchestrate_ poll_ process. sh` (lines 6782-6787) call these functions. They fall back to warning + empty JSON, but the judge loses richer PR context, potentially harming decision quality.; ### ISSUE 3: CRITICAL - Removed Workflow_Log_Analysis_Cache breaks log collection\n      Confidence: avg 5.0\n      Flagged by: minimax_minimax-m2_5\n\n  [3] File: scripts/ai_ memory_ lib. py\n      Problem: Lines: Removed `get_ workflow_ log_ analysis_ cache`, `put_ workflow_ log_ analysis_ cache`, `validate_ workflow_ log_ analysis_ cache`, `_default_ workflow_ log_ analysis_ cache`, `_validate_ repository_ name`, `import sys` (lines 367-418, 521-530); These functions were removed from `ai_ memory_ lib.py`.; `scripts/collect_ workflow_ logs. py` (lines 30, 32, 38, 40, 265, 288) imports and uses these functions:; ```python; from ai_memory_lib import get_workflow_log_analysis_cache, put_workflow_analysis_cache; This will cause ImportError at runtime.; ### ISSUE 4: Logic Bug - push_Retries cannot be set to 0\n      Confidence: avg 5.0\n      Flagged by: minimax_minimax-m2_5\n\n  [4] File: scripts/ai_ memory. py\n      Problem: Original: `if getattr(args, \"push_ retries\", None) is None:`; Changed to: `if not getattr(args, \"push_ retries\", None):`; The change from `is None` to `not` treats any falsy value (including explicitly set `0`) as unset and falls back to default `5`.; Users cannot set `--push- retries 0` or `AI_ MEMORY_ PUSH_ RETRIES=0` to disable retries \u2014 the code silently replaces it with `5`. This breaks the documented config contract.; ### ISSUE 5: Regression - Label Error Handling Silently Swallows Failures\n      Confidence: avg 5.0\n      Flagged by: minimax_minimax-m2_5\n\n  [5] File: scripts/label_ helpers. sh\n      Problem: Lines: 88-96 (ensure_label_ exists function); Original: Had specific error checking that warned on non-\"already exists\" errors; Changed to: Uses `|| true` which silently ignores ALL errors; All errors from `gh label create` are suppressed without any warning.; Real errors (auth failures, network issues, rate limits) are now silently swallowed. Debugging missing labels in downstream operations becomes impossible. This is an observability regression.; ### ISSUE 6: Indentation Inconsistency in review_ Run_ Reviewers. Sh\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\n  [6] File: scripts/label_ helpers. sh\n      Problem: Location: ensure_label_ exists function (lines 88-96); Issue: Silently swallows all label creation errors; Suggested minimal fix: Restore error detection for non-\"already exists\" failures:; ```bash; gh_retry gh label create \"${label_name}\" \\; --repo \"${repo}\" \\; --color \"${color}\" \\; --description \"${description}\" \\; 2>/dev/null || {; # Check if it failed because it already exists (acceptable); # vs real error (should warn); return 0  # simplified - full fix in original; Estimated lines changed: ~10; HARDENING_ RISK_ SCORE: 2; ## SUMMARY; The PR's stated goal (H8: configurable poll interval) was implemented correctly. However, the AI autofix also introduced **5 critical breaking changes** by removing existing functionality that is still called by other scripts:; 1. `actions- runs- cache` CLI removed but called by orchestrator; 2. `gh_ pr_ with_ all_ comments` removed but called by review_ rb_ judge and orchestrator; 3. `workflow_ log_ analysis_ cache` functions removed but imported by collect_ workflow_ logs; 4. `push_ retries` logic changed to reject explicit `0` value; 5. Label error handling simplified to swallow all errors; These are clear scope-creep issues where the AI incorrectly identified \"unused\" code and removed it, despite the code being actively used across the codebase.\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\n  [7] File: scripts/review_ run_ reviewers. sh\n      Problem: Lines: 691-695, 777-780, 816-817; The new code introduced uses inconsistent indentation (mix of tabs and spaces). The repo mandates TABS for indentation (except YAML).; This is a style violation. While not a runtime crash, it violates the repository's explicit code style guidelines (agents.md \u00a79).; ### Positive Finding: H8 Implementation Correct; The intended change (adding `REVIEW_ PR_ STATE_ POLL_ INTERVAL_ SECS` environment variable) was implemented correctly in `scripts/review_ run_ reviewers. sh` with proper validation (accepting 10-36000 range, falling back to default 10 on invalid values).; ## HARDENING_ SUGGESTIONS\n      Confidence: avg 5.0\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/ai_ memory. py\nscripts/ai_ memory_ lib. py\nscripts/ai_memory. py\nscripts/gh_helpers. sh\nscripts/label_ helpers. sh\nscripts/review_ run_ reviewers. sh",
+  "fingerprint": "e397d27b078088e40b9e00ffa83ef839469679371066fb29194bb564e2a8a5b7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1246,
+    "run_id": "24536403828",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24536403828",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416223033_b55e29e8c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1246,
+    "run_id": "24536403828"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-16T22:30:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

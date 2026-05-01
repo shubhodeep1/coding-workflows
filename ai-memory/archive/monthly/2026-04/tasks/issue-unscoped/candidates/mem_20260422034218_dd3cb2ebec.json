@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.ai/review_issue_ledger.txt:86-93` | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The ledger entry references the non-existent file `scripts/collect_workspace_logs.py` instead of the actual script.\n  WHY: Incorrect file paths mislead automated tools and reviewers that rely on the ledger; all reviewers agreed this is a data-integrity error.\n- `.ai/review_issue_ledger.txt:86-93` | severity=critical | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The ledger marks unrelated files as `FIXED` even though they were not modified in this PR.\n  WHY: False `FIXED` statuses break traceability and can cause downstream consumers to treat unresolved issues as resolved.\n- `tests/test_collect_workflow_logs.py:583-584` | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: Missing blank line between `test_fetch_run_log_archive_retry_exhaustion_raises_last_error` and `test_fetch_run_log_archive_non_retryable_failure_path`.\n  WHY: This violates PEP 8 spacing for top-level functions; it is stylistic only, but every reviewer who mentioned it agreed on the issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `.ai/review_issue_ledger.txt:86-93` | severity=critical | confidence=5\n  PROBLEM: The ledger entry references a non-existent file `scripts/collect_workspace_logs.py`.\n  WHY: Incorrect data in the ledger could mislead automated tools and reviewers that map findings to source files.\n- `scripts/collect_workflow_logs.py:678-690` | severity=medium | confidence=4\n  PROBLEM: The 404 detection logic misses common error variations like `Error 404:` and `status code: 404`.\n  WHY: Actual 404 errors with slightly different wording may be misclassified as hard failures instead of soft failures.\n- `scripts/collect_workflow_logs.py:751` | severity=low | confidence=3\n  PROBLEM: Redundant exception chaining with `raise normalized_exc from exc` when `normalized_exc` already has `__cause__` set.\n  WHY: This can create nested exception chains that make debugging slightly harder.\n- `scripts/collect_workflow_logs.py:754-755` | severity=low | confidence=2\n  PROBLEM: The empty payload error path has no explicit test coverage.\n  WHY: If the API returns an empty response body, this edge case would execute without validation.\n- `tests/test_collect_workflow_logs.py:583-584` | severity=medium | confidence=4\n  PROBLEM: Missing blank line between two top-level test functions violates PEP 8.\n  WHY: It does not affect runtime behavior, but it is a visible style issue in the test suite.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `.ai/review_issue_ledger.txt:86-93` | severity=critical | confidence=5\n  PROBLEM: The ledger entry references the non-existent file path `scripts/collect_workspace_logs.py`.\n  WHY: The wrong path breaks mapping between reported findings and the correct source file, creating \"ghost\" issues in tracking.\n- `.ai/review_issue_ledger.txt:86-93` | severity=critical | confidence=5\n  PROBLEM: The ledger marks several entries as `FIXED` or `NEW` for files that were not modified in this PR.\n  WHY: This misattributes fixes to unrelated files and breaks the ledger's integrity as a source of truth.\n- `tests/test_collect_workflow_logs.py:583-584` | severity=medium | confidence=5\n  PROBLEM: Missing blank line between `test_fetch_run_log_archive_retry_exhaustion_raises_last_error` and `test_fetch_run_log_archive_non_retryable_failure_path`.\n  WHY: This is a PEP 8 violation and reduces readability in the test suite.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `.ai/review_issue_ledger.blob:52-61` | severity=critical | confidence=5\n  PROBLEM: The ledger references a non-existent file `scripts/collect_workspace_logs.py` instead of `scripts/collect_workflow_logs.py`.\n  WHY: This data error can mislead future reviewers and automated tools that parse the ledger for tracking issues.\n- `.ai/review_issue_ledger.blob` | severity=critical | confidence=5\n  PROBLEM: The ledger marks many issues as `FIXED` for files that were not modified in this PR.\n  WHY: False `FIXED` status causes downstream tracking and acceptance logic to treat unresolved issues as resolved.\n- `tests/test_collect_workflow_logs.py:583-584` | severity=medium | confidence=4\n  PROBLEM: Missing blank line between top-level test functions violates PEP 8.\n  WHY: This is a style inconsistency and does not affect runtime behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `.ai/review_issue_ledger.txt:86-93` | severity=critical | confidence=5\n  PROBLEM: The ledger entry references `FILE: scripts/collect_workspace_logs.py`, which does not exist in the repository.\n  WHY: The incorrect filename misleads future automated reviews and tools that rely on the ledger for tracking issues.\n- `tests/test_collect_workflow_logs.py:583-585` | severity=medium | confidence=4\n  PROBLEM: There should be two blank lines between `test_fetch_run_log_archive_retry_exhaustion_raises_last_error` and `test_fetch_run_log_archive_non_retryable_failure_path`.\n  WHY: This is a PEP 8 style violation for top-level function definitions and does not affect runtime.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `.ai/review_issue_ledger.txt:86-93` | severity=critical | confidence=5\n  PROBLEM: The ledger contains a non-existent file path `scripts/collect_workspace_logs.py`.\n  WHY: Incorrect file references can cause missed lookups or false positives for tools and humans using the ledger.\n- `.ai/review_issue_ledger.txt` | severity=critical | confidence=5\n  PROBLEM: The ledger contains false `FIXED` status entries for files outside the PR's changes.\n  WHY: This breaks traceability and may hide unresolved defects by treating them as resolved.\n- `scripts/collect_workflow_logs.py` | severity=critical | confidence=5\n  PROBLEM: The script calls functions that are not defined: `_normalize_log_archive_exception` and `_is_retryable_log_archive_exception`.\n  WHY: Those missing functions would cause a `NameError` at runtime when the retry path executes.\n- `tests/test_collect_workflow_logs.py` | severity=medium | confidence=0\n  PROBLEM: Missing blank line between two top-level test functions.\n  WHY: Style issue only; no runtime failure.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "2b4ca9fca96f9af22d9f6b6c1995dd84ee90a5a5ad976444e20ad47e520e26bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1505,
+    "run_id": "24758218445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24758218445",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422034218_dd3cb2ebec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1505,
+    "run_id": "24758218445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T03:42:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

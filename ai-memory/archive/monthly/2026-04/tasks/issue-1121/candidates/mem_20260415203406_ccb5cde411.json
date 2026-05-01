@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation: no Q<ID> items were asked in clarify; `/answer [auto-answered-by-clarify]` means scope is accepted as-is.\n\nImplementation plan\n\n1. Files likely to change\n1. `.github/workflows/orchestrate_poll.yml`\n2. `tests/test_orchestrate_poll_workflow_contract.py`\n\n2. Functions/modules to update\n1. Workflow bootstrap block in `orchestrate_poll.yml` that currently loops:\n   `for pf in mode-judge.txt mode-judge-review-blocked.txt serena-efficiency-block.txt; do`\n2. Contract test module functions in `test_orchestrate_poll_workflow_contract.py`:\n   existing env-default test remains; add prompt-bootstrap coverage test and wire it into `main()`.\n\n3. Data structures affected\n1. Prompt filename list (`pf`) used by bootstrap fetch loop.\n2. Workflow string literals asserted by contract test:\n   - script-ref fetch path (`?ref=${script_ref}`)\n   - main fallback fetch path (`?ref=main`)\n   - warning text (`::warning::${pf} not found on ${script_ref}; falling back to main`)\n\n4. API/interface changes\n1. No external API/interface changes.\n2. Runtime behavior change is only bootstrap completeness: include `mode-judge-stall-recovery.txt` in the same existing fallback mechanism.\n\n5. Risks and edge cases\n1. Accidentally changing fallback warning wording would break contract expectations and reduce operator clarity.\n2. Altering fetch order could break backward compatibility; must remain `script_ref` first, then `main`.\n3. Keep YAML indentation/style intact (2-space YAML requirement).\n\n6. Testing considerations\n1. Extend `tests/test_orchestrate_poll_workflow_contract.py` to assert:\n   - loop includes `mode-judge-stall-recovery.txt`\n   - both `${script_ref}` and `main` prompt fetch paths exist\n   - fallback warning string is present\n2. Run targeted contract test file and confirm pass after change.\n3. Ensure no unrelated workflow logic diffs.\n\nConflict detection\n- No factual conflicts found between issue description and current code; issue evidence matches repository state.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "dc002d76768e281b7c7918be02371e9dea4ef21050433f104fbd39e2a7abf42d",
+  "lineage": {
+    "issue_number": 1121,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24476872352",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24476872352",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1121"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415203406_ccb5cde411",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1121,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24476872352"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1121",
+  "timestamps": {
+    "created_at": "2026-04-15T20:34:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarifications were asked.\n- The auto-response `/answer [auto-answered-by-clarify]` indicates the scope is clear and implementation planning can proceed.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/orchestrate_poll.yml`\n- `.github/workflows/ci.yml`\n- `.github/workflows/test-and-mark-stable.yml`\n- `tests/test_orchestrate_poll_workflow_contract.py`\n\n2. Functions/modules to implement\n- Update orchestrate poll prompt bootstrap loop to include `mode-judge-stall-recovery.txt` in the existing prompt fetch list that currently pulls judge prompts with `${script_ref}` then falls back to `main`.\n- Extend required prompt lists in CI/release guardrails:\n  - `ci.yml` `target_prompts=(...)` block.\n  - `test-and-mark-stable.yml` prompt validation loops (both the focused judge prompt check and the broader `target_prompts` array).\n- Extend `tests/test_orchestrate_poll_workflow_contract.py` with assertions that:\n  - workflow contains `mode-judge-stall-recovery.txt` in bootstrap prompt fetch list.\n  - bootstrap logic still uses `${script_ref}` fetch path and `?ref=main` fallback semantics.\n- Wire new test into `main()` in that test file (consistent with current test-file style).\n\n3. Data structures affected\n- Bash prompt filename lists/arrays in workflow YAML (`for pf in ...`, `target_prompts=(...)`).\n- Python string-assertion expectations in workflow contract tests.\n\n4. API/interface changes\n- No external API/interface changes.\n- No env var, label, command, or schema changes.\n- Behavior remains additive: only deterministic availability of the stall-judge prompt is enforced.\n\n5. Potential risks/edge cases\n- Missing one of multiple prompt validation locations in `test-and-mark-stable.yml` would leave a release gap.\n- Accidentally changing fallback logic while editing prompt list could break backward compatibility for non-main refs.\n- Contract test must assert both presence and fallback semantics to prevent future regressions.\n\n6. Testing considerations\n- Run targeted contract test: `pytest tests/test_orchestrate_poll_workflow_contract.py`.\n- Optionally run related orchestrate poll tests for regression confidence: `pytest tests/test_orchestrate_poll_process.py`.\n- Ensure CI prompt validation path still passes with the new required prompt in both workflow files.\n\nConflict detection\n- No factual conflicts found between issue description and repository state; the described gaps are present as stated.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2d20db35236dbf3c22bc82a66c7a92d70c81b33447bfea4b058c58d2f1d34fc6",
+  "lineage": {
+    "issue_number": 1107,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24469925087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24469925087",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1107"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415180112_83d14d92fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1107,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24469925087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1107",
+  "timestamps": {
+    "created_at": "2026-04-15T18:01:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

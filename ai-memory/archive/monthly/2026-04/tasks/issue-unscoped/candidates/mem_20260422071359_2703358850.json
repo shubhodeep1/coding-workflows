@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4557 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The comment-body truncation uses a 2000-character cap that may still overflow Linux `MAX_ARG_STRLEN` because `jq length` counts characters, not bytes.\n  WHY: Several reviewers identified the same root cause: multi-byte UTF-8 content can exceed the byte-based argv limit even when the character count is bounded.\n- scripts/orchestrate_poll_process.sh:4634-4635 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `stall_minutes` and `recovery_count` are passed to `jq --argjson` without validating that they are numeric JSON values.\n  WHY: If either variable is empty or non-numeric, `jq` fails and the diagnostics builder falls back, which these reviewers treated as a runtime robustness bug.\n- scripts/orchestrate_poll_process.sh:4558 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: The implementation fetches all issue comments and then slices down to the newest few, which is unnecessary overhead.\n  WHY: This is a performance-only concern: both reviewers noted the code paginates through more comments than needed for the final diagnostics payload.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:4557 | severity=medium | confidence=4\n  PROBLEM: Character-based truncation does not protect against the byte-based `MAX_ARG_STRLEN` limit.\n  WHY: `jq` truncates by character count, but Linux enforces a byte limit, so multi-byte UTF-8 content can still overflow the argv budget.\n- scripts/orchestrate_poll_process.sh:4634-4635, 4666-4667 | severity=medium | confidence=3\n  PROBLEM: `--argjson` arguments are not validated as numeric JSON.\n  WHY: If `stall_minutes` or `recovery_count` are empty or non-numeric, `jq` fails and the diagnostics builder falls back to a minimal payload.\n- scripts/orchestrate_poll_process.sh:4558 | severity=low | confidence=2\n  PROBLEM: Comment fetching is more expensive than necessary because it loads all pages before keeping only the newest few comments.\n  WHY: This creates avoidable API and processing overhead for large or long-lived issue threads.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/orchestrate_poll_process.sh:4557 | severity=medium | confidence=4\n  PROBLEM: The truncation logic is character-based, while `MAX_ARG_STRLEN` is byte-based.\n  WHY: A 2000-character limit can still exceed the byte limit with multi-byte UTF-8 content, and the reviewer also noted the documentation text is misleading about bytes versus characters.\n- scripts/orchestrate_poll_process.sh:4558 | severity=medium | confidence=5\n  PROBLEM: The code fetches all comments through pagination and only later slices to the newest 8.\n  WHY: This can hit `E2BIG`/overhead concerns before `jq` runs and wastes API calls on issues with many comments.\n- scripts/orchestrate_poll_process.sh:4634-4635 | severity=medium | confidence=4\n  PROBLEM: `stall_minutes` and `recovery_count` are passed to `jq --argjson` without validation.\n  WHY: Empty or malformed values make `jq` throw a syntax error, which forces the fallback diagnostics path.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:4557 | severity=critical | confidence=5\n  PROBLEM: The truncation uses `.[:1988]` even though the intended cap is 20,000 characters.\n  WHY: The reviewer judged this to be a typo that reduces the available context by roughly 10x relative to the intended limit.\n- scripts/orchestrate_poll_process.sh:4557 | severity=medium | confidence=4\n  PROBLEM: The truncation is character-based rather than byte-based.\n  WHY: `jq length` counts Unicode codepoints, so multi-byte UTF-8 content can still exceed the byte-based `MAX_ARG_STRLEN` limit.\n- scripts/orchestrate_poll_process.sh:46634-46635 | severity=medium | confidence=3\n  PROBLEM: `stall_minutes` and `recovery_count` are passed to `jq --argjson` without validation.\n  WHY: Non-numeric values would make `jq` fail, and the reviewer noted the fallback path does not eliminate that initial failure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:4557 | severity=medium | confidence=4\n  PROBLEM: Character-based truncation still risks exceeding the byte-based `MAX_ARG_STRLEN` limit.\n  WHY: The reviewer noted that `jq length` counts codepoints rather than bytes, so heavily multi-byte content can still overflow the argv budget.\n- scripts/orchestrate_poll_process.sh:4634-4635, 4676-4677 | severity=medium | confidence=3\n  PROBLEM: `stall_minutes` and `recovery_count` are passed through `--argjson` without validation.\n  WHY: Empty or malformed values can make the primary diagnostics builder fail before the safer fallback path is reached.\n- scripts/orchestrate_poll_process.sh:4682-4687 | severity=medium | confidence=3\n  PROBLEM: The fallback builder does not consistently harden all JSON fields against malformed or special-character input.\n  WHY: The reviewer warned that some fallback fields could still break JSON validity or force the ultimate minimal fallback.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "14388979410866d1100bc563461600baf66cc08f395a7ca059e5704d97265eb5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1516,
+    "run_id": "24764834125",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24764834125",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422071359_2703358850",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1516,
+    "run_id": "24764834125"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T07:13:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

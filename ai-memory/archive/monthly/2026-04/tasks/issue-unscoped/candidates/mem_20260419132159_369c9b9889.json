@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:258 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The status filter includes `OPEN`, which is not a valid ledger status value.\n  WHY: The ledger status model uses `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, and `accepted-residual`, so `OPEN` is dead code; reviewers disagreed on impact, with some calling it minor/hardening-only.\n- scripts/review_run_reviewers.sh:254-256 | severity=medium | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The `NF < 4` guard is positioned after the awk block opens, allowing malformed rows with fewer than four fields to reach the path reference.\n  WHY: A short or malformed ledger row could leave `$4` undefined and produce unpredictable behavior when the script processes it.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/review_run_reviewers.sh:257-262 | severity=critical | confidence=5\n  PROBLEM: The awk parser was reading the wrong columns for status and file path from the ledger status file.\n  WHY: The parser was using the wrong column mapping for the ledger row format, which would break iteration scoping and cause reviewers to miss persistent issues.\n- scripts/review_run_reviewers.sh:262 | severity=medium | confidence=4\n  PROBLEM: The regex for stripping line-range suffixes from paths was incomplete.\n  WHY: The existing pattern did not cover all line-range formats, so some path metadata could survive and interfere with downstream file handling.\n- scripts/review_run_reviewers.sh:258 | severity=low | confidence=4\n  PROBLEM: The status filter included `OPEN`, which is not a valid ledger status.\n  WHY: The ledger uses `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, and `accepted-residual`, so `OPEN` never matches and should not be checked.\n- scripts/review_run_reviewers.sh:301 | severity=low | confidence=none\n  PROBLEM: A comment still referred to `OPEN/NEW/PERSISTING/RESURGENT` instead of the active statuses.\n  WHY: The comment no longer matched the intended filter set after the status handling change.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_run_reviewers.sh:257-262 | severity=high | confidence=5\n  PROBLEM: The awk parser uses incorrect column indices for status and file path when reading the ledger status file.\n  WHY: The ledger TSV schema means a column mismatch would prevent iteration scoping from including relevant files and cause reviewers to miss persistent issues.\n- scripts/review_run_reviewers.sh:258 | severity=medium | confidence=4\n  PROBLEM: The status filter includes `OPEN`, which is not a valid ledger status value.\n  WHY: `OPEN` is not produced by the ledger data model, so the check is mismatched with the underlying statuses even though it is harmless.\n- scripts/review_run_reviewers.sh:262 | severity=medium | confidence=3\n  PROBLEM: The regex for removing line numbers from paths is too restrictive.\n  WHY: Some line-list or malformed suffix formats could leave trailing metadata on the path and break later file checks.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_run_reviewers.sh:257-261 | severity=critical | confidence=5\n  PROBLEM: The claimed column parsing bug is not valid because the code reads the ledger columns correctly.\n  WHY: The review explicitly verified that `$2` is the status field and `$4` is the file path, so the earlier finding was a false positive.\n- scripts/review_run_reviewers.sh:254-256 | severity=medium | confidence=3\n  PROBLEM: The `NF < 4` guard is positioned after the block opens, allowing malformed rows with fewer than four fields to reach the `$4` reference.\n  WHY: Malformed ledger rows could make `$4` undefined and lead to unpredictable behavior.\n- scripts/review_run_reviewers.sh:258 | severity=low | confidence=4\n  PROBLEM: The status filter checks for `OPEN`, which is not a valid ledger status value.\n  WHY: `OPEN` never matches the ledger schema, so the condition is extraneous dead code rather than a runtime failure.\n- scripts/review_run_reviewers.sh:262 | severity=medium | confidence=3\n  PROBLEM: The regex used to strip line-range suffixes may not handle all observed formats.\n  WHY: The current pattern is acceptable for the common case but may leave unusual suffix forms behind, which could affect later file handling.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:258 | severity=low | confidence=3\n  PROBLEM: The status filter includes `OPEN`, which is not a valid ledger status value.\n  WHY: The ledger data model only contains `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, and `accepted-residual`, so `OPEN` is extraneous though harmless.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "a7338dfa254bdc2bcd26cf6db93b884f97e6980d862117bccf2f8099b89782bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1429,
+    "run_id": "24629416037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24629416037",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419132159_369c9b9889",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1429,
+    "run_id": "24629416037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T13:21:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

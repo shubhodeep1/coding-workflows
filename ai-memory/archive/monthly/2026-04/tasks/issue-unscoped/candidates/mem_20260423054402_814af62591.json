@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1222-1229 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The blocked preflight path now exits 1 unconditionally, so `checkout_guard_unpushable` also fails hard.\n  WHY: All reviewers agree this regresses fork PRs by preventing the review workflow from continuing when `CAN_PUSH=false`; there is severity consensus on high.\n- tests/test_review_autofix_merge_precheck.py:199-216 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The test asserts that the `checkout_guard_unpushable` carve-out must not exist.\n  WHY: This encodes the regression and would block any fix that restores the intended non-fatal fork-PR path; one reviewer placed the lines at 211-213, but the finding is the same root cause.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:1223-1229 | severity=high | confidence=5\n  PROBLEM: The preflight gate unconditionally exits 1 when `push_preflight_status = \"blocked\"`, including for `checkout_guard_unpushable` which affects fork PRs without `GH_PAT`.\n  WHY: Fork PRs get `CAN_PUSH=false` \u2192 `checkout_guard_unpushable` \u2192 preflight exits before reviewers run \u2192 regresses AI feedback for external contributors.\n- tests/test_review_autofix_merge_precheck.py:208-210 | severity=high | confidence=5\n  PROBLEM: Test asserts that `checkout_guard_unpushable` carve-out must not exist, which encodes the broken behavior and would block restoring the fix.\n  WHY: Test enforces regression instead of protecting intended behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:1222-1225 | severity=high | confidence=5\n  PROBLEM: Unconditional `exit 1` for all blocked preflight reasons, including `checkout_guard_unpushable`.\n  WHY: The `checkout_guard_unpushable` reason is common for fork PRs without `GH_PAT`, and forcing `exit 1` regresses the review cycle for external contributors.\n- tests/test_review_autofix_merge_precheck.py:199-216 | severity=high | confidence=5\n  PROBLEM: The test codified the regression by asserting the absence of the `checkout_guard_unpushable` carve-out.\n  WHY: It prevents a correct fix from being merged because it enforces the broken behavior.\n- .github/workflows/review_autofix.yml:1118-1121 | severity=low | confidence=5\n  PROBLEM: Adding `GH_TOKEN: ${{ secrets.GH_PAT }}` to the preflight step.\n  WHY: This ensures `git push --dry-run` has the same authentication context as the final push and avoids false-positive access denials.\n- .github/workflows/review_autofix.yml:1156 | severity=low | confidence=5\n  PROBLEM: Removing `non_fast_forward` from `is_definitive_unpushable_reason`.\n  WHY: Non-fast-forward is recoverable and should not be treated as a definitive push failure during preflight.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:12,223-12,225 | severity=high | confidence=5\n  PROBLEM: The blocked preflight now exits 1 unconditionally for all blocked conditions, removing the carve-out for `checkout_guard_unpushable`.\n  WHY: When `CAN_PUSH` is false, the preflight sets `push_preflight_reason=\"checkout_guard_unpushable\"` and now blocks the review pipeline entirely for fork PRs.\n- tests/test_review_autofix_merge_precheck.py:206-210 | severity=high | confidence=5\n  PROBLEM: The test explicitly asserts that the carve-out for `checkout_guard_unpushable` must NOT exist, which codifies the regression.\n  WHY: This test would block any future fix that restores the carve-out path.\n- .github/workflows/review_autofix.yml:11,119-11,120 | severity=low | confidence=5\n  PROBLEM: Adding `GH_TOKEN` to preflight gate.\n  WHY: This provides authentication parity for `git push --dry-run`, which is necessary to accurately probe push permissions.\n- .github/workflows/review_autofix.yml:1,156 | severity=low | confidence=5\n  PROBLEM: Removing `non_fast_forward` from definitive unpushable reasons.\n  WHY: `non_fast_forward` is recoverable and should not be treated as a definitive push failure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:1223-1228 | severity=high | confidence=4\n  PROBLEM: The removal of the `checkout_guard_unpushable` carve-out means fork PRs now trigger `exit 1` in the preflight gate.\n  WHY: Fork PR detection sets `CAN_PUSH=false`, which triggers `checkout_guard_unpushable`, and the workflow exits before reviewer models run, denying AI feedback to external contributors.\n- tests/test_review_autofix_merge_precheck.py:211-213 | severity=high | confidence=4\n  PROBLEM: The test asserts that the `checkout_guard_unpushable` carve-out must not exist.\n  WHY: This explicitly validates the regression and blocks future fixes that restore the carve-out.\n- .github/workflows/review_autofix.yml:1119-1120 | severity=low | confidence=5\n  PROBLEM: Adding `GH_TOKEN: ${{ secrets.GH_PAT }}` to the preflight step.\n  WHY: This is correct because `git push --dry-run` needs authentication parity.\n- .github/workflows/review_autofix.yml:1156-1163 | severity=low | confidence=5\n  PROBLEM: Removing `non_fast_forward` from the definitive unpushable list.\n  WHY: Non-fast-forward is recoverable, so treating it as a hard preflight failure would be incorrect.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:1223-1229 | severity=high | confidence=5\n  PROBLEM: The blocked preflight path now exits 1 unconditionally, so `checkout_guard_unpushable` becomes fatal.\n  WHY: This regresses fork/external-contribution PRs because the workflow now fails before reviewer models run when `CAN_PUSH=false`.\n- tests/test_review_autofix_merge_precheck.py:208-210 | severity=high | confidence=5\n  PROBLEM: The test removes the carve-out assertion for `checkout_guard_unpushable`.\n  WHY: That makes the regression intentional and prevents restoring the intended non-fatal path.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "9e0384efcaddd1409c311c1ac68f3e33c8888738d5e3dfd06614f2fa5c261796",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1531,
+    "run_id": "24818261720",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24818261720",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423054402_814af62591",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1531,
+    "run_id": "24818261720"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T05:44:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification mapping:\n- `Q45: B` \u2014 proceed with a generic, repository-agnostic implementation plan based only on issue text (no code inspection).\n- This effectively overrides prior \u201cfile-grounded in another repo\u201d selections that lacked concrete `repo/path` + `branch`.\n\nConflict detected:\n- The issue references `validation/tests/01_core_smoke.sh` and optional `validation/app_server.py`, but those files are not present in the current workspace context. Plan below is intentionally generic.\n\nImplementation plan:\n\n1. Files likely to change\n- `validation/tests/01_core_smoke.sh` (primary)\n- `validation/app_server.py` (optional, only if timing/flush behavior is proven to cause false negatives)\n\n2. Functions/modules to implement\n- Replace the current brittle Mongo persistence assertion in `01_core_smoke.sh` with a deterministic check that emits a single sentinel token from `mongosh` (`FOUND` or `MISSING`) using `countDocuments({ event_id: \"evt-001\" }) > 0`.\n- Enforce `mongosh --quiet` and avoid parsing via blank-line tailing or fragile stdout slicing.\n- Add a short bounded retry loop after successful POST (for example, small sleep interval with timeout) to absorb write-latency races before declaring failure.\n- Fail distinctly on query execution errors vs \u201cdocument not found\u201d (separate exit paths and messages).\n- Keep existing inbound API assertions unchanged (`202` status and current payload shape).\n- Touch `validation/app_server.py` only if needed to guarantee insert completion semantics before response, without changing external contract.\n\n3. Data structures affected\n- Read path for Mongo collection `validation_smoke.inbound_events`.\n- Query/filter for `event_id=evt-001` (or exact per-test event id if made unique).\n- No schema/index/document-shape changes planned.\n\n4. API or interface changes\n- No public API contract changes.\n- Optional test-only env knobs (with defaults) for polling behavior, e.g. timeout/interval, to keep behavior deterministic and configurable.\n- Improve assertion output text to explicit diagnostics (expected id/collection, observed token/error).\n\n5. Potential risks or edge cases\n- Eventual consistency/timing race immediately after POST can still produce transient misses without bounded polling.\n- Static `evt-001` can create false positives across reruns if old data persists; mitigate via cleanup or unique event id per run.\n- `mongosh` warnings/noise can pollute output unless sentinel-only printing is enforced.\n- Connection/auth failures may be misreported as persistence failures if not handled separately.\n- Shell quoting/URI parsing issues can break checks in CI shells.\n\n6. Testing considerations\n- Run `validation/tests/01_core_smoke.sh` repeatedly (5\u201310 runs) and verify zero intermittent persistence false negatives.\n- Confirm unchanged checks still pass: health route, inbound validation error format, unknown route behavior.\n- Validate failure diagnostics by forcing a non-existent event id check to ensure the assertion fails correctly and clearly.\n- Verify command failure paths (bad Mongo URI/auth) produce explicit \u201cquery failed\u201d output and non-zero exit.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "971944202dc722971ddd23a8c59f8e9ef26a62f890416f357a004a2202e831da",
+  "lineage": {
+    "issue_number": 634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24220776066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24220776066",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/634"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260410005341_0c45d14dee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24220776066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #634",
+  "timestamps": {
+    "created_at": "2026-04-10T00:53:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

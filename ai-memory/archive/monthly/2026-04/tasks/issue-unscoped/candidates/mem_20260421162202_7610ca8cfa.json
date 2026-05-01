@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.github/workflows/update_workflows.yml:162-164` | severity=medium | confidence=[5]\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `printf '%s'` writes the `UPDATED_FILES`, `CREATED_FILES`, and `SKIPPED_FILES` values verbatim, so embedded `\\n` sequences are not expanded into real newlines.\n  WHY: All five reviewers identified the same runtime formatting bug; the temp files end up with literal `\\n` text, which breaks the GitHub Step Summary and any downstream display or message formatting.\n- `.github/workflows/update_workflows.yml:331-352` | severity=medium | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `SKIPPED_LIST` is only read and rendered inside the `HAS_UPDATES=true` branch, so skipped-only runs do not show skipped files in the summary.\n  WHY: The reviewer specifically noted that when no updates or creates occur, the workflow falls into the `else` branch and omits the skipped-file summary entirely.\n- `.github/workflows/update_workflows.yml:121,137` | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The `cp` failure path calls `fail_with_reason` immediately afterward, making the error-handling path redundant and slightly inconsistent with the surrounding script.\n  WHY: The reviewer treated this as a minor logic/style issue rather than a correctness bug, but it is still a distinct finding from that review.\n- `.github/workflows/update_workflows.yml:186,189` | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The commit-message assembly may mix literal `\\n` content from files with bash escape sequences, which can produce inconsistent formatting.\n  WHY: This was reported as a separate formatting concern in the review, distinct from the temp-file write bug because it concerns the later concatenation path.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `.github/workflows/update_workflows.yml:162-164` | severity=medium | confidence=5\n  PROBLEM: `printf '%s'` writes the `UPDATED_FILES`, `CREATED_FILES`, and `SKIPPED_FILES` values verbatim, so embedded `\\n` sequences are not expanded into real newlines.\n  WHY: The variables are built with literal `\\n` escapes, and writing them with `%s` preserves those escapes as text, breaking later summary and message formatting.\n- `.github/workflows/update_workflows.yml:186,189` | severity=low | confidence=3\n  PROBLEM: The commit-message assembly may mix literal `\\n` content from files with bash escape sequences, which can produce inconsistent formatting.\n  WHY: The reviewer reported this as a formatting inconsistency concern when combining file contents and escaped newlines.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `.github/workflows/update_workflows.yml:162-164` | severity=medium | confidence=5\n  PROBLEM: `printf '%s'` writes the `UPDATED_FILES`, `CREATED_FILES`, and `SKIPPED_FILES` values verbatim, so embedded `\\n` sequences are not expanded into real newlines.\n  WHY: The reviewer confirmed that the temp files retain literal `\\n` text, which makes the step summary and commit messages render as a single long line.\n- `.github/workflows/update_workflows.yml:121,137` | severity=low | confidence=3\n  PROBLEM: The `cp` failure path calls `fail_with_reason` immediately afterward, making the error-handling path redundant and slightly inconsistent with the surrounding script.\n  WHY: The reviewer described the extra `fail_with_reason` invocation after `cp` as redundant rather than a correctness defect.\n- `.github/workflows/update_workflows.yml:345-349` | severity=medium | confidence=4\n  PROBLEM: The summary logic for skipped files is incomplete or not visible in the provided snippet, so skipped files may not be rendered consistently.\n  WHY: The reviewer noted the `SKIPPED_LIST` display path looked truncated/incomplete in the snippet and treated that as a summary-visibility issue.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `.github/workflows/update_workflows.yml:162-164` | severity=medium | confidence=5\n  PROBLEM: `printf '%s'` writes the `UPDATED_FILES`, `CREATED_FILES`, and `SKIPPED_FILES` values verbatim, so embedded `\\n` sequences are not expanded into real newlines.\n  WHY: The reviewer confirmed that `%s` preserves the backslash-n text, which causes garbled summary output when those files are later displayed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `.github/workflows/update_workflows.yml:162-164` | severity=critical | confidence=5\n  PROBLEM: `printf '%s'` writes the `UPDATED_FILES`, `CREATED_FILES`, and `SKIPPED_FILES` values verbatim, so embedded `\\n` sequences are not expanded into real newlines.\n  WHY: The reviewer marked this as a critical runtime formatting defect because the temp files and step summary end up with literal `\\n` text instead of proper line breaks.\n- `.github/workflows/update_workflows.yml:331-352` | severity=medium | confidence=4\n  PROBLEM: `SKIPPED_LIST` is only read and rendered inside the `HAS_UPDATES=true` branch, so skipped-only runs do not show skipped files in the summary.\n  WHY: The reviewer explicitly noted that if only skipped files exist, the summary falls into the `else` branch and omits them.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `.github/workflows/update_workflows.yml:162-164` | severity=medium | confidence=5\n  PROBLEM: `printf '%s'` writes the `UPDATED_FILES`, `CREATED_FILES`, and `SKIPPED_FILES` values verbatim, so embedded `\\n` sequences are not expanded into real newlines.\n  WHY: The reviewer confirmed the temp files contain literal `\\n` text, which later breaks the intended multi-line GitHub summary rendering.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "e0432748a5ce1dc9e1ceae36fbef177c489ac8f7f8c4ccc6e4e1876ceba6b6ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1487,
+    "run_id": "24732340494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24732340494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421162202_7610ca8cfa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1487,
+    "run_id": "24732340494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T16:22:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

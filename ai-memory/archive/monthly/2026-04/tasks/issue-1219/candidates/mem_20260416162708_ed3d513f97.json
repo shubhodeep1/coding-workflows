@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Fix the dependency-auditing harness logic in validation test `08_dependency_auditing.sh` so the custom binary audit Python snippet is syntactically valid and can complete its audit logic. Keep behavior deterministic: the step should only fail when unexpected binaries are actually detected, and should print a stable `UNEXPECTED_BINARIES ...` diagnostic line in that case. Verification: rerun validation and confirm `08_dependency_auditing.sh` no longer throws SyntaxError, the custom binary audit",
+  "fingerprint": "7358583a1da953c935b02fdacaaf82f79620dedd72981782182aa2be62af8511",
+  "lineage": {
+    "issue_number": 1219,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24520818744",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24520818744",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260416162708_ed3d513f97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1219,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24520818744"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-16T16:27:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

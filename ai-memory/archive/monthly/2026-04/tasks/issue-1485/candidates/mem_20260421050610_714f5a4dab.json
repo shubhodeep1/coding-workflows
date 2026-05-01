@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No Q<ID> clarification questions were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpretable as \u201cproceed with the stated scope and acceptance criteria.\u201d\n\nPlanning ref context:\n- `HEAD`: `7342faa9155af83163a10e56816e147bd2b94344`\n- Checked-out branch: `orchestrator/project-1479`\n- Integration metadata branch: `orchestrator/project-1479`\n- Mismatch: `false` (planning can proceed)\n\nConflict check:\n- No factual conflicts found between issue scope and current code.\n- Relevant existing behavior: `log_archive_cache` already dedupes repeated log-download calls when `--log-output-dir` is enabled; this plan extends that behavior for explicit missing-log (404) handling and retry policy.\n\n1. Files likely to change\n- `scripts/collect_workflow_logs.py`\n- `tests/test_collect_workflow_logs.py`\n\n2. Functions/modules to implement\n- In `scripts/collect_workflow_logs.py`, update `_fetch_run_log_archive` to add bounded retry/backoff specifically for log-archive fetches, with explicit handling for HTTP 404/not-found responses.\n- Add/extend internal outcome classification so persistent 404 is treated as \u201cknown missing log archive\u201d (soft-fail), not a hard collector failure.\n- Extend cycle-local log fetch caching so known-missing `(repo, run_id)` outcomes are cached and reused, preventing repeated fetch attempts in the same collection cycle.\n- Update log consumption points in `main` and `export_categorized_logs` to:\n  - Continue normal parse/write path for successful payloads.\n  - Record partial-data error metadata for missing-log outcomes and continue.\n  - Preserve existing hard-error behavior for non-404 failures.\n- Use the existing \u201cjobs fetch failure is appended to `errors` and collection continues\u201d pattern in `main` as the representative behavior model for this soft-fail change.\n\n3. Data structures affected\n- `log_archive_cache` value type will need to represent three states per `(repo, run_id)` key:\n  - Success payload bytes.\n  - Known-missing-log outcome (404 persistent).\n  - Other exception/failure.\n- `errors` list entries for log-missing runs will include a stable partial-data marker in existing metadata fields (no unrelated schema-field changes).\n\n4. API/interface changes\n- No CLI argument changes planned.\n- No unrelated output schema changes planned.\n- Report generation remains `schema_version = workflow_log_collector.v2`; partial handling is expressed via existing per-run/error metadata paths.\n\n5. Potential risks / edge cases\n- 404 detection may rely on `gh api` stderr wording; implement robust matching for both `404` and `not found` forms.\n- Retry policy must stay bounded to avoid long collection delays.\n- Non-404 failures must not be incorrectly downgraded to soft-fail.\n- Dedupe must work across both notable-run excerpt collection and categorized full-log export in the same invocation.\n\n6. Testing considerations\n- Extend `tests/test_collect_workflow_logs.py` with targeted mocks/assertions for:\n  - Retry/backoff on transient log fetch failure followed by success.\n  - Persistent 404 log fetch treated as soft-fail with collector exit code still `0` and report emitted.\n  - Known-missing log dedupe: repeated logical consumers in one cycle do not trigger repeated `gh api .../logs` attempts for the same run.\n- Keep existing assertions for unaffected fields and summary behavior to guard against unrelated schema/output drift.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "eb44baa3cee76a3cd8fbde0664ded37f6e1e001eeb500dc66e5efb8c07ea9b5c",
+  "lineage": {
+    "issue_number": 1485,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24704923564",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24704923564",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1485"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421050610_714f5a4dab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1485,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24704923564"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1485",
+  "timestamps": {
+    "created_at": "2026-04-21T05:06:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

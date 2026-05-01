@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 10\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/workflow-log-analysis.yml\n      Problem: Location: deep-audit and api-redundancy job git sync steps (lines ~571-572 and ~780-781); Issue: Improve git checkout robustness for branches not on remote; Suggested minimal fix: Add condition to check if fetch succeeds before attempting checkout from remote. Example fix:; ```bash; if git fetch origin \"${TARGET_BRANCH}\" --depth=1; then; git checkout \"${TARGET_BRANCH}\" 2>/dev/null || git checkout -b \"${TARGET_BRANCH}\" \"origin/${TARGET_BRANCH}\"; echo \"::warning::Branch '${TARGET_BRANCH}' not found on remote, checking out local branch\"; git checkout -b \"${TARGET_BRANCH}\" 2>/dev/null || git checkout \"${TARGET_BRANCH}\"; git pull --rebase origin \"${TARGET_BRANCH}\" || echo \"::warning::Could not rebase, continuing with local branch\"; Estimated lines changed: ~10; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: .github/workflows/workflow-log-analysis.yml\n      Problem: The git checkout logic doesn't handle the case where the branch doesn't exist on the remote. The `git fetch` may fail, and then `git checkout -b \"${TARGET_BRANCH}\" \"origin/${TARGET_BRANCH}\"` will fail because `origin/${TARGET_BRANCH}` doesn't exist.; When running on a branch that hasn't been pushed to remote (e.g., a local feature branch), the job will fail with a git error.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: .github/workflows/workflow-log-analysis.yml\n      Problem: The `git pull --rebase` commands don't have explicit conflict handling. While they'll fail due to `set -euo pipefail`, this could cause job failures when there are concurrent modifications to the report file.; If another process modifies the report file concurrently, `git pull --rebase` will fail with conflicts, causing the job to fail without clear error messaging about the conflict.; ## HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/workflow-log-analysis.yml\n      Problem: Location: deep-audit and api-redundancy job commit steps (lines ~662 and ~871); Issue: Add conflict handling for concurrent modifications; Suggested minimal fix: Add retry logic or better error message for git rebase conflicts. Example:; ```bash; if ! git pull --rebase origin \"${TARGET_BRANCH}\"; then; echo \"::error::Failed to rebase due to conflicts. Manual resolution may be needed.\"; echo \"::error::Conflict details:\"; git status; exit 1; Estimated lines changed: ~8; HARDENING_RISK_SCORE: 2; ## Final assessment; The PR has successfully added deep-audit and api-redundancy analysis jobs to the workflow log analysis pipeline. Most critical issues identified in reviews have been addressed. The remaining issues are relatively minor hardening improvements that would improve robustness but don't block the core functionality.; The most important issue that should be fixed before merge is the git checkout logic for branches not on remote, as this could cause job failures in legitimate use cases (e.g., running on local feature branches).\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: .github/workflows/workflow-log-analysis.yml\n      Problem: Stray `if` statement without a corresponding `fi` inside the retry loop error handling.; The shell script will fail immediately with a syntax error when attempting to execute the malformed conditional.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: .github/workflows/workflow-log-analysis.yml\n      Problem: Location: deep-audit and api-redundancy job commit steps (lines 657 and 863); Issue: Potential race condition during the sequential push operations.; Suggested minimal fix: Wrap the git push in a retry loop (2-3 attempts) to handle rare interleaved commits between the rebase and push.; Estimated lines changed: 5; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [7] File: .github/workflows/workflow-log-analysis.yml\n      Problem: The trap is single-quoted, so ${SECTION_FILE} and ${CODEX_PROMPT_FILE} are not expanded. On exit, rm tries to delete literal filenames `${SECTION_FILE}` and `${CODEX_PROMPT_FILE}`, leaving the actual temp files behind.; Temp files accumulate in /tmp across runs, risking disk exhaustion and runner failures over time.; ISSUE 2\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [8] File: .github/workflows/workflow-log-analysis.yml\n      Problem: Lines: deep-audit: 572 (sync step), 662 (commit step); api-redundancy: 781 (sync), 871 (commit); Unhandled merge conflict exit. Under `set -euo pipefail`, any non-zero exit (e.g., due to concurrent branch modifications) aborts the job with no retry or friendly diagnostics.; Intermittent failures when multiple workflow-log-analysis runs overlap or when a developer pushes during the job\u2019s sync/commit window; requires manual re-trigger.; ISSUE 3\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [9] File: prompts/mode-workflow-api-redundancy.txt\n      Problem: The API redundancy prompt uses the `DEAD-###` prefix for findings, which conflicts with the `DEAD-###` prefix used by the general audit prompt.; Both jobs append findings to the same report file. If both find \"dead\" items, they will use identical IDs (e.g., `DEAD-001`), making it impossible to distinguish between finding sources or reference them uniquely.; ### Hardening Suggestions\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [10] File: prompts/mode-workflow-api-redundancy.txt\n      Problem: Lines: 35\u201340 (ID specification block); Without explicit zero-pad guidance, model outputs may use non-padded numbers (e.g., `DEAD-API-1`), breaking lexical sort order and risking ID collisions or confusing downstream tooling.; Inconsistent ID formatting across runs can break aggregation, sorting, and deduplication logic in report consumers.; Previously reported issues (syntax errors, missing codex_mode gate, hardcoded reasoning level, missing OPENROUTER_PROMPT_CACHE_DISABLED, trap absence, weak validation) are not present in the current code base.\n      Confidence: avg 3.0\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/workflow-log-analysis.yml\n\nLow confidence files (mentioned by 1 reviewer):\nprompts/mode-workflow-api-redundancy.txt",
+  "fingerprint": "d4e8d44c04ef8748ce8439bfc88f0e55ccdc85b87087a2709a235328554c557f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1271,
+    "run_id": "24554731470",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24554731470",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417084938_44919468fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1271,
+    "run_id": "24554731470"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-17T08:49:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

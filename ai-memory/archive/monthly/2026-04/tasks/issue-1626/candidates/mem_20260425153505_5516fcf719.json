@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context: checked out on `orchestrator/project-1608` at `e434204b89790c6e3b71ec37f5f14251625d21c7`; integration-branch metadata matches the checkout, so planning can proceed. No blocking clarification remains; the orchestrator auto-answer confirms the docs-only scope.\n\n1. Files likely to change\n- [README.md](README.md): add a small append-only subsection in the existing validation area, most naturally adjacent to the current \u201cValidation Refresh Automation\u201d section. The subsection should describe the nightly validation self-test workflow, where operators can find the uploaded run artifact/logs, and where the committed streak/status JSON lives.\n- [agents.md](agents.md): add a concise operational/failure-mode note in the validation docs area. Do not touch the env-var anchor/table, because the nightly self-test workflow does not introduce new repo variables or secrets.\n- [docs/validation-templates-plan.md](docs/validation-templates-plan.md): append a new dated status snapshot immediately below `<!-- anchor:validation-templates-status -->`; do not rewrite prior snapshots.\n\n2. Functions/modules to implement\n- No runtime implementation is planned. This is a documentation-only pass.\n- Use the existing implementation as source of truth only:\n  - [`.github/workflows/nightly-validation-selftest.yml`](.github/workflows/nightly-validation-selftest.yml) for the nightly job behavior, uploaded artifact names, status-update step, and commit behavior.\n  - [`scripts/validation_selftest_status.py`](scripts/validation_selftest_status.py) for the streak/status semantics.\n  - [`scripts/validation_refresh_runner.py`](scripts/validation_refresh_runner.py#L422) for the existing direct green-path auto-merge via `gh pr merge --squash --auto`, which resolves M5 without any label-driven merge mechanism.\n\n3. Data structures affected\n- No DB collections, contracts, indexes, or runtime schemas change.\n- The docs should describe the existing committed status artifact at `analysis/validation-selftest-status.json`, especially:\n  - `consecutive_green_runs`\n  - `latest_run.overall_status`\n  - `latest_run.generated_at`\n  - `latest_run.totals.{fixtures,passed,failed}`\n- The docs should also mention the uploaded nightly run artifact contents already produced by the workflow:\n  - `artifacts/validation-selftest-summary.json`\n  - `artifacts/validation-selftest-logs/`\n\n4. API/interface changes\n- None. No new CLI flags, workflow inputs, labels, env vars, secrets, or runtime behavior should be introduced.\n- The only user-facing change is documentation surfacing of already-existing nightly self-test and streak behavior.\n- The plan snapshot should explicitly resolve M5 as already satisfied by the direct auto-merge implementation, not by reintroducing `auto-merge:validation-refresh`.\n\n5. Potential risks and edge cases\n- `README.md` and `agents.md` are hot files; keep edits append-only and localized. Avoid reflowing nearby prose or tables.\n- Do not describe a badge or label workflow unless it exists in code. The current implementation exposes an uploaded nightly artifact plus a committed status JSON/streak file; documentation should match that.\n- Be precise about streak semantics. Based on the existing status writer/tests, a new passing run increments the streak, a failing run resets it to `0`, and an identical rerun keeps the stored streak unchanged rather than incrementing again.\n- Do not imply validation-refresh auto-merges on all outcomes. The current auto-merge path is only the green path in the refresh runner.\n- In `docs/validation-templates-plan.md`, append a new snapshot that supersedes stale prose, but leave all older snapshots untouched.\n\n6. Testing considerations\n- No new tests should be added for this docs-only change.\n- Use existing tests as factual guardrails when writing the docs and the appended snapshot:\n  - [`tests/test_nightly_validation_selftest_workflow_contract.py`](tests/test_nightly_validation_selftest_workflow_contract.py)\n  - [`tests/test_validation_selftest_status.py`](tests/test_validation_selftest_status.py)\n  - [`tests/test_validation_refresh_runner.py`](tests/test_validation_refresh_runner.py)\n  - [`tests/test_validation_refresh_workflow_contract.py`](tests/test_validation_refresh_workflow_contract.py)\n- Review the final diff to ensure only the three documentation files changed and no runtime code paths were modified.\n\nFactual conflicts to call out in the plan\n- The stale conflict is in existing documentation, not in the issue statement. Current code already has the nightly self-test workflow/status publisher and already enables direct green-path auto-merge in the validation refresh runner.\n- Older snapshots in [docs/validation-templates-plan.md](docs/validation-templates-plan.md) still say `.github/workflows/nightly-validation-selftest.yml` or `.github/workflows/validation-refresh.yml` are missing, and still treat M5 as blocked on `auto-merge:validation-refresh`; the new append-only snapshot should explicitly correct those claims with code-backed evidence.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "71b4e98ce3f8e846924119d37ce6eee532d0a84f59476dff711ca0162204d117",
+  "lineage": {
+    "issue_number": 1626,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24934229148",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24934229148",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1626"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260425153505_5516fcf719",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1626,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24934229148"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1626",
+  "timestamps": {
+    "created_at": "2026-04-25T15:35:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

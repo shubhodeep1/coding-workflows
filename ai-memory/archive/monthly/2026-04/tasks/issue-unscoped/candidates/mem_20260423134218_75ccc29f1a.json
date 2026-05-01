@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:184-196 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `agents.md` still contains contradictory `VALIDATION_USE_TEMPLATES` guidance across the old line 184 entry and the superseding line 196 entry.\n  WHY: The stale entry says the script default is `false` and freehand generation remains available, which conflicts with the newer `true`/no-freehand behavior and can mislead operators.\n- scripts/validate_process.sh:2160-2238 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The template-only hard-fail is evaluated only after Phase 0 discovery work has already run.\n  WHY: When template mode is disabled or `.ai/validate.yml` is missing, the script still spends LLM/API tokens and wall-clock time before failing; one reviewer treated this as an optimization concern rather than a bug.\n- .github/workflows/validate.yml:517-521 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The warning text and the step's new name still use slightly different terminology.\n  WHY: It is only a cosmetic/logging mismatch, but aligning the message with the step name would improve clarity.\n- docs/validation-templates-plan.md:311-321 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The new 2026-04-23 snapshot adds a third dated status entry that can be read as conflicting status history.\n  WHY: Successive dated snapshots are a valid documentation pattern, but the extra entry can still confuse readers about status progression.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- agents.md:184-196 | confidence=5\n  PROBLEM: The environment variable documentation contains contradictory entries for `VALIDATION_USE_TEMPLATES`.\n  WHY: The old entry says the script default is `false`, while the newer superseding entry says it is `true` and freehand generation was removed.\n- scripts/validate_process.sh:2160-2238 | confidence=5\n  PROBLEM: The template mode guard is executed after Phase 0 discovery work has already run.\n  WHY: Phase 0 can consume LLM tokens and wall-clock time before the script reaches the hard-fail check.\n- .github/workflows/validate.yml:517-521 | confidence=2\n  PROBLEM: The step name \"Install Python dependencies for validation renderer\" doesn't exactly match the warning text \"skipping renderer dependency installation.\"\n  WHY: This is a cosmetic logging mismatch that does not affect behavior.\n- docs/validation-templates-plan.md:311-321 | confidence=1\n  PROBLEM: The new 2026-04-23 snapshot adds a third dated status entry.\n  WHY: The extra entry can confuse readers about which status is current.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3_1-pro-preview ===\n- agents.md:184 | confidence=5\n  PROBLEM: The `VALIDATION_USE_TEMPLATES` entry still contains older contradictory text.\n  WHY: It says the script default is `false` and implies freehand fallback, which conflicts with the newer `true`/no-freehand behavior.\n- scripts/validate_process.sh:2160 | confidence=5\n  PROBLEM: The hard-fail gate executes only after Phase 0 discovery work has already run.\n  WHY: When `VALIDATION_USE_TEMPLATES=false`, the script still burns API/token time on discovery before failing at Phase 1.\n=== END FINDINGS FROM google_gemini-3_1-pro-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:184-196 | confidence=5\n  PROBLEM: The stale entry at line 184 directly contradicts the superseding line 196 entry.\n  WHY: One entry says the default is `false` and freehand Codex generation remains available, while the other says the default is `true` and freehand generation was removed.\n- scripts/validate_process.ys:2,160-2,238 | confidence=5\n  PROBLEM: The `VALIDATION_USE_TEMPLATES_ENABLED != \"true\"` check occurs after Phase 0 discovery has already run.\n  WHY: When `VALIDATION_USE_TEMPLATES=false`, the script wastes LLM tokens and wall-clock time running discovery before failing at this gate.\n- .github/workflows/validate.yml:517-521 | confidence=2\n  PROBLEM: The warning text and the step's new name still use slightly different terminology.\n  WHY: It is only a cosmetic/logging mismatch, but aligning the message with the step name would improve clarity.\n- docs/validation-templates-plan.md:311-321 | confidence=1\n  PROBLEM: The new 2026-04-23 snapshot adds a third dated status entry that can be read as conflicting status history.\n  WHY: Successive dated snapshots are a valid documentation pattern, but the extra entry can still confuse readers about status progression.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:184-196 | confidence=5\n  PROBLEM: The file contains two entries for `VALIDATION_USE_TEMPLATES` that contradict each other.\n  WHY: The first entry still suggests the default is `false` and freehand generation is available, which conflicts with the newer entry saying it is `true` and freehand generation is removed.\n- scripts/validate_process.sh:2160-2166 | confidence=4\n  PROBLEM: The `VALIDATION_USE_TEMPLATES_ENABLED` check is performed after significant setup work.\n  WHY: If someone sets `VALIDATION_USE_TEMPLATES=false`, the script still spends time setting up Codex/Serena and may invoke Phase 0 discovery before failing, wasting resources.\n- .github/workflows/validate.yml:517-521 | confidence=2\n  PROBLEM: The step name \"Install renderer dependencies\" uses slightly different terminology than the warning message \"skipping renderer dependency installation.\"\n  WHY: This is a non-critical documentation issue that doesn't affect runtime behavior.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a589b21f19615b9b21151bfd9706aca15b208ac3501cda4bf899733df04ade10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1540,
+    "run_id": "24832806372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24832806372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423134218_75ccc29f1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1540,
+    "run_id": "24832806372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T13:42:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context validated for planning:\n- `git rev-parse HEAD`: `acbb422d523c7c57a853e3ece4cd88bdb11a83cc`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1479`\n- Integration metadata branch: `orchestrator/project-1479`\n- Mismatch: `false` (planning can proceed)\n\nClarification interpretation:\n- No Q<ID> clarification questions were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the stated scope and acceptance criteria unchanged.\u201d\n\nImplementation checklist (from issue scope):\n- [ ] Remove direct API-content decode+execute resolver path from:\n  - `.github/workflows/clarify.yml`\n  - `.github/workflows/plan.yml`\n  - `.github/workflows/implement.yml`\n  - `.github/workflows/validate.yml`\n  - `.github/workflows/orchestrate_clarify_respond.yml`\n- [ ] Replace with staged/local resolver execution (checkout-based trust model).\n- [ ] Preserve fail-open behavior (`::warning` + empty `ref` output + default-branch checkout fallback).\n- [ ] Preserve existing resolver output contract (`steps.refctx.outputs.ref`, and `integration_branch_meta` where currently emitted).\n- [ ] Update `tests/test_workflow_checkout_integration_ref_audit.py` to assert the new canonical pattern.\n\nFiles likely to change:\n1. `.github/workflows/clarify.yml`\n2. `.github/workflows/plan.yml`\n3. `.github/workflows/implement.yml`\n4. `.github/workflows/validate.yml`\n5. `.github/workflows/orchestrate_clarify_respond.yml`\n6. `tests/test_workflow_checkout_integration_ref_audit.py`\n\nFunctions/modules to implement:\n1. In each workflow\u2019s `Resolve integration ref` step:\n- Remove `gh api .../contents/scripts/resolve_integration_ref.sh ... | base64 --decode > ...` and direct execution of that decoded payload.\n- Execute `resolve_integration_ref.sh` from a staged local checkout path instead.\n\n2. In each workflow, add/reuse pre-resolver staging steps:\n- Resolve support source ref (`stable` for external repos, `${{ github.sha }}` for self-repo).\n- `actions/checkout@v5` support repo into a local path (with current fallback-to-`main` behavior).\n- Select local resolver script path from staged checkout; if unavailable, fail-open with warning and `ref=`.\n\n3. Preserve workflow-specific behavior:\n- Keep existing issue-number/tracking-issue validation guards.\n- Keep conditional `if:` guards (notably in `implement.yml` and `orchestrate_clarify_respond.yml`).\n- Keep checkout contract `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}` and existing ref logging.\n\nData structures affected:\n- GitHub Actions step outputs only (no DB/schema impact):\n  - `steps.refctx.outputs.ref` (must remain identical contract).\n  - `steps.refctx.outputs.integration_branch_meta` in `plan.yml` (must remain as-is when branch is non-empty).\n- Temporary local resolver path variables inside workflow shell steps.\n\nAPI/interface changes:\n- No external user-facing API change.\n- Internal workflow behavior change:\n  - Stop using GitHub Contents API payload decode for resolver execution.\n  - Continue using resolver logic and existing fallback semantics.\n- No env-var rename/removal; no identifier contract changes.\n\nPotential risks / edge cases:\n1. Step-ordering risk: resolver must be locally staged before execution but still happen before main repository checkout ref selection.\n2. Path-cleanup risk: ensure staged resolver location is available at execution time and not dependent on later staging blocks.\n3. Fail-open parity risk: any staging/load/exec error must still emit warning and leave `ref` empty.\n4. Conditional-path regressions: preserve `if:` conditions around resolver/checkout steps in guarded workflows.\n5. Self-repo vs consumer-repo source selection (`github.sha` vs `stable/main`) must remain intact.\n\nTesting considerations:\n1. Update and run:\n- `pytest tests/test_workflow_checkout_integration_ref_audit.py`\n2. Ensure audit verifies:\n- Required resolver step still exists with `id: refctx`.\n- Contractual checkout ref/default fallback remains.\n- Resolved ref logging remains.\n- Old unsafe marker is absent (`contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}` / base64 decode-exec path).\n- New local staged resolver execution markers are present.\n3. Optional targeted safety regression:\n- `pytest tests/test_orchestrate_lib.py -k resolve_integration_ref`\n\nConflict detection:\n- Confirmed: current code in all 5 target workflows still uses direct contents-API decode+execute path.\n- Confirmed: current audit test enforces the old `canonical_fetch` marker, which conflicts with the requested secure staged/local pattern and must be updated.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "410f06d8759c3ae5f13792d33290099ae0c2daa8ebcd4931d685bda4270c6e97",
+  "lineage": {
+    "issue_number": 1496,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24720333811",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24720333811",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1496"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421114450_df65349aa0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1496,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24720333811"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1496",
+  "timestamps": {
+    "created_at": "2026-04-21T11:44:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

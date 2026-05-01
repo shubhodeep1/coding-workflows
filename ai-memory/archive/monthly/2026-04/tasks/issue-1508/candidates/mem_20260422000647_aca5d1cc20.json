@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1508,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1508\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1510\",\"pr_number\":1510,\"branch\":\"ai/issue-1508\",\"run_id\":\"24752252359\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24752252359\",\"changed_files\":[\".github/workflows/nightly-validation-selftest.yml\",\"examples/validation-fixtures/node-hardhat-solidity.yml\",\"examples/validation-fixtures/python-mongo-flask.yml\",\"scripts/validation_selftest_matrix.py\",\"tests/test_nightly_validation_selftest_workflow_contract.py\",\"tests/test_validation_selftest_runner.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "7d51aef185800556c7a4c72bbe09423ec6398a08a39c51e3c56e601c1288caeb",
+  "lineage": {
+    "issue_number": 1508,
+    "parent_ids": [],
+    "pr_number": 1510,
+    "run_id": "24752252359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24752252359",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1510"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260422000647_aca5d1cc20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1508,
+    "level": "run",
+    "pr_number": 1510,
+    "run_id": "24752252359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1508: https://github.com/shubhodeep1/coding-workflows/pull/1510",
+  "timestamps": {
+    "created_at": "2026-04-22T00:06:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

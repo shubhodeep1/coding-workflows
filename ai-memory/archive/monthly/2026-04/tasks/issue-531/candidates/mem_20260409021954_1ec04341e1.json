@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #531\n\n**Clarification mapping**\n- No Q<ID> clarification questions were asked in this issue thread.\n- Interpreted `/answer [auto-answered-by-orchestrator]` as: the issue description is sufficient and planning should proceed without further clarification.\n\n**Conflict detection**\n- No factual conflicts found between issue description and repository state.\n- Confirmed mismatch exists exactly as described:\n- [.github/workflows/orchestrate_clarify_respond.yml](.github/workflows/orchestrate_clarify_respond.yml):400 uses `--category \"clarify_auto_answer\"`.\n- [ai-memory/schemas/memory_record.v1.json](ai-memory/schemas/memory_record.v1.json):35 only allows `decisions|constraints|patterns|incidents|run_events|task_summaries`.\n- [scripts/ai_memory_lib.py](scripts/ai_memory_lib.py):604 rejects non-allowed categories.\n\n**Checklist**\n- [ ] Replace invalid memory category with valid `decisions` in orchestrator clarify-response candidate recording.\n- [ ] Keep summary/details/source refs unchanged.\n- [ ] Verify candidate record creation succeeds and task candidate files are written.\n\n**Files likely to change**\n- [.github/workflows/orchestrate_clarify_respond.yml](.github/workflows/orchestrate_clarify_respond.yml):399\n\n**Functions/modules to implement**\n- Update the `memory_record_candidate` invocation in `orchestrate_clarify_respond.yml`:\n- Change only `--category \"clarify_auto_answer\"` to `--category \"decisions\"`.\n- Keep `--summary`, `--details`, `--source-refs`, confidence, workflow/run metadata, and step conditions unchanged.\n- Follow existing category usage pattern from [.github/workflows/clarify.yml](.github/workflows/clarify.yml):657 (`--category \"decisions\"`).\n\n**Data structures affected**\n- Memory candidate record field `category` (string enum) changes from invalid value to `decisions`.\n- Candidate persistence path remains task-scoped (`ai-memory/tasks/issue-<n>/candidates/*.json`).\n- Downstream promotion/retrieval remains compatible; category-partitioned canonical placement would be under `global/canonical/decisions/` if promoted.\n\n**API/interface changes**\n- No external API/CLI/workflow interface changes.\n- Internal argument value change only for `record-candidate --category`.\n\n**Potential risks and edge cases**\n- Retrieval weighting semantics for these records now follow `decisions` category (expected and requested).\n- `memory_record_candidate` is fail-open in shell helpers, so silent workflow success is not enough; verify logs and file outputs.\n- Ensure change remains limited to orchestrator-managed clarify-response candidate recording path.\n\n**Testing considerations**\n- Confirm there are no remaining `clarify_auto_answer` category uses in workflow files.\n- Execute an orchestrator-managed clarify-response run and verify:\n- No `Unsupported memory category` error appears.\n- A candidate JSON is created under `ai-memory/tasks/issue-<issue-number>/candidates/`.\n- Candidate `summary`, `details`, and `source_refs` content is unchanged from current behavior (only `category` differs).\n- No README/agents/db-contract updates are expected for this fix because behavior change is internal and does not alter documented external interfaces or MongoDB contracts.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1fce9643a8680ac7f15d33ae8c6acb7fe0b315256b4dbb9121d326e2ca47d295",
+  "lineage": {
+    "issue_number": 531,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24168920359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24168920359",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/531"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409021954_1ec04341e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 531,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24168920359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #531",
+  "timestamps": {
+    "created_at": "2026-04-09T02:19:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

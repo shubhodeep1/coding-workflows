@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning context interpretation:\n- Clarification mapping: no Q-IDs were issued; `/answer [auto-answered-by-orchestrator]` means proceed with the issue scope as written.\n- Ref context: `HEAD=6c8ccc98d6a760a7c3d1558f3ebb06e1ce5da816`, checked-out branch `orchestrator/project-1292`, integration metadata `orchestrator/project-1292`, mismatch `false`.\n\nConflict detection:\n- The requested behavior is already implemented on this ref in `scripts/validate_process.sh`, `scripts/self_heal_validation.sh`, `prompts/mode-validate-self-heal.txt`, and covered by `tests/test_validate_process_render_recovery.py` plus `tests/test_validate_process_template_mode.py`.\n- Plan should therefore be \u201cgap-audit + minimal delta only\u201d (no speculative refactor).  \n- Possible repo-internal drift to verify: `.codex-workflow-src/...` copies may lag root files; only sync if those paths are in allowed `files_touched`.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/validate_process.sh` (only if a gap is found in render-phase retry/fail-open routing).\n- `scripts/self_heal_validation.sh` (only if render phase logging/plumbing is incomplete while preserving allow-list/additive guards).\n- `prompts/mode-validate-self-heal.txt` (only if guidance still permits harness edits in render phase).\n- `tests/test_validate_process_render_recovery.py` (add/adjust integration-style coverage only if missing for rerender/re-lint/fail-open branches).\n- `tests/test_validate_process_template_mode.py` (contract assertions only if missing).\n- Optional parity targets if in scope: `.codex-workflow-src/scripts/validate_process.sh`, `.codex-workflow-src/scripts/self_heal_validation.sh`, `.codex-workflow-src/agents.md`, `.codex-workflow-src/README.md`.\n\n2. Functions/modules to implement or verify\n- `attempt_render_recovery_after_preflight_failure` in `scripts/validate_process.sh`: ensure lint-only gate, deterministic rerender, relint, and return code contract (`0` success, `2` rerender/relint fail-open fallback path).\n- Pre-flight caller branch in `scripts/validate_process.sh`: ensure `render_recovery_exit==2` routes to `attempt_self_heal_and_reexec \"render\"` and no freehand harness edit path is introduced.\n- `attempt_self_heal_and_reexec` in `scripts/validate_process.sh`: ensure `render` is supported and logged.\n- `ALLOWED_TARGETS` + additive patch enforcement in `scripts/self_heal_validation.sh`: keep four-prompt allow-list and deletion/rename/file-op rejections unchanged.\n- `prompts/mode-validate-self-heal.txt`: keep hard constraints; reinforce that render-phase harness recovery is renderer-driven and prompt self-heal remains prompt-only.\n\n3. Data structures affected\n- Shell state flags and routing variables: `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `PRE_FLIGHT_FAILURE_CLASS`, `PRE_FLIGHT_APPEND_LOG`, `render_recovery_exit`, `SELF_HEAL_FAILURE_PHASE`.\n- Self-heal ledger entries: `failure_phase` value includes/uses `render`.\n- No MongoDB collections/contracts/indexes affected.\n\n4. API/interface changes\n- No external API changes.\n- No CLI/env var rename/removal; preserve existing contracts and defaults.\n- Preserve observable behavior in non-render phases (`discover/generate/preflight/canary/diagnose/runtime`).\n\n5. Risks and edge cases\n- Accidentally re-enabling freehand harness edits during render-phase failure handling.\n- Breaking fail-open behavior when renderer assets are missing or renderer exits non-zero.\n- Regressing non-template mode (must remain legacy preflight path and use `preflight` self-heal phase).\n- Weakening self-heal safety guardrails (allow-list scope or additive-only patch checks).\n\n6. Testing considerations\n- Run targeted tests:\n  - `python3 tests/test_validate_process_render_recovery.py`\n  - `python3 tests/test_validate_process_template_mode.py`\n- Validate contract assertions for:\n  - Successful rerender+relint continuation path.\n  - Renderer failure fail-open path (`render` self-heal phase).\n  - Relint failure fail-open path (`render` self-heal phase).\n  - Non-template legacy path still uses `preflight` self-heal phase.\n- If no gaps are found and tests pass, implementation should be a no-op with issue closure notes rather than additional code churn.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2e696f659f35870df8cef0f21adbfabfa4280a86374d4134435dffc88c14915f",
+  "lineage": {
+    "issue_number": 1433,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24626967883",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626967883",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1433"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419103305_06b6390e10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1433,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24626967883"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1433",
+  "timestamps": {
+    "created_at": "2026-04-19T10:33:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

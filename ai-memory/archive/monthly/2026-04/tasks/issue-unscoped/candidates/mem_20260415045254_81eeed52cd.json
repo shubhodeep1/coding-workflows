@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nscripts/orchestrate_poll_process.sh\ntests/test_orchestrate_poll_process.py\n\nLow confidence files (mentioned by 1 reviewer):\n`scripts/orchestrate_poll_process.sh`\nscripts/orchestrate_poll_process.",
+  "fingerprint": "a13d583842900095023c2942b969f0b111426ccea75487e077d201964536c421",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1003,
+    "run_id": "24435762521",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "Copilot",
+    "run_attempt": 2,
+    "run_id": "24435762521",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415045254_81eeed52cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1003,
+    "run_id": "24435762521"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T04:52:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

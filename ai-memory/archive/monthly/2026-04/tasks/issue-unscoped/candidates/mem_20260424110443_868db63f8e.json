@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_template_mode.py:29-45 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The contract test does not assert that the old freehand generation path was removed.\n  WHY: It checks the new default and removal message, but not the absence of the freehand implementation.\n- scripts/validate_process.sh:2160-2167 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The breaking-change error message does not reference `docs/validation-templates-plan.md`.\n  WHY: It tells users to set `VALIDATION_USE_TEMPLATES=true`, but linking the migration doc would improve guidance.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_template_mode.py:29-45 | severity=low | confidence=1\n  PROBLEM: Test checks for specific strings but doesn't verify freehand generation code is actually removed.\n  WHY: Test completeness issue, not a runtime failure.\n- scripts/validate_process.sh:2160-2167 | severity=low | confidence=1\n  PROBLEM: Breaking-change error message doesn't reference migration documentation.\n  WHY: User experience issue, not a runtime failure.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validate_process_template_mode.py:29-45 | severity=low | confidence=3\n  PROBLEM: `test_template_mode_selection_contract_present` does not verify that the old freehand code blocks are actually removed from `validate_process.sh`.\n  WHY: It checks the new behavior but not the removal of the old code path.\n- scripts/validate_process.sh:2160-2167 | severity=low | confidence=4\n  PROBLEM: The error message does not reference `docs/validation-templates-plan.md`.\n  WHY: It is a documentation enhancement, not a correctness issue.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "182d2729dfe243c1cf0b873a36f1a5c8122649a78ab6a55eafa2f9bb28d684ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24883318646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24883318646",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424110443_868db63f8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24883318646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T11:04:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

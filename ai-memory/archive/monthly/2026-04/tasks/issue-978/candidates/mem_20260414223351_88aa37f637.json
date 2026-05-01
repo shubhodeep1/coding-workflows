@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which runtime contract should the docs represent for `validation/validate.sh`?**\nChoices:\n- **A** \u2014 Document current behavior: `validation/validate.sh` may be generated transiently at runtime in the runner workspace, but it is never committed to consumer repos. **(RECOMMENDED)**\n- **B** \u2014 Document new behavior: `validation/validate.sh` is not generated at all in consumer workspaces anymore (and we accept docs temporarily leading code until follow-up implementation lands).\n- **C** \u2014 Omit explicit generation wording for now; document only canonical driver location/runtime fetch/non-commit guarantees.\nReply: `Q1: A`",
+  "fingerprint": "fdbf1231b6f17fcaea7287307bcb49824b5c33f9a80994bf8169cc259ec19867",
+  "lineage": {
+    "issue_number": 978,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24426224513",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24426224513",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414223351_88aa37f637",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 978,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24426224513"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #978 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T22:33:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

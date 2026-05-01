@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which layer should this fix target in this repository?**\nChoices:\n- **A** \u2014 Validation harness generation guidance (prompts/specs) so generated Dockerfile/compose use TERM-safe PID 1 behavior (RECOMMENDED)\n- **B** \u2014 Validation orchestration/runtime scripts (`scripts/validate_process.sh` / workflow stop semantics) only\n- **C** \u2014 Both: generation guidance plus orchestration/runtime safeguards\nReply: `Q1: A`",
+  "fingerprint": "370cac65206deaf352033f47103dce136b3deddeb20f57a420bc61d11cdabfb2",
+  "lineage": {
+    "issue_number": 963,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24412684136",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24412684136",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414171405_9836f825d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 963,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24412684136"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #963 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T17:14:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

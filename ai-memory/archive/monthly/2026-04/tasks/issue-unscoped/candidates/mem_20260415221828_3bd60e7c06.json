@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/clarify.yml\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/implement.yml\n.github/workflows/orchestrate_clarify_respond.yml\n.github/workflows/plan.yml\n.github/workflows/validate.yml\n`.github/workflows/clarify.yml`\n`.github/workflows/clarify.yml`\n`.github/workflows/implement.yml`\n`.github/workflows/implement.yml`\n`.github/workflows/validate.yml`\n`tests/test_workflow_checkout_integration_ref_audit.py`",
+  "fingerprint": "5d7b5299622141a659e36952beab4bf8b42a08b30d747793e306e74c8a97bf0a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1124,
+    "run_id": "24480835510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24480835510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415221828_3bd60e7c06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1124,
+    "run_id": "24480835510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T22:18:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

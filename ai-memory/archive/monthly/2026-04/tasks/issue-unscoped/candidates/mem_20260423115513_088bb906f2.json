@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/repo-local-tooling/tests/30_hardhat_test.sh.j2:1-42 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The template is named 30_hardhat_test.sh.j2 even though it runs the Python self-test runner, so the filename mislabels the template.\n  WHY: All reviewers treated this as a confusing naming/maintainability issue, but moonshotai labeled it critical while the others treated it as low-risk confusion, so the highest reported severity is critical.\n- workflow-templates/validation-harness/repo-local-tooling/_lib/tap_helpers.sh.j2:MISSING FILE | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The repo-local-tooling family does not provide tap_helpers.sh.j2 even though generated test scripts source ../_lib/tap_helpers.sh.\n  WHY: Minimax treated this as a clear runtime failure, while moonshotai said the shared _shared/_lib/tap_helpers.sh.j2 fallback prevents failure, so the impact is disputed and the highest reported severity is critical.\n- .ai/validate.yml:4-5 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview]\n  PROBLEM: The manifest points to scripts/render_validation_templates.py without a preflight check that the entry script exists and is executable.\n  WHY: Reviewers described this as a potential launch/validation hardening gap rather than a confirmed failure, and one noted the workflow already runs chmod +x, so the issue is low severity.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- workflow-templates/validation-harness/repo-local-tooling/tests/30_hardhat_test.sh.j2:Filename and content | severity=low | confidence=4\n  PROBLEM: The template is named 30_hardhat_test.sh.j2 but runs python3 tests/test_validation_selftest_runner.py, so the filename is misleading.\n  WHY: The mismatch can confuse users during debugging or when extending the template system.\n- .ai/validate.yml:4-5 | severity=low | confidence=3\n  PROBLEM: The manifest references scripts/render_validation_templates.py without checking whether it exists or is executable.\n  WHY: If the script were missing or not executable, validation would fail with a confusing error path rather than a clear preflight check.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3_1-pro-preview ===\n- workflow-templates/validation-harness/repo-local-tooling/tests/30_hardhat_test.sh.j2:The file name 30_hardhat_test.sh.j2 | severity=low | confidence=4\n  PROBLEM: The filename suggests Hardhat/Ethereum tests even though it runs a Python test suite.\n  WHY: That mismatch is a maintainability issue and can mislead debugging.\n- .ai/validate.yml:type: repo-local-tooling\nentry: scripts/render_validation_templates.py | severity=low | confidence=2\n  PROBLEM: The manifest points at the Python renderer entry without asserting that the file is directly executable.\n  WHY: Depending on how the validation pipeline invokes entry files, launch can fail unexpectedly or with a confusing error.\n=== END FINDINGS FROM google_gemini-3_1-pro-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- workflow-templates/validation-harness/repo-local-tooling/_lib/tap_helpers.sh.j2:MISSING FILE | severity=critical | confidence=5\n  PROBLEM: The family is missing the template source for tap_helpers.sh.j2 even though the tests source ../_lib/tap_helpers.sh.\n  WHY: The reviewer says consumer repos will fail when the generated test scripts source a helper file that is not rendered.\n- workflow-templates/validation-harness/repo-local-tooling/tests/30_hardhat_test.sh.j2:1 (filename) | severity=low | confidence=5\n  PROBLEM: The file is named hardhat_test even though it runs Python self-tests, not Hardhat tests.\n  WHY: The naming mismatch is misleading but does not change runtime behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- workflow-templates/validation-harness/repo-local-tooling/tests/30_hardhat_test.sh.j2:1-42 | severity=critical | confidence=5\n  PROBLEM: The template name says hardhat even though it runs the Python self-test runner.\n  WHY: The filename implies Hardhat/Ethereum testing and conflicts with the actual Python-focused behavior.\n- workflow-templates/validation-harness/repo-local-tooling/_lib/tap_helpers.sh.j2:MISSING FILE | severity=low\n  PROBLEM: The family does not define its own tap_helpers.sh.j2 even though the test scripts source ../_lib/tap_helpers.sh.\n  WHY: The reviewer notes the shared _shared/_lib/tap_helpers.sh.j2 fallback avoids a runtime failure, so this is only a low-severity consistency issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9228d78d19feddd0405d8a8efb5413715959c7bc23b530feb68dc53ff17f1577",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1546,
+    "run_id": "24831929173",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24831929173",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423115513_088bb906f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1546,
+    "run_id": "24831929173"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T11:55:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

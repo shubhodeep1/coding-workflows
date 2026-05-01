@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_lint_external_tool_dependencies.py:151-173 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The test still expects external-tool dependency validation to skip when runtime HTTP tests and custom tests are absent, but the PR removed that early return so the missing forge tool now makes it fail.\n  WHY: With the guard gone, _check_external_tool_dependencies now validates CANARY_TOOLS unconditionally and returns a nonzero exit because the fixture's Dockerfile.app installs curl jq but not forge.\n- scripts/validation_lint.py:1096-1106 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3_1-pro-preview, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The hardhat dependency check can flag a missing hardhat install just because tests/30_hardhat_test.sh exists, even when that test output is not selected.\n  WHY: Unlike the custom_tests path, this block does not consult context.is_test_output_selected(...), so a generated-but-unselected hardhat test file can produce a false-positive lint failure, though one reviewer thought the behavior may be intentional.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_lint_external_tool_dependencies.py:154 | confidence=5\n  PROBLEM: The test still expects external-tool dependency validation to skip when no runtime HTTP or custom tests are selected.\n  WHY: Removing the early return makes lint check forge and fail because the fixture's Dockerfile.app does not install it.\n- scripts/validation_lint.py:1096-1106 | confidence=3\n  PROBLEM: The hardhat dependency check runs for tests/30_hardhat_test.sh based on file presence alone instead of selection.\n  WHY: If that test file exists but is not selected, the linter can report a missing hardhat dependency even though the test will not run.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3_1-pro-preview ===\n- tests/test_validate_lint_external_tool_dependencies.py:151-173 | confidence=5\n  PROBLEM: The skip-when-no-http-or-custom-tests case is out of date after the linter change and now fails.\n  WHY: Removing the conditional early return means the test now hits the canary-tool check, finds missing forge, and returns exit code 1 instead of 0.\n- scripts/validation_lint.py:1096-1106 | confidence=4\n  PROBLEM: The hardhat dependency check is not gated on context.is_test_output_selected(...).\n  WHY: If tests/30_hardhat_test.sh is generated but skipped, the linter can still block validation over a missing hardhat install, unlike the properly gated custom-test path.\n=== END FINDINGS FROM google_gemini-3_1-pro-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validate_lint_external_tool_dependencies.py:151-173 | confidence=5\n  PROBLEM: The test now expects the old skip behavior for external-tool dependency validation, but the early return was removed.\n  WHY: With the guard removed, the linter always checks the canary tools, so the fixture's missing forge install makes the test fail.\n- scripts/validation_lint.py:1096-1106 | confidence=2\n  PROBLEM: The hardhat dependency check triggers on the existence of tests/30_hardhat_test.sh rather than on selection.\n  WHY: If that file exists but is omitted from selected_test_outputs, the linter can report a hardhat dependency even though the test will not run, though this may be intentional.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_validate_lint_external_tool_dependencies.py:151-173 | severity=critical | confidence=5\n  PROBLEM: The test still asserts the linter should skip external-tool dependency validation when runtime HTTP and custom tests are omitted, but the PR removed that skip.\n  WHY: The fixture now reaches the canary-tool check, where missing forge in Dockerfile.app causes returncode == 1 and breaks the assert result.returncode == 0 expectation.\n- scripts/validation_lint.py:1096-1106 | confidence=2\n  PROBLEM: The hardhat dependency check is unconditional on test selection and may flag hardhat for an unselected tests/30_hardhat_test.sh.\n  WHY: It does not use the same selection gating as custom tests, so a generated-but-skipped hardhat script can produce a false-positive validation failure, though it may be intentional.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5badcba857ad93b906ce63e3c91b4adccc3d4234e6d40e89a522aeb14b3b2beb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1549,
+    "run_id": "24872166833",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24872166833",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260424050754_72474130e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1549,
+    "run_id": "24872166833"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-24T05:07:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

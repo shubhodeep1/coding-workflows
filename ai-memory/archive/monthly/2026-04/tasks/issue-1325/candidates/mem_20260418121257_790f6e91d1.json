@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1325,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1325\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1330\",\"pr_number\":1330,\"branch\":\"ai/issue-1325\",\"run_id\":\"24604066828\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24604066828\",\"changed_files\":[\".github/workflows/validate.yml\",\"README.md\",\"agents.md\",\"scripts/validate_process.sh\",\"tests/test_validate_process_template_mode.py\",\"tests/test_validate_workflow_validate_bootstrap.py\"]}",
+  "fingerprint": "ec562c2ed0724fa918c7bfa520e4e165c78d4f74303c086b9c05fcf18ed0e983",
+  "lineage": {
+    "issue_number": 1325,
+    "parent_ids": [],
+    "pr_number": 1330,
+    "run_id": "24604066828",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24604066828",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1330"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260418121257_790f6e91d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1325,
+    "level": "run",
+    "pr_number": 1330,
+    "run_id": "24604066828"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1325: https://github.com/shubhodeep1/coding-workflows/pull/1330",
+  "timestamps": {
+    "created_at": "2026-04-18T12:12:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

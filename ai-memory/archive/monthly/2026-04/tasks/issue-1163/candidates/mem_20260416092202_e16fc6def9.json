@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: How should the new comprehensive workflow deterministically identify which orchestrator tracking issue belongs to its dispatch (so it can add `ai:comprehensive-test-pending`)?**\nChoices:\n- **A** \u2014 Inject a unique run marker into `project_description`, then locate the newly created `ai:orchestrator-tracking` issue containing that marker and label it. (RECOMMENDED)\n- **B** \u2014 Assume the newest open `ai:orchestrator-tracking` issue is the correct one.\n- **C** \u2014 Do not auto-label; require manual labeling of the tracking issue.\nReply: `Q1: A`\n**Q2: Which dispatch inputs must be persisted on the tracking issue for the poller callback to use when triggering `test-and-mark-stable.yml` with `dry_run: false`?**\nChoices:\n- **A** \u2014 Persist only `version_tag`; callback uses default repo/timeouts.\n- **B** \u2014 Persist `version_tag` and `test_repo` (and any non-default timeout inputs) and replay them in the callback. (RECOMMENDED)\n- **C** \u2014 Persist nothing; callback always auto-increments version and uses current repo defaults.\nReply: `Q2: B`\n**Q3: What is the expected behavior if orchestrate does not create a tracking issue (short-circuit plain issue or single-issue mode)?**\nChoices:\n- **A** \u2014 Treat as terminal for this pipeline: post alert and stop (no release dispatch). (RECOMMENDED)\n- **B** \u2014 Continue by monitoring the standalone issue and trigger release after it completes.\n- **C** \u2014 Skip orchestrator gating and immediately dispatch real `test-and-mark-stable` after log analysis.\nReply: `Q3: A`",
+  "fingerprint": "6abb24fe8aa20a17333d91fa02aa423bdd1ce40397f0109ba283041788433b62",
+  "lineage": {
+    "issue_number": 1163,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24502160738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24502160738",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260416092202_e16fc6def9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1163,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24502160738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1163 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-16T09:22:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

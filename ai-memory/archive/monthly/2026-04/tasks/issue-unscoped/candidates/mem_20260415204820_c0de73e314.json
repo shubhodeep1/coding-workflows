@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/clarify.yml\n.github/workflows/issue_pr_status.yml\n/tmp/codex-pr-24477064692-1-26558/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24477064692-1-26558/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/orchestrate.yml\n.github/workflows/validate.yml\n/tmp/codex-pr-24477064692-1-26558/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24477064692-1-26558/previous_reviews/review_deepseek_deepseek-v3_2.txt:1.\n/tmp/codex-pr-24477064692-1-26558/previous_reviews/review_deepseek_deepseek-v3_2.txt:2.\n/tmp/codex-pr-24477064692-1-26558/previous_reviews/review_deepseek_deepseek-v3_2.txt:3.\nscripts/validate_process.\nscripts/validate_process.sh\nworkflows/orchestrate.yml",
+  "fingerprint": "58621d7ee741dcc443272572f742573f3f07176a52172b3e51ecd25c0999ca23",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1083,
+    "run_id": "24477064692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24477064692",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415204820_c0de73e314",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1083,
+    "run_id": "24477064692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T20:48:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

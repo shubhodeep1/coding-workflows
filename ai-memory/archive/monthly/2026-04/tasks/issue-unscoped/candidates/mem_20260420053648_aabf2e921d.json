@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `scripts/review_run_reviewers.sh`:883 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The `--ask-for-approval never` flag was removed from the reviewer `codex exec` invocation.\n  WHY: Multiple reviewers report the PR intended `--sandbox read-only --ask-for-approval never`; without `--ask-for-approval never`, unattended runs may prompt for approval and hang, with the reviewers agreeing on the same root cause.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `scripts/review_run_reviewers.sh`:883 | severity=medium | confidence=5\n  PROBLEM: The `--ask-for-approval never` flag was removed from the reviewer codex-cli invocation.\n  WHY: The PR intent was to lock the sandbox to read-only and maintain the non-interactive approval policy; removing `--ask-for-approval never` allows interactive prompts that can hang unattended CI/CD runs.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `scripts/review_run_reviewers.883` | severity=medium | confidence=5\n  PROBLEM: The `--ask-for-approval never` flag is missing from the reviewer invocation.\n  WHY: The previous autofix run removed it contrary to the PR's explicit intent, and without it `codex exec` may prompt for human approval in unattended CI/CD pipelines, causing hangs.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `scripts/review_run_reviewers.sh`: Line 883 (in the `run_reviewer` function, inside the subshell that executes codex) | severity=medium | confidence=5\n  PROBLEM: The `--ask-for-approval never` flag is missing from the reviewer `codex exec` command.\n  WHY: The PR description states reviewers must run with `--sandbox read-only --ask-for-approval never`; without the flag, the reviewer might prompt for approval during execution and hang the unattended CI/CD workflow.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `scripts/review_run_reviewers.sh`:883 | severity=medium | confidence=5\n  PROBLEM: The `--ask-for-approval never` flag is missing from the reviewer `codex exec` command.\n  WHY: The last run diff shows the flag was removed, the PR description explicitly required `--sandbox read-only --ask-for-approval never`, and without the flag unattended execution can hang on approval prompts.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "59b494118e4de89d8badfc48f5eaff9eb69ad7d2f2eaccda31712b4ba5ed8b8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1449,
+    "run_id": "24649882504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24649882504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420053648_aabf2e921d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1449,
+    "run_id": "24649882504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T05:36:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

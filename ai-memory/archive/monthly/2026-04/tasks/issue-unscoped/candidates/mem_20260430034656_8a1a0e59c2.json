@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py:113-129 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The buffer-cap check runs after appending the chunk, so the buffer can briefly exceed the documented 1 MiB limit by up to one 4 KiB read.\n  WHY: Reviewers characterized the overshoot as bounded and minor, but it still allows the buffer to exceed the stated cap before _ResponseTooLargeError is raised.\n- scripts/mcp_handshake_probe.py:169-224 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Switching to inherited stderr mixes the server's diagnostics into CI logs instead of keeping probe stderr isolated.\n  WHY: The reviewer said this makes the logs noisier and harder to parse for probe-specific diagnostics.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mcp_handshake_probe.py:~129 | severity=low | confidence=3\n  PROBLEM: The buffer cap check happens after appending a full chunk, so the buffer can exceed _MAX_RESPONSE_BYTES by about 4 KiB before the error is raised.\n  WHY: This is a bounded memory-bound hardening issue; the overshoot is minor and the cap still fires.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/mcp_handshake_probe.py:113-114 | severity=low | confidence=2\n  PROBLEM: The buffer cap check occurs after the chunk is appended, so the buffer can temporarily exceed _MAX_RESPONSE_BYTES by up to one chunk.\n  WHY: The overshoot is bounded to 4096 bytes and does not create an unbounded memory risk, so this is a minor hardening issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py:169-224 | severity=low | confidence=3\n  PROBLEM: Changing stderr=None inherits the server's stderr into the parent process, which mixes probe diagnostics with server noise in CI logs.\n  WHY: This makes probe-specific diagnostics harder to isolate and parse.\n- scripts/mcp_handshake_probe.py:113-114 | severity=low | confidence=3\n  PROBLEM: The buffer cap check happens after appending the chunk, allowing the buffer to exceed the documented 1 MiB limit by up to one 4 KiB read.\n  WHY: The overshoot is bounded, but it still exceeds the stated cap before _ResponseTooLargeError is raised.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py:122-128 | severity=low | confidence=2\n  PROBLEM: The buffer cap check happens after extending the buffer, so it can exceed _MAX_RESPONSE_BYTES by up to 4 KiB before the error is raised.\n  WHY: The overshoot is bounded and does not cause a runtime failure, but it is still a minor precision issue.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ddb7735d7124e037e17893358b9932113d043265c5ec0bbb7ec6277a533dda8a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1799,
+    "run_id": "25145674032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25145674032",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430034656_8a1a0e59c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1799,
+    "run_id": "25145674032"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T03:46:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

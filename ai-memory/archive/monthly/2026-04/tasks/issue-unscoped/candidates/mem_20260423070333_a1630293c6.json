@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.github/workflows/issue_pr_status.yml:291-301` | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: If the REST fallback lookup fails for an orchestrator-managed issue, that issue is not added to `ORCHESTRATED_ISSUES` and later falls through to the label/close loop.\n  WHY: Multiple reviewers agree this fail-open path can reintroduce the original bug by letting a tracked issue be mislabeled or closed when transient API failures prevent detection.\n- `.github/workflows/issue_pr_status.yml:264-273` | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The batched GraphQL query has no upper bound on the number of issue aliases it can include.\n  WHY: Reviewers agree this can make the query too large for GraphQL limits under high issue counts; severity is low because at least one reviewer considered it unlikely in practice.\n- `.github/workflows/issue_pr_status.yml:308` | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The skip check uses `grep` inside the per-issue loop, creating repeated process spawning.\n  WHY: Reviewers agree this is an O(n\u00b2)-style inefficiency that hurts performance more than correctness, so severity stays low.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `.github/workflows/issue_pr_status.yml:273,290-310` | severity=medium | confidence=4\n  PROBLEM: GraphQL query construction can become malformed if `REPOSITORY` is not in the expected `owner/name` format, and the REST fallback fail-open path can let orchestrator-managed issues be processed normally when lookup fails.\n  WHY: If `REPOSITORY` lacks `/`, the repository argument is malformed; if the REST API call fails, the issue is omitted from `ORCHESTRATED_ISSUES` and may be labeled or closed downstream.\n- `.github/workflows/issue_pr_status.yml:268-272` | severity=medium | confidence=3\n  PROBLEM: There is no limit on the size of the GraphQL alias fragment, so too many linked issues can exceed query limits.\n  WHY: GraphQL servers enforce practical request-size limits, and a large enough alias list can cause the batch query to fail.\n- `.github/workflows/issue_pr_status.yml:308` | severity=low | confidence=2\n  PROBLEM: Membership testing with `grep` runs inside the issue loop and scales poorly.\n  WHY: Repeating `grep` per issue creates unnecessary overhead and can degrade workflow performance with larger issue sets.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `.github/workflows/issue_pr_status.yml:291-301` | severity=medium | confidence=4\n  PROBLEM: If the per-issue REST lookup fails, the issue is not recorded in `ORCHESTRATED_ISSUES` and can still be labeled or closed downstream.\n  WHY: The downstream skip check only matches numbers already present in `ORCHESTRATED_ISSUES`, so a failed lookup for a real orchestrator issue reintroduces the bug.\n- `.github/workflows/issue_pr_status.yml:268` | severity=low | confidence=3\n  PROBLEM: The GraphQL alias fragment can grow too large if many issue numbers are present.\n  WHY: A large alias list can hit GraphQL request-size or alias-count limits, especially with many linked issues.\n- `.github/workflows/issue_pr_status.yml:308` | severity=low | confidence=2\n  PROBLEM: The loop uses `printf | grep` for every issue to test membership.\n  WHY: Spawning a process per iteration is inefficient, though the impact is mostly performance rather than correctness.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `.github/workflows/issue_pr_status.yml:297-299` | severity=medium | confidence=4\n  PROBLEM: A failed REST lookup leaves an orchestrator-managed issue out of `ORCHESTRATED_ISSUES`, so it falls through to the label/close loop.\n  WHY: When the API returns an empty response, the workflow cannot detect that the issue is orchestrator-managed and may process it as a regular issue.\n- `.github/workflows/issue_pr_status.yml:264-271` | severity=medium | confidence=3\n  PROBLEM: The batched GraphQL query has no upper bound on the number of issues it includes.\n  WHY: A large PR can produce a query that exceeds GraphQL size limits and causes the detection step to fail.\n- `.github/workflows/issue_pr_status.yml:310` | severity=low | confidence=2\n  PROBLEM: The membership check runs `grep` once per issue in the loop.\n  WHY: This adds avoidable process overhead and creates O(n\u00b2) behavior as the number of issues grows.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `.github/workflows/issue_pr_status.yml:293-301` | severity=medium | confidence=4\n  PROBLEM: When a per-issue REST lookup fails, the issue is not added to `ORCHESTRATED_ISSUES` and later goes through normal label/close handling.\n  WHY: This recreates the original mislabeling bug for orchestrator-managed issues whenever transient API errors prevent detection.\n- `.github/workflows/issue_pr_status.yml:262-273` | severity=low | confidence=2\n  PROBLEM: The batch GraphQL query has no cap on the number of issues it includes.\n  WHY: Very large PRs can make the constructed query approach GitHub GraphQL request-size limits and force fallback behavior.\n- `.github/workflows/issue_pr_status.yml:308` | severity=low | confidence=3\n  PROBLEM: The membership test spawns `grep` for every issue in the loop.\n  WHY: This adds repeated process-creation overhead and becomes inefficient as the number of issues increases.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "31f57922b979e8d2e114310ed98c16760b2d49a74e0c41cdd85c480d57330c0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1539,
+    "run_id": "24821192383",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24821192383",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423070333_a1630293c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1539,
+    "run_id": "24821192383"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T07:03:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

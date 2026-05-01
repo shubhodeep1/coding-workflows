@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/test-and-mark-stable.yml (line ~1049)\n      Problem: No runtime correctness issues found. The implementation correctly adds retry logic for GitHub API eventual-consistency 422 errors. The bash arithmetic loop is more robust than the previous `seq` approach. The `\"HTTP 422\"` check alongside `\"Could not resolve to a node\"` ensures retries only occur for the specific eventual-consistency error.; N/A - implementation is correct\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: .github/workflows/test-and-mark-stable.yml (line ~960)\n      Problem: No issues. Changing from `2>/dev/null` to `>/dev/null 2>&1` provides more complete output suppression for cleanup operations.; N/A - improvement, not a bug\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: .github/workflows/test-and-mark-stable.yml (line ~1165)\n      Problem: No issues. The updated logic correctly handles cases where `ai:review-blocked` remains alongside terminal labels (`ai:merged` or `ai:ready-to-merge`).; N/A - improvement, not a bug; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Line ~1055 (before the retry loop); Issue: Missing validation for TRACKING_NUMBER variable. If issue creation fails unexpectedly and TRACKING_NUMBER is empty or \"null\", the API path becomes invalid.; Suggested minimal fix: Add `if [ -z \"${TRACKING_NUMBER}\" ] || [ \"${TRACKING_NUMBER}\" = \"null\" ]; then echo \"::error::TRACKING_NUMBER is invalid: '${TRACKING_NUMBER}'\"; exit 1; fi`; Estimated lines changed: 1-2; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Line 1061-1062 (grep patterns); Issue: The grep patterns might not match all variations of GitHub API error messages. While unlikely, if gh changes its error output format, the retry logic would break.; Suggested minimal fix: Make patterns more flexible: `grep -qiE \"(Could not|Couldn't) resolve to a node\"` and `grep -qiE \"HTTP 422|422 Unprocessable\"`; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Line 1053-1054; Issue: The `gh api` command for posting a comment relies on `TRACKING_NUMBER` being populated correctly from a previous step. If the preceding issue creation failed silently or returned unexpected JSON, `TRACKING_NUMBER` could be empty, causing the API URL to be malformed.; Suggested minimal fix: Add `[ -n \"${TRACKING_NUMBER}\" ] || { echo \"::error::TRACKING_NUMBER is empty\"; exit 1; }` before entering the loop.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2; **REVIEW FINDINGS:**; No runtime correctness, security, or backward-compatibility issues were found in the modified code. The implementation aligns perfectly with the repository's prime directive of safety and correctness.; FINAL VERDICT: No changes required.\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/test-and-mark-stable.yml",
+  "fingerprint": "bdfb5bb11677e1396df483a9c247eded0252ff747c474c3b9a2c8402422a143a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1343,
+    "run_id": "24612294485",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24612294485",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418200023_f6c18f5f38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1343,
+    "run_id": "24612294485"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T20:00:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

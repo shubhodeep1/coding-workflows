@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nANSWERS:\nQ35: A\n\nRATIONALE:\nQ35: The issue explicitly targets `validation/tests/01_core_smoke.sh` (and optionally `validation/app_server.py`), and the current workspace reports those files are missing, so planning must be grounded in the correct repo/path and branch where they exist. Choosing A resolves the blocking context gap with the minimum-risk path.",
+  "fingerprint": "70c384a0c19d3b814ab4ab6cfcf0426e0c8bf40827579f5e2eb6a5b7bd61001a",
+  "lineage": {
+    "issue_number": 634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24219847987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24219847987",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/634"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260410001806_63281c7ea8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24219847987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #634",
+  "timestamps": {
+    "created_at": "2026-04-10T00:18:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

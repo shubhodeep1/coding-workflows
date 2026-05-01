@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.github/workflows/clarify.yml:82-92` | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The resolver script staging uses a shallow clone of `main` and then fetches `resolver_ref`, which can fail if the target ref is not reachable from the shallow history.\n  WHY: If `resolver_ref` points to a commit outside the fetched depth, `git checkout --detach FETCH_HEAD` can fail and the workflow may fall back to `main` instead of the intended resolver script version.\n- `scripts/collect_workflow_logs.py:684-700` | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: `_is_missing_log_archive_error` checks for 404 and 410 but not 403, so forbidden responses are treated as missing logs.\n  WHY: A 403 from GitHub API indicates permission or rate-limit problems and should not be conflated with an absent log archive; reviewers agreed on this issue, though one framed it as a hardening suggestion.\n- `.github/workflows/update_workflows.yml:91-92` | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: `detail_sanitized=\"${detail_sanitized//$'\\n'/ }\"` replaces newlines with spaces but does not collapse repeated whitespace or trim trailing spaces.\n  WHY: Multi-line error messages can produce awkward spacing in `$GITHUB_OUTPUT`; severity/confidence are taken from the reviewer.\n- `agents.md:640` | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The documentation references the `review_autofix.yml` step at \u201caround line 2502,\u201d but the actual line is about 2535.\n  WHY: This is a documentation mismatch only, with no runtime impact.\n- `.github/workflows/review_autofix.yml:1841` | severity=low | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The comment uses an approximate line reference that is slightly off due to recent additions.\n  WHY: This is a documentation-only mismatch with no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `.github/workflows/clarify.yml:82-92` | severity=medium | confidence=4\n  PROBLEM: Resolver script staging uses a shallow clone of `main` and then fetches `resolver_ref`, which can fail if the target ref is not reachable from the shallow history.\n  WHY: If `resolver_ref` points to a commit outside the fetched depth, `git checkout --detach FETCH_HEAD` can fail and the workflow may fall back to `main` instead of the intended resolver script version.\n- `scripts/collect_workflow_logs.py:684-700` | severity=medium | confidence=3\n  PROBLEM: `_is_missing_log_archive_error` checks for 404 and 410 but not 403, so forbidden responses are treated as missing logs.\n  WHY: A 403 from GitHub API indicates permission or rate-limit problems and should not be conflated with an absent log archive.\n- `.github/workflows/update_workflows.yml:91-92` | severity=low | confidence=2\n  PROBLEM: `detail_sanitized=\"${detail_sanitized//$'\\n'/ }\"` replaces newlines with spaces but does not collapse repeated whitespace or trim trailing spaces.\n  WHY: Multi-line error messages can produce awkward spacing in `$GITHUB_OUTPUT`; severity/confidence are taken from the reviewer.\n- `agents.md:640` | severity=low | confidence=5\n  PROBLEM: The documentation references the `review_autofix.yml` step at \u201caround line 2502,\u201d but the actual line is about 2535.\n  WHY: This is a documentation mismatch only, with no runtime impact.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `tests/test_orchestrate_poll_process.py:1004` | severity=low | confidence=5\n  PROBLEM: (Resolved) The last run fixed the mapping to use `alias_num` instead of `issue_num`.\n  WHY: The fix ensures tests mirroring batch GraphQL responses now return the exact shape expected by the orchestrator's `jq` parsing logic.\n- `.github/workflows/review_autofix.yml:1841` | severity=low | confidence=5\n  PROBLEM: The comment uses an approximate line reference that is slightly off due to recent additions.\n  WHY: This is documentation only and has no runtime impact.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- (No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "c8206d2ccc2309711944c720c4b5e554bd199db63c647a8c1498121b3747583c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1513,
+    "run_id": "24789140777",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24789140777",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422164612_0ca0584e91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1513,
+    "run_id": "24789140777"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T16:46:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

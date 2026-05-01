@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1423,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1423\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1430\",\"pr_number\":1430,\"branch\":\"ai/issue-1423\",\"run_id\":\"24626335629\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24626335629\",\"changed_files\":[\"README.md\",\"scripts/dev/replay_review_pipeline.sh\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_review_pipeline_integration.py\"]}",
+  "fingerprint": "c18757bc1ed8d44f07ee0e673e5ec52b8bfd37263e2c0a64fce4051b3dec1b5c",
+  "lineage": {
+    "issue_number": 1423,
+    "parent_ids": [],
+    "pr_number": 1430,
+    "run_id": "24626335629",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626335629",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1430"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260419100925_1a7f96d852",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1423,
+    "level": "run",
+    "pr_number": 1430,
+    "run_id": "24626335629"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1423: https://github.com/shubhodeep1/coding-workflows/pull/1430",
+  "timestamps": {
+    "created_at": "2026-04-19T10:09:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

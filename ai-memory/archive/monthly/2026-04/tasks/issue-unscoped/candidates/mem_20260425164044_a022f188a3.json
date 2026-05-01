@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1352-1357 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, qwen_qwen3-coder-plus]\n  PROBLEM: BASE_REF is extracted without the regex validation applied to HEAD_REF.\n  WHY: Missing validation is a defense-in-depth gap and can let malformed branch names reach downstream git operations.\n- .github/workflows/review_autofix.yml:1896-1900 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, qwen_qwen3-coder-plus]\n  PROBLEM: `_ensure_merge_base_reachable` returns success even when the fallback `--unshallow` fetch fails.\n  WHY: The function can mask a real history/fetch failure and let later merge-base-dependent steps proceed with incomplete history.\n- .github/workflows/review_autofix.yml:1757-1795 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, qwen_qwen3-coder-plus]\n  PROBLEM: The pre-walk deepen logic only fetches `TARGET_BRANCH`, so the history walk can miss detached-HEAD ancestry after force-pushes or complex merges.\n  WHY: The workflow can still undercount or truncate the ancestry being walked when the fetched branch history diverges from the commit ancestry.\n- .github/workflows/review_autofix.yml:1757-1790 and 1857-1909 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, qwen_qwen3-coder-plus]\n  PROBLEM: Fetch failures are handled without any retry/backoff logic.\n  WHY: Transient GitHub or network fetch errors can leave the clone shallow or incomplete and cause later operations to fail or miscompute history.\n- .github/workflows/review_autofix.yml:1857-1909 and 2936-2988 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: Both merge-base code paths can independently trigger the `--unshallow` fallback and emit duplicate warnings.\n  WHY: If the shallow repo is detected in both phases, the second fallback is usually redundant and only adds debugging noise.\n- .github/workflows/review_autofix.yml:1857-1909 and 2936-2988 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, qwen_qwen3-coder-plus]\n  PROBLEM: Merge-base reachability logic is duplicated between the helper function and the inline merge-precheck block.\n  WHY: The duplication is required by GitHub Actions step isolation, but it creates maintenance drift risk if one copy is updated without the other.\n- .github/workflows/review_autofix.yml:Various locations with `100` and `200` constants | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The shallow-clone and deepen depths are hardcoded without configuration overrides.\n  WHY: Very long-running PRs can exceed the fixed budgets, and the deepen loop has no escape hatch for deeper histories.\n- .github/workflows/review_autofix.yml:1785-1787 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The pre-walk deepen fetch suppresses stderr with `2>/dev/null`, hiding failure details.\n  WHY: When the deepen fetch fails, the workflow only emits a warning and loses the underlying git error context, which makes debugging harder.\n- scripts/validation_selftest_status.py:30-39 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_read_json` does not wrap `json.loads()` errors with file context.\n  WHY: Malformed JSON from a partial write or corruption surfaces as a raw `JSONDecodeError` instead of a clearer path-specific error.\n- scripts/validation_selftest_matrix.py:248-254 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Workspace cleanup uses an existence check before `shutil.rmtree()`, creating a TOCTOU race.\n  WHY: The directory state can change between the check and removal, causing intermittent cleanup failures.\n- scripts/validation_selftest_matrix.py:348-349 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `runtime_command` is split and executed without validation of the resulting command components.\n  WHY: CLI-provided command strings can still resolve into unexpected or unsafe subprocess execution paths.\n- scripts/validation_selftest_matrix.py:359-371 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_resolve_command_path` falls back to returning the unresolved token when it cannot find the path in workspace or repo.\n  WHY: Callers only discover the missing path later at subprocess execution time instead of during resolution.\n- scripts/validation_selftest_matrix.py:403-473 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Clone success can still lead to a skipped render stage without an explicit error when workspace data is missing.\n  WHY: Silent skipping makes it harder to diagnose partial clone success.\n- scripts/validation_selftest_matrix.py:86-90 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_fixture_log_name` only replaces path separators and does not sanitize other filesystem-risky characters.\n  WHY: Fixture names can still produce invalid or problematic directory names, especially on Windows.\n- scripts/validation_selftest_matrix.py:_run_fixture | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_run_fixture` proceeds without validating the manifest schema up front.\n  WHY: Malformed or missing required manifest fields fail later in the pipeline instead of being rejected early.\n- scripts/validation_selftest_matrix.py:381-392 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `LOG_DIR` uses `.resolve()`, which can raise `OSError` on resolution failures.\n  WHY: Permission or path-resolution problems can crash the runtime stage unexpectedly.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:1352-1357 | severity=low | confidence=3\n  PROBLEM: BASE_REF is extracted without regex validation, unlike HEAD_REF which has `^[A-Za-z0-9._/-]+$` validation.\n  WHY: This is a defense-in-depth gap that can let a malformed base ref reach git commands.\n- .github/workflows/review_autofix.yml:1896-1900 | severity=low | confidence=3\n  PROBLEM: `_ensure_merge_base_reachable` masks `--unshallow` failures with `|| true`.\n  WHY: If `--deepen=200` and `",
+  "fingerprint": "02326eb9df82c7371f763ce580d209795521bb6f20339513c3112be4f01638d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1628,
+    "run_id": "24934975510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24934975510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260425164044_a022f188a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1628,
+    "run_id": "24934975510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 6 multi-reviewer finding(s) across 16 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-25T16:40:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

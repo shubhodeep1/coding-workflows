@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3706-3729 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The fallback stub tells operators to inspect per-phase artifacts even though the fallback path is specifically for missing checkout/python/script prerequisites, which can make the guidance misleading.\n  WHY: Both reviewers flagged the same shell fallback block as confusing about artifact availability; moonshot called it a clarity issue and x-ai said it can send operators chasing artifacts instead of the real failure.\n- .github/workflows/test-and-mark-stable.yml:3720-3751 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The workflow hardcodes `--max-summary-bytes 2800` instead of exposing the summary cap as a tunable variable.\n  WHY: All three reviewers identified the same hardcoded limit as an operational flexibility issue rather than a runtime bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3721 | severity=low | confidence=3\n  PROBLEM: The `--max-summary-bytes 2800` limit is hardcoded in the workflow instead of being configurable at runtime.\n  WHY: The reviewer called this a minor hardening gap because operators cannot tune the cap without editing the workflow file.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3723-3728 | severity=low | confidence=3\n  PROBLEM: The fallback stub points operators at per-phase artifacts in a way that can be confusing on the fallback path.\n  WHY: The reviewer said the stub correctly identifies the primary failure, but the remediation suggestion could mislead if the download step also failed.\n- .github/workflows/test-and-mark-stable.yml:3751 | severity=low | confidence=2\n  PROBLEM: The `--max-summary-bytes 2800` limit is hardcoded in the workflow and cannot be tuned without modifying the file.\n  WHY: The reviewer treated this as a minor operational limitation rather than a correctness issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:3706-3729 | severity=low | confidence=5\n  PROBLEM: The fallback stub references per-phase soft-error artifacts as potentially inspectable even though that fallback path is about missing local prerequisites, which can send operators toward the wrong diagnosis.\n  WHY: The reviewer said the stub can make an operator chase artifact list entries instead of the actual checkout/setup failure.\n- .github/workflows/test-and-mark-stable.yml:3720-3721 | severity=low | confidence=4\n  PROBLEM: The workflow hardcodes `--max-summary-bytes 2800` with no variable or input driving the cap.\n  WHY: The reviewer flagged this as a configurability gap that limits tuning for Telegram payload variance.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "23f3476359405c75414ce4cc78652f0d668424cd32ae13818115c6844acf1c8d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1824,
+    "run_id": "25157829636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25157829636",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430095729_ab00c17d31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1824,
+    "run_id": "25157829636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-30T09:57:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

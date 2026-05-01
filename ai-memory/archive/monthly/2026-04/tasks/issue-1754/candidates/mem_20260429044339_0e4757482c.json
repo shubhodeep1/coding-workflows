@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Ref Context**\n\n`HEAD 0445e960bf3db8f88b8e2060a1160386ddf5df3d`, resolved checkout ref `main`, symbolic branch `main`. Integration branch metadata was blank in the planning context, so no mismatch was indicated. Clarification status: none required; `/answer [auto-answered-by-orchestrator]` was already posted.\n\n**Recommended approach**\n\nImplement mitigation 1, not provider-routing. The current workflow-generated Codex config only sets the standard OpenRouter fields (`wire_api = \"responses\"`, retries, timeouts) and does not expose request-body `provider` overrides anywhere, so mitigation 2 would require a broader wrapper/fork. The lower-risk fix is to keep the existing Context7 pin at `@upstash/context7-mcp@2.1.8` and make `scripts/setup_serena.sh` probe optional MCP servers before their `[mcp_servers.*]` blocks are written.\n\n**Files likely to change**\n\n- `scripts/setup_serena.sh`\n- `.github/workflows/implement.yml`\n- `.github/workflows/validate.yml`\n- `.github/workflows/review_autofix.yml`\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/orchestrate.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `README.md`\n- `agents.md`\n- New test file, likely `tests/test_setup_serena_mcp_handshake_guard.py`\n- Possibly a small workflow-contract test file, or targeted additions to existing workflow contract tests\n\n**Implementation plan**\n\n- In `scripts/setup_serena.sh`, extend the existing config-writing path into a probe-and-append flow for optional MCP servers.\n- Keep the current Serena health check/removal logic intact.\n- Add a reusable helper that launches an optional MCP candidate, performs a minimal initialize handshake over stdio, and only appends `[mcp_servers.context7]` or `[mcp_servers.git]` if the server returns a valid initialize response within a bounded timeout.\n- Treat EOF, invalid JSON-RPC response, timeout, or non-zero exit as \u201cserver unavailable\u201d; emit a warning and skip writing that server\u2019s config instead of letting the bad block reach Codex.\n- Reuse `remove_mcp_server_blocks` so reruns do not leave stale server tables behind.\n- Add an additive config knob, preferably `MCP_HANDSHAKE_PROBE_ENABLED` with default `true`.\n- Wire that knob through every workflow that invokes `setup_serena.sh`, not just `implement.yml` / `validate.yml` / `review_autofix.yml`, because the same failure class exists in `clarify.yml`, `plan.yml`, `orchestrate.yml`, and `orchestrate_clarify_respond.yml` too.\n- Leave the existing Context7 pin unchanged as defense-in-depth.\n\n**Data structures / interfaces**\n\n- Affected runtime data:\n- generated `~/.codex/config.toml`, specifically presence/absence of `[mcp_servers.context7]` and `[mcp_servers.git]`\n- new repo/workflow env var controlling the handshake guard\n- warning/diagnostic log lines when an optional MCP server is skipped\n- No MongoDB collections, contracts, or indexes are involved.\n- No public API changes beyond the new additive env knob.\n\n**Risks and edge cases**\n\n- `required = false` is not enough here; the fix has to prevent the bad MCP block from being written at all.\n- The probe must tolerate slow startup and stderr noise without false-failing healthy servers.\n- A failed Context7 probe must not remove Serena or Git; a failed Git probe must not remove Serena or Context7.\n- The script must remain fail-open: probe failure should degrade tool availability, not job success.\n- Partial rollout is risky: fixing only the three named workflows would leave the same Azure-sensitive payload path in other Codex phases using the same helper.\n\n**Testing considerations**\n\n- Add a local reproduction harness around `scripts/setup_serena.sh`.\n- Use the shell-subprocess test pattern from `tests/test_detect_editor_changes_lost.py`.\n- Create a mock MCP that closes during initialize, plus a control mock that returns a valid initialize response.\n- Assert that `setup_serena.sh` exits `0`, omits the failing server from `~/.codex/config.toml`, and keeps healthy servers registered.\n- Add workflow smoke coverage using the extracted-step pattern from `tests/test_implement_post_codex_recovery.py`.\n- Execute the `Create Codex config` + `Setup Serena MCP server` step blocks from `implement.yml`, `validate.yml`, and `review_autofix.yml` against the failing mock and assert the step survives without job-level failure.\n- Add a workflow-contract assertion, following `tests/test_validate_workflow_validate_bootstrap.py`, to ensure every `setup_serena.sh` caller passes the new env var.\n- Update `README.md` and `agents.md` with the new knob, default, rollback behavior, and the graceful-degradation failure mode.\n\n**Factual conflicts / codebase truth**\n\n- The issue text scopes the failure to `implement.yml`, `validate.yml`, and `review_autofix.yml`, but the same OpenRouter responses config plus `setup_serena.sh` path is also used by `clarify.yml`, `plan.yml`, `orchestrate.yml`, and `orchestrate_clarify_respond.yml`.\n- `scripts/setup_serena.sh` already hardens Serena itself and already pins Context7 to `2.1.8`; the missing gap is optional-server initialize probing before Context7/Git are written into Codex config.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3b6b8c763c53fb95dcc4bd5cb8378a81afbca94f6207c3addd65f0dadc399c9f",
+  "lineage": {
+    "issue_number": 1754,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25091096636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25091096636",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1754"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260429044339_0e4757482c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1754,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25091096636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1754",
+  "timestamps": {
+    "created_at": "2026-04-29T04:43:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

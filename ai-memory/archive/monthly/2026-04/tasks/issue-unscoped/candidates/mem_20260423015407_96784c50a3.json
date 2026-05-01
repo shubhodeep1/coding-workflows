@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `_AI_PHASE_LABELS` is missing validation-related and other issue-phase labels, so phase transitions can leave stale phase labels attached.\n  WHY: All reviewers identified that `set_issue_phase_label_resilient` relies on `_AI_PHASE_LABELS` to remove existing phase labels, and the incomplete list breaks phase exclusivity; one reviewer noted a severity disagreement but the highest severity is high.\n- scripts/label_helpers.sh:162-163 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `gh api --paginate | jq -cs 'add // []'` label-fetch pipeline may produce an unexpected JSON shape in edge cases.\n  WHY: Multiple reviewers flagged a possible jq shape issue in the current-label fetch path, though one reviewer judged the code likely correct; the highest reported severity is low and the concern is only about robustness, not the main phase-label bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  PROBLEM: `_AI_PHASE_LABELS` is missing 7 phase labels from the contract's issue_phase group: ai:validating, ai:validated, ai:validation-failed, ai:validation-fixing, ai:validation-recovery, ai:needs-human, ai:blocked\n  WHY: When set_issue_phase_label_resilient is called to transition between phases, it won't remove these missing labels, breaking the exclusivity guarantee (multiple phase labels could remain on an issue).\n- scripts/label_helpers.sh:162-163 | severity=low | confidence=3\n  PROBLEM: The jq -cs 'add // []' pipeline could pass through non-array JSON if the GitHub API returns an error object instead of array, though fallback would catch it.\n  WHY: If _cur contains non-array JSON, the subsequent jq operation at line 174 will fail, triggering fallback to POST. This is handled but could be made more robust.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  PROBLEM: `_AI_PHASE_LABELS` is missing several active phase labels defined in `_AI_LABEL_DESCS` and `_AI_LABEL_COLORS`, specifically `ai:validating`, `ai:validated`, `ai:validation-failed`, `ai:validation-fixing`, and `ai:validation-recovery`.\n  WHY: `set_issue_phase_label_resilient` uses `_AI_PHASE_LABELS` to subtract existing phase labels from an issue before applying a new one. Since the validation-related labels are missing from this list, an issue transitioning from a validation phase (e.g., `ai:validating`) to a terminal phase (e.g., `ai:done`) will retain both labels, violating the requirement for phase exclusivity and confusing the orchestrator state tracking.\n- scripts/label_helpers.sh:162-163 | severity=low | confidence=4\n  PROBLEM: Pipe to `jq -cs 'add'` after `--paginate` may produce an unexpected array shape if the input is already a list of lists.\n  WHY: When `gh api --paginate` is used with a JQ filter that produces an array (like `[.[].name]`), it outputs one JSON array per page. `jq -cs 'add'` slugs these arrays into a single array-of-arrays and then `add` flattens one level. However, if any page result is empty or the shape is inconsistent, the final shape passed to the subtraction logic `(. - $p)` in the next step may mismatch (e.g., acting on a string or a nested list), causing `jq` to error or return `null`. This results in the function falling back to a simple `POST` (append) which leaves all previous phase labels intact on the issue.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  PROBLEM: The `_AI_PHASE_LABELS` array is incomplete and omits validation-related and other phase labels defined elsewhere in the same file.\n  WHY: `set_issue_phase_label_resilient` only removes labels present in `_AI_PHASE_LABELS`, so omitted labels like `ai:validating` and `ai:validation-failed` will persist across transitions and violate phase exclusivity.\n- scripts/label_helpers.sh:146 | severity=low | confidence=2\n  PROBLEM: The `gh api --paginate ... | jq -cs 'add // []'` pipeline may return an unexpected shape in edge cases.\n  WHY: The reviewer judged this concern speculative and likely correct code, but noted a possible mismatch could trigger the fallback path and leave stale labels.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/label_helpers.sh:94 | severity=medium | confidence=5\n  PROBLEM: The `_AI_PHASE_LABELS` array is missing several validation-related phase labels that are defined in the same file.\n  WHY: When `set_issue_phase_label_resilient` transitions an issue, the missing labels will not be removed, which violates phase exclusivity and can leave conflicting labels on the issue.\n- scripts/label_helpers.sh:164 | severity=low | confidence=3\n  PROBLEM: The `gh api --paginate` output combined with `--jq '[.[].name]'` and piped to `jq -cs 'add // []'` can produce unexpected array shapes when pagination returns multiple pages or when the API returns non-array responses on error edge cases.\n  WHY: If the pipeline yields malformed output, the subsequent subtraction logic can fail and the function falls back to `POST`, which fails to remove existing phase labels.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/label_helpers.sh:94 | severity=high | confidence=5\n  PROBLEM: `_AI_PHASE_LABELS` is missing several issue-phase labels, including validation-related and human/blocker states, so stale labels can survive transitions.\n  WHY: `set_issue_phase_label_resilient` depends on `_AI_PHASE_LABELS` to clear prior phase labels before applying the new one, and the incomplete list breaks exclusivity for transitions like `ai:validating` to `ai:done`.\n- scripts/label_helpers.sh:94 | severity=low | confidence=5\n  PROBLEM: The maintainer comment above `_AI_PHASE_LABELS` adds only documentation and does not alter behavior.\n  WHY: This was reported as a change in the file, but it is not a bug finding.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "348d175dab3b173eaa359e1b3ab4515963b5326cd543076a301dedc23c473688",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1531,
+    "run_id": "24811453054",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24811453054",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423015407_96784c50a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1531,
+    "run_id": "24811453054"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T01:54:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

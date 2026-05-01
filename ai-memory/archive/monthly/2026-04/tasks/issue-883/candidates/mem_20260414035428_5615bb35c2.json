@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Reduce AI workflow LLM spend via prompt caching, reasoning tuning, semantic cache, and batch APIs\",\"issues\":[{\"id\":\"w3-close-serena-gaps-g1-g5\",\"title\":\"Close Serena adoption gaps G1\u2013G5 exactly per optimization plan\",\"priority\":1},{\"id\":\"w1-openrouter-prompt-cache-static-prefix\",\"title\":\"Add OpenRouter static-prefix prompt caching with cache_control and token telemetry\",\"priority\":2},{\"id\":\"w2-reviewer-reasoning-autodowngrade\",\"title\":\"Auto-downgrade reviewer reasoning effort across autofix cycles\",\"priority\":2},{\"id\":\"w5-semantic-cache-clarify-phases\",\"title\":\"Add opt-in semantic cache for clarify and orchestrate_clarify_respond only\",\"priority\":3},{\"id\":\"w6-batch-api-memory-maintenance-workflow-analysis\",\"title\":\"Adopt provider batch APIs for memory_maintenance and workflow-log-analysis\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"w3-close-serena-gaps-g1-g5\",\"to\":\"w1-openrouter-prompt-cache-static-prefix\"}]}",
+  "fingerprint": "291388b02045be160aff66de64d67b8cdd719293a0046f98e75161453309acd9",
+  "lineage": {
+    "issue_number": 883,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24379848958",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379848958",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260414035428_5615bb35c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 883,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24379848958"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Reduce AI workflow LLM spend via prompt caching, reasoning tuning, semantic cache, and batch APIs' into 5 issues (tracking #883)",
+  "timestamps": {
+    "created_at": "2026-04-14T03:54:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

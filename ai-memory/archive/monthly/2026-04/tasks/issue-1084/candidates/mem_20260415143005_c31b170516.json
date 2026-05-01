@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping used for planning:\n- `Q1 -> B`: add TODO/placeholder entries for the two new cache schemas now, then replace with real filenames in H5/H6.\n- `Q2 -> A`: add the H1 note under `## [Unreleased]` in `CHANGELOG.md`.\n- `Q3 -> A`: audit only wrappers corresponding to `validate`, `issue_pr_status`, `memory_maintenance`, `workflow-log-analysis`, `cancel_on_pr_close`.\n\nFactual conflicts found:\n- `.github/workflows/memory_maintenance.yml`, `.github/workflows/workflow-log-analysis.yml`, and `.github/workflows/cancel_on_pr_close.yml` currently do not contain support-file Contents API fetch loops, so transport migration is likely not applicable there.\n- No `internal-*`/`workflow-templates/ai-*` wrapper exists for `workflow-log-analysis`; only the other four counterparts exist.\n- Requirement #5 asks to include two new cache schema filenames, but filenames are unknown (`Q1: B`). Plan uses explicit TODO placeholders (non-breaking) and flags follow-up.\n\nImplementation checklist:\n- [ ] Migrate support-file fetch transport in `.github/workflows/validate.yml` from Contents API loops to the H1 checkout/staging pattern, preserving existing gates and file destinations.\n- [ ] Migrate support-file fetch transport in `.github/workflows/issue_pr_status.yml` (including tg helper fetch sites) to the same H1 pattern, preserving behavior and fallbacks.\n- [ ] Add TODO placeholder entries for the two future cache schemas in staged schema lists (where schema staging is performed in-scope), without introducing runtime breakage.\n- [ ] Audit `.github/workflows/memory_maintenance.yml`, `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/cancel_on_pr_close.yml`; leave unchanged if no support-fetch pattern exists.\n- [ ] Audit corresponding internal/template wrappers; update only if alignment is required by changed reusable workflow wiring; otherwise keep untouched and document audit result.\n- [ ] Add one H1 changelog entry under `## [Unreleased]`.\n\n1. Files likely to change\n- `.github/workflows/validate.yml`\n- `.github/workflows/issue_pr_status.yml`\n- `CHANGELOG.md`\n- Possible (only if alignment required after audit):  \n  `.github/workflows/internal-validate.yml`, `.github/workflows/internal-issue-pr-status.yml`, `.github/workflows/internal-memory-maintenance.yml`, `.github/workflows/internal-cancel-on-pr-close.yml`, `workflow-templates/ai-validate.yml`, `workflow-templates/ai-issue-pr-status.yml`, `workflow-templates/ai-memory-maintenance.yml`, `workflow-templates/ai-cancel-on-pr-close.yml`\n- Expected audit-only/no-change: `.github/workflows/memory_maintenance.yml`, `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/cancel_on_pr_close.yml`\n\n2. Functions/modules to implement\n- Replace shell logic inside:\n  - `validate.yml` step: `Fetch workflow support files`\n  - `issue_pr_status.yml` step: `Fetch memory helper scripts`\n  - `issue_pr_status.yml` inline tg helper fetch blocks (merged alert + TG cleanup paths)\n- Introduce/align to H1 pattern elements in those steps:\n  - `SCRIPT_REF` resolution (self-repo SHA vs stable)\n  - checkout-based transport into staging area\n  - `${SCRIPT_REF} -> main` fallback semantics\n  - copy-to-target with exact on-disk parity and chmod behavior retained\n\n3. Data structures affected\n- Support-file manifest arrays (`_fetched_scripts` and related staging/copy lists)\n- Schema filename lists used for `ai-memory/schemas` staging (add two TODO placeholders per `Q1: B`)\n- Runtime env vars for ref/source/staging paths used by fetch steps\n\n4. API/interface changes\n- No user-facing API/CLI/env var contract changes intended.\n- No identifier renames/removals.\n- Behavior goal: transport-only swap; outputs, labels, fallback behavior, and artifact paths stay bit-identical.\n\n5. Potential risks/edge cases\n- Missing files on `SCRIPT_REF` must still fallback to `main` exactly as in H1 pattern.\n- Must preserve \u201cno-work\u201d gate behavior to avoid extra clone/fetch cost.\n- Must keep executable bits and destination paths identical.\n- Placeholder schema entries must not cause hard failures or noisy behavior regressions.\n- `issue_pr_status.yml` currently mixes `wf_source` forms; migration must avoid changing observable repo-targeting behavior unintentionally.\n\n6. Testing considerations\n- Run YAML/schema checks: `yamllint`, `actionlint`.\n- Diff-verify transport-only changes in touched workflows (no unrelated logic drift).\n- Validate parity paths exist after fetch stage in both modes:\n  - self repo (`script_ref=github.sha`)\n  - external consumer (`script_ref=stable`, fallback to `main`).\n- Confirm existing gate paths still short-circuit unchanged.\n- Confirm wrappers/templates either unchanged (with audit note) or only minimally updated for alignment.\n- Confirm changelog entry is under `## [Unreleased]` only.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "64ee59a882355aab73affad3db31bcb2072b38cdcc503b61c4183b71d0343e00",
+  "lineage": {
+    "issue_number": 1084,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24458270197",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24458270197",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1084"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415143005_c31b170516",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1084,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24458270197"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1084",
+  "timestamps": {
+    "created_at": "2026-04-15T14:30:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

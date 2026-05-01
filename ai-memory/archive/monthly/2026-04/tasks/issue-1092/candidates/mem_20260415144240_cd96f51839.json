@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Where should the post-merge standalone validation dispatch be triggered, given current wrappers do not fire `review_autofix.yml` on PR merge?**\nChoices:\n- **A** \u2014 Add `pull_request.closed` to review wrappers (`workflow-templates/ai-review.yml` and `.github/workflows/internal-review.yml`) and gate inside `review_autofix.yml` to run only when `merged == true` (RECOMMENDED)\n- **B** \u2014 Keep wrapper triggers unchanged and run the dispatch earlier in existing pre-merge flow (not strictly post-merge)\n- **C** \u2014 Keep `review_autofix.yml` unchanged for triggers and implement this in a different merge-time workflow (for example `issue_pr_status.yml`) instead\nReply: `Q1: A`",
+  "fingerprint": "59bc13daafe9a02a9747b68b8c31cd7bebbbfae3760cc600e9c960f9aa40ad1e",
+  "lineage": {
+    "issue_number": 1092,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24460901422",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24460901422",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260415144240_cd96f51839",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1092,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24460901422"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1092 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-15T14:42:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

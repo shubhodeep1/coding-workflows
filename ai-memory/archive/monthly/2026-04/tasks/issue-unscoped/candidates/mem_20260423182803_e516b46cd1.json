@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/fixtures/validation_harness/repo_local_tooling/tests/20_import_audit.sh:22 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: Redirecting both stdout and stderr to /dev/null hides import-failure diagnostics from the helper.\n  WHY: deepseek_deepseek-v3_2 called this a critical regression because failure details disappear, while minimax_minimax-m2_5 treated the same redirection as an acceptable TAP-stability trade-off.\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:10 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The helper is invoked without stdout redirection, so TAP-noncompliant output leaks into test results.\n  WHY: deepseek_deepseek-v3_2, minimax_minimax-m2_5, and moonshotai_kimi-k2_5 all reported the stdout leak; minimax treated it as pre-existing, but the leak still reaches the TAP stream.\n- workflow-templates/validation-harness/repo-local-tooling/tests/20_import_audit.sh.j2:22 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The generated template also redirects both stdout and stderr to /dev/null, so failures lose diagnostics.\n  WHY: It carries the same `>/dev/null 2>&1` redirect as the fixture, so generated scripts inherit the diagnostic suppression.\n- workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2:10 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: The generated template still does not redirect stdout, so helper success lines will leak into TAP output.\n  WHY: deepseek_deepseek-v3_2 and moonshotai_kimi-k2_5 both flagged the same missing stdout suppression in the template.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/fixtures/validation_harness/repo_local_tooling/tests/20_import_audit.sh:22 | severity=critical | confidence=5\n  PROBLEM: Redirects both stdout and stderr to /dev/null, hiding import-failure diagnostics.\n  WHY: The last run changed it from `>/dev/null` to `>/dev/null 2>&1`, which suppresses the helper's stderr failure details.\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:10 | confidence=5\n  PROBLEM: Does not redirect stdout, allowing non-TAP compliant success messages to leak into test output.\n  WHY: The helper prints success messages to stdout, so the wrapper's TAP output is polluted unless stdout is suppressed.\n- workflow-templates/validation-harness/repo-local-tooling/tests/20_import_audit.sh.j2:22 | confidence=5\n  PROBLEM: The generated template hides both stdout and stderr from import_audit.py.\n  WHY: It mirrors the fixture's `>/dev/null 2>&1` redirection, so generated scripts will also suppress failure diagnostics.\n- workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2:10 | confidence=5\n  PROBLEM: The generated template does not redirect stdout, so TAP-noncompliant helper output leaks.\n  WHY: It mirrors the fixture's missing stdout suppression, so generated scripts will emit non-TAP helper lines.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/../repo_local_tooling/tests/20_import_audit.sh:22 | confidence=4\n  PROBLEM: Redirects both stdout and stderr to /dev/null, hiding import-failure diagnostics.\n  WHY: The reviewer considered this an acceptable TAP-stability trade-off rather than a bug because the wrapper only uses the exit code and the code comment treats helper output as non-TAP diagnostics.\n- tests/../python_mongo_flask/tests/20_import_audit.sh:10 | confidence=4\n  PROBLEM: Leaves helper stdout unredirected, so TAP-noncompliant status lines can leak into test output.\n  WHY: The reviewer treated this as a separate pre-existing issue outside the last run's changes.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:10 | confidence=4\n  PROBLEM: The helper script's stdout is not suppressed, so `ok - isolated import module=...` lines can leak into TAP output and confuse parsers.\n  WHY: The reviewer said the wrapper already communicates success/failure via TAP, so the helper's diagnostic output should be redirected away.\n- workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2:10 | confidence=4\n  PROBLEM: The corresponding template was not updated to suppress the helper's stdout.\n  WHY: The reviewer said the template should match the fixture's redirection so generated scripts don't leak non-TAP output.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3-coder-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3-coder-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1eff47d781a4243ec1f9ad39fd09ede74b407c4993f6efd1ab9e947fb2fd5233",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1533,
+    "run_id": "24850412769",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24850412769",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423182803_e516b46cd1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1533,
+    "run_id": "24850412769"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T18:28:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

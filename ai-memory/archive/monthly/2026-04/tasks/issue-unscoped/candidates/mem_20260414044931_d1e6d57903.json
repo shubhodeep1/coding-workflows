@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24381285176-1-12107/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/orchestrate_poll_\nscripts/orchestrate_poll_process.",
+  "fingerprint": "0feeb91259987fbd8591d60d729bc3a26fb98782b60ca87515dcf900ac045bf9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 890,
+    "run_id": "24381285176",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24381285176",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414044931_d1e6d57903",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 890,
+    "run_id": "24381285176"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T04:49:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

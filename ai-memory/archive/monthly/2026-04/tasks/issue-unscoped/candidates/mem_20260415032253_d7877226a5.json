@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n`tests/test_orchestrate_poll_process.py`\nscripts/orchestrate_poll_process.sh\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "da4e5dd3cbbdbe0bee6faaa135c06025fb3494246f87d8576ac94e3c827bdaeb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 991,
+    "run_id": "24434195567",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24434195567",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415032253_d7877226a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 991,
+    "run_id": "24434195567"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-15T03:22:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

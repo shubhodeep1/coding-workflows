@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: Lines: ~1695-1730; The new touched-file detection logic compares against HEAD:; git diff --name-only HEAD >> \"${CODEX_TOUCHED_FILE}\"; git diff --cached --diff-filter=A --name-only HEAD >> \"${CODEX_TOUCHED_FILE}\"; git ls-files --others --exclude-standard; This compares against HEAD, not the state before the editor ran. If there are pre-existing changes in the working tree from previous autofix retries or merge artifacts, they will be incorrectly attributed to the current editor run.; The removed PRE_EDITOR_STATE_FILE approach explicitly captured the pre-editor state to avoid this exact issue.; On retry cycles where the previous editor attempt left changes, or when the workflow runs on an integration branch with pre-existing commits, the touched-file detection would include files the current editor didn't modify. This could lead to:; - Committing files the editor never touched; - Incorrect \"Editor changes lost\" false positives; - Blocking legitimate workflow edits unnecessarily; **ISSUE 2: Inconsistent Label Creation in workflow-log-analysis.yml (REMAINS UNFIXED)**\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\n  [2] File: .github/workflows/workflow-log-analysis.yml\n      Problem: Lines: 334, 525, 790, 1107; The workflow still uses direct `gh label create` commands instead of the new `ensure_label_exists` helper function from label_helpers.sh:; gh label create \"ai:log-analysis-failed\" --repo \"${GITHUB_REPOSITORY}\" --color \"e11d48\" --description \"Workflow log analysis failed\" >/dev/null 2>&1 || true; This creates inconsistency with other workflows that now use the label helper. While error suppression (`|| true`) makes it work, it bypasses the centralized label management.; The direct command works due to error suppression, but if the suppression fails unexpectedly, the workflow would fail. Also, the inconsistency makes maintenance harder.; **ALREADY FIXED (verified):**; 1. **_check_shell_parity inline comment stripping** - Lines ~380-414 now correctly call `_strip_inline_comment(line)` before regex searching (lines 389-390).; 2. **Hardhat detection inline comment stripping** - Lines ~694-698 also correctly call `_strip_inline_comment(line)` before the hardhat regex search.; 3. **ai:validate-failed in DEDICATED_HANDLER_PHASES** - Line 833 now includes `\"ai:validate-failed\"` in the set along with other failure labels.; 4. **ensure_label_exists return code** - The function now returns 0 on success/already-exists and 1 only on real failures, preventing `set -e` aborts.; **HARDENING_SUGGESTIONS:**; 1. **File:** scripts/label_helpers.sh; **Location:** Line 129; **Issue:** Regex for \"already exists\" detection could be more comprehensive; **Suggested minimal fix:** Expand regex to: `'already[ _-]*exists|already_exists|Resource already exists|already present'`; **Estimated lines changed:** 1; **HARDENING_RISK_SCORE:** 1; **SUMMARY:**; Two concrete issues remain unfixed:; 1. The staging logic regression in review_autofix.yml removes the pre-editor state capture, which can cause issues in retry scenarios; 2. workflow-log-analysis.yml still uses direct `gh label create` instead of the centralized label helper; The inline comment stripping issues in validation_lint.py have been fixed, as has the missing `ai:validate-failed` in DEDICATED_HANDLER_PHASES. The overall changes add valuable functionality (failure labels, retry logic, phase markers) but need these two fixes to be production-ready.\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n.github/workflows/workflow-log-analysis.yml",
+  "fingerprint": "ed3a76b75079ee113745f29d3f68f2e15e857f77d04e1e10399f8aaa58ec629b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1352,
+    "run_id": "24616558165",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24616558165",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419000842_daad040218",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1352,
+    "run_id": "24616558165"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-19T00:08:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

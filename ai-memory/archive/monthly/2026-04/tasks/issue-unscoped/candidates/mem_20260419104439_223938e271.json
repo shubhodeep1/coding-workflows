@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:574-578,8049-8080 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: `ALLOW_WORKFLOW_EDITS` defaults to `true` when unset, so unconfigured environments permit workflow/script/prompt edits by default.\n  WHY: Multiple reviewers identified the same permissive default in the normalization and downstream guards; one reviewer disagreed and argued the behavior is intentional, but the highest severity reported is high.\n- .github/workflows/internal-review.yml:15 | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: The `allow_workflow_edits` input defaults to `true` for dispatches.\n  WHY: Reviewers reported this expands the edit surface for manual or automated runs when the flag is omitted.\n- .github/workflows/orchestrate_poll.yml:411 | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: `ALLOW_WORKFLOW_EDITS` is forced to `true` when the repository variable is unset.\n  WHY: Reviewers flagged the workflow-level fallback as reinforcing the permissive default in unconfigured repositories.\n- .github/workflows/review_autofix.yml:30,48 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: `allow_workflow_edits` has inconsistent defaults between `workflow_call` and `workflow_dispatch`.\n  WHY: The reviewer reported `workflow_call` defaults to `true` while `workflow_dispatch` defaults to `false`, creating trigger-dependent behavior.\n- scripts/orchestrate_poll_process.sh:6108 | severity=low | confidence=3\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: `allow_workflow_edits_flag` uses a redundant `:-true` fallback even though the variable is normalized earlier.\n  WHY: Reviewers said the fallback is unreachable after normalization and should be removed for clarity.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:574-578 | severity=medium | confidence=4\n  PROBLEM: `ALLOW_WORKFLOW_EDITS` defaults to `true` when unset, using opt-out semantics instead of secure-by-default behavior.\n  WHY: The reviewer said unconfigured environments will allow workflow edits unless the variable is explicitly set to `false`.\n- scripts/orchestrate_poll_process.sh:8049-8080 | severity=medium | confidence=4\n  PROBLEM: The self-heal block also falls back to `true` for `ALLOW_WORKFLOW_EDITS`, allowing workflow edits when the variable is unset.\n  WHY: The reviewer said the commit guard and staging logic will permit workflow file edits in unconfigured environments.\n- .github/workflows/review_autofix.yml:30,48 | severity=medium | confidence=5\n  PROBLEM: `allow_workflow_edits` defaults differ between `workflow_call` and `workflow_dispatch`.\n  WHY: The reviewer said `workflow_call` defaults to `true` while `workflow_dispatch` defaults to `false`, causing inconsistent behavior depending on trigger.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/orchestrate_poll_process.sh | severity=high | confidence=5\n  PROBLEM: The default for `ALLOW_WORKFLOW_EDITS` changed from `false` to `true` when the variable is unset.\n  WHY: The reviewer said unconfigured repositories will now allow AI modification of workflow/script/prompt paths, violating secure-by-default behavior.\n- .github/workflows/internal-review.yml | severity=high | confidence=5\n  PROBLEM: The `allow_workflow_edits` input default was changed to `true`.\n  WHY: The reviewer said omitted flags now default to allowing workflow edits during manual or automated dispatch.\n- .github/workflows/orchestrate_poll.yml | severity=high | confidence=5\n  PROBLEM: `ALLOW_WORKFLOW_EDITS` is forced to `true` when the GitHub variable is missing.\n  WHY: The reviewer said this propagates the unsafe default to the orchestrator entrypoint.\n- scripts/orchestrate_poll_process.sh:6109 | severity=low | confidence=1\n  PROBLEM: `_dispatch_review_for_conflicts` uses a redundant fallback for `allow_workflow_edits_flag`.\n  WHY: The reviewer said the variable is already normalized earlier, so the fallback is unnecessary.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:~80,052 and ~80,066 | severity=medium | confidence=4\n  PROBLEM: The commit guard changed from a secure `false` fallback to a permissive `true` fallback for `ALLOW_WORKFLOW_EDITS`.\n  WHY: The reviewer said unconfigured environments will now allow edits to `.github/workflows/`, `scripts/`, and `prompts/`.\n- .github/workflows/orchestrate_poll.yml:~411 | severity=medium | confidence=4\n  PROBLEM: The workflow environment default changed from `false` to `true`.\n  WHY: The reviewer said this expands the edit surface when the repository variable is not set.\n- .github/workflows/internal-review.yml:15 | severity=medium | confidence=4\n  PROBLEM: The workflow input default changed from `false` to `true`.\n  WHY: The reviewer said this expands the edit surface for dispatches that omit the flag.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:6108 | severity=low | confidence=3\n  PROBLEM: `allow_workflow_edits_flag` uses an unreachable `:-true` fallback.\n  WHY: The reviewer said earlier normalization guarantees the variable is already set, so the fallback is only code clutter.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/orchestrate_poll_process.sh:574,6108,8063,8083 | severity=high | confidence=5\n  PROBLEM: `ALLOW_WORKFLOW_EDITS` defaults were changed to `true` in multiple places, expanding edit permissions for unconfigured environments.\n  WHY: The reviewer said the safe default should remain `false` while preserving forwarding behavior.\n- .github/workflows/internal-review.yml:15 | severity=medium | confidence=5\n  PROBLEM: `allow_workflow_edits` now defaults to `false` in dispatches.\n  WHY: The reviewer said this restores the safe-by-default behavior for manual runs.\n- .github/workflows/orchestrate_poll.yml:411 | severity=medium | confidence=5\n  PROBLEM: The orchestrator workflow now passes `false` when the repository variable is unset.\n  WHY: The reviewer said this ensures the script receives the safe default when no variable is configured.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "7f24fd73875343e509ad3e2abdcf6a9a7a6f0402f4b7f40964e2a8b6f10bbf54",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1409,
+    "run_id": "24626800968",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626800968",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419104439_223938e271",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1409,
+    "run_id": "24626800968"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T10:44:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

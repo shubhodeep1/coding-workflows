@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:3594-3603 | severity=medium | confidence=3\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The test validates only that a `surface_reissue_closed_without_pr`-shaped string appears in the extracted window, not that the function is actually defined and available at runtime.\n  WHY: A coincidental string match in a comment or variable value could let the test pass while the script still fails with `command not found` if the function is missing or not sourced.\n- tests/test_orchestrate_poll_process.py:3598-3599 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: `main_window.index('close_linked_pr')` is called without a preceding presence assertion, so a missing substring would raise an unhelpful `ValueError`.\n  WHY: If `close_linked_pr` is absent, the failure message is generic rather than explicitly identifying the missing anchor; reviewers disagreed only on how important this is, with the highest confidence being 5.\n- tests/test_orchestrate_poll_process.py:3612 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The standalone-path check uses a hardcoded 400-character backward window to find `surface_reissue_closed_without_pr` before `close_linked_pr`.\n  WHY: If comments, logging, or other logic expand the distance between the two calls, the test can fail even when the script is functionally correct.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_orchestrate_poll_process.py:3600 | severity=medium | confidence=5\n  PROBLEM: `main_window.index('close_linked_pr')` is called without first asserting that the substring exists.\n  WHY: If `close_linked_pr` is missing, the test fails with `ValueError: substring not found` instead of a clear assertion message.\n- tests/test_orchestrate_poll_process.py:3612 | severity=medium | confidence=3\n  PROBLEM: The standalone-path check uses a hardcoded 400-character window to search for `surface_reissue_closed_without_pr` before `close_linked_pr`.\n  WHY: If additional logging, comments, or error handling are added between the two calls, the window may become too small and the test can fail even though the script is correct.\n- tests/test_orchestrate_poll_process.py:3600 | severity=low | confidence=2\n  PROBLEM: `main_window.index('close_linked_pr')` is called without first asserting presence, which could raise an unhelpful `ValueError`.\n  WHY: If `close_linked_pr` is missing, the test fails with `ValueError: substring not found` instead of a clear assertion message.\n- tests/test_orchestrate_poll_process.py:3612 | severity=medium | confidence=3\n  PROBLEM: The test uses a hardcoded 400-character window to search for `surface_reissue_closed_without_pr` before `close_linked_pr` in the standalone path.\n  WHY: If additional logging, comments, or error handling are added between the calls, the window might become too small and the test would fail even though the script is functionally correct.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- tests/test_orchestrate_poll_process.py:3604 | severity=low | confidence=0\n  PROBLEM: `main_window.index('close_linked_pr')` is called without a preceding assertion of presence.\n  WHY: If `close_linked_pr` is missing, Python raises a `ValueError`, which is less descriptive than a targeted assertion error.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_xxx:36xx | severity=low | confidence=2\n  PROBLEM: The `main_window.index('close_xxx')` call does not have a prior presence assertion.\n  WHY: If the string is missing, the test would fail with `ValueError: substring not found` rather than a descriptive assertion message.\n- tests/test_orchestrate_poll_xxx:35xx | severity=low | confidence=3\n  PROBLEM: The main case anchor search relies on exactly 4 spaces of indentation.\n  WHY: If the script formatting changes to use a different indentation width, the test could fail with an unclear assertion error.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- tests/test_orchestrate_poll_process.py:3594-3603 | severity=medium | confidence=3\n  PROBLEM: The test validates only that a string matching a function-call pattern appears in the extracted window.\n  WHY: It does not verify that `surface_reissue_closed_without_pr` is actually defined and available in the execution context, so a coincidental string match could let the test pass while runtime still fails with `command not found`.\n- tests/test_orchestrate_poll_process.py:3598-3599 | severity=low | confidence=1\n  PROBLEM: `main_window.index('surface_reissue_closed_without_pr') < main_window.index('close_linked_pr')` calls `.index()` on `close_linked_pr` without a separate presence assertion.\n  WHY: If `close_linked_pr` is missing, the test raises a generic `ValueError` instead of a clear assertion message.\n- tests/test_orchestrate_poll_process.py:3590-3600 | severity=low | confidence=1\n  PROBLEM: The main path's case-delimiter `'\\n      ;;\\n'` could silently mismatch if script indentation style changes.\n  WHY: A spacing or indentation change would break the delimiter assumption and make the test harder to maintain.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "167a0047c3c3041fb1e1f59317142c794e40dcb0ea6ff4e1254868c9949fc45c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1462,
+    "run_id": "24657329504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24657329504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420091119_1ee539b26c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1462,
+    "run_id": "24657329504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T09:11:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

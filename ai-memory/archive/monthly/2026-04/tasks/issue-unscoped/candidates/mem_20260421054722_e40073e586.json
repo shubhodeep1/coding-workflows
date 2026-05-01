@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:632-633,669,680 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `IMPL_RUN_TOTAL` and `IMPL_RUN_IN_PROGRESS` are used in arithmetic comparisons without numeric validation.\n  WHY: Multiple reviewers report the same root cause: the `jq`-derived values only have a `|| echo \"0\"` fallback, so non-numeric or empty output can still reach `[ \"$IMPL_RUN_TOTAL\" -gt 0 ]` / `[ \"$IMPL_RUN_IN_PROGRESS\" -eq 0 ]` and trigger `integer expression expected`; the severity is kept at the highest reported level and all reviewers agreed it is actionable.\n- tests/test_test_and_mark_stable_workflow_contract.py:17-34 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The contract test is brittle because it relies on exact string matching against workflow text.\n  WHY: Reviewers consistently identified the same maintenance risk: harmless formatting or quoting changes in the workflow YAML can fail the test even when the intended logic is unchanged; severity stays low because the issue is about brittleness rather than runtime correctness.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/test-and-mark-stable.yml:632-633 and 669-680 | severity=medium | confidence=5\n  PROBLEM: IMPL_RUN_TOTAL and IMPL_RUN_IN_PROGRESS variables lack numeric validation before being used in arithmetic comparisons at lines 669 and 680.\n  WHY: If `jq` command succeeds but returns empty string or non-numeric value (e.g., `null`), the `|| echo \"0\"` fallback doesn't execute, leaving the variable with invalid content; the subsequent numeric comparisons `[ \"$IMPL_RUN_TOTAL\" -gt 0 ]` will fail with \"integer expression expected\" Bash error.\n- tests/test_test_and_mark_stable_workflow_contract.py:17-28 and 31-34 | severity=low | confidence=3\n  PROBLEM: Test uses exact string matching against workflow text, making it brittle to formatting changes.\n  WHY: Whitespace changes, line breaks, or comment additions in the workflow file would cause test failures even when the contract logic remains correct.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/test-and-mark-stable.yml:632-633 (in the Wait for implementation PR phase) | severity=medium | confidence=5\n  PROBLEM: IMPL_RUN_TOTAL and IMPL_RUN_IN_PROGRESS variables from jq lack numeric validation, making shell comparisons fragile.\n  WHY: If the echo $IMPL_RUNS_JSON | jq pipe succeeds but produces an empty string or non-numeric output (e.g. if the JSON structure is unexpected), the shell comparisons \"[ $IMPL_RUN_TOTAL -gt 0 ]\" at lines 669 and 680 will fail with \"integer expression expected\"; while the PR fixed this for OTHER_ACTIVE_PLAN_RUNS at line 482, it missed these parallel counters in the second polling loop.\n- tests/test_test_and_mark_stable_workflow_contract.py:17-29 (Assertions in test_wait_plan_guards_non_numeric_active_plan_output) | severity=low | confidence=4\n  PROBLEM: The contract test is brittle because it uses exact string matches for multi-line shell logic.\n  WHY: The test asserts literal strings like \"PLAN_RUNS_JSON='{\\\"workflow_runs\\\":[]}'\"; any harmless formatting change, such as changing quotes, adding a comment, or slightly adjusting indentation in the workflow YAML, will cause the test to fail even if the logic remains correct.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:632-633,669,680 | severity=medium | confidence=4\n  PROBLEM: The variables `IMPL_RUN_OTAL` and `IMPL_RUN_IN_Progress` are set using `jq ... 2>/dev/null || echo \"0\"` which only handles jq command failures, not jq succeeding with empty/null or non-numeric output.\n  WHY: When these variables are used in arithmetic comparisons, non-numeric output causes the shell to fail with \"integer expression expected\"; this is the same vulnerability already fixed for `OTHER_ACTIVE_PLAN_RUNS`, but not applied here.\n- tests/test_test_and_mark_stable_workflow_contract.py:17-28 | severity=low | confidence=3\n  PROBLEM: The test function `test_wait_plan_guards_non_numeric_active_plan_output()` uses exact string matching with multiple `assert \"...\" in wf` statements checking for literal workflow text.\n  WHY: This is fragile because whitespace changes, line-break changes, or reformatting would break the test even when the logic is correct.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:638-641,669,680 | severity=medium | confidence=4\n  PROBLEM: `IMPL_RUN_TOTAL` and `IMPL_RUN_IN_PROGRESS` are extracted with `jq` plus `|| echo \"0\"` but without the defensive numeric validation used elsewhere.\n  WHY: The fallback only handles jq failures; if jq succeeds with empty or non-numeric output, the arithmetic comparisons at lines 669 and 680 can fail with `integer expression expected`, matching the same bug already fixed for `OTHER_ACTIVE_PLAN_RUNS`.\n- tests/test_test_and_mark_stable_workflow_contract.py:17-28 | severity=low | confidence=2\n  PROBLEM: The test uses exact string matching against the workflow file content, making it brittle to whitespace, indentation, comment, or line-wrapping changes.\n  WHY: Legitimate formatting changes could break CI even when the contract logic remains correct; this is a test implementation trade-off rather than a runtime issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/test-and-mark-stable.yml:632-633,669,680 | severity=medium | confidence=5\n  PROBLEM: Numeric validation is missing for `IMPL_RUN_TOTAL` and `IMPL_RUN_IN_PROGRESS`, so arithmetic tests can receive non-numeric input.\n  WHY: The `jq` output is only guarded by `|| echo \"0\"`, which does not protect against successful jq runs that emit empty or non-digit values; the later `[ \"$IMPL_RUN_TOTAL\" -gt 0 ]` / `[ \"$IMPL_RUN_IN_PROGRESS\" -eq 0 ]` checks then abort with `integer expression expected`.\n- tests/test_test_and_mark_stable_workflow_contract.py:full file | severity=low | confidence=3\n  PROBLEM: The contract test is brittle because it relies on exact string and regex matching against workflow YAML.\n  WHY: Whitespace, quoting, or line-break changes can fail the test even when the guard logic is functionally unchanged.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "c9204d63ce7159ed9d92357adacfee3fc3a22d29460d14e3396ce2aee7cf90c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1486,
+    "run_id": "24705286038",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24705286038",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421054722_e40073e586",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1486,
+    "run_id": "24705286038"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T05:47:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

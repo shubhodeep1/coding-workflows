@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context:\n- `git rev-parse HEAD`: `73a100ae8c077b14d7b7b9331b6652cdd5aff171`\n- Checked-out ref: `orchestrator/project-1479`\n- Integration metadata ref: `orchestrator/project-1479`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No Q-ID clarification questions were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpretable as \u201cproceed with original scoped requirements unchanged.\u201d\n\nConflict check against codebase:\n- No factual path/name mismatch found.\n- Existing workflow already has partial push guards (`CAN_PUSH` from branch/repo checks, stale-base guards), but reviewer/editor execution still proceeds without an explicit remote pushability probe; this matches the issue\u2019s stated late-failure gap.\n\nImplementation plan\n\n1. Files likely to change\n- [.github/workflows/review_autofix.yml](.github/workflows/review_autofix.yml)\n- [tests/test_review_autofix_merge_precheck.py](tests/test_review_autofix_merge_precheck.py) (or a new narrowly scoped `tests/test_review_autofix_push_preflight.py` if preferred by existing test organization)\n\n2. Functions/modules to implement\n- Add an early \u201cpushability preflight\u201d step in `review_autofix.yml` immediately after PR head checkout (and before reviewer/editor stages).\n- Preflight behavior:\n  - Run a remote push probe (`git push --dry-run origin HEAD:${TARGET_BRANCH}`) with `GH_PAT`.\n  - Classify stderr/stdout into actionable reason codes (for example: auth denied, protected branch policy, read-only/archive, repo/ref not writable).\n  - Hard-block only on definitive \u201cknown unpushable\u201d classes: emit explicit marker(s), write step summary context, and fail the job before reviewer/editor.\n  - Fail-open on transient/ambiguous probe failures (network/temporary unknown) with warning marker so normal flow is preserved.\n- Reuse existing workflow guard pattern (stale-base gate style): explicit status markers + no changes to dispatch/concurrency logic.\n\n3. Data structures affected\n- Workflow runtime state in `$GITHUB_ENV`:\n  - Add preflight status/reason fields (for example `PUSH_PREFLIGHT_STATUS`, `PUSH_PREFLIGHT_REASON`) for observability and failure messaging.\n- Log/summary contract:\n  - Add a stable structured preflight marker (for example `PUSH_PREFLIGHT_V1 ...`) and a corresponding blocked marker for triage.\n- No DB contracts or Mongo collections affected.\n\n4. API/interface changes\n- No external API contract changes.\n- Internal workflow behavior change only:\n  - `review_autofix` can now terminate early (before model-heavy steps) when push is definitively impossible.\n  - Pushable branches keep existing reviewer/editor/dispatch path unchanged.\n- No new repository variable required unless implementation later decides configurability is needed.\n\n5. Potential risks / edge cases\n- `git push --dry-run` can miss some future policy failures if no ref update is effectively evaluated; reason-classification should be conservative.\n- Overly aggressive hard-fail classification could create false blocks; unknown/transient outputs should remain fail-open.\n- Keep added YAML `run:` block compact to avoid reintroducing GitHub expression-template size risk in this workflow.\n- Ensure early failure does not alter existing re-dispatch/concurrency behavior on pushable paths.\n\n6. Testing considerations\n- Add static workflow contract tests to verify:\n  - New preflight step exists and appears before `Run reviewer models`.\n  - Preflight contains the dry-run push probe and structured blocked marker.\n  - Existing re-dispatch gate condition remains intact (no regression in current trigger logic).\n- Run targeted tests:\n  - `pytest -q tests/test_review_autofix_merge_precheck.py` (and new test file if created).\n- Optional follow-up smoke validation:\n  - one known-unpushable scenario should fail before reviewer/editor steps;\n  - one normal pushable PR path should still reach reviewer/editor unchanged.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3c8251f513cd29e31b30f549b7cfca445e6378896a5bf76ac05fcb3d0429da9c",
+  "lineage": {
+    "issue_number": 1527,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24809833487",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24809833487",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1527"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260423003445_b1d25ece4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1527,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24809833487"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1527",
+  "timestamps": {
+    "created_at": "2026-04-23T00:34:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

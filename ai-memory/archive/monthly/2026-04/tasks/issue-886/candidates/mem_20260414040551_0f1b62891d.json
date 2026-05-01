@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Mapping**\n- No `Q<ID>` clarification questions were asked.\n- `/answer [auto-answered-by-clarify]` maps to: requirements are clear enough to plan.\n\n**Conflict Check**\n- Requirement/code gap: [orchestrate_clarify_respond.yml](.github/workflows/orchestrate_clarify_respond.yml) currently uses issue body + tracking body + triggering comment, but not full issue thread history. The requirement says cache key must use issue body + thread history, so this workflow needs a thread-history fetch before lookup.\n- No other factual conflicts detected.\n\n**Implementation Plan**\n1. Files likely to change\n- [clarify.yml](.github/workflows/clarify.yml)\n- [orchestrate_clarify_respond.yml](.github/workflows/orchestrate_clarify_respond.yml)\n- New: `scripts/semantic_cache.py`\n- [ci.yml](.github/workflows/ci.yml) for compile/lint coverage of the new script\n- [README.md](README.md)\n- [agents.md](agents.md)\n- Recommended new tests: `tests/test_semantic_cache.py`\n\n2. Functions/modules to implement\n- `semantic_cache.py` with two commands:\n- `lookup`: build canonical input text, call embeddings API, search backend, return hit/miss + metadata, and on hit write cached Codex output file.\n- `store`: persist embedding + output + metadata with TTL.\n- Backends:\n- `none`: transparent passthrough.\n- `sqlite-vec`: SQLite-backed persistence + similarity scan.\n- `redis`: Redis-backed persistence + similarity scan.\n- Workflow integration:\n- Add cache lookup step before Codex in clarify + orchestrate_clarify_respond.\n- Skip Codex call on hit.\n- Add cache write step after successful live Codex output on miss.\n- Keep fail-open behavior identical to memory helpers (warn and continue).\n\n3. Data structures affected\n- Canonical cache input: deterministic concatenation of issue body + thread history.\n- Cache record fields:\n- `phase`, `original_issue_id`, `cached_at`, `expires_at`, `embedding`, `response_text`, `similarity_threshold`, `source_fingerprint`.\n- SQLite table for cache entries with indexes on `phase` and `expires_at`.\n- Redis key layout with phase-scoped keys and TTL.\n\n4. API/interface changes\n- Add env vars (with defaults):\n- `SEMANTIC_CACHE_BACKEND=none` (`none|redis|sqlite-vec`)\n- `SEMANTIC_CACHE_TTL_DAYS=14`\n- `SEMANTIC_CACHE_SIMILARITY_THRESHOLD=0.92`\n- Optional backend vars if needed:\n- `SEMANTIC_CACHE_REDIS_URL`\n- `SEMANTIC_CACHE_SQLITE_PATH`\n- `SEMANTIC_CACHE_EMBEDDING_MODEL` (default `openai/text-embedding-3-small`)\n- Required hit audit log fields:\n- `phase`, `similarity`, `cached_at`, `original_issue_id`\n- Explicit scope boundary: only clarify + orchestrate_clarify_respond use the semantic cache.\n\n5. External API details for implementation\n- Embeddings call:\n- `POST https://openrouter.ai/api/v1/embeddings`\n- Headers: `Authorization: Bearer <OPENROUTER_API_KEY>`, `Content-Type: application/json`\n- Body: `input`, `model`, optional `dimensions`, optional `encoding_format`\n- Read embedding from `data[0].embedding`\n- Optional model list:\n- `GET https://openrouter.ai/api/v1/embeddings/models`\n- On any API/cache error: log warning and continue normal Codex/OpenRouter path.\n\n6. Risks and edge cases\n- SQLite cache on hosted runners is ephemeral per job.\n- Thread ordering/normalization must be deterministic.\n- Very large threads need deterministic truncation before embedding.\n- Similarity false positives near threshold; keep strict phase scoping and high default threshold.\n- Cached content must still satisfy existing parse expectations; otherwise treat as miss.\n- Missing Redis dependency/connectivity must be non-fatal.\n\n7. Testing considerations\n- Validate acceptance criteria directly:\n- `SEMANTIC_CACHE_BACKEND=none` keeps behavior unchanged.\n- `SEMANTIC_CACHE_BACKEND=sqlite-vec` repeated synthetic clarify request hits cache on second call and logs required fields.\n- Cache-layer failures are non-fatal.\n- Run existing `tests/` and keep all passing.\n- Add focused unit tests for lookup/store, TTL, similarity threshold, and fail-open behavior.\n\nSources\n- https://openrouter.ai/docs/api/api-reference/embeddings/create-embeddings\n- https://openrouter.ai/docs/api/api-reference/embeddings/list-embeddings-models\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0ff1eef7116a30a3c705a478b84c3efbb87aeb3b8887f6bc7a07384ae36ebf24",
+  "lineage": {
+    "issue_number": 886,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24380154991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24380154991",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/886"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414040551_0f1b62891d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 886,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24380154991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #886",
+  "timestamps": {
+    "created_at": "2026-04-14T04:05:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

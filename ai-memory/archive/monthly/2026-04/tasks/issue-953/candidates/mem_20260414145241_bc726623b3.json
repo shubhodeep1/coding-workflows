@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which source of truth should the docs follow for this issue?**\nChoices:\n- **A** \u2014 Document only what is currently implemented in this repo (existing stall ladder/actions/env vars), and do not add the new names until code exists. **(RECOMMENDED)**\n- **B** \u2014 Document the new behavior/names exactly as specified in the issue (`ENABLE_STALL_JUDGE`, `STALL_JUDGE_TRIGGER_COUNT`, `run_stall_judge`) even if they are not yet present in code.\n- **C** \u2014 Use a different branch/commit as source of truth (please provide it), then align docs to that implementation.\nReply: `Q1: A`",
+  "fingerprint": "1a1252c211bb86557894ddc8780f3475c2f772d8ace341491e9407f52bfcf50a",
+  "lineage": {
+    "issue_number": 953,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24405834036",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24405834036",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414145241_bc726623b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 953,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24405834036"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #953 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T14:52:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

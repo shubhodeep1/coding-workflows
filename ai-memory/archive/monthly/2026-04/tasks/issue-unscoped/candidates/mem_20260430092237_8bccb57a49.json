@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:~2491-2537 (\"Ensure E2E smoke-test labels exist on repo\" step) | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The step hard-fails if scripts/label_helpers.sh is missing or ensure_label_exists is undefined, with no fallback.\n  WHY: Consumer repos without the bootstrap helper can fail PR creation entirely.\n- .github/workflows/implement.yml:~2589-2667 (\"Backstop E2E smoke-test labels on PR after creation\" step) | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The backstop uses ensure_label_exists with a warn/skip path, so if PR creation races or 422s the labels can still be absent.\n  WHY: If the backstop does nothing, review_autofix can miss the labels and auto-merge the canary anyway.\n- .github/workflows/review_autofix.yml:~3953-3977 (label fetch in \"Enable auto-merge on PR\") | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The label check is implemented in a way that can miss e2e-smoke-test on PRs with many labels.\n  WHY: The intended auto-merge suppression can fail and let an e2e PR merge despite the label being present.\n- .github/workflows/test-and-mark-stable.yml:~858-878 (inject-bait pr_already_closed branch) | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The branch exits non-zero, which propagates a failed job status even though the summary step still reports pr_already_closed.\n  WHY: A legitimate early auto-merge race can be reported as a smoke-test failure and block the release gate.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/implement.yml:~2491-2537 (\"Ensure E2E smoke-test labels exist on repo\" step) | confidence=3\n  PROBLEM: Step hard-fails via `set -euo pipefail` if `scripts/label_helpers.sh` missing or `ensure_label_exists` undefined (no fallback like prior inline helper).\n  WHY: Consumer repo without bootstrap fails PR creation entirely (no implement PR made).\n- .github/workflows/implement.yml:~2589-2667 (\"Backstop E2E smoke-test labels on PR after creation\" step) | confidence=3\n  PROBLEM: `ensure_label_exists` called with `|| true` warn/skip on failure/missing helper, but PR-create `--label` atomicity assumed primary \u2014 backstop noop leaves labels absent if PR-create races 422.\n  WHY: `review_autofix.yml` gate misses `force-review`/`e2e-smoke-test`, auto-merges bait-missing canary anyway.\n- .github/workflows/review_autofix.yml:~3953-3977 (label fetch in \"Enable auto-merge on PR\") | confidence=4\n  PROBLEM: `--paginate | jq '.[].name' | sort -u | grep -qxF 'e2e-smoke-test'` assumes single-page or perfect flatten; >100 labels paginates beyond `--per_page=100` default, misses label.\n  WHY: e2e PR auto-merges despite label present (fails PR intent).\n- .github/workflows/test-and-mark-stable.yml:~858-878 (inject-bait pr_already_closed branch) | confidence=3\n  PROBLEM: `exit 1` skips downstream phases, but `if: always()` summary still runs \u2014 reports `pr_already_closed` but job status=failed propagates to release gate.\n  WHY: Legit race (early auto-merge) falsely fails smoke test/release.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "daf95277d9ce62bbe8cea2b95c0b7013caee1fbf36caff817bda6b74c08e3639",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1823,
+    "run_id": "25156445151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25156445151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260430092237_8bccb57a49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1823,
+    "run_id": "25156445151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-30T09:22:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

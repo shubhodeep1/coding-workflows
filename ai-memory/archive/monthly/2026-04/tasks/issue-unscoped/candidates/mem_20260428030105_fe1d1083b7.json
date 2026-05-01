@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- N/A:N/A | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The review is blocked because the sandbox/container environment prevents access to the PR artifacts and shell execution.\n  WHY: All three reviewers reported the same `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` failure, so no code review could be performed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- N/A:N/A | confidence=5\n  PROBLEM: The review is blocked because all shell commands fail with the sandbox restriction `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.\n  WHY: This prevents access to `/tmp/codex-pr-*` context directories and review artifacts, so no meaningful code review could be completed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- N/A:N/A | confidence=5\n  PROBLEM: The review is blocked because sandbox restrictions prevent access to all review artifacts and shell command execution.\n  WHY: The `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` error blocks reading the diff, changed files, and runtime context, so the code cannot be reviewed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- N/A:N/A | confidence=5\n  PROBLEM: The review is blocked because the sandbox/container networking restriction prevents access to review context files and the working directory.\n  WHY: All shell command execution attempts fail with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`, so no code analysis was possible.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "67ae302aa6ffc5cd5246d59402710fb11e6480f3c789de2e8b2d91942b4cdfd6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25031025936",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25031025936",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260428030105_fe1d1083b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25031025936"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-28T03:01:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

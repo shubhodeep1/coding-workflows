@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:176-177 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: The structured failure log emits `pr=${PR_NUMBER:-?}`, which can produce a literal `?` token when `PR_NUMBER` is unset.\n  WHY: This is harmless at runtime but makes machine parsing of the log line brittle; both reviewers identified the same log-shape issue.\n- .github/workflows/review_autofix.yml:176-196 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The commit-message skip logic is brittle because it depends on the current first-line subject shape and, in the tab-split path, assumes the metadata format stays exactly as produced today.\n  WHY: If the commit message format changes or the subject contains leading whitespace/tab characters, the skip may fail to activate and cause redundant verification; reviewer severity differed only by emphasis, so the highest is kept.\n- .github/workflows/review_autofix.yml:191-195 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The author-email guard is hard-coded to `codex@users.noreply.github.com`, so the skip will not trigger if the bot identity changes.\n  WHY: This is a brittle dependency on one exact noreply address; reviewers noted it is intentional as a security boundary, but it is still a single-point identity match.\n- .github/workflows/review_autofix.yml:3838-3842 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The claimed unset-variable crash in the post-commit retrigger guard is not present because the code already defaults `DID_COMMIT` and `CONFLICT_RESOLVED`.\n  WHY: The reviewer explicitly verified the current `${VAR:-default}` handling, so this is a stale cross-pollination concern rather than a live bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:176-177 | severity=medium | confidence=3\n  PROBLEM: The commit message parsing uses `${head_meta%%$'\\t'*}` and `${head_meta#*$'\\t'}`, which assumes the GitHub API metadata is cleanly tab-separated.\n  WHY: If the commit subject contains a tab character, the split can misparse the subject and author email, making the skip fail.\n- .github/workflows/review_autofix.yml:181 | severity=low | confidence=2\n  PROBLEM: The fallback `?` in `${PR_NUMBER:-?}` can make the structured log ambiguous.\n  WHY: When `PR_NUMBER` is unset, the log line contains a literal `?`, which can confuse log parsers.\n- .github/workflows/review_autofix.yml:183-184 | severity=low | confidence=2\n  PROBLEM: The no-tab guard does not handle an empty subject case.\n  WHY: If the API returned only an email and no subject, the subject check could fail silently.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:185,191 | severity=medium | confidence=4\n  PROBLEM: The gate job\u2019s commit probe and author check are brittle, and the post-commit retrigger step can be unsafe if variables are missing.\n  WHY: The parsing assumes a single tab separator, the author guard assumes one exact no-reply address, and `DID_COMMIT`/`CONFLICT_RESOLVED` were called out as needing defaults under `set -u`.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:182-199 | severity=medium | confidence=3\n  PROBLEM: The commit-message prefix detection only inspects the first line and can miss the prefix if leading whitespace is introduced before `[ai-autofix]`.\n  WHY: The current first-line match is correct for today\u2019s format, but future template changes could make the skip silently fail to activate.\n- .github/workflows/review_autofix.yml:191 | severity=medium | confidence=3\n  PROBLEM: The hard-coded author email creates a brittle dependency on a specific noreply address format.\n  WHY: The code works today, but if GitHub changes the codex noreply address, the skip will stop working.\n- .github/workflows/review_autofix.yml:182-188 | severity=medium | confidence=2\n  PROBLEM: The tab-based split assumes exactly one tab separator and can misparse if the subject itself contains a tab.\n  WHY: The string manipulation would extract the wrong fields in that edge case, causing a false negative or incorrect log output.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:3841-3842 | severity=low | confidence=5\n  PROBLEM: The reported missing-defaults issue for `DID_COMMIT` and `CONFLICT_RESOLVED` is already handled in the code.\n  WHY: The current retrigger guard uses `${DID_COMMIT:-false}` and `${CONFLICT_RESOLVED:-false}`, so the stale finding does not describe a live bug.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:176 | severity=medium | confidence=4\n  PROBLEM: The gate log line uses `pr=${PR_NUMBER:-?}`, which emits a non-key-value token when the PR number is unavailable.\n  WHY: This does not break execution, but it makes the structured log output harder to parse reliably.\n- .github/workflows/review_autofix.yml:172-196 | severity=medium | confidence=3\n  PROBLEM: The commit-message prefix check only examines the first line, so future format changes could bypass the skip.\n  WHY: The current behavior is safe but cost-inefficient if the message shape changes and the prefix is no longer on the first line.\n- .github/workflows/review_autofix.yml:195 | severity=high | confidence=5\n  PROBLEM: The author email guard is hard-coded to `codex@users.noreply.github.com`.\n  WHY: If the bot uses a different noreply address, the skip will never trigger and the cost-saving path is lost.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "8031e754dcd289277160239afcb55924bbced0f941cf98c2a3eebd8d3431500c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1459,
+    "run_id": "24652787353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24652787353",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420072334_72d96a9be8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1459,
+    "run_id": "24652787353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T07:23:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

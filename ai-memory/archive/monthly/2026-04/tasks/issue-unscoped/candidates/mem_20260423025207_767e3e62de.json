@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1150-1153 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The jq fragment filter uses `tostring` before the numeric regex test, which is less strict than explicit type-aware validation.\n  WHY: Multiple reviewers identified the same defensive-validation concern; the code is functionally safe and fail-open, so this is low severity.\n- scripts/orchestrate_poll_process.sh:1184 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: The dictionary merge runs a new `jq` process inside the batch loop, adding avoidable per-batch overhead.\n  WHY: Reviewers agreed this is a performance-only concern; the batch size limits impact and the implementation remains correct.\n- scripts/orchestrate_poll_process.sh:1137-1138 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `local i` and `local n` remain declared after the loop refactor even though they are no longer used.\n  WHY: This is dead code rather than a runtime bug, so it is low severity and only reported by one reviewer.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:1150, 1179 | severity=low | confidence=3\n  PROBLEM: Type validation could be stricter because `select(.value | tostring | test(\"^[0-9]+$\"))` accepts values after string coercion.\n  WHY: Current behavior filters non-numeric values correctly, but an explicit type check would be more robust.\n- scripts/orchestrate_poll_process.sh:1184 | severity=low | confidence=2\n  PROBLEM: The merge operation `jq -cn --argjson a \"${merged}\" --argjson b \"${batch_transformed}\" '$a * $b'` runs once per batch.\n  WHY: This creates minor process overhead for large issue lists, though the batch size keeps the impact small.\n- scripts/orchestrate_poll_process.sh:1150-1153 | severity=medium | confidence=4\n  PROBLEM: The fragment generation `jq ... 2>/dev/null || echo \"\"` handles jq failures by failing open.\n  WHY: The function contract expects valid JSON array input, and the code skips failed batches rather than stopping.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/orchestrate_poll_process.sh:1150 | severity=low | confidence=4\n  PROBLEM: The use of `tostring` in the jq filter `select(.value | tostring | test(\"^[0-9]+$\"))` is slightly permissive.\n  WHY: It does not fail at runtime and correctly filters numeric-looking values, but a more explicit type check would be more robust.\n- scripts/orchestrate_poll_process.sh:1184 | severity=low | confidence=3\n  PROBLEM: The dictionary merge still happens inside the `while` loop with `jq -cn --argjson a \"${merged}\" --argjson b \"${batch_transformed}\" '$a * $b'`.\n  WHY: This adds linear overhead for large sets of issues, though it is acceptable for the current batch size.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:1150-1153 | severity=low | confidence=1\n  PROBLEM: The jq fragment generation uses `tostring` before the numeric test, which is less strict than explicit type checking.\n  WHY: This does not cause runtime failure because the regex still rejects non-numeric values, so it is informational only.\n- scripts/orchestrate_poll_process.sh:1137-1138 | severity=low | confidence=2\n  PROBLEM: `local i` and `local n` remain declared even though the refactored jq-based approach no longer uses them.\n  WHY: This is dead code in variable declarations and does not affect runtime behavior.\n- scripts/orchestrate_poll_process.sh:1184 | severity=low | confidence=1\n  PROBLEM: The merge step creates a new `jq` process for each batch.\n  WHY: This adds minor performance overhead for large issue lists, but the function is still functionally correct.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/orchestrate_poll_process.sh:1151 | severity=low | confidence=1\n  PROBLEM: The jq filter `select(.value | tostring | test(\"^[0-9]+$\"))` accepts numeric strings via coercion rather than enforcing numeric types.\n  WHY: This is a defensive input-validation improvement only; current behavior is functionally safe because non-numeric values are rejected by the regex.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "33b87eaf282e6cd76c4b93222b535f5e48b6e7d0d63964997f630dc804a54709",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1532,
+    "run_id": "24813229775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24813229775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260423025207_767e3e62de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1532,
+    "run_id": "24813229775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-23T02:52:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 10\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/label_helpers.sh (line ~135)\n      Problem: Changed error handling from returning 0 (success) to 1 (failure) when label creation fails for reasons other than \"already exists\". While technically correct (fixing silent failure), this changes behavior for callers using `set -e`.; Scripts with `set -e` (like orchestrator_poll_process.sh) will now exit if label creation fails due to GitHub API issues, permissions, or network problems. Previously they would continue with a warning.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: scripts/label_helpers.sh\n      Problem: Location: Line 129, \"already exists\" regex check; Issue: Current regex might not catch all variations of \"already exists\" error messages from GitHub API; Suggested minimal fix: Broaden regex pattern: `'already[ _-]*exists|already_exists|resource.*exists|already.*present|label.*exists'`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2 (minor improvement - reduces false failures)\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: scripts/label_helpers.sh\n      Problem: Location: Line 135, return statement; Issue: Stricter error handling could cause workflow failures for transient issues; Suggested minimal fix: Consider adding retry logic or documenting that callers should use `ensure_label_exists \"label\" || true` if they want to continue on failure; Estimated lines changed: 1 (comment/documentation); HARDENING_RISK_SCORE: 3 (moderate robustness gain - prevents silent failures but could cause new failures); Actually, wait. Let me reconsider. According to the unattended decision policy \u00a74 and the reviewer role guidelines, I should focus on problems that could realistically affect runtime behavior, correctness, security, etc.; The change from `return 0` to `return 1` fixes incorrect behavior. It's a bug fix. The fact that it might cause workflows to fail is actually correct behavior - they should fail if they can't create required labels.; The regex improvement is also correct.; The CI test addition is correct.; So actually, from a correctness perspective, these changes are all correct. The only potential issue is the behavior change, but it's fixing incorrect behavior.; Looking at the cross-pollination summary, most reviewers agree these changes are correct. Only deepseek_deepseek-v3_2 raised it as a potential issue but acknowledged it's technically correct.; Given this, I should report that the changes are correct but note the behavior change. Actually, as a reviewer in unattended mode, I should report validated issues. The behavior change is a validated issue that could affect runtime.; Let me provide my final review output.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: scripts/label_helpers.sh\n      Problem: Location: ensure_label_exists; Issue: Potential for excessive log noise on transient GitHub API failures across multiple attempts.; Suggested minimal fix: While the return 1 is correct, adding a short sleep/retry for transient 5xx errors or rate limits would improve robustness, though this may exceed the 10-line limit if not using an existing helper.; Estimated lines changed: 3; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: scripts/label_helpers.sh\n      Problem: Location: Line 135; Issue: Stricter error handling - now returns 1 on genuine failures; Suggested minimal fix: None - this is a correct bug fix, not a problem; Estimated lines changed: 0; HARDENING_RISK_SCORE: 0\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\n  [6] File: tests/test_ai_label_precreation_contract.py\n      Problem: Updated regex to accept optional `./` prefix (`(?:\\./)?`) for script sourcing patterns.; Previous regex would cause false test failures for valid shell commands like `source ./scripts/label_helpers.sh`.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: .github/workflows/ci.yml (line ~142)\n      Problem: Added CI execution of the label precreation contract test.; Required for regression detection - without this, the test wouldn't run in CI.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [8] File: `scripts/label_helpers.sh`\n      Problem: The change from `return 0` to `return 1` in the failure path of `ensure_label_exists` correctly signals a failure (e.g., API errors, permissions) to the caller. Previously, these were silently treated as success, which could lead to workflows proceeding without required labels and potentially failing later with less clear errors. Sourcing scripts with `set -e` will now correctly abort on these failures.; #### 2. Robust Regex in Contract Tests (CORRECT)\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [9] File: `tests/test_ai_label_precreation_contract.py`\n      Problem: Lines: 15, 30, 40, 51; The addition of `(?:\\./)?` to the sourcing regex allows the test to correctly identify both `source scripts/label_helpers.sh` and `source ./scripts/label_helpers.sh`. This prevents false negatives where a valid shell sourcing pattern was rejected by the test.; #### 3. CI Integration (CORRECT)\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [10] File: `.github/workflows/ci.yml`\n      Problem: Lines: 142-147; The explicit addition of the `AI label precreation contract test` step ensures that label-related regressions are caught during the CI process. The use of `set -euo pipefail` and `PYTHONDONTWRITEBYTECODE=1` follows standard repository practices.; ### Verification Status; The label contract parity between `scripts/label_helpers.sh` and the `.github/ai/label_contract.v1.json` specification is maintained. Runtime behavior analysis indicates that the stricter error handling in shell scripts is a desired improvement to prevent silent state corruption.; **NO ISSUES FOUND** in the logic or implementation of the latest changes.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/ci.yml\n`.github/workflows/ci.yml`\n`scripts/label_helpers.sh`\n`tests/test_ai_label_precreation_contract.py`\nscripts/label_helpers.sh\ntests/test_ai_label_precreation_contract.py",
+  "fingerprint": "3c86b81ba2ff75d6ed403614a672c492f910c9010eb7380dc429058bc1a6b524",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1319,
+    "run_id": "24607376674",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24607376674",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418152516_2f78181f75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1319,
+    "run_id": "24607376674"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T15:25:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

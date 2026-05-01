@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 4\nIssues with multi-reviewer agreement: 4\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/review_autofix.yml (line ~2014)\n      Problem: The regex pattern `not[[:space:]]edited` used in the grep filter matches exactly one whitespace character between \"not\" and \"edited\". It does not handle multiple spaces, tabs, or other whitespace sequences (e.g., \"not  edited\", \"not\\tedited\").; If the AI editor outputs a multi-whitespace variant, the grep filter rejects the line, leaving `change_status` empty and forcing a fallback heuristic that may misclassify the edit status. Even if the grep were more permissive, the subsequent sed normalization `s/^not[[:space:]]edited$/not-edited/I` would also fail for multi-whitespace variants, leaving a non-canonical value that does not equal \"not-edited\" and again forces the fallback.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash\n\n  [2] File: .github/workflows/review_autofix.yml (line ~2014)\n      Problem: The sed normalization pattern `s/^not[[:space:]]edited$/not-edited/I` also only matches exactly one whitespace character. Even if the grep somehow matched (due to case insensitivity flags), the normalization to canonical \"not-edited\" would fail for multi-space inputs.; If \"not  edited\" (two spaces) somehow passed through, the sed substitution would not normalize it to \"not-edited\", leaving `change_status` as \"not  edited\". The downstream equality check at line 2028 expects exactly \"not-edited\", so \"not  edited\" would not match, again forcing the less reliable heuristic fallback path.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Location: line 2014; Issue: Both grep and sed patterns only match single whitespace; Suggested minimal fix: Change `[[:space:]]` to `[[:space:]]+` (one or more) in both the grep pattern and sed substitution to handle multiple whitespace characters:; - grep: `not[[:space:]]+edited`; - sed: `s/^not[[:space:]]+edited$/not-edited/I`; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5\n\n  [4] File: .github/workflows/review_autofix.yml (line ~1999)\n      Problem: Comment states \"The section contains exactly one bullet with value \"edited\" or \"not-edited\"\" but the code now also accepts \"not edited\" (with space) as a valid value.; Not a direct runtime failure, but inaccurate documentation can mislead maintainers and complicate future modifications.; No other issues found in the last run modifications.\n      Confidence: avg 2.0\n      Flagged by: minimax_minimax-m2_5, stepfun_step-3_5-flash\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  (none)\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "7b36cfacc70a38054418da134ba0ba8e63c710f19b058b41314594fc96376b33",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1200,
+    "run_id": "24540919570",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24540919570",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417003535_2390ebc6db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1200,
+    "run_id": "24540919570"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-17T00:35:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

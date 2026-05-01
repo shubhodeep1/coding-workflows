@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `workflow_analysis_docs_update` (issue: \u201cDocument workflow log analysis usage, inputs, and report outputs in README\u201d).\n\nClarification mapping:\n- No `Q<ID>` clarification questions were asked in this run.\n- `/answer [auto-answered-by-clarify]` indicates planning can proceed with current scope.\n\n**1. Files likely to change**\n- [README.md](README.md)  \n  Add a dedicated \u201cWorkflow Log Analysis\u201d section covering usage, workflow inputs, and outputs.\n- No code changes are expected for this issue (docs-only scope).\n\nReference-only files to mirror actual behavior:\n- [.github/workflows/workflow-log-analysis.yml](.github/workflows/workflow-log-analysis.yml)\n- [scripts/collect_workflow_logs.py](scripts/collect_workflow_logs.py)\n- [scripts/analyze_workflow_logs.py](scripts/analyze_workflow_logs.py)\n\n**2. Functions/modules to implement (documentation work)**\n- No new runtime modules/functions.\n- Document existing workflow/script interfaces from:\n- `.github/workflows/workflow-log-analysis.yml`:\n  - `workflow_dispatch` inputs: `lookback_days`, `repos_override`\n  - `collect-logs` and `analyze-commit-notify` jobs\n- `scripts/collect_workflow_logs.py`:\n  - `build_parser` CLI contract\n  - `main` behavior and token/env fallback\n  - `build_report` output payload shape\n- `scripts/analyze_workflow_logs.py`:\n  - `build_parser` CLI contract\n  - `load_input_data` accepted input forms\n  - `resolve_dated_output_path` report filename behavior\n  - `main` OpenRouter key requirement + output path emission\n\n**3. Data structures affected (to be documented)**\n- Collector JSON output (`workflow_log_report.json`) with top-level keys:\n- `schema_version`\n- `generated_at`\n- `scope` (`repositories`, `workflow_families`, `source`)\n- `runs` (per-run metrics including `workflow_family`, timing, retries, `failure_point`)\n- `summary` (counts + avg/p50/p95 durations)\n- `errors`\n- Analyzer markdown output:\n- Default path in `analysis/` as `workflow-optimization-YYYY-MM-DD.md`\n- Collision handling appends `-2`, `-3`, etc.\n- Workflow artifact:\n- `workflow-log-report` artifact containing `workflow_log_report.json`\n\n**4. API/interface changes**\n- No API/runtime behavior changes; README-only update.\n- README should explicitly document:\n- How to trigger the workflow (`workflow_dispatch`)\n- Inputs and valid formats:\n  - `lookback_days` (string/int-like days window)\n  - `repos_override` (comma-separated `owner/repo`, validated)\n- Required/optional auth/config:\n  - `OPENROUTER_API_KEY` required for analysis step\n  - `GH_PAT` preferred with `github.token` fallback\n  - Telegram notification is optional (`TG_BOT_SECRET`, `TG_ADMIN_CHAT_ID`)\n- Expected outputs:\n  - Artifact upload\n  - Committed report file on branch\n  - Telegram summary message (when configured)\n\n**5. Potential risks / edge cases**\n- Documentation drift risk: older design doc examples are stale versus current script flags.\n- `repos_override` format validation failures should be called out.\n- No-op commit case should be documented (`No report changes to commit`).\n- Insufficient data window can still produce a report that explains low/no run data.\n- Analyzer path behavior may create suffixed filenames on same-day reruns.\n\n**6. Testing considerations**\n- Docs accuracy pass:\n- Verify every documented flag/input matches current parser/workflow names exactly.\n- Verify output filenames and artifact names match real workflow behavior.\n- Link sanity:\n- Ensure README references existing paths/files only.\n- Optional runtime sanity check after docs merge:\n- Manually run \u201cWorkflow Log Analysis\u201d with a small `lookback_days` and confirm README-described outputs appear as documented.\n\n**Conflict detection**\n- Detected mismatch between existing planning doc and implementation:\n- [docs/workflow-llm-analysis-plan.md](docs/workflow-llm-analysis-plan.md) includes legacy collector examples (`--repos`, `--phases`, `--output-dir`, `--deep-dive-count`) that do not match current `scripts/collect_workflow_logs.py` CLI.\n- Plan for this issue: README content should follow actual current workflow/script contracts, not legacy examples.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c2bb56cd07946278f06b18cecbef6b2a46b89c9c6ab8be2473ab3b4dc91c9a21",
+  "lineage": {
+    "issue_number": 745,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24284869818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24284869818",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/745"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411145559_2e02c0950e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 745,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24284869818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #745",
+  "timestamps": {
+    "created_at": "2026-04-11T14:55:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

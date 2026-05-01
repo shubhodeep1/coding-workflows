@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 3\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/orchestrate_lib.py\n      Problem: Lines: 814-828 and 1524-1525; The TERMINAL_PHASES set was expanded to include all new failure-phase labels (ai:clarify-failed, ai:validate-failed, ai:plan-failed, etc.). In reconcile_wave_issue_status(), any label in TERMINAL_PHASES causes the function to return status=\"closed\", source=\"label_terminal_phase\". This is incorrect behavior for failure phases.; Wave issues with ai:*-failed labels will be marked \"closed\" in the tracking state instead of remaining active for stall recovery or retry. The orchestrator's stall detection and recovery mechanisms will skip these issues entirely because \"closed\" is in TERMINAL_WAVE_STATUSES (line 1501-1502), preventing any automatic recovery or retrigger.; **2. Exit code collision in run_template_validation_harness_renderer**\n      Confidence: avg 5.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [2] File: scripts/validate_process.sh\n      Problem: Lines: 1098, 1103, 2092-2143; Both \"templates_root directory missing\" (line 1098) and \"_shared template files missing\" (lines 1100-1103) return exit code 13. There is no case handler in the switch statement for exit code 15, despite the cross-pollination summary suggesting it was changed from 13. If exit 15 were ever returned, it would fall through to the default *) case with a generic error message instead of the specific \"required templates are missing\" message.; Operators cannot distinguish between the templates directory being missing vs the directory existing but specific required template files being absent. Both conditions produce identical error messages and exit codes, making debugging harder.; **3. Inconsistent node_modules exclusion pattern**\n      Confidence: avg 4.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Lines: 1721 vs 3077; The IS_WORKFLOW_SOURCE_REPO=true branch uses a shallow pattern \"node_modules|node_modules/*\" (line 3077), while the else branch uses the comprehensive pattern \"node_modules|node_modules/*|*/node_modules|*/node_modules/*\" (line 1721).; On this repository (the workflow source repo), nested node_modules directories (e.g., in monorepo packages subdirectories) will not be excluded during conflict resolution staging, potentially resulting in unwanted node_modules artifacts being committed.; === HARDENING SUGGESTIONS ===; **File: scripts/label_helpers.sh**; **Line:** 124, 134; **Issue:** ensure_label_exists returns 1 on non-\"already exists\" errors, which changes behavior from previous patterns using \"|| true\". This may cause workflows with set -euo pipefail to abort unexpectedly on transient GitHub API errors.; **Suggested minimal fix:** Document this stricter behavior, or change final return 1 to return 0 (matching embedded implementations) if fail-open tolerance is desired.; **Estimated lines changed:** 1; **HARDENING_RISK_SCORE:** 3; **File: scripts/validate_process.sh**; **Line:** 1103; **Issue:** Missing exit code 15 handler in case statement and conflated exit code 13 for two different error conditions.; **Suggested minimal fix:** Change return 13 to return 15 on line 1103 (for missing _shared template files) and add a corresponding 15) handler in the case statement around line 2127 with specific diagnostic message about missing template files vs missing directory.; **Estimated lines changed:** 10-12; **HARDENING_RISK_SCORE:** 4; **File: .github/workflows/review_autofix.yml**; **Line:** 3077; **Issue:** Inconsistent node_modules exclusion pattern between workflow source and consumer branches; **Suggested minimal fix:** Change \"node_modules|node_modules/*\" to \"node_modules|node_modules/*|*/node_modules|*/node_modules/*\" to match line 1721.; **Estimated lines changed:** 1; **HARDENING_RISK_SCORE:** 2; === END OF REVIEW ===; The most critical issue is #1 - the erroneous \"closed\" status assignment for failure-phase labels will break the orchestrator's entire stall recovery mechanism for failed workflow phases. This should be addressed before merge.\n      Confidence: avg 3.0\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\nscripts/orchestrate_lib.py\nscripts/validate_process.sh",
+  "fingerprint": "c6bc76a22606513138bcf1899ac9a68328226a604327acac87e916cd01c95640",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1350,
+    "run_id": "24615754204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24615754204",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418235353_ae580748c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1350,
+    "run_id": "24615754204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T23:53:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

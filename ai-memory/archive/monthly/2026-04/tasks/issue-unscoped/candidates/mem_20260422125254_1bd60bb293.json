@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:2209-2212 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The added log output includes `enabled=${VALIDATION_USE_TEMPLATES_ENABLED}` even though that state is already guaranteed by the preceding guard.\n  WHY: Reviewers agreed this is redundant logging rather than a correctness issue; severity disagreement was not present.\n- scripts/validate_process.sh:2230 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The missing-manifest error message was changed to only say to create the manifest, removing the prior bypass guidance.\n  WHY: Reviewers disagreed on whether the removed `VALIDATION_USE_TEMPLATES=false` guidance was still valid, but the finding itself is the same change in error text; use the highest severity/confidence reported.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:2209 | severity=low | confidence=4\n  PROBLEM: The autofix added `, enabled=${VALIDATION_USE_TEMPLATES_ENABLED}` to the debug echo, creating redundant log output.\n  WHY: When this line executes, `VALIDATION_USE_TEMPLATES_ENABLED` is always `\"true\"`, so the extra field adds no new information but changes the log format.\n- scripts/validate_process.sh:2230 | severity=low | confidence=4\n  PROBLEM: The autofix changed the error message from offering two recovery options to only one.\n  WHY: Removing `set VALIDATION_USE_TEMPLATES=false` guidance makes the error less helpful for users encountering a missing manifest.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/validate_process.sh:2212 | severity=low | confidence=5\n  PROBLEM: The log message explicitly states that template render mode is \"enabled\", but the message is printed before checking `VALIDATION_USE_TEMPLATES_ENABLED`.\n  WHY: If a user sets `VALIDATION_USE_TEMPLATES=false`, the log will still output an internally contradictory \"enabled\" message, which is confusing.\n- scripts/validate_process.sh:2230 | severity=low | confidence=4\n  PROBLEM: The error message removed the instruction informing users they can disable template mode.\n  WHY: Removing the `VALIDATION_USE_TEMPLATES=false` guidance makes the system less self-documenting and forces users to look elsewhere for recovery steps.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:2209 | severity=low | confidence=4\n  PROBLEM: Added `enabled=${VALIDATION_USE_TEMPLATES_ENABLED}` to the debug echo.\n  WHY: The value is guaranteed to be `\"true\"` when this line executes, so the addition is redundant.\n- scripts/validate_process.sh:22/22 | severity=low | confidence=4\n  PROBLEM: The error message removed the user bypass option.\n  WHY: The old message included `set VALIDATION_USE_TEMPLATES=false`, while the new one only says to create the required manifest.\n- scripts/validate_process.sh:22/22\n  PROBLEM: The log message says template render mode is enabled regardless of flag value.\n  WHY: This finding was later marked partially incorrect because the prior guard exits when template mode is disabled.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:2212 | severity=low | confidence=2\n  PROBLEM: The log message redundantly includes `enabled=${VALIDATION_USE_TEMPLATES_ENABLED}` when the code already guarantees this is `\"true\"` at this point.\n  WHY: The log is accurate but slightly redundant because the prior guard exits if template mode is not enabled.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/validate_process.sh:2212\n  PROBLEM: The log message now includes both the raw `VALIDATION_USE_TEMPLATES` and the normalized `VALIDATION_USE_TEMPLATES_ENABLED` values.\n  WHY: This is a non-functional enhancement that improves observability; the message is accurate because an earlier guard guarantees the line only executes when enabled.\n- scripts/validate_process.sh:2230\n  PROBLEM: The missing-manifest error summary was changed from suggesting users `set VALIDATION_USE_TEMPLATES=false` to telling them to create the manifest.\n  WHY: Under the template-only design, disabling template mode triggers a separate hard-failure, so the previous suggestion was invalid.\n- tests/test_validate_process_template_mode.py\n  PROBLEM: The test's embedded harness snippet was updated to match the corrected error message.\n  WHY: Consistency with the new message was confirmed.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "3d190ffad99dda0914738b4beccb1477a3c6cf193d9215c8e4d3095b9d31dc76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1521,
+    "run_id": "24778040204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24778040204",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422125254_1bd60bb293",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1521,
+    "run_id": "24778040204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T12:52:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
