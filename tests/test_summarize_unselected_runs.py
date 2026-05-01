@@ -153,8 +153,17 @@ def test_build_summary_input_run_level_truncation_when_assembled_exceeds_cap():
 	text = summarizer.build_summary_input(
 		logs, char_cap=5_000, per_step_head=1_000, per_step_tail=2_000
 	)
-	assert len(text) <= 5_000 + len("\n... [run-level truncation] ...\n")
+	# Strict cap: total length INCLUDING the truncation marker must fit
+	# within `char_cap`. This matches the --per-run-char-cap CLI contract.
+	assert len(text) <= 5_000
 	assert "[run-level truncation]" in text
+
+
+def test_build_summary_input_when_cap_smaller_than_marker_returns_marker_prefix():
+	# Pathological tiny cap (< marker length): we still must not exceed it.
+	logs = [{"step_name": "s", "content": "X" * 100}]
+	text = summarizer.build_summary_input(logs, char_cap=10, per_step_head=5, per_step_tail=5)
+	assert len(text) <= 10
 
 
 def test_build_summary_input_skips_empty_steps():
@@ -169,13 +178,42 @@ def test_build_summary_input_skips_empty_steps():
 
 def test_build_summary_input_clamps_non_positive_char_cap():
 	logs = [{"step_name": "build", "content": "X" * 5_000}]
-	# A misconfigured char_cap=0 must not produce unbounded output; the
-	# defensive clamp upgrades it to 1, so the result is bounded by the
-	# truncation marker plus 1 char of head + 1 char of tail.
+	# A misconfigured char_cap=0 is clamped to 1, and the strict cap means
+	# the returned text fits in 1 character (marker truncated to that).
 	text = summarizer.build_summary_input(logs, char_cap=0, per_step_head=10, per_step_tail=10)
-	marker = "\n... [run-level truncation] ...\n"
-	assert len(text) <= len(marker) + 2
-	assert "[run-level truncation]" in text
+	assert len(text) <= 1
+
+
+def test_extract_tokens_used_prefers_normalized_total():
+	got = summarizer._extract_tokens_used(
+		{"total_tokens": 123, "prompt_tokens": 100, "completion_tokens": 23},
+		input_chars=4_000,
+		max_output_tokens=500,
+	)
+	assert got == 123
+
+
+def test_extract_tokens_used_sums_prompt_and_completion_when_total_missing():
+	got = summarizer._extract_tokens_used(
+		{"prompt_tokens": 80, "completion_tokens": 20},
+		input_chars=4_000,
+		max_output_tokens=500,
+	)
+	assert got == 100
+
+
+def test_extract_tokens_used_falls_back_when_usage_missing():
+	# When the provider omits `usage` entirely, the fallback estimate must
+	# still return a positive number so --token-budget keeps advancing.
+	got = summarizer._extract_tokens_used(None, input_chars=4_000, max_output_tokens=500)
+	assert got >= 1
+	# Conservative estimate: input_chars/4 + max_output_tokens.
+	assert got == 4_000 // 4 + 500
+
+
+def test_extract_tokens_used_falls_back_on_empty_usage_dict():
+	got = summarizer._extract_tokens_used({}, input_chars=2_000, max_output_tokens=400)
+	assert got == 2_000 // 4 + 400
 
 
 # ---------- _format_user_message + truncation helper ---------------------
@@ -333,6 +371,55 @@ def test_main_writes_summary_when_summarizer_succeeds(monkeypatch=None):
 	assert row["log_summary"].startswith("- success")
 	assert row["log_summary_meta"]["tokens_used"] == 42
 	assert row["log_summary_meta"]["model"]
+
+
+def test_main_counts_empty_archive_as_skipped_empty_logs_not_fetch_error():
+	"""When extract_full_logs returns nothing summarizable, the run must be
+	counted as skipped_empty_logs (fetch succeeded, archive was empty),
+	not skipped_fetch_error (transient/unrecoverable fetch failure)."""
+	with tempfile.TemporaryDirectory() as tmp:
+		report = Path(tmp) / "report.json"
+		_write_report(
+			report,
+			{
+				"runs": [
+					{"repository": "a/b", "run_id": 1, "created_at": "2026-04-30T00:00:00Z"}
+				]
+			},
+		)
+
+		class _EmptyArchiveCollector:
+			@staticmethod
+			def _fetch_run_log_archive(repo, run_id, *, token, cache=None):
+				return b""
+
+			@staticmethod
+			def extract_full_logs(_archive):
+				return []  # empty -> logs_text is blank
+
+		class _ShouldNotBeCalledSummarizer:
+			def __init__(self, *_a, **_k):
+				pass
+
+			def summarize(self, *_a, **_k):  # pragma: no cover — guarded by empty path
+				raise AssertionError("summarize() must not be called for empty archives")
+
+		original_loader = summarizer._load_collector_module
+		original_klass = summarizer.OpenRouterSummarizer
+		summarizer._load_collector_module = lambda: _EmptyArchiveCollector
+		summarizer.OpenRouterSummarizer = _ShouldNotBeCalledSummarizer
+		try:
+			with _env(OPENROUTER_API_KEY="orkey", GH_TOKEN="ghs_test"), _capture_std() as (_out, err):
+				rc = summarizer.main(["--report", str(report)])
+			err_text = err.getvalue()
+		finally:
+			summarizer._load_collector_module = original_loader
+			summarizer.OpenRouterSummarizer = original_klass
+
+	assert rc == 0
+	# Telemetry line includes skipped_empty_logs=1 and skipped_fetch_error=0.
+	assert '"skipped_empty_logs": 1' in err_text
+	assert '"skipped_fetch_error": 0' in err_text
 
 
 def test_main_breaks_loop_when_token_budget_exhausted():

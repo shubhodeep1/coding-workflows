@@ -92,6 +92,66 @@ def _load_collector_module() -> Any:
 	return module
 
 
+def _load_normalize_usage() -> Any:
+	"""Import openrouter_prompt_cache.normalize_usage if available.
+
+	Reusing the existing helper keeps token-budget accounting consistent with
+	the rest of the OpenRouter call-sites (it handles `prompt_tokens_details`,
+	`input_token_details`, and other variant shapes that some providers
+	return). If the helper can't be loaded we fall back to a local parser.
+	"""
+	try:
+		spec = importlib.util.spec_from_file_location(
+			"_openrouter_prompt_cache", SCRIPTS_DIR / "openrouter_prompt_cache.py"
+		)
+		if spec is None or spec.loader is None:
+			return None
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+		return getattr(module, "normalize_usage", None)
+	except Exception:  # noqa: BLE001 — fail-open: fall back to local parser
+		return None
+
+
+_NORMALIZE_USAGE = _load_normalize_usage()
+
+
+def _extract_tokens_used(
+	usage: Any, *, input_chars: int, max_output_tokens: int
+) -> int:
+	"""Best-effort token accounting that always returns a positive number.
+
+	Order of preference:
+	1. `normalize_usage()` from openrouter_prompt_cache (handles nested shapes).
+	2. Flat `total_tokens` / sum of `prompt_tokens` + `completion_tokens`.
+	3. Conservative estimate `input_chars/4 + max_output_tokens` so the
+	   token budget keeps advancing even if a provider omits `usage` entirely.
+	"""
+	usage_dict = usage if isinstance(usage, dict) else {}
+	if _NORMALIZE_USAGE is not None:
+		try:
+			normalized = _NORMALIZE_USAGE(usage_dict) or {}
+		except Exception:  # noqa: BLE001
+			normalized = {}
+		total = normalized.get("total_tokens")
+		if isinstance(total, int) and total > 0:
+			return total
+		prompt = normalized.get("prompt_tokens") or 0
+		completion = normalized.get("completion_tokens") or 0
+		if (prompt or completion) and isinstance(prompt, int) and isinstance(completion, int):
+			return max(prompt + completion, 0)
+	flat_total = _to_int(usage_dict.get("total_tokens"), 0)
+	if flat_total > 0:
+		return flat_total
+	flat_sum = _to_int(usage_dict.get("prompt_tokens"), 0) + _to_int(
+		usage_dict.get("completion_tokens"), 0
+	)
+	if flat_sum > 0:
+		return flat_sum
+	# ~4 chars/token is the OpenAI rule-of-thumb; conservative for English logs.
+	return max(input_chars // 4 + max(max_output_tokens, 0), 1)
+
+
 def _to_int(value: Any, default: int = 0) -> int:
 	try:
 		return int(value)
@@ -196,9 +256,17 @@ def build_summary_input(
 	text = "".join(parts)
 	if len(text) <= char_cap:
 		return text
-	head_size = max(char_cap // 3, 1)
-	tail_size = max(char_cap - head_size, 1)
-	return text[:head_size] + "\n... [run-level truncation] ...\n" + text[-tail_size:]
+	# Run-level truncation must keep len(result) <= char_cap *including* the
+	# marker, so we subtract the marker length from the head/tail budget. If
+	# `char_cap` is smaller than the marker itself, return a marker prefix
+	# so we still don't exceed the cap.
+	marker = "\n... [run-level truncation] ...\n"
+	budget = char_cap - len(marker)
+	if budget <= 0:
+		return marker[:char_cap]
+	head_size = max(budget // 3, 1)
+	tail_size = max(budget - head_size, 1)
+	return text[:head_size] + marker + text[-tail_size:]
 
 
 def _format_user_message(run: dict[str, Any], logs_text: str) -> str:
@@ -288,13 +356,12 @@ class OpenRouterSummarizer:
 		content = content.strip()
 		if not content:
 			raise RuntimeError("chat/completions empty content")
-		usage = payload.get("usage") or {}
-		tokens_used = _to_int(usage.get("total_tokens"), 0)
-		if tokens_used <= 0:
-			tokens_used = _to_int(usage.get("prompt_tokens"), 0) + _to_int(
-				usage.get("completion_tokens"), 0
-			)
-		return content, max(tokens_used, 0)
+		tokens_used = _extract_tokens_used(
+			payload.get("usage"),
+			input_chars=len(logs_text),
+			max_output_tokens=self.max_output_tokens,
+		)
+		return content, tokens_used
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
@@ -374,6 +441,7 @@ def main(argv: list[str] | None = None) -> int:
 		"targeted": 0,
 		"summarized": 0,
 		"skipped_fetch_error": 0,
+		"skipped_empty_logs": 0,
 		"skipped_summary_error": 0,
 		"skipped_budget_exhausted": 0,
 		"skipped_disabled": 0,
@@ -450,7 +518,10 @@ def main(argv: list[str] | None = None) -> int:
 			continue
 		logs_text = build_summary_input(full_logs, char_cap=args.per_run_char_cap)
 		if not logs_text.strip():
-			stats["skipped_fetch_error"] += 1
+			# The fetch succeeded — the archive was just empty/unsupported.
+			# Count it separately so telemetry can distinguish transient
+			# fetch errors from "nothing to summarize".
+			stats["skipped_empty_logs"] += 1
 			continue
 		try:
 			summary, tokens_used = summarizer.summarize(run, logs_text)
