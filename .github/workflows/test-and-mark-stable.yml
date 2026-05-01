@@ -1076,7 +1076,15 @@ jobs:
           # Fail-soft: if dispatch fails, the synchronize event (when
           # it fires) still serves as the primary path; if neither
           # fires, wait-review surfaces no_review_triggered as before.
+          # --repo "${TEST_REPO}" is required because this job supports
+          # dispatching E2E against an arbitrary `inputs.test_repo`;
+          # without it, `gh workflow run` would target the default repo
+          # from the checkout/CLI context (shubhodeep1/coding-workflows
+          # itself, per the early checkout at line 316) instead of the
+          # repo we just pushed the bait commit to, leaving Phase 4
+          # still vulnerable to no_review_triggered.
           if gh workflow run "internal-review.yml" \
+              --repo "${TEST_REPO}" \
               --ref "${BRANCH}" \
               -f pr_number="${PR_NUMBER}" >/tmp/dispatch_resp.txt 2>&1; then
             echo "✓ Dispatched internal-review.yml on ${BRANCH} for PR #${PR_NUMBER} (Bug B fallback)"
@@ -1420,7 +1428,7 @@ jobs:
               # jq's `last` on an empty array yields the literal string
               # "null" rather than empty, so both branches are needed.
               if [ -n "${BAIT_SHA:-}" ] && { [ -z "${REVIEW_RUN:-}" ] || [ "${REVIEW_RUN}" = "null" ]; }; then
-                echo "::error::No review_autofix run with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
+                echo "::error::No review workflow run (Internal: AI Review & Autofix) with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
                 echo "status=no_review_triggered" >> "$GITHUB_OUTPUT"
                 echo "Diagnostic: workflow runs visible on branch ${PR_BRANCH}:" >&2
                 gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=20" \
