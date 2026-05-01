@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains a fourth bait/comment line instead of the required exactly three lines.\n  WHY: The task requires exactly three lines with no comments or extra content, so the extra line violates the specification.\n- N/A:N/A | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The editor failed before producing a validated summary, leaving the bait line unresolved.\n  WHY: The review outputs say the editor state was \"not-edited\" / produced no validated summary, so the autofix pass did not remove the extra line.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains a fourth line instead of the required three lines.\n  WHY: The file is expected to contain exactly three lines with no comments or extra content, and the fourth bait/comment line violates that contract.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:Line 4 | confidence=5\n  PROBLEM: The file contains a fourth bait/comment line, violating the requirement that it contain exactly three lines.\n  WHY: The task explicitly requires \"exactly these three lines (no more, no less)\" and \"do not add comments, headers, or any extra content.\"\n- N/A:Editor summary status | confidence=4\n  PROBLEM: The editor failed before producing a validated summary, leaving the bait line unresolved.\n  WHY: The editor summary indicates \"editor failed before producing a validated summary\" and \"not-edited\", meaning the autofix pass did not successfully remove the bait line.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:Line 4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The linked issue explicitly requires the file content to be \"exactly these three lines (no more, no less)\" with no comments or extra content.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:Line 4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required 3.\n  WHY: The extra bait line violates the explicit constraint that the file must contain exactly these three lines and no more.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:Line 4 | confidence=5\n  PROBLEM: File contains 4 lines instead of exactly 3 as required by issue #1899.\n  WHY: The task mandates overwriting with precisely these 3 lines and no extra content/comments, so the bait line violates the specification.\n- N/A:N/A | confidence=5\n  PROBLEM: Prior editor run produced no validated summary and left bait line intact.\n  WHY: The editor disposition \"not-edited\" despite the clear violation means the autofix loop did not converge without explicit removal of the extra line.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:Line 4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of exactly 3 lines as required by the linked issue.\n  WHY: The smoke test verifies file content matches exactly, and the bait line causes the content check to fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e20187428c4dda0b449a095df22528c70c9dde33b9db214e27ce7e68b997a21b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1903,
+    "run_id": "25215784558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25215784558",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501135607_854b21d030",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1903,
+    "run_id": "25215784558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-01T13:56:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
