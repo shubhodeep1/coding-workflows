@@ -548,3 +548,123 @@ Additional cross-cutting notes:
 | Code modularization | 7-10 | Large |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 4-6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-01)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the repository evidence is strong enough that the call can be merged/removed without changing observable behavior. `NEEDS_VERIFICATION` means the overlap is real, but a human must confirm cross-step timing, fallback, or error-handling semantics before implementation. `RISKY_SKIP` means the redundancy sits in a retry/poll/recovery-sensitive path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — MERGE-001  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:371-375`; `.github/workflows/test-and-mark-stable.yml:377-380`  
+  **Current call count** — 2  
+  **Proposed call count** — 1  
+  **Endpoint(s)** — `POST /repos/{owner}/{repo}/issues`; `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence** — The step creates an issue, extracts only the number, then immediately re-reads the same issue only to get `html_url`.
+  ```bash
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+  **Proposed fix** — In the `Create issue` step, capture the `POST /issues` response once and extract both `.number` and `.html_url` from that single payload (for example via one JSON temp file or one `@tsv` extraction). Update only this step’s local parsing; no downstream caller changes are required.  
+  **Safety rationale** — The calls are adjacent in the same step with no intervening mutation, but this is a POST+GET collapse rather than a same-endpoint field extension, so a human should verify the second GET is not intentionally acting as a read-after-write visibility probe.  
+  **Downstream signal** — Verify from the current workflow behavior or GitHub REST docs that the issue-create response always includes `html_url`, and confirm the follow-up GET is not relied on as a propagation check before collapsing to one call.
+
+- **ID** — MERGE-002  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `.github/workflows/review_autofix.yml:1381-1405`; `.github/workflows/review_autofix.yml:1833-1836`  
+  **Current call count** — 2 on the linked-issue smoke-detection path  
+  **Proposed call count** — 1 on the common path, with the current REST read retained only as fallback when the early GraphQL fetch was unavailable  
+  **Endpoint(s)** — GraphQL `repository.pullRequest(number){ closingIssuesReferences(first:50){ nodes { number title body }}}`; `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence** — `Collect PR metadata` already fetches linked issue titles and bodies, but `Detect smoke test and tune LLM settings` later re-fetches the linked issue title from REST.
+  ```bash
+  if gh_retry "${_linked_tmp}" api graphql \
+    ... \
+    -f query='query(...){repository(...){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+    _linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
+  fi
+  ```
+  ```bash
+  ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '...' || true)
+  if [ -n "${ISSUE_NUM:-}" ]; then
+    ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+  fi
+  ```
+  **Proposed fix** — Extend the `Collect PR metadata` step to emit a tiny cached field such as `FIRST_LINKED_ISSUE_TITLE` (or a lightweight JSON sidecar under `${RUNTIME_DIR}`) derived from `_linked_raw`. Update `Detect smoke test and tune LLM settings` to consult that cached title first, and keep the current `_safe_gh_jq` issue-title read only when `_linked_fetch_ok != true` or no linked title was cached.  
+  **Safety rationale** — The overlap is explicit, but the reuse crosses workflow steps and the smoke detector currently fails open on early-GraphQL miss, so fallback coverage must be verified before removing the later REST read.  
+  **Downstream signal** — Verify that `Collect PR metadata` always runs before `Detect smoke test and tune LLM settings` in every PR mode, and confirm smoke detection still works when `closingIssuesReferences` is empty or the early GraphQL fetch failed.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — REUSE-001  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `.github/workflows/implement.yml:3019-3033`; `scripts/implement_diagnose_post_codex_failure.sh:130-153`  
+  **Current call count** — 2 logical `/jobs` snapshots on the same failure path (up to 6 actual GETs because both sides retry up to 3 times)  
+  **Proposed call count** — 1 logical snapshot on the common path; retain a script-side fallback snapshot only when the capture-step output is empty  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100`  
+  **Evidence** — The capture step already polls the current run’s jobs API to derive `failed_step_name`, and the diagnose script immediately re-polls the same endpoint to derive the same datum again.
+  ```bash
+  # .github/workflows/implement.yml
+  for _attempt in 1 2 3; do
+    RUN_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" || true)"
+    ...
+    FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' ...)"
+  done
+  echo "failed_step_name=${FAILED_STEP_NAME}" >> "$GITHUB_OUTPUT"
+  ```
+  ```bash
+  # scripts/implement_diagnose_post_codex_failure.sh
+  for _attempt in 1 2 3; do
+    FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+    ...
+    FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '... | .name // ""' ...)"
+  done
+  ```
+  **Proposed fix** — Pass `steps.capture_post_codex_validation_errors.outputs.failed_step_name` into the `Diagnose post-Codex failure and create fix-up issues` step as env, and update `scripts/implement_diagnose_post_codex_failure.sh` to trust that supplied value when non-empty/non-`unknown-step`. Keep the script’s current `/jobs` polling only as fallback when the capture-step output is missing.  
+  **Safety rationale** — The endpoint, run id, and derived field are identical, but the reuse crosses a step boundary and the second probe currently benefits from slightly later job-indexing state, so it is not statically safe to drop without validation.  
+  **Downstream signal** — On one forced failure run and one forced cancellation run, compare `steps.capture_post_codex_validation_errors.outputs.failed_step_name` with the script’s current self-fetched value; only collapse to one snapshot if they match or the fallback path remains for empty outputs.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — DEAD-API-001  
+  **Safety tag** — SAFE_TO_MERGE  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:1508-1511`  
+  **Current call count** — 1  
+  **Proposed call count** — 0  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/commits?sha={branch}&per_page=20`  
+  **Evidence** — The workflow computes `COMMITS_AFTER` and never consumes it. The next branch decision uses only `PR_HEAD`.
+  ```bash
+  COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
+    --jq "[.[] | select(.sha != \"${BAIT_SHA}\") | .sha] | length" 2>/dev/null || echo "0")
+  PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
+    ...
+  fi
+  ```
+  **Proposed fix** — Delete the `COMMITS_AFTER=...` assignment from the bait-verification step and leave the existing `PR_HEAD` check unchanged.  
+  **Safety rationale** — The fetched value has no downstream consumer, is not logged, and sits outside any retry/pagination/recovery path, so removing the read does not alter control flow or observable log keys.  
+  **Downstream signal** — Remove the unused `COMMITS_AFTER` assignment and keep the subsequent `PR_HEAD` comparison exactly as-is.
+
+### Cross-References to Deep Audit Section
+
+- API-001: SAFE_TO_MERGE — same function, same `GET /issues/{n}` shape, and later body fetches do not influence control flow after `FIRST_ISSUE_BODY` is set.
+- BATCH-001: NEEDS_VERIFICATION — the fallback loop’s per-issue label reads are batchable, but the regex-derived issue set and GraphQL fallback semantics should be human-checked before replacing the current loop.
+- BATCH-002: NEEDS_VERIFICATION — reusing the earlier tracking/managed classification should remove the later body loop, but the handoff must preserve the conservative skip behavior that protects tracking issues from BUG-002 regressions.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 3 | MERGE-001, MERGE-002, REUSE-001 |
+| RISKY_SKIP | 0 | — |
+
+### Implement-Stage Handoff
+
+- DEAD-API-001
