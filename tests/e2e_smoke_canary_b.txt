@@ -1,5 +1,5 @@
-# Orchestrate-decompose smoke canary B.
-# Owned by .github/workflows/test-and-mark-stable.yml :: orchestrate-decompose-test.
+status: ok
+decompose-run: 25208141990
 # Issue 2 of the smoke project_description targets this file so that the two
 # decomposed sub-issues touch DIFFERENT files (no files_touched overlap),
 # making the two-issue + dependency_edges shape structurally inevitable.
