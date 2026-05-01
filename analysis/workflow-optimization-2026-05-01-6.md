@@ -416,3 +416,135 @@
 | cancel_on_pr_close / recent runs | `/rate_limit` + cancel POST with retry | Bounded, healthy | Low |
 | orchestrate_poll / 25215312050 | `gh issue list` plus full repo checkout/fetch | API okay; git fetch heavier than API | Low API, medium runtime |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-01)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — BUG-001  
+  **File path** — `scripts/tg_helpers.sh:167-206,240-277`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — `tg_store_msg_id()` and `tg_store_phase_msg_id()` both implement a read-modify-write append on a single GitHub tracking comment: they fetch recent comments, select the first matching marker comment, append the new Telegram ID with `sed`, and `PATCH` the whole body back. That sequence is not concurrency-safe. If two workflows send tracked Telegram messages for the same issue at nearly the same time, both can read the same old body and the later `PATCH` will overwrite the earlier append, permanently losing one message ID. Cleanup then relies on the preserved marker list in `tg_cleanup_msgs()` / `tg_cleanup_phase_msgs()`, so a lost ID becomes an orphaned Telegram message.  
+  **Recommended fix** — Stop using a shared append-only comment as the source of truth. Preferred: write one GitHub tracking comment per Telegram message ID/phase and let cleanup sweep all matching comments. If the single-comment design must remain, add a retry loop that re-reads the current marker comment immediately before patching, merges IDs uniquely, and retries on mismatch.
+
+- **ID** — BUG-002  
+  **File path** — `.github/workflows/issue_pr_status.yml:253-350,501-518`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The workflow correctly classifies linked issues as tracking vs. managed vs. standalone in the “Update linked issue labels when PR closes” step using labels plus body markers, but the later “Send PR merged Telegram alert” step discards that classification and only treats an issue as orchestrated if its body contains the literal `Managed by: AI Orchestrator`. That misses `ai:orchestrator-tracking` issues entirely and can also miss managed issues whose body marker changes or is absent. The step comment says orchestrator issues should not emit this alert because the poller owns completion alerts, but the implementation no longer matches that rule.  
+  **Recommended fix** — Export the earlier `TRACKING_ISSUES` / `MANAGED_ISSUES` classification to `GITHUB_ENV` or a JSON artifact and reuse it in the alert step. If the step must stay independent, reuse the same batched GraphQL classification logic instead of body-only detection.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — API-001  
+  **File path** — `scripts/review_rb_judge.sh:146-170`  
+  **Severity** — Low  
+  **Category tag** — `api-redundancy`  
+  **Description** — The judge resolves all linked issue numbers, then loops through every issue and fetches each body with `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}"`, but only `FIRST_ISSUE_BODY` is ever consumed. After the first non-empty body is captured, every later `GET /issues/{n}` is redundant. Current call count is **N** issue-body fetches for **N** linked issues; proposed call count is **1**.  
+  **Recommended fix** — Break the loop once `FIRST_ISSUE` and `FIRST_ISSUE_BODY` are populated, or fetch only the first linked issue body. No batching helper is required for the current use case; if future judge context needs multiple issue bodies, extend the aliased GraphQL batching pattern already used elsewhere in `scripts/orchestrate_poll_process.sh`.
+
+- **ID** — BATCH-001  
+  **File path** — `.github/workflows/review_autofix.yml:478-530`  
+  **Severity** — Medium  
+  **Category tag** — `api-batching`  
+  **Description** — In `post-merge-validate-dispatch`, the fast path uses GraphQL to fetch closing issues with labels, but the fallback path extracts issue numbers from PR title/body and then does a per-issue `gh issue view ... --json labels` inside the loop whenever `labels_known != "true"`. Current call count on the fallback path is **1** PR fetch (`GET /pulls/{n}`) + **N** issue-label fetches; proposed call count is **1** PR fetch + **1** aliased GraphQL batch for all extracted issue numbers.  
+  **Recommended fix** — After regex extraction, batch-resolve labels for the extracted issue numbers in one GraphQL call before entering the loop. Reuse the same aliasing pattern already implemented in `.github/workflows/issue_pr_status.yml:286-320` and mirrored in `scripts/orchestrate_poll_process.sh`’s batch-label helpers.
+
+- **ID** — BATCH-002  
+  **File path** — `.github/workflows/issue_pr_status.yml:280-350,501-518`  
+  **Severity** — Low  
+  **Category tag** — `api-batching`  
+  **Description** — This is the API-efficiency side of **BUG-002**. The workflow already spends **1** batched GraphQL call (plus per-issue fallback only on batch failure) to classify orchestrator tracking/managed issues in the close-handling step, but the later merged-alert step still performs **N** per-issue body fetches to rediscover whether the issues are orchestrated. Current alert-step call count is **N**; proposed call count is **0 additional** if the earlier classification is exported, or **1** batched GraphQL call if the alert step must remain isolated.  
+  **Recommended fix** — Persist the earlier classification to `GITHUB_ENV` / step outputs and consume it in the alert step. If isolation is required, reuse the same `ORCH_ALIAS_FRAGMENT` batched query pattern instead of looping over `_safe_gh_jq "repos/.../issues/{n}"`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — DUP-001  
+  **File path** — `scripts/label_helpers.sh:102-197; scripts/validate_process.sh:496-590; scripts/orchestrate_poll_process.sh:1087-1225`  
+  **Severity** — Low  
+  **Category tag** — `duplication`  
+  **Description** — Label creation and phase-label mutation logic is duplicated three ways: a reusable version in `scripts/label_helpers.sh`, a validate-local version in `scripts/validate_process.sh`, and a poller-local version in `scripts/orchestrate_poll_process.sh`. The bodies are near-identical: load label metadata, ensure labels exist, fetch current labels, compute add/remove sets, and apply mutations. This duplication is already drifting: only the poller version has `_ENSURED_LABELS_CACHE`, and failure-return semantics differ across copies.  
+  **Recommended fix** — Make `scripts/label_helpers.sh` the single owner of:
+  - `ensure_label_exists <label_name> [repo]`
+  - `set_issue_phase_label <issue_number> <phase_label> [repo] [contract_file]`
+  - `set_tracking_phase_label <tracking_issue_number> <phase_label> [repo]`  
+  Then update callers in `scripts/validate_process.sh` and `scripts/orchestrate_poll_process.sh` to source that module rather than carrying private copies.
+
+- **ID** — DUP-002  
+  **File path** — `.github/workflows/issue_pr_status.yml:41-131,466-499,555-588`  
+  **Severity** — Low  
+  **Category tag** — `duplication`  
+  **Description** — `issue_pr_status.yml` contains three separate implementations of support-source checkout/fallback logic: one for memory helpers, one for the merged-alert Telegram helper fetch, and one for Telegram cleanup. Each rebuilds `WF_REMOTE_URL`, allocates temp directories, tries `script_ref`, falls back to `main`, and copies `scripts/tg_helpers.sh` or related helpers into place. This is >70% structurally identical and already varies in small but important ways (different temp roots, different fallback logging, different file-copy guards).  
+  **Recommended fix** — Extract a shared helper script, e.g. `scripts/fetch_support_source.sh`, with a function like `checkout_support_source <workflow_repo> <preferred_ref> <stage_root>`, returning the resolved root and ref. Update the three `issue_pr_status.yml` call sites first; then fold similar blocks from other workflows into the same helper.
+
+- **ID** — DUP-003  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/orchestrate_poll.yml:63-97; .github/workflows/mark-stable.yml:307-333,456-483`  
+  **Severity** — Low  
+  **Category tag** — `duplication`  
+  **Description** — The inline `_rl_wait` + `_gh_retry` retry/backoff implementation appears multiple times across workflows with only cosmetic differences. The duplication increases maintenance risk: any fix to rate-limit parsing, breaker-file handling, or backoff policy must be applied in several places.  
+  **Recommended fix** — Centralize this bootstrap logic in a small shared script, e.g. `scripts/gh_retry_bootstrap.sh`, with `_rl_wait` and `_gh_retry <cmd...>`. Update `cancel_on_pr_close.yml`, `orchestrate_poll.yml`, and `mark-stable.yml` to source or generate that shared helper early in the job.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No reportable `expression-limit` findings in the current tree.
+
+- I did not find any current `run:` or `if:` block containing `${{ }}` that crossed the 15,000-character static-body threshold during this audit.
+- No workflow file exceeded the 800 KB early-warning threshold. The two largest current workflow files are:
+  - `review_autofix.yml` — **267,353 bytes**
+  - `test-and-mark-stable.yml` — **229,098 bytes**
+
+The repo still has clear historical risk because the largest files remain `review_autofix.yml` and `test-and-mark-stable.yml`, but there is no present block I can support as an actionable size-limit finding.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — DEAD-001  
+  **File path** — `scripts/orchestrate_poll_process.sh:4765-4772`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `read_standalone_state_json()` is defined but has no live call sites in the repository. The surrounding code paths use cached comment JSON plus `_extract_standalone_state_json_from_comments()` and `write_standalone_state_json()` instead. Keeping the unused wrapper is misleading because it suggests an endorsed API that no caller actually uses, and it duplicates a paginated comments fetch.  
+  **Recommended fix** — Remove `read_standalone_state_json()` if the cached-comment path is the intended contract. If a wrapper is still desirable, convert one real caller to use it so the function stops being dead code.
+
+- **ID** — CONSIST-001  
+  **File path** — `scripts/label_helpers.sh:124-143; scripts/validate_process.sh:511-529; scripts/orchestrate_poll_process.sh:1121-1141`  
+  **Severity** — Medium  
+  **Category tag** — `consistency`  
+  **Description** — The same `ensure_label_exists` operation has three different error contracts. In `scripts/label_helpers.sh`, unrecoverable create failures return non-zero. In `scripts/validate_process.sh` and `scripts/orchestrate_poll_process.sh`, the helper logs a warning but always returns success. That means callers cannot reason consistently about label-creation failures, and future code that expects canonical helper semantics will silently fail open in some execution paths but not others.  
+  **Recommended fix** — Standardize on one contract in `scripts/label_helpers.sh`: return non-zero on unrecoverable create failure, and make fail-open explicit at call sites with `|| true` where desired. Then delete the duplicated local variants.
+
+- **ID** — SHELL-001  
+  **File path** — `scripts/validate_process.sh:197-205`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — ShellCheck flags `local msg="$1$(_tg_link_suffix)"` as `SC2155`. Declaring and assigning in one command masks the exit status of `_tg_link_suffix`, which is easy to miss under `set -euo pipefail` if that helper later grows a real failure mode.  
+  **Recommended fix** — Split declaration from assignment:
+  ```bash
+  local msg
+  msg="$1$(_tg_link_suffix)"
+  ```
+  This preserves command-substitution failure semantics and removes the ShellCheck warning.
+
+Additional cross-cutting notes:
+- I did not find any `TODO`, `FIXME`, or `HACK` markers in the audited workflows/scripts during this pass.
+- ShellCheck on a targeted subset also reported two unused-variable warnings worth cleaning up next: `scripts/review_run_reviewers.sh:119` (`probe_prompt`) and `scripts/memory_helpers.sh:57` (`token`).
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 4 | BUG-001, BUG-002, BATCH-001, CONSIST-001 |
+| Low | 7 | API-001, BATCH-002, DUP-001, DUP-002, DUP-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 3-4 | Medium |
+| Code modularization | 7-10 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 4-6 | Medium |
