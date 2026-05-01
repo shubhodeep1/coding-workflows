@@ -120,6 +120,18 @@ def test_select_targets_zero_cap_returns_empty():
 	assert summarizer.select_targets(runs, max_summaries=0) == []
 
 
+def test_select_targets_treats_whitespace_log_summary_as_missing():
+	runs = [
+		{"repository": "a/b", "run_id": 1, "created_at": "2026-01-01T00:00:00Z", "log_summary": "   "},
+		{"repository": "a/b", "run_id": 2, "created_at": "2026-01-02T00:00:00Z", "log_summary": ""},
+		{"repository": "a/b", "run_id": 3, "created_at": "2026-01-03T00:00:00Z", "log_summary": "real"},
+	]
+	picked = summarizer.select_targets(runs, max_summaries=10)
+	# Whitespace-only and empty are treated as missing → eligible. Real text
+	# is treated as already summarized → skipped.
+	assert sorted(r["run_id"] for r in picked) == [1, 2]
+
+
 # ---------- build_summary_input ------------------------------------------
 
 
@@ -153,6 +165,17 @@ def test_build_summary_input_skips_empty_steps():
 	text = summarizer.build_summary_input(logs, char_cap=10_000)
 	assert "STEP: real" in text
 	assert "STEP: empty" not in text
+
+
+def test_build_summary_input_clamps_non_positive_char_cap():
+	logs = [{"step_name": "build", "content": "X" * 5_000}]
+	# A misconfigured char_cap=0 must not produce unbounded output; the
+	# defensive clamp upgrades it to 1, so the result is bounded by the
+	# truncation marker plus 1 char of head + 1 char of tail.
+	text = summarizer.build_summary_input(logs, char_cap=0, per_step_head=10, per_step_tail=10)
+	marker = "\n... [run-level truncation] ...\n"
+	assert len(text) <= len(marker) + 2
+	assert "[run-level truncation]" in text
 
 
 # ---------- _format_user_message + truncation helper ---------------------
@@ -310,6 +333,69 @@ def test_main_writes_summary_when_summarizer_succeeds(monkeypatch=None):
 	assert row["log_summary"].startswith("- success")
 	assert row["log_summary_meta"]["tokens_used"] == 42
 	assert row["log_summary_meta"]["model"]
+
+
+def test_main_breaks_loop_when_token_budget_exhausted():
+	"""After a single mini call exceeds the budget, remaining runs must be
+	accounted for in `skipped_budget_exhausted` in one shot — not iterated."""
+	with tempfile.TemporaryDirectory() as tmp:
+		report = Path(tmp) / "report.json"
+		_write_report(
+			report,
+			{
+				"runs": [
+					{
+						"repository": "a/b",
+						"run_id": i,
+						"created_at": f"2026-04-{i:02d}T00:00:00Z",
+					}
+					for i in range(1, 6)  # 5 eligible runs
+				]
+			},
+		)
+		fetch_calls = {"n": 0}
+		summarize_calls = {"n": 0}
+
+		class _FakeCollector:
+			@staticmethod
+			def _fetch_run_log_archive(repo, run_id, *, token, cache=None):
+				fetch_calls["n"] += 1
+				return b"<archive bytes>"
+
+			@staticmethod
+			def extract_full_logs(_archive):
+				return [{"step_name": "build", "content": "ok"}]
+
+		class _BudgetEatingSummarizer:
+			def __init__(self, *_a, **_k):
+				pass
+
+			def summarize(self, *_a, **_k):
+				summarize_calls["n"] += 1
+				# First call alone consumes the entire budget.
+				return ("- summary", 10_000)
+
+		original_loader = summarizer._load_collector_module
+		original_klass = summarizer.OpenRouterSummarizer
+		summarizer._load_collector_module = lambda: _FakeCollector
+		summarizer.OpenRouterSummarizer = _BudgetEatingSummarizer
+		try:
+			with _env(OPENROUTER_API_KEY="orkey", GH_TOKEN="ghs_test"), _capture_std():
+				rc = summarizer.main(
+					["--report", str(report), "--token-budget", "5000"]
+				)
+			written = json.loads(report.read_text(encoding="utf-8"))
+		finally:
+			summarizer._load_collector_module = original_loader
+			summarizer.OpenRouterSummarizer = original_klass
+
+	assert rc == 0
+	# Exactly one summary written; loop must not continue calling the
+	# summarizer or fetching archives once budget exceeded.
+	assert summarize_calls["n"] == 1
+	assert fetch_calls["n"] == 1
+	summarized_count = sum(1 for r in written["runs"] if r.get("log_summary"))
+	assert summarized_count == 1
 
 
 def test_main_fail_open_when_summarizer_raises():

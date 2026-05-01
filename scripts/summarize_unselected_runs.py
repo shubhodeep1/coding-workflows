@@ -121,7 +121,11 @@ def _warn(message: str) -> None:
 def _is_run_eligible(run: Any) -> bool:
 	if not isinstance(run, dict):
 		return False
-	if run.get("log_summary"):
+	# Treat whitespace-only `log_summary` as missing so a prior empty write
+	# doesn't permanently block re-summarization (analyzer also drops blanks
+	# in `_normalized_run_view`).
+	log_summary = run.get("log_summary")
+	if isinstance(log_summary, str) and log_summary.strip():
 		return False
 	excerpts = run.get("log_excerpts")
 	if isinstance(excerpts, list) and excerpts:
@@ -170,6 +174,11 @@ def build_summary_input(
 	total approaches `char_cap`. If still over the cap, the assembled text is
 	itself head/tail-truncated to fit.
 	"""
+	# Defensive clamps so a misconfigured CLI flag or env override can't
+	# produce unbounded output: char_cap >= 1, per-step bounds >= 0.
+	char_cap = max(int(char_cap), 1)
+	per_step_head = max(int(per_step_head), 0)
+	per_step_tail = max(int(per_step_tail), 0)
 	parts: list[str] = []
 	total = 0
 	for step in full_logs:
@@ -299,7 +308,10 @@ def _write_json_atomic(path: Path, payload: Any) -> None:
 
 def _emit_telemetry(stats: dict[str, Any]) -> None:
 	stats_with_op = {"op": SUMMARIZER_TELEMETRY_OP, **stats}
-	print(f"AI_MEMORY_TELEMETRY: {json.dumps(stats_with_op, sort_keys=True)}", file=sys.stderr)
+	print(
+		f"AI_MEMORY_TELEMETRY: {json.dumps(stats_with_op, ensure_ascii=True, sort_keys=True)}",
+		file=sys.stderr,
+	)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -419,10 +431,12 @@ def main(argv: list[str] | None = None) -> int:
 	)
 	archive_cache: dict[tuple[str, int], Any] = {}
 
-	for run in targets:
+	for index, run in enumerate(targets):
 		if stats["tokens_used"] >= args.token_budget:
-			stats["skipped_budget_exhausted"] += 1
-			continue
+			# Account for the current run plus everything after it in one shot,
+			# then bail — no point fetching log archives we won't summarize.
+			stats["skipped_budget_exhausted"] += len(targets) - index
+			break
 		repository = str(run.get("repository") or "")
 		run_id = _to_int(run.get("run_id"), 0)
 		try:
