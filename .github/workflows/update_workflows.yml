@@ -124,6 +124,67 @@ jobs:
           echo "changed_count=${changed_count}" >> "$GITHUB_OUTPUT"
           echo "message=${message}" >> "$GITHUB_OUTPUT"
 
+      - name: Sync .claude/ assets from upstream
+        id: claude_sync
+        run: |
+          set -euo pipefail
+
+          # Mirror workflow-templates/.claude/ → .claude/ in the consumer
+          # repo. Semantics, per design:
+          #   - Upstream is source of truth: any file present in
+          #     upstream's workflow-templates/.claude/ overwrites the
+          #     consumer's copy on every sync. Hand-edits to consumer
+          #     copies of synced files will be lost — matches how
+          #     *.yml workflow wrappers already behave.
+          #   - Consumer-local files NOT present in upstream are left
+          #     alone (consumers can keep .claude/skills/private-foo/).
+          #   - Files removed upstream are NOT deleted from the
+          #     consumer; orphans accumulate. Intentional retirement
+          #     is a future feature.
+          # If upstream has no workflow-templates/.claude/ at this
+          # stable ref, log and exit 0 — the sync is additive.
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          CLAUDE_UPSTREAM_DIR="${UPSTREAM_DIR}/.claude"
+          CLAUDE_LOCAL_DIR=".claude"
+
+          echo "claude_changed=0" >> "$GITHUB_OUTPUT"
+          echo "claude_has_changes=false" >> "$GITHUB_OUTPUT"
+          : > /tmp/claude_changed_files.txt
+
+          if [ ! -d "${CLAUDE_UPSTREAM_DIR}" ]; then
+            echo "Upstream has no workflow-templates/.claude/ at this ref — nothing to sync."
+            exit 0
+          fi
+
+          mkdir -p "${CLAUDE_LOCAL_DIR}"
+
+          CHANGED_COUNT=0
+          while IFS= read -r upstream_path; do
+            [ -n "${upstream_path}" ] || continue
+            rel="${upstream_path#${CLAUDE_UPSTREAM_DIR}/}"
+            local_path="${CLAUDE_LOCAL_DIR}/${rel}"
+            local_dir=$(dirname "${local_path}")
+            mkdir -p "${local_dir}"
+
+            # Copy if absent or differs (whitespace-tolerant compare,
+            # matching the wrapper-update step's diff invocation so
+            # CRLF round-trips don't trigger spurious churn).
+            if [ ! -f "${local_path}" ] || ! diff -q --strip-trailing-cr --ignore-space-at-eol "${upstream_path}" "${local_path}" >/dev/null 2>&1; then
+              cp "${upstream_path}" "${local_path}"
+              CHANGED_COUNT=$((CHANGED_COUNT + 1))
+              printf '%s\n' "${local_path}" >> /tmp/claude_changed_files.txt
+            fi
+          done < <(LC_ALL=C find "${CLAUDE_UPSTREAM_DIR}" -type f | LC_ALL=C sort)
+
+          echo "claude_changed=${CHANGED_COUNT}" >> "$GITHUB_OUTPUT"
+          if [ "${CHANGED_COUNT}" -gt 0 ]; then
+            echo "claude_has_changes=true" >> "$GITHUB_OUTPUT"
+            echo ".claude/ assets synced: ${CHANGED_COUNT} file(s) changed."
+          else
+            echo ".claude/ assets already up to date."
+          fi
+
       - name: Compare and update workflow wrappers
         id: update
         run: |
@@ -249,7 +310,7 @@ jobs:
           fi
 
       - name: Commit and push updates
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true'
         run: |
           set -euo pipefail
 
@@ -263,6 +324,12 @@ jobs:
               git add -- "$changed_path"
             done < /tmp/audit_gate_changed_files.txt
           fi
+          if [ -f /tmp/claude_changed_files.txt ] && [ -s /tmp/claude_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              git add -- "$changed_path"
+            done < /tmp/claude_changed_files.txt
+          fi
 
           COMMIT_BODY=""
           UPDATED_LIST=$(cat /tmp/updated_files.txt)
@@ -274,6 +341,13 @@ jobs:
               AUDIT_CHANGED_LIST="${AUDIT_CHANGED_LIST}• ${changed_path}\n"
             done < /tmp/audit_gate_changed_files.txt
           fi
+          CLAUDE_CHANGED_LIST=""
+          if [ -f /tmp/claude_changed_files.txt ] && [ -s /tmp/claude_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              CLAUDE_CHANGED_LIST="${CLAUDE_CHANGED_LIST}• ${changed_path}\n"
+            done < /tmp/claude_changed_files.txt
+          fi
           if [ -n "$UPDATED_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Updated templates:\n${UPDATED_LIST}\n"
           fi
@@ -282,6 +356,9 @@ jobs:
           fi
           if [ -n "$AUDIT_CHANGED_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Audit gate assets:\n${AUDIT_CHANGED_LIST}\n"
+          fi
+          if [ -n "$CLAUDE_CHANGED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}.claude/ assets:\n${CLAUDE_CHANGED_LIST}\n"
           fi
 
           if git diff --cached --quiet; then
@@ -294,7 +371,7 @@ jobs:
           git push
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -338,6 +415,11 @@ jobs:
           if [ -f /tmp/audit_gate_changed_files.txt ] && [ -s /tmp/audit_gate_changed_files.txt ]; then
             AUDIT_GATE_CHANGED_LIST=$(cat /tmp/audit_gate_changed_files.txt)
           fi
+          CLAUDE_CHANGED_COUNT="${{ steps.claude_sync.outputs.claude_changed }}"
+          CLAUDE_CHANGED_LIST=""
+          if [ -f /tmp/claude_changed_files.txt ] && [ -s /tmp/claude_changed_files.txt ]; then
+            CLAUDE_CHANGED_LIST=$(cat /tmp/claude_changed_files.txt)
+          fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           MSG="Workflow wrappers updated in ${REPO}
@@ -356,6 +438,11 @@ jobs:
             MSG="${MSG}
           Audit-gate assets applied:
           ${AUDIT_GATE_CHANGED_LIST}"
+          fi
+          if [ -n "$CLAUDE_CHANGED_LIST" ]; then
+            MSG="${MSG}
+          ${CLAUDE_CHANGED_COUNT} .claude/ asset(s) synced:
+          ${CLAUDE_CHANGED_LIST}"
           fi
           MSG="${MSG}
           Source: coding-workflows@stable
@@ -443,6 +530,8 @@ jobs:
           if [ -n "${AUDIT_GATE_MESSAGE:-}" ]; then
             echo "- **Audit gate message:** ${AUDIT_GATE_MESSAGE}" >> "$GITHUB_STEP_SUMMARY"
           fi
+          CLAUDE_CHANGED_COUNT="${{ steps.claude_sync.outputs.claude_changed }}"
+          echo "- **.claude/ assets synced:** ${CLAUDE_CHANGED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${HAS_UPDATES}" = "true" ]; then
@@ -475,5 +564,12 @@ jobs:
             echo "**Audit gate files:**" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             cat /tmp/audit_gate_changed_files.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -s /tmp/claude_changed_files.txt ]; then
+            echo "**.claude/ files:**" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/claude_changed_files.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
