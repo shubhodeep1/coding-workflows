@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/analyze-log.md:25-35 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The historical upstream SHA lookup may fall back to the current tip when the commit history query cannot resolve the run\u2019s branch state.\n  WHY: That fallback can cause investigations of older branch-pinned failures to use a newer upstream commit instead of the code that actually ran.\n- workflow-templates/.claude/skills/investigate-issue/SKILL.md:36-46 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The historical upstream SHA lookup may fall back to the current tip when the commit history query cannot resolve the run\u2019s branch state.\n  WHY: That fallback can cause investigations of older branch-pinned failures to use a newer upstream commit instead of the code that actually ran.\n- .github/workflows/update_workflows.yml:175-178 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The deterministic ordering fix relies on `LC_ALL=C sort`, which the reviewer flagged as still potentially varying across runner environments.\n  WHY: If ordering differs, generated commit bodies, notifications, and summaries can become non-reproducible across runs.\n- .github/workflows/update_workflows.yml:289-290 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The workflow fetches `tg_helpers.sh` from upstream on every run without a local fallback or retry.\n  WHY: A transient upstream fetch failure would skip the notification helper and reduce operator visibility.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- workflow-templates/.claude/commands/analyze-log.md:25-35 | severity=medium | confidence=3\n  PROBLEM: New instructions assume `mcp__github__list_commits` supports `until=<timestamp>` filtering or reliable pagination to locate a branch's historical commit from run metadata.\n  WHY: If unsupported, branch-pin cases silently fall back to the current tip without surfacing the tool limitation, so investigations may use the wrong code state.\n- workflow-templates/.claude/skills/investigate-issue/SKILL.md:36-46 | severity=medium | confidence=3\n  PROBLEM: The skill duplicates the same assumption that `mcp__github__list_commits` can resolve a branch's historical commit from run metadata.\n  WHY: If unsupported, the skill has the same degraded evidence quality and can analyze failures against the wrong upstream commit.\n- .github/workflows/update_workflows.yml:175-178 | severity=low | confidence=2\n  PROBLEM: `LC_ALL=C sort` is treated as fully deterministic, but the reviewer flagged it as still runner-dependent under some environments.\n  WHY: If sort order varies, the generated commit body, Telegram message, and step summary can become non-reproducible.\n- .github/workflows/update_workflows.yml:289-290 | severity=low | confidence=3\n  PROBLEM: The workflow fetches `tg_helpers.sh` from upstream without a local fallback or version pin.\n  WHY: If the fetch 404s, rate-limits, or times out, notification handling can be skipped and operators lose visibility.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "51386c077acb3ba189f615293abb5ee1b9929e4d5356387bcc9a447564108756",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1843,
+    "run_id": "25203362359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25203362359",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501054017_7dded214cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1843,
+    "run_id": "25203362359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-01T05:40:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
