@@ -1568,6 +1568,10 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          # Fallback: if gh_helpers.sh failed to source, gh_retry would be
+          # undefined and the next call would fail under `set -euo pipefail`.
+          # Same pattern used by every other gh_retry caller in this file.
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           echo "auto_approved=false" >> "$GITHUB_OUTPUT"
 
