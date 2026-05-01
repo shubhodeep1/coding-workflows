@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The canary file contains an extra fourth line, so it is not exactly the required three lines.\n  WHY: All reviewers report that the smoke gate requires an exact three-line match with no extra content, so the additional line causes validation to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The canary file contains an extra fourth line, so it does not match the required exact three-line content.\n  WHY: The smoke gate validates this file by exact content comparison, and the extra line makes the check fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The file has 4 lines instead of the required exactly 3 lines.\n  WHY: The issue requires no extra comments or additional content, so the fourth line causes the E2E smoke test content check to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The file contains a fourth bait/comment line and therefore exceeds the required exact three-line content.\n  WHY: The smoke test gate expects only the three specified lines, so preserving the extra line makes validation fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The file contains 4 lines but the issue explicitly requires exactly 3 lines with no extra comments, headers, or additional text.\n  WHY: An unmatched fourth line causes the content check to fail, marking the release gate as failed.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The file contains an extraneous fourth line, so it violates the exact three-line requirement.\n  WHY: E2E smoke validation will fail because the content is expected to match only three lines exactly.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The file contains a fourth bait line that violates the explicit requirement for exactly three lines with no extra content.\n  WHY: The smoke gate validates the canary file against an exact three-line expectation, so the extra line causes content validation to fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2d762228e671a2c6f060780ae9f86eec233b5406c5d0a2aba53ac1b6216cb02a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1837,
+    "run_id": "25200273362",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25200273362",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501031319_48dd0ac152",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1837,
+    "run_id": "25200273362"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-01T03:13:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
