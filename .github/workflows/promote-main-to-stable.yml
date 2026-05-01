@@ -26,10 +26,12 @@ name: Promote main to stable
     inputs:
       version_tag:
         description: >
-          Semantic version tag (e.g. v1.5.0). Almost always required
-          for a promotion (since the typical case is a minor/major
-          bump). Leave blank to fall back to patch auto-increment
-          from the latest stable-reachable tag.
+          Semantic version tag (e.g. v1.5.0). Leave blank to
+          auto-increment the MINOR component from the latest
+          stable-reachable tag (vX.Y.Z → vX.(Y+1).0). The patch
+          component is reset to 0 — promotes are minor/major bumps
+          by definition; the patch-bump default in
+          test-and-mark-stable.yml is for the stable-only patch path.
         required: false
         type: string
         default: ""
@@ -199,24 +201,111 @@ jobs:
           echo "moved=true" >> "$GITHUB_OUTPUT"
           echo "sha=${TARGET}" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve version (compute next minor if not provided)
+        id: resolve_version
+        env:
+          INPUT_VERSION: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+          # Promote runs are minor/major bumps by definition; the
+          # auto-bump path here computes vX.(Y+1).0 from the latest
+          # semver tag reachable from the just-fast-forwarded HEAD
+          # (== main HEAD). The patch-bump auto-resolver in
+          # test-and-mark-stable.yml is appropriate for the stable-
+          # only patch path; we override it here by passing an
+          # explicit version_tag through to the dispatch.
+          if [ -n "${INPUT_VERSION}" ]; then
+            if [[ ! "${INPUT_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Provided version '${INPUT_VERSION}' is invalid; must match vX.Y.Z"
+              exit 1
+            fi
+            echo "Using user-provided version: ${INPUT_VERSION}"
+            echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Refresh tags from origin BEFORE computing LATEST. Bounded
+          # retry tolerates transient network/auth flakes; persistent
+          # failure is a hard error since computing the next version
+          # on stale tag data could pick a colliding version.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch --tags --force origin 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch remote tags after 3 attempts — refusing to compute next version on potentially stale tag data"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch --tags failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
+
+          # Strict semver filter mirrors test-and-mark-stable.yml's
+          # resolver: the shell glob also matches prerelease tags
+          # (e.g. v1.4.2-beta.1) which would later break minor
+          # arithmetic on `cut -d. -f2` under `set -euo pipefail`.
+          LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+            | head -n1)
+
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0.0"
+            echo "No existing version tags reachable from HEAD. Defaulting to ${NEXT}"
+          else
+            MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
+            # Bump minor (patch resets to 0) and skip any candidate
+            # already in the local tag namespace (which mirrors origin
+            # after the fetch above). Bounded to 1000 iterations as a
+            # belt-and-braces guard.
+            NEXT=""
+            i=0
+            while [ "$i" -lt 1000 ]; do
+              MINOR=$((MINOR + 1))
+              CANDIDATE="v${MAJOR}.${MINOR}.0"
+              if ! git rev-parse "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+                NEXT="$CANDIDATE"
+                break
+              fi
+              echo "Tag ${CANDIDATE} already exists — skipping"
+              i=$((i + 1))
+            done
+            if [ -z "$NEXT" ]; then
+              echo "::error::Could not find an unused minor tag after 1000 attempts starting from ${LATEST}"
+              exit 1
+            fi
+            echo "Latest reachable tag: ${LATEST} → next promote version: ${NEXT}"
+          fi
+
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+
       - name: Dispatch test-and-mark-stable on stable
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          RESOLVED_VERSION: ${{ steps.resolve_version.outputs.version }}
         run: |
           set -euo pipefail
           # test-and-mark-stable.yml hard-rejects any dispatch ref
           # other than `stable`, so we MUST pass `--ref stable` here.
           # The release job tags the just-fast-forwarded commit on
           # stable and `gh release create` targets the stable branch.
+          # Passing `version_tag` explicitly overrides
+          # test-and-mark-stable.yml's auto-bump (which would patch-
+          # bump) — promote runs are minor/major by definition.
           gh workflow run test-and-mark-stable.yml \
             --ref stable \
-            -f version_tag="${{ inputs.version_tag }}" \
+            -f version_tag="${RESOLVED_VERSION}" \
             -f test_repo="${{ inputs.test_repo }}" \
             -f skip_e2e="${{ inputs.skip_e2e }}" \
             -f dry_run="${{ inputs.dry_run }}" \
             -f phase_timeout="${{ inputs.phase_timeout }}" \
             -f review_timeout="${{ inputs.review_timeout }}"
-          echo "Dispatched test-and-mark-stable.yml on stable branch."
+          echo "Dispatched test-and-mark-stable.yml on stable branch with version=${RESOLVED_VERSION}."
           echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml"
 
       - name: Summary
@@ -225,6 +314,7 @@ jobs:
           echo "Promotion summary:"
           echo "  stable now at: ${{ steps.ff.outputs.sha }}"
           echo "  fast-forward moved: ${{ steps.ff.outputs.moved }}"
+          echo "  resolved version: ${{ steps.resolve_version.outputs.version }}"
           echo "  release pipeline dispatched on stable branch (see link above)"
           echo ""
           echo "The release run will tag, move the stable/vN pointers, create a"
