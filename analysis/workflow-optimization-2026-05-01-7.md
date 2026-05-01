@@ -479,3 +479,145 @@
 | copilot PR reviewer | `github.paginate(pulls.listFiles)` + artifact listing/deletes | full pagination / repeated artifact lookups | fetch once and reuse |
 | review post-merge validate dispatch | `gh api graphql` + workflow dispatch fallback + `gh issue edit` | serial redundant calls | batch lookups and pre-check workflow availability |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-01)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID**: BUG-001  
+  **File path**: `.github/workflows/test-and-mark-stable.yml:1249-1360`  
+  **Severity**: High  
+  **Category tag**: `bug`  
+  **Description**: The review wait loop can mark the smoke test successful while the review workflow is still `in_progress`. After 10 minutes it fetches live job logs, counts `Reviewer .* succeeded`, and exits with `status=success` once `SUCCEEDED >= 3` and `SUCCEEDED * 2 > TOTAL_DONE` (lines 1347-1359). That shortcut ignores every downstream stage that runs after reviewers finish: consensus synthesis, editor execution, commit/push, merge-conflict handling, and final workflow conclusion. A run with three successful reviewers and a later editor/push failure will therefore be reported as a passing E2E review.  
+  **Recommended fix**: Remove the early-success exit. Keep the reviewer-count probe only as an activity signal for resetting the inactivity timer, or require a terminal workflow signal before returning success (for example `status=completed && conclusion=success`, or an explicit end-of-review marker comment/artifact emitted after the editor/commit path).
+
+- **ID**: BUG-002  
+  **File path**: `.github/workflows/review_autofix.yml:485-529,594-607`  
+  **Severity**: Medium  
+  **Category tag**: `bug`  
+  **Description**: The `post-merge-validate-dispatch` job falls back to regex-scanning the PR title/body for issue-like text when `closingIssuesReferences` is empty. It matches broad patterns such as `issues/123`, `issue #123`, and `fixes #123` (lines 486-495), then probes and mutates those issues by dispatching validation and removing `ai:orchestrator-validate-required` (lines 500-529). In the same workflow, the deterministic-skip path explicitly avoids this fallback because incidental prose references can false-match unrelated issues (lines 594-607). That means the post-merge path can clear the validate-required label for an unrelated orchestrator issue that was only mentioned in documentation or examples.  
+  **Recommended fix**: Do not use title/body regex fallback on a mutating path. Either require authoritative `closingIssuesReferences`, or add a second authoritative check before any dispatch/label removal (for example timeline/cross-reference verification or explicit orchestrator metadata on the issue).
+
+- **ID**: BUG-003  
+  **File path**: `.github/workflows/test-and-mark-stable.yml:2725-2956,3002-3067,3211-3255`  
+  **Severity**: Medium  
+  **Category tag**: `bug`  
+  **Description**: Several “Dispatch & watch” steps correlate the child run only by `id > PRE` and then choose the newest run (`sort_by(.created_at) | last`). That pattern is used for `workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-memory-maintenance`, `internal-orchestrate`, and `internal-validate`. If another run of the same workflow starts in `TEST_REPO` after `PRE` but before the poll loop locks onto the intended dispatch, the smoke test can watch the wrong run and report the wrong result.  
+  **Recommended fix**: Stamp each dispatch with a unique correlation token and filter on that token when resolving the new run. Where inputs cannot carry a token, use a unique branch/ref or a unique input value already echoed into the child run, then filter the run list by that marker before selecting `NEW_ID`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID**: BATCH-001  
+  **File path**: `scripts/orchestrate_poll_process.sh:11387-11453`  
+  **Severity**: High  
+  **Category tag**: `api-batching`  
+  **Description**: The standalone PR conflict sweep does one `gh pr list` call to enumerate open PRs, then issues a separate `GET /pulls/{n}` for every candidate to read `state`, `head.ref`, `head.sha`, and `mergeable_state`. Current call count is `1 + N` per sweep, where `N` is the number of open PRs being scanned. On a repo with 100 open PRs, that is 101 calls in a single sweep. This is exactly the per-item REST pattern CLAUDE.md §15 warns about.  
+  **Recommended fix**: Reduce this to `1 + ceil(N / batch_size)` by reusing the aliased-GraphQL batching pattern already used in `orchestrate_poll_process.sh` (extend `_fetch_linked_pr_status_graphql` or add a sibling helper with the same alias-chunking contract). For example, with batches of 20 PRs, 100 open PRs drops from 101 calls to 6.
+
+- **ID**: BATCH-002  
+  **File path**: `scripts/orchestrate_poll_process.sh:6348-6373`  
+  **Severity**: Medium  
+  **Category tag**: `api-batching`  
+  **Description**: The standalone stall sweep builds its candidate issue set by making seven separate `gh issue list --label ...` calls, one per pipeline label (`ai:clarification`, `ai:planning`, `ai:awaiting-approval`, `ai:implementing`, `ai:done`, `ai:ready-to-merge`, `ai:review-blocked`). Current call count is 7 list calls per sweep before the later candidate-details GraphQL prefetch even starts. This is a repeated fan-out over the same repo/state scope. `[NEEDS VERIFICATION]`  
+  **Recommended fix**: Collapse the label fan-out into one batched query and keep `_fetch_candidate_issue_details_graphql` as the downstream detail fetch. A single GraphQL/search query that returns open issues matching any pipeline-phase label would reduce the current 7 calls to 1. The existing candidate-detail batching pattern in `_fetch_candidate_issue_details_graphql` is the right helper family to extend.
+
+- **ID**: BATCH-003  
+  **File path**: `.github/workflows/review_autofix.yml:478-530`  
+  **Severity**: Medium  
+  **Category tag**: `api-batching`  
+  **Description**: In the `post-merge-validate-dispatch` fallback path, the workflow first does one PR fetch to regex-extract candidate issue numbers, then does `gh issue view ... --json labels` once per candidate issue to discover whether `ai:orchestrator-validate-required` is present. Current fallback-path call count is `2 + N` (`1` failed/empty `closingIssuesReferences` query, `1` PR fetch, then `N` issue-label fetches).  
+  **Recommended fix**: Keep the single PR fetch, then batch the label lookups into one GraphQL alias request for the extracted issue numbers. That cuts the fallback path from `2 + N` to `3` total calls regardless of `N`, or to `2` if the initial empty `closingIssuesReferences` attempt is skipped once the fallback branch is entered. The existing `_fetch_issue_labels_batch_graphql` pattern in `scripts/orchestrate_poll_process.sh` is the natural helper to extend.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID**: DUP-001  
+  **File path**: `.github/workflows/test-and-mark-stable.yml:2725-2897,2919-2956,3002-3067,3211-3255`  
+  **Severity**: Medium  
+  **Category tag**: `duplication`  
+  **Description**: `test-and-mark-stable.yml` repeats the same dispatch/watch/poll loop for multiple child workflows: snapshot previous run id, dispatch, poll for the new run, then poll `actions/runs/{id}` until terminal. The `workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-memory-maintenance`, `internal-orchestrate`, and `internal-validate` blocks are near-identical, with only workflow file, timeout, and allowed conclusions differing.  
+  **Recommended fix**: Extract a shared helper under `scripts/`, e.g. `scripts/dispatch_and_watch_workflow.sh`, with a signature like `dispatch_and_watch_workflow <repo> <workflow_file> <deadline_secs> <success_conclusions_csv> [--field key=value ...]`. Update each of the six callers in `test-and-mark-stable.yml` to use the helper and pass only workflow-specific parameters.
+
+- **ID**: DUP-002  
+  **File path**: `scripts/label_helpers.sh:102-197; .github/workflows/review_autofix.yml:563-580,3698-3738,3826-3836; scripts/orchestrate_poll_process.sh:1087-1215; scripts/validate_process.sh:496-605; scripts/review_rb_judge.sh:33-77`  
+  **Severity**: Medium  
+  **Category tag**: `duplication`  
+  **Description**: Label creation and resilient phase-label application are implemented multiple times with slightly different local copies. `scripts/label_helpers.sh` already provides `ensure_label_exists` and `set_issue_phase_label_resilient`, but review/autofix, validate, the poller, and the review-blocked judge all carry inline or partial reimplementations. This duplicates label color/description data and phase-swap behavior across several files.  
+  **Recommended fix**: Make `scripts/label_helpers.sh` the single owner of label catalog + phase mutation logic. Keep the function signatures `ensure_label_exists <label_name> [repo]` and `set_issue_phase_label_resilient <issue_number> <target_label> <repo>`. Update callers in `review_autofix.yml`, `validate_process.sh`, `review_rb_judge.sh`, and `orchestrate_poll_process.sh` to source that module instead of maintaining local fallbacks, or stage the helper earlier in lightweight jobs that currently avoid it.
+
+- **ID**: DUP-003  
+  **File path**: `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/mark-stable.yml:307-334,456-483; .github/workflows/orchestrate_poll.yml:63-97; .github/workflows/review_autofix.yml:1269-1307; .github/workflows/test-and-mark-stable.yml:1133-1155`  
+  **Severity**: Medium  
+  **Category tag**: `duplication`  
+  **Description**: Rate-limit-aware inline retry wrappers (`_rl_wait`, `_gh_retry`, `gh_api_safe`) are copied into multiple workflows with slightly different retry counts, backoff behavior, and stderr handling. The repo already has `scripts/gh_helpers.sh` with `gh_retry`, `gh_retry_to_file`, and `gh_api_json_to_file`, but these workflows maintain parallel implementations.  
+  **Recommended fix**: Consolidate on `scripts/gh_helpers.sh` as the shared module. Where early bootstrap prevents sourcing from the checkout, stage a minimal bootstrap copy once and reuse the same interface. Keep the public helper signatures `gh_retry <cmd...>`, `gh_retry_to_file <outfile> <cmd...>`, and `gh_api_json_to_file <outfile> <cmd...>`. Update callers in the five workflows above to stop carrying bespoke retry logic.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID**: EXPR-001  
+  **File path**: `.github/workflows/test-and-mark-stable.yml:1118-1448`  
+  **Severity**: High  
+  **Category tag**: `expression-limit`  
+  **Description**: The `Wait for review & autofix to complete` `run:` block contains GitHub interpolations and is already about **19,696 characters**, leaving only **1,304 characters** before the 21,000-character hard limit. This block has already accumulated log polling, live-log parsing, early-exit logic, and activity heuristics, so future edits have very little headroom.  
+  **Recommended fix**: Extract this wait loop to an external script under `scripts/` and pass only small env vars from YAML. That is the safest fix because it removes the entire block from expression-length accounting.
+
+- **ID**: EXPR-002  
+  **File path**: `.github/workflows/validate.yml:188-480`  
+  **Severity**: Medium  
+  **Category tag**: `expression-limit`  
+  **Description**: The `Fetch workflow support files` `run:` block contains interpolations and is about **16,529 characters**, leaving **4,471 characters** of headroom. It includes branch/ref resolution, staged checkout fallback logic, large template-copy lists, and schema bootstrap logic in one expression-bearing block.  
+  **Recommended fix**: Move the support-file bootstrap into a dedicated script such as `scripts/fetch_validate_support_files.sh`, or split the current block into at least two steps: ref/checkout resolution and file-copy/bootstrap.
+
+- **ID**: EXPR-003  
+  **File path**: `.github/workflows/review_autofix.yml:1266-1587`  
+  **Severity**: Medium  
+  **Category tag**: `expression-limit`  
+  **Description**: The `Collect PR metadata` `run:` block is about **16,437 characters**, leaving **4,563 characters** of headroom. It combines local retry helpers, no-PR Claude-branch synthesis, four PR metadata fetches, and linked-issue GraphQL prefetch logic in one interpolation-bearing block.  
+  **Recommended fix**: Extract the metadata collection path to `scripts/review_collect_pr_metadata.sh` and keep YAML limited to env wiring plus the script invocation.
+
+- **ID**: EXPR-004  
+  **File path**: `.github/workflows/orchestrate_clarify_respond.yml:840-1122`  
+  **Severity**: Medium  
+  **Category tag**: `expression-limit`  
+  **Description**: The `Parse and post answer` `run:` block is about **15,140 characters**, leaving **5,860 characters** of headroom. It bundles processed-command claim logic, memory loop guards, escalation comment building, Telegram notification, and answer posting into one interpolated block.  
+  **Recommended fix**: Extract the parsing/posting logic into a script under `scripts/`, or split the current step into separate “claim/guard”, “post escalation”, and “post answer” steps.
+
+No workflow file currently exceeds the 800 KB early-warning threshold; the largest audited workflow is `review_autofix.yml` at 266,996 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID**: DEAD-001  
+  **File path**: `scripts/mark-stable.sh:1-14`  
+  **Severity**: Low  
+  **Category tag**: `dead-code`  
+  **Description**: Repository search found no workflow or script references to `scripts/mark-stable.sh`; only documentation/analysis files mention it. That makes the script effectively orphaned inside this repo and increases the chance it drifts away from the real release path. `[NEEDS VERIFICATION]`  
+  **Recommended fix**: Either document it as a supported manual release tool in the main operational docs and keep it intentionally maintained, or remove it from the repository if the workflow-based release path is the only supported path.
+
+- **ID**: SHELL-001  
+  **File path**: `scripts/tg_helpers.sh:335-350,405-420`  
+  **Severity**: Low  
+  **Category tag**: `shellcheck`  
+  **Description**: The Telegram cleanup helpers iterate over comment-derived `id_list` with unquoted `for tg_id in ${id_list}; do` after changing `IFS=','`. If the marker is malformed, that expansion can still undergo shell word-splitting/globbing, which is the classic SC2086-style failure mode. The same blocks also delete GitHub tracking comments with raw `curl -X DELETE` while suppressing failures, so malformed input and transient API errors are both hard to see.  
+  **Recommended fix**: Parse IDs with `IFS=, read -r -a tg_ids <<< "${id_list}"` and iterate as `for tg_id in "${tg_ids[@]}"; do`. Route the GitHub DELETE through `curl_gh_api` (or at least check the HTTP status once) so cleanup stays rate-limit-aware and observable.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the audited `.github/workflows/*.yml`, `scripts/*.sh`, or `scripts/*.py` scope.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, BATCH-001, EXPR-001 |
+| Medium | 10 | BUG-002, BUG-003, BATCH-002, BATCH-003, DUP-001, DUP-002, DUP-003, EXPR-002, EXPR-003, EXPR-004 |
+| Low | 2 | DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 2 | Large |
+| Code modularization | 7 | Large |
+| Expression size reduction | 4 | Medium |
+| Medium/Low fixes | 2 | Small |
