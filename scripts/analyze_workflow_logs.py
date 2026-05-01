@@ -182,7 +182,7 @@ def load_input_data(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _normalized_run_view(run: dict[str, Any]) -> dict[str, Any]:
-	return {
+	view: dict[str, Any] = {
 		"repository": run.get("repository"),
 		"run_id": run.get("run_id") or run.get("id"),
 		"workflow_name": run.get("workflow_name") or run.get("workflow"),
@@ -194,6 +194,13 @@ def _normalized_run_view(run: dict[str, Any]) -> dict[str, Any]:
 		"created_at": run.get("created_at"),
 		"failure_point": run.get("failure_point") or {},
 	}
+	# `log_summary` is populated by scripts/summarize_unselected_runs.py for
+	# runs outside the collector's deep-dive top-15. Carry it through so the
+	# Codex analysis pass can cite signals from coverage-widened runs.
+	log_summary = run.get("log_summary")
+	if isinstance(log_summary, str) and log_summary.strip():
+		view["log_summary"] = log_summary
+	return view
 
 
 def _summarize_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
