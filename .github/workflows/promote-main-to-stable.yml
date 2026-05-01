@@ -116,18 +116,88 @@ jobs:
         id: ff
         run: |
           set -euo pipefail
+          # Pre-check: `stable` MUST exist on origin as a branch. A naked
+          # `git push origin stable` from a detached HEAD (which is what
+          # `actions/checkout ref: stable` produces when only a `stable`
+          # tag exists) will silently match the tag refspec and report
+          # "Everything up-to-date" without moving any branch — the
+          # downstream release would then run against an unchanged
+          # commit. ls-remote --exit-code: 0 found, 2 absent, other =
+          # transport/auth/repo error.
+          set +e
+          git ls-remote --exit-code --heads origin stable >/dev/null 2>&1
+          rc=$?
+          set -e
+          case "$rc" in
+            0) ;;
+            2)
+              echo "::error::Origin has no 'stable' branch. The promote workflow requires a long-lived stable branch (consumers pin to the @stable tag, but the branch is what this workflow fast-forwards)."
+              echo "::error::Create it once with: git push origin <commit>:refs/heads/stable"
+              exit 1
+              ;;
+            *)
+              echo "::error::git ls-remote failed with exit code ${rc} (transport/auth/repo error). Refusing to proceed without a confirmed branch-present signal."
+              exit 1
+              ;;
+          esac
+
           BEFORE=$(git rev-parse HEAD)
           TARGET=$(git rev-parse origin/main)
           if [ "${BEFORE}" = "${TARGET}" ]; then
             echo "stable already at main's HEAD (${TARGET}) — no-op"
             echo "moved=false" >> "$GITHUB_OUTPUT"
-          else
-            git merge --ff-only origin/main
-            git push origin stable
-            echo "Fast-forwarded stable: ${BEFORE} → ${TARGET}"
-            echo "moved=true" >> "$GITHUB_OUTPUT"
+            echo "sha=${TARGET}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+          git merge --ff-only origin/main
+          # Push HEAD explicitly to refs/heads/stable. Without the
+          # explicit refspec, `git push origin stable` from a detached
+          # HEAD resolves to the local `stable` tag (if present) and
+          # no-ops; the explicit `HEAD:refs/heads/stable` always
+          # targets the branch.
+          git push origin "HEAD:refs/heads/stable"
+
+          # Post-verify: confirm origin's stable branch actually moved
+          # to TARGET. Catches any path where the push appeared to
+          # succeed but the remote ref didn't advance (e.g. a server-
+          # side hook silently dropped the update, or an intermediate
+          # cache returned a stale OK).
+          # Bounded retry distinguishes a transient transport failure
+          # from a real ref mismatch — without it, a network blip
+          # would surface as "origin/stable is at <empty>, expected
+          # TARGET" instead of the underlying transport error.
+          ls_attempt=1
+          REMOTE_AFTER=""
+          while [ "$ls_attempt" -le 3 ]; do
+            set +e
+            git ls-remote origin refs/heads/stable >/tmp/_ls_remote_out 2>/tmp/_ls_remote_err
+            ls_rc=$?
+            set -e
+            if [ "$ls_rc" -eq 0 ]; then
+              REMOTE_AFTER=$(awk '{print $1}' /tmp/_ls_remote_out 2>/dev/null || true)
+              if [ -n "$REMOTE_AFTER" ]; then
+                break
+              fi
+            fi
+            if [ "$ls_attempt" -eq 3 ]; then
+              echo "::error::Post-push verification failed: git ls-remote could not return a SHA for refs/heads/stable after 3 attempts (rc=${ls_rc}). Cannot confirm origin/stable advanced — re-run after the transport issue resolves."
+              cat /tmp/_ls_remote_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** ls_attempt ))
+            echo "::warning::git ls-remote failed (attempt ${ls_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_ls_remote_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            ls_attempt=$((ls_attempt + 1))
+          done
+          if [ "${REMOTE_AFTER}" != "${TARGET}" ]; then
+            echo "::error::Push reported success but origin/stable is at ${REMOTE_AFTER}, expected ${TARGET}. Refusing to dispatch the release on stale state."
+            exit 1
+          fi
+          echo "Fast-forwarded stable: ${BEFORE} → ${TARGET} (verified on origin)"
+          echo "moved=true" >> "$GITHUB_OUTPUT"
+          echo "sha=${TARGET}" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch test-and-mark-stable on stable
         env:
