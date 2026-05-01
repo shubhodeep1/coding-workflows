@@ -222,6 +222,7 @@ jobs:
           echo "Verified: origin/main contains origin/stable — propagation complete"
 
       - name: Fallback — open PR for manual merge
+        id: fallback
         if: >-
           steps.check.outputs.ahead != '0' &&
           (steps.direct.outputs.merge_status == 'conflict' ||
@@ -280,11 +281,20 @@ jobs:
           set -e
           if [ "${PR_RC}" -eq 0 ]; then
             echo "${PR_OUTPUT}"
+            # Capture the PR URL so the follow-up TG alert step can
+            # surface it. `gh pr create` prints the URL on its own
+            # line on success; grep for the first github.com URL to
+            # be tolerant of any preceding banner output.
+            PR_URL=$(printf '%s' "${PR_OUTPUT}" | grep -oE 'https://github\.com/[^[:space:]]+' | head -n1 || true)
+            echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+            echo "reason=${MERGE_STATUS}" >> "$GITHUB_OUTPUT"
           elif printf '%s' "${PR_OUTPUT}" | grep -qiE 'pull request for branch .* already exists'; then
             # Anchored to gh CLI's canonical phrasing: "a pull request
             # for branch <name> into branch <base> already exists". The
             # earlier looser pattern could match unrelated errors that
             # happened to mention "pull request" or "already exists".
+            # Don't re-alert: the original run that opened the PR
+            # already alerted, and a re-run shouldn't spam TG.
             echo "::warning::PR already exists for ${BRANCH} — treating as benign"
             echo "${PR_OUTPUT}"
           else
@@ -292,6 +302,43 @@ jobs:
             echo "${PR_OUTPUT}" >&2
             exit "${PR_RC}"
           fi
+
+      - name: Telegram alert — fallback PR opened
+        if: steps.fallback.outputs.pr_url != ''
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          PR_URL: ${{ steps.fallback.outputs.pr_url }}
+          REASON: ${{ steps.fallback.outputs.reason }}
+        shell: bash
+        run: |
+          # Forward-merge is the safety net for stable→main propagation.
+          # When it falls back to a manual PR (conflict or branch
+          # protection), the bug fix is stuck on stable until a human
+          # resolves the PR. Surface that on TG so it doesn't sit
+          # unnoticed in GitHub email.
+          set -uo pipefail
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::tg_helpers.sh not found; skipping fallback PR TG alert"
+            exit 0
+          fi
+          # shellcheck disable=SC1091
+          source scripts/tg_helpers.sh
+
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          case "${REASON}" in
+            conflict)      reason_text="merge conflict" ;;
+            push_rejected) reason_text="branch protection / push rejected" ;;
+            *)             reason_text="${REASON}" ;;
+          esac
+
+          msg="forward-merge stable→main opened a fallback PR (${reason_text})"
+          msg+=$'\n'"PR: ${PR_URL}"
+          msg+=$'\n'"Run: ${run_url}"
+          msg+=$'\n'"Bug fixes on stable will not reach main until this PR is merged."
+
+          tg_send_msg "${msg}" "ERROR" >/dev/null || true
 
       - name: Summary
         if: always()
@@ -310,3 +357,58 @@ jobs:
           else
             echo "Result: unknown — see job logs"
           fi
+
+      - name: Telegram alert — hard failure
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        shell: bash
+        run: |
+          # Catch-all for hard failures (transport retries exhausted,
+          # post-push verification mismatch, fallback PR creation
+          # failure, etc.). Without this, a red run only surfaces via
+          # GitHub's default email — and forward-merge silently failing
+          # means stable bug fixes don't reach main, which the next
+          # main-source release would then re-introduce. Fire CRITICAL.
+          # Best-effort: missing tg_helpers.sh (e.g. an early checkout
+          # failure) degrades to a warning rather than masking the
+          # original failure.
+          set -uo pipefail
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::tg_helpers.sh not found; skipping hard-failure TG alert"
+            exit 0
+          fi
+          # shellcheck disable=SC1091
+          source scripts/tg_helpers.sh
+
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          workflow_name="${GITHUB_WORKFLOW:-forward-merge-stable-to-main}"
+
+          # Resolve the first failing step name via the GitHub API.
+          # Fail open: if the lookup fails or returns nothing, still
+          # send the alert without the step name rather than dropping
+          # the alert.
+          failing_step=""
+          if [ -n "${GH_TOKEN:-}" ]; then
+            jobs_json="$(curl -fsSL \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}/jobs" 2>/dev/null || echo '')"
+            if [ -n "${jobs_json}" ]; then
+              failing_step="$(printf '%s' "${jobs_json}" \
+                | jq -r '.jobs[]?.steps[]? | select(.conclusion == "failure") | .name' 2>/dev/null \
+                | head -n1)"
+            fi
+          fi
+
+          msg="forward-merge stable→main hard failure: ${workflow_name}"
+          if [ -n "${failing_step}" ]; then
+            msg+=$'\n'"Failing step: ${failing_step}"
+          fi
+          msg+=$'\n'"Run: ${run_url}"
+          msg+=$'\n'"Bug fixes on stable may not propagate to main until resolved."
+
+          tg_send_msg "${msg}" "CRITICAL" >/dev/null || true
