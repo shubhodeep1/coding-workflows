@@ -166,6 +166,28 @@ def test_build_summary_input_when_cap_smaller_than_marker_returns_marker_prefix(
 	assert len(text) <= 10
 
 
+def test_build_summary_input_strict_cap_at_marker_plus_one():
+	# Regression: when budget==1 (char_cap == len(marker)+1), the previous
+	# `max(budget - head_size, 1)` clamp produced char_cap+1 chars.
+	marker = "\n... [run-level truncation] ...\n"
+	char_cap = len(marker) + 1
+	logs = [{"step_name": "s", "content": "X" * 1_000}]
+	text = summarizer.build_summary_input(
+		logs, char_cap=char_cap, per_step_head=10, per_step_tail=10
+	)
+	assert len(text) <= char_cap
+
+
+def test_build_summary_input_strict_cap_at_marker_plus_two():
+	marker = "\n... [run-level truncation] ...\n"
+	char_cap = len(marker) + 2
+	logs = [{"step_name": "s", "content": "X" * 1_000}]
+	text = summarizer.build_summary_input(
+		logs, char_cap=char_cap, per_step_head=10, per_step_tail=10
+	)
+	assert len(text) <= char_cap
+
+
 def test_build_summary_input_skips_empty_steps():
 	logs = [
 		{"step_name": "empty", "content": ""},
@@ -221,6 +243,31 @@ def test_extract_tokens_used_falls_back_on_empty_usage_dict():
 
 def test_truncate_step_returns_short_content_unchanged():
 	assert summarizer._truncate_step("short", 100, 100) == "short"
+
+
+def test_truncate_step_handles_tail_chars_zero_without_falling_back_to_full_string():
+	"""Python `content[-0:]` evaluates to `content[0:]` (the full string).
+	The truncator must guard against that so per_step_tail=0 actually drops
+	the tail instead of silently returning the entire content."""
+	content = "X" * 1_000
+	out = summarizer._truncate_step(content, head_chars=10, tail_chars=0)
+	# Should be head + marker only — never the full 1000-char content.
+	assert content not in out
+	assert out.startswith("X" * 10)
+	assert "[truncated 990 chars]" in out
+
+
+def test_truncate_step_handles_head_chars_zero():
+	content = "Y" * 500
+	out = summarizer._truncate_step(content, head_chars=0, tail_chars=20)
+	assert content not in out
+	assert out.endswith("Y" * 20)
+
+
+def test_truncate_step_returns_marker_only_when_both_bounds_zero():
+	out = summarizer._truncate_step("Z" * 100, head_chars=0, tail_chars=0)
+	assert "Z" not in out
+	assert "[truncated" in out
 
 
 def test_format_user_message_includes_failure_point_when_present():
@@ -420,6 +467,59 @@ def test_main_counts_empty_archive_as_skipped_empty_logs_not_fetch_error():
 	# Telemetry line includes skipped_empty_logs=1 and skipped_fetch_error=0.
 	assert '"skipped_empty_logs": 1' in err_text
 	assert '"skipped_fetch_error": 0' in err_text
+
+
+def test_main_does_not_pass_archive_cache_so_payload_bytes_arent_retained():
+	"""The collector caches payload bytes by (repo, run_id) when given a
+	cache dict; for a script that fetches each run exactly once that just
+	leaks log archives. Verify cache=None is passed."""
+	with tempfile.TemporaryDirectory() as tmp:
+		report = Path(tmp) / "report.json"
+		_write_report(
+			report,
+			{
+				"runs": [
+					{"repository": "a/b", "run_id": 1, "created_at": "2026-04-01T00:00:00Z"},
+					{"repository": "a/b", "run_id": 2, "created_at": "2026-04-02T00:00:00Z"},
+				]
+			},
+		)
+		seen_cache_args: list[Any] = []
+
+		class _CacheSpyingCollector:
+			@staticmethod
+			def _fetch_run_log_archive(repo, run_id, *, token, cache=None):
+				seen_cache_args.append(cache)
+				return b"<archive>"
+
+			@staticmethod
+			def extract_full_logs(_archive):
+				return [{"step_name": "build", "content": "ok"}]
+
+		class _NoopSummarizer:
+			def __init__(self, *_a, **_k):
+				pass
+
+			def summarize(self, *_a, **_k):
+				return ("- ok", 10)
+
+		original_loader = summarizer._load_collector_module
+		original_klass = summarizer.OpenRouterSummarizer
+		summarizer._load_collector_module = lambda: _CacheSpyingCollector
+		summarizer.OpenRouterSummarizer = _NoopSummarizer
+		try:
+			with _env(OPENROUTER_API_KEY="orkey", GH_TOKEN="ghs_test"), _capture_std():
+				rc = summarizer.main(["--report", str(report)])
+		finally:
+			summarizer._load_collector_module = original_loader
+			summarizer.OpenRouterSummarizer = original_klass
+
+	assert rc == 0
+	assert len(seen_cache_args) == 2
+	assert all(arg is None for arg in seen_cache_args), (
+		f"expected cache=None for every fetch to avoid retaining log-archive bytes, "
+		f"got: {seen_cache_args!r}"
+	)
 
 
 def test_main_breaks_loop_when_token_budget_exhausted():

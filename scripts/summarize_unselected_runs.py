@@ -213,12 +213,24 @@ def select_targets(runs: list[dict[str, Any]], max_summaries: int) -> list[dict[
 
 
 def _truncate_step(content: str, head_chars: int, tail_chars: int) -> str:
-	"""Keep head + tail of a single step log, preserving error context at the end."""
+	"""Keep head + tail of a single step log, preserving error context at the end.
+
+	Both bounds may be 0; we slice explicitly because Python's
+	`content[-0:]` evaluates to `content[0:]` (the full string), which would
+	silently defeat truncation when `tail_chars == 0`.
+	"""
 	if len(content) <= head_chars + tail_chars:
 		return content
-	head = content[:head_chars]
-	tail = content[-tail_chars:]
-	return f"{head}\n... [truncated {len(content) - head_chars - tail_chars} chars] ...\n{tail}"
+	head = content[:head_chars] if head_chars > 0 else ""
+	tail = content[-tail_chars:] if tail_chars > 0 else ""
+	marker = f"... [truncated {len(content) - head_chars - tail_chars} chars] ..."
+	if head and tail:
+		return f"{head}\n{marker}\n{tail}"
+	if head:
+		return f"{head}\n{marker}"
+	if tail:
+		return f"{marker}\n{tail}"
+	return marker
 
 
 def build_summary_input(
@@ -264,8 +276,15 @@ def build_summary_input(
 	budget = char_cap - len(marker)
 	if budget <= 0:
 		return marker[:char_cap]
+	if budget == 1:
+		# Only one slot left after the marker — give it to the head.
+		return text[:1] + marker
+	# Strict invariant: head_size + tail_size == budget so the result is
+	# exactly char_cap chars long (head + marker + tail). The previous
+	# `max(..., 1)` clamp on tail_size could push the total over by one
+	# when head_size already consumed the entire budget.
 	head_size = max(budget // 3, 1)
-	tail_size = max(budget - head_size, 1)
+	tail_size = budget - head_size
 	return text[:head_size] + marker + text[-tail_size:]
 
 
@@ -497,7 +516,11 @@ def main(argv: list[str] | None = None) -> int:
 		timeout_seconds=args.timeout_seconds,
 		max_output_tokens=args.max_output_tokens,
 	)
-	archive_cache: dict[tuple[str, int], bytes | Exception] = {}
+	# No archive cache: this script visits each (repo, run_id) at most once,
+	# so the collector's payload-bytes cache (collect_workflow_logs.py:777-779)
+	# would only retain hundreds of MB of log archives for no benefit. A
+	# per-run fetch with `cache=None` keeps memory bounded by a single
+	# archive at a time.
 
 	for index, run in enumerate(targets):
 		if stats["tokens_used"] >= args.token_budget:
@@ -509,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
 		run_id = _to_int(run.get("run_id"), 0)
 		try:
 			archive_bytes = collector._fetch_run_log_archive(
-				repository, run_id, token=gh_token, cache=archive_cache
+				repository, run_id, token=gh_token, cache=None
 			)
 			full_logs = collector.extract_full_logs(archive_bytes)
 		except Exception as exc:  # noqa: BLE001 — fail-open per run
