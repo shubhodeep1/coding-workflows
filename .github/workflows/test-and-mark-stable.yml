@@ -2607,9 +2607,16 @@ jobs:
     # still in "Plan update → Draft" phase), so api-redundancy was
     # bumped to 90m. Sum of in-step DEADLINEs below (workflow-log-analysis
     # 12000 + validation-refresh 2400 + update_workflows 600 +
-    # memory-maintenance 900 = 15900s ≈ 265m) plus a 15m headroom for
-    # runner queueing and step setup.
-    timeout-minutes: 280
+    # memory-maintenance 900 = 15900s ≈ 265m). This job also spends
+    # additional wall time outside those DEADLINE windows on prerequisite
+    # validation, checkout, and the per-phase run-soft-error-analyzer
+    # composite actions (each waits up to wait_for_completion_secs=120s
+    # and then runs an OpenRouter call via scripts/analyze_soft_errors.py;
+    # log1 of run #25200117236 observed ~40s for one phase, so 4 phases
+    # under OpenRouter latency variance can plausibly reach 8–12m), so
+    # keep extra headroom for that work as well as runner queueing and
+    # step setup. Per Copilot review on PR #1842.
+    timeout-minutes: 330
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
