@@ -1,3 +1,4 @@
 status: ok
 run_id: 25204168842
 updated-by: ai-pipeline
+# E2E_EDITOR_BAIT_25204168842: this line should be removed by the editor (smoke gate)
