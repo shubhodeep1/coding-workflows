@@ -1056,6 +1056,35 @@ jobs:
           echo "marker=${BAIT_MARKER}" >> "$GITHUB_OUTPUT"
           echo "bait_sha=${BAIT_SHA}" >> "$GITHUB_OUTPUT"
 
+          # Defense-in-depth for "Bug B" (PR #1811): the Contents-API PUT
+          # above sometimes succeeds (commit + PR head pointer updated)
+          # without GitHub fanning out a `pull_request: synchronize`
+          # event, so internal-review.yml is never auto-triggered and
+          # wait-review (Phase 4) ages out at REVIEW_TIMEOUT minutes.
+          # Run 25204168842 was the most recent confirmed occurrence.
+          # Explicitly dispatch internal-review.yml against the PR
+          # branch so a review run with head_sha=BAIT_SHA always exists
+          # — workflow_dispatch resolves the ref's tip SHA at dispatch
+          # time, and we just pushed the bait commit there, so the
+          # dispatched run carries head_sha=BAIT_SHA and is matched by
+          # wait-review's pinned filter without any extra logic.
+          # The dispatch is keyed on a separate concurrency group (see
+          # internal-review.yml:48-50, `internal-review-dispatch-pr-N`),
+          # so if the synchronize event ever DID fire, both runs are
+          # serialised downstream by review_autofix.yml's `pr-autofix-N`
+          # group rather than racing — only one autofix proceeds.
+          # Fail-soft: if dispatch fails, the synchronize event (when
+          # it fires) still serves as the primary path; if neither
+          # fires, wait-review surfaces no_review_triggered as before.
+          if gh workflow run "internal-review.yml" \
+              --ref "${BRANCH}" \
+              -f pr_number="${PR_NUMBER}" >/tmp/dispatch_resp.txt 2>&1; then
+            echo "✓ Dispatched internal-review.yml on ${BRANCH} for PR #${PR_NUMBER} (Bug B fallback)"
+          else
+            echo "::warning::Could not dispatch internal-review.yml as Bug B fallback; relying on pull_request:synchronize event only"
+            cat /tmp/dispatch_resp.txt >&2 || true
+          fi
+
       # ── Phase 4: Wait for review/edit to complete ───────────────
       - name: "Phase 4: Wait for review & autofix to complete"
         id: wait-review
@@ -1138,8 +1167,18 @@ jobs:
             # page. Falls back to the legacy latest-by-created_at filter
             # only when the bait-injection step did not produce a SHA
             # (status=skipped path).
+            #
+            # The URL no longer pins event=pull_request: Phase 3c also
+            # dispatches internal-review.yml as a Bug B fallback, and
+            # those runs carry event=workflow_dispatch. Dropping the
+            # event filter from the URL lets head_sha=BAIT_SHA match
+            # both paths uniformly. (We still rely on the jq name match
+            # to avoid latching onto e.g. CI runs that happen to share
+            # the bait SHA.) The dispatched run's head_sha matches
+            # BAIT_SHA because we dispatch with --ref "${BRANCH}" and
+            # GitHub records the ref's tip SHA at dispatch time.
             if [ -n "${BAIT_SHA:-}" ]; then
-              REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=100" \
+              REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
                 --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix\"; \"i\")) | select(.head_sha == \"${BAIT_SHA}\")] | sort_by(.created_at) | last" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
@@ -1381,7 +1420,7 @@ jobs:
               # jq's `last` on an empty array yields the literal string
               # "null" rather than empty, so both branches are needed.
               if [ -n "${BAIT_SHA:-}" ] && { [ -z "${REVIEW_RUN:-}" ] || [ "${REVIEW_RUN}" = "null" ]; }; then
-                echo "::error::No review_autofix run with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — bait push did not trigger downstream workflows"
+                echo "::error::No review_autofix run with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
                 echo "status=no_review_triggered" >> "$GITHUB_OUTPUT"
                 echo "Diagnostic: workflow runs visible on branch ${PR_BRANCH}:" >&2
                 gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=20" \
