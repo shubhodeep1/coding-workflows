@@ -621,3 +621,125 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the audited `.github/workflo
 | Code modularization | 7 | Large |
 | Expression size reduction | 4 | Medium |
 | Medium/Low fixes | 2 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-01)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is fully proven safe to consolidate without changing endpoint/filter/retry/concurrency behavior; `NEEDS_VERIFICATION` means the overlap is real but a human must confirm freshness/error-handling semantics before changing it; `RISKY_SKIP` means the optimization is visible but must not be auto-implemented because it sits in a poller/recovery/race-sensitive path or otherwise risks changing externally observed behavior.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001
+- **ID:** `REUSE-001`
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/issue_pr_status.yml:297-345` and `.github/workflows/issue_pr_status.yml:503-512`
+- **Current call count / proposed call count:** Up to `1 + N + M` → up to `1 + N` on merged-PR runs, where `N` is the per-issue REST fallback count if the earlier GraphQL batch fails, and `M` is the later alert-step body lookups until an orchestrated issue is found or the list is exhausted.
+- **Endpoint(s):** GitHub GraphQL `repository.issue(number) { number labels(first: 50) { nodes { name } } body }` via aliased batch; REST `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:** The close-sync step already classifies linked issues using `labels` and `body`, then the merged-alert step refetches issue bodies only to answer the narrower yes/no question “is any linked issue orchestrated?”:
+  ```sh
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ...
+  _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" \
+    --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
+  ```
+  ```sh
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+    IS_ORCHESTRATED="true"
+    break
+  fi
+  ```
+  The same earlier step already exports `LINKED_ISSUE_NUMBERS` through `$GITHUB_ENV`, so there is already an established step-to-step cache pattern in this job.
+- **Proposed fix:** Extend `Update linked issue labels when PR closes` to export a tri-state signal such as `HAS_ORCHESTRATED_LINKED_ISSUE=true|false|unknown` (or export the resolved `TRACKING_ISSUES` / `MANAGED_ISSUES` lists) via `$GITHUB_ENV`, then update `Send PR merged Telegram alert` to reuse that signal and skip the `_safe_gh_jq "repos/.../issues/${issue_number}"` loop unless the earlier classification is explicitly `unknown`.
+- **Safety rationale:** The data overlap is real and in the same job, but the earlier classification path has conservative fail-open behavior on partial lookup failure, so a human must verify that reusing it will not suppress alerts that the current per-issue refetch would send.
+- **Downstream signal:** Verify on one merged standalone PR and one merged orchestrator-managed PR that the exported orchestrator flag matches the current alert/no-alert outcome, and confirm the GraphQL-fallback path cannot silently turn an “unknown” classification into a skipped alert.
+
+#### REUSE-002
+- **ID:** `REUSE-002`
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/orchestrate_clarify_respond.yml:61-63` and `.github/workflows/orchestrate_clarify_respond.yml:418-420`
+- **Current call count / proposed call count:** `2` → `1` on the normal path, with the current second fetch retained only as a cache-miss/unparseable fallback.
+- **Endpoint(s):** REST `GET /repos/{repo}/issues/{ISSUE_NUMBER}`
+- **Evidence:** The workflow fetches the same child issue twice in the same job and re-parses the same `body`/`title` fields:
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+  ```
+  ```sh
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ```
+- **Proposed fix:** In `Check orchestrator metadata`, persist `ISSUE_PAYLOAD` to a runner-local file such as `${RUNNER_TEMP}/orchestrate_issue_payload.json` (or export the parsed `ISSUE_BODY` / `ISSUE_TITLE` via `$GITHUB_ENV`), and update the later prompt-preparation step to read that cached payload first, falling back to the existing `gh_retry gh api` only if the cache is missing or invalid.
+- **Safety rationale:** The calls hit the same endpoint for the same issue in the same job, but they sit in different steps with different retry behavior, so freshness and failure semantics are not fully proven from static inspection alone.
+- **Downstream signal:** Verify that no step between lines 61 and 418 intentionally relies on a fresher issue-body read, and confirm the cached payload survives checkout/setup so the fallback only triggers on genuine cache-miss or parse errors.
+
+#### REUSE-003
+- **ID:** `REUSE-003`
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/review_autofix.yml:1381-1439` and `.github/workflows/review_autofix.yml:1833-1836`
+- **Current call count / proposed call count:** `2` logical lookups on the successful metadata path (`1` early linked-issue GraphQL fetch + `1` later REST issue-title fetch) → `1` on that same path, while retaining the REST title lookup only for cache-miss/unparseable fallback.
+- **Endpoint(s):** GitHub GraphQL `repository.pullRequest(number) { closingIssuesReferences(first: 50) { nodes { number title body } } }`; REST `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:** `Collect PR metadata` already fetches linked issue `number/title/body` and materializes local context, then the smoke-detection block refetches the issue title:
+  ```sh
+  if gh_retry "${_linked_tmp}" api graphql ... \
+    -f query='query(...){...closingIssuesReferences(first:50){nodes{number title body}}}' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+  ...
+  lines.append(f"Issue #{num}: {title}")
+  ```
+  ```sh
+  ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '...' || true)
+  if [ -n "${ISSUE_NUM:-}" ]; then
+    ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+    if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+      IS_SMOKE=true
+    fi
+  fi
+  ```
+- **Proposed fix:** Extend `Collect PR metadata` to write a compact `LINKED_ISSUE_TITLES_JSON` cache keyed by issue number (or deterministically parse the already-built `LINKED_ISSUE_CONTEXT_FILE`), then update the smoke-detection block to consult that cache first and call `_safe_gh_jq "repos/.../issues/${ISSUE_NUM}"` only when the cache is absent or invalid.
+- **Safety rationale:** The overlap is genuine and lives in the same job, but static reading alone does not fully prove that the regex-selected `ISSUE_NUM` always belongs to the same linked-issue set captured by the earlier GraphQL fetch.
+- **Downstream signal:** Verify with one smoke-test PR and one non-smoke PR that the cached-title path returns the same `IS_SMOKE` decision as the current REST lookup, and retain the REST fallback whenever the linked-issue cache is missing or GraphQL failed open.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001
+- **ID:** `DEAD-API-001`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:11390-11400`
+- **Current call count / proposed call count:** `2 + N` → `1 + N` inside the standalone conflict sweep (`gh pr list` + repo default-branch fetch + per-PR `GET /pulls/{n}` calls), where `N` is the number of open PR candidates scanned.
+- **Endpoint(s):** REST `GET /repos/{repo}`
+- **Evidence:** The standalone conflict sweep fetches `DEFAULT_BRANCH` and never consumes it before the section ends:
+  ```sh
+  STANDALONE_PRS="$(gh_retry gh pr list ...)"
+  STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+    ...
+  done
+  ```
+  Within this sweep, the logic uses `S_BASE`, `S_HEAD_REF`, `S_HEAD_SHA`, and `S_MERGEABLE_STATE`; `DEFAULT_BRANCH` is not read again.
+- **Proposed fix:** Remove the `DEFAULT_BRANCH="$(gh_retry _safe_gh_jq ...)"` fetch from the standalone conflict sweep, or move it down next to the first real consumer if a future edit actually needs it.
+- **Safety rationale:** This appears to be a true dead call, but it lives inside `scripts/orchestrate_poll_process.sh`, which the audit policy explicitly marks as `RISKY_SKIP` because poller/recovery changes can alter race handling and log contracts.
+- **Downstream signal:** Do not auto-implement; manually review the standalone conflict-sweep section for any hidden dependency on the `DEFAULT_BRANCH` assignment and re-run the sweep path in a controlled environment before removing the fetch.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: `RISKY_SKIP` — the per-PR conflict-sweep batching idea is valid, but it sits in `scripts/orchestrate_poll_process.sh` and must preserve stage-1 update-branch vs stage-2 dispatch behavior, retry boundaries, and log keys under manual review.
+- BATCH-002: `RISKY_SKIP` — the seven-label stall sweep is real fan-out, but collapsing it changes a poller recovery path inside `scripts/orchestrate_poll_process.sh`, so batching must be manually audited rather than auto-applied.
+- BATCH-003: `NEEDS_VERIFICATION` — batching the fallback issue-label probes is directionally right, but implement must preserve the current per-issue fail-open semantics so one lookup failure cannot suppress standalone validate dispatch for unrelated issues.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | REUSE-001, REUSE-002, REUSE-003, BATCH-003 |
+| RISKY_SKIP | 3 | DEAD-API-001, BATCH-001, BATCH-002 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
