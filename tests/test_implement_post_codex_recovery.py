@@ -1547,15 +1547,12 @@ def test_codex_empty_output_streak_bail_and_flag() -> None:
 		"the orchestrator can distinguish exploration-stuck from other "
 		"failure modes when picking the recovery action"
 	)
-	# Accept either the original "consecutive empty-output" wording or
-	# the post-#1864 "no actionable output ${empty_streak} attempts in
-	# a row (empty-output and/or announced-edit-without-changes)"
-	# wording — the latter broadens the bail to also cover the
-	# stuck-intent (announced-edit-without-changes) contributor that
-	# now feeds the same `attempt_was_empty=true` counter.
-	assert ('no actionable output ${empty_streak} attempts in a row' in codex_block) or \
-		('empty_streak} consecutive empty-output attempts' in codex_block) or \
-		('consecutive empty-output' in codex_block), (
+	# Align with the post-#1864 wording which broadens the bail to also
+	# cover the stuck-intent (announced-edit-without-changes) contributor
+	# that now feeds the same `attempt_was_empty=true` counter. Strict
+	# match (not "old OR new") so an accidental revert of the #1864
+	# wording fails this regression test loudly.
+	assert 'no actionable output ${empty_streak} attempts in a row' in codex_block, (
 		"the bail error must explain WHY the loop is aborting, with the "
 		"actual streak count, so the GHA log shows a one-line root cause"
 	)
@@ -1622,13 +1619,12 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 		"diagnostics reason must distinguish the request_user_input "
 		"bail so the orchestrator can route accordingly"
 	)
-	# Accept either the original "consecutive empty-output attempts"
-	# wording or the post-#1864 "consecutive attempts with no actionable
-	# output" wording — the latter broadens the bail/diag wording to
-	# cover both empty-output AND announced-edit-without-changes
-	# contributors that now feed the same streak counter.
-	assert ("consecutive empty-output attempts" in codex_block) or \
-		("consecutive attempts with no actionable output" in codex_block), (
+	# Align with the post-#1864 wording which broadens the diag_reason
+	# to cover both empty-output AND announced-edit-without-changes
+	# contributors that now feed the same streak counter. Strict match
+	# (not "old OR new") so an accidental revert of the #1864 wording
+	# fails this regression test loudly.
+	assert "consecutive attempts with no actionable output" in codex_block, (
 		"diagnostics reason must distinguish the empty-streak bail "
 		"from the 5/5 exhausted path"
 	)
