@@ -3019,7 +3019,13 @@ jobs:
           # Cleanup still targets new issues via tracking-issue back-reference +
           # title-prefix marker.
           PROJECT_DESC="[E2E Orchestrate Smoke ${GITHUB_RUN_ID}] This is an author-decomposed project that requires TWO independent (no-dependency) child issues touching DIFFERENT files. Per the orchestrator's author-decomposition rule (see prompts/mode-orchestrate.txt), honor the enumeration below verbatim — emit exactly two issues with NO dependency_edges between them so both can run in Wave 1. "
-          PROJECT_DESC+="Issue 1 (no dependencies, files_touched=[tests/e2e_smoke_canary.txt]): set the first line of tests/e2e_smoke_canary.txt to exactly 'status: ok'. "
+          # Both issues MUST embed ${GITHUB_RUN_ID} in the required content so
+          # the acceptance criteria force a real diff every run. Without that,
+          # whichever file already has the requested first line from a prior
+          # run becomes a no-op for the implementer, which the implement loop
+          # treats as "stuck in exploration" and aborts after 2 consecutive
+          # no-actionable-output attempts (see implement.yml retry-bail logic).
+          PROJECT_DESC+="Issue 1 (no dependencies, files_touched=[tests/e2e_smoke_canary.txt]): set the first line of tests/e2e_smoke_canary.txt to exactly 'status: ok' AND append the line 'decompose-run: ${GITHUB_RUN_ID}' as the second line. "
           PROJECT_DESC+="Issue 2 (no dependencies, files_touched=[tests/e2e_smoke_canary_b.txt]): set the first line of tests/e2e_smoke_canary_b.txt to exactly 'status: ok' AND append the line 'decompose-run: ${GITHUB_RUN_ID}' as the second line. Issue 2 is fully self-contained — it does NOT need to read Issue 1's output and can run in parallel with Issue 1. "
           PROJECT_DESC+="The orchestrate_decomposition.v1 schema dependency_edges array MUST be empty ([]) so both issues are placed in Wave 1. The two issues' files_touched lists MUST NOT overlap. This is fully specified — no clarification is needed."
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
