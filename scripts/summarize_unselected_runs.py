@@ -124,8 +124,8 @@ def _extract_tokens_used(
 	Order of preference:
 	1. `normalize_usage()` from openrouter_prompt_cache (handles nested shapes).
 	2. Flat `total_tokens` / sum of `prompt_tokens` + `completion_tokens`.
-	3. Conservative estimate `input_chars/4 + max_output_tokens` so the
-	   token budget keeps advancing even if a provider omits `usage` entirely.
+	3. Conservative estimate `input_chars/4 + max_output_tokens` so the token
+	budget keeps advancing even if a provider omits `usage` entirely.
 	"""
 	usage_dict = usage if isinstance(usage, dict) else {}
 	if _NORMALIZE_USAGE is not None:
