@@ -193,6 +193,24 @@ def test_build_summary_input_run_level_truncation_when_assembled_exceeds_cap():
 	assert "[run-level truncation]" in text
 
 
+def test_build_summary_input_preserves_late_step_signal_in_tail():
+	"""Regression: previously an early `break` at total>=char_cap*2 dropped
+	late steps entirely. The run-level truncation now keeps both ends, so
+	the failing-step content at the bottom of the archive must survive."""
+	logs = [
+		{"step_name": f"step{i:03d}", "content": f"step{i:03d}-body " * 200}
+		for i in range(40)
+	]
+	# Append a sentinel as the final step (mirrors the failing step / final
+	# warnings that the analyzer needs).
+	logs.append({"step_name": "final", "content": "FAILING_STEP_SENTINEL " * 50})
+	text = summarizer.build_summary_input(
+		logs, char_cap=8_000, per_step_head=200, per_step_tail=400
+	)
+	assert "FAILING_STEP_SENTINEL" in text
+	assert len(text) <= 8_000
+
+
 def test_build_summary_input_when_cap_smaller_than_marker_returns_marker_prefix():
 	# Pathological tiny cap (< marker length): we still must not exceed it.
 	logs = [{"step_name": "s", "content": "X" * 100}]
@@ -518,7 +536,7 @@ def test_main_does_not_pass_archive_cache_so_payload_bytes_arent_retained():
 				]
 			},
 		)
-		seen_cache_args: list[Any] = []
+		seen_cache_args: list[object] = []
 
 		class _CacheSpyingCollector:
 			@staticmethod

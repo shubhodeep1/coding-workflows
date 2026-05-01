@@ -262,7 +262,6 @@ def build_summary_input(
 	per_step_head = max(int(per_step_head), 0)
 	per_step_tail = max(int(per_step_tail), 0)
 	parts: list[str] = []
-	total = 0
 	for step in full_logs:
 		name = str(step.get("step_name") or "unknown_step")
 		content = str(step.get("content") or "")
@@ -271,10 +270,13 @@ def build_summary_input(
 		body = _truncate_step(content, per_step_head, per_step_tail)
 		block = f"=== STEP: {name} ===\n{body}\n"
 		parts.append(block)
-		total += len(block)
-		if total >= char_cap * 2:
-			# Hard cut so we don't blow up memory if a run has thousands of steps.
-			break
+	# Don't `break` early on the assembled length: log archives are sorted
+	# earliest-first, so cutting off mid-stream would usually drop the late
+	# steps (often the failing step + final warnings) that carry the most
+	# signal. Each step is already head/tail-truncated, so memory stays
+	# bounded (~per_step_head + per_step_tail per step), and the run-level
+	# truncation below preserves both the head and tail of the assembled
+	# text — meaning late steps survive into the summary input.
 	text = "".join(parts)
 	if len(text) <= char_cap:
 		return text

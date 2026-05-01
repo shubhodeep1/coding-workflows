@@ -284,10 +284,27 @@ jobs:
             echo "::warning::workflow_log_report.json not present; skipping mini summarization."
             exit 0
           fi
+
+          # Validate `vars`-sourced numeric inputs in-shell so a typo like
+          # vars.WORKFLOW_LOG_SUMMARY_MAX_RUNS="abc" doesn't crash argparse
+          # before the Python script can emit a fail-open ::warning:: +
+          # AI_MEMORY_TELEMETRY. Pattern matches MAX_CODEX_ATTEMPTS validation
+          # later in this workflow.
+          max_summaries="${WORKFLOW_LOG_SUMMARY_MAX_RUNS}"
+          token_budget="${WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET}"
+          if ! [[ "${max_summaries}" =~ ^-?[0-9]+$ ]]; then
+            echo "::warning::Invalid WORKFLOW_LOG_SUMMARY_MAX_RUNS='${WORKFLOW_LOG_SUMMARY_MAX_RUNS}'; falling back to 100."
+            max_summaries="100"
+          fi
+          if ! [[ "${token_budget}" =~ ^-?[0-9]+$ ]]; then
+            echo "::warning::Invalid WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET='${WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET}'; falling back to 1500000."
+            token_budget="1500000"
+          fi
+
           python3 scripts/summarize_unselected_runs.py \
             --report workflow_log_report.json \
-            --max-summaries "${WORKFLOW_LOG_SUMMARY_MAX_RUNS}" \
-            --token-budget "${WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET}"
+            --max-summaries "${max_summaries}" \
+            --token-budget "${token_budget}"
 
       - name: Run workflow log analysis
         id: analyze
