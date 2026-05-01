@@ -521,8 +521,21 @@ while IFS= read -r line || [ -n "${line}" ]; do
 done < "${CONSOLIDATOR_RAW_FILE}"
 
 if [ "${block_open}" -eq 1 ]; then
-	dropped_unknown_reason=$((dropped_unknown_reason + 1))
+	# Recover blocks where the consolidator emitted the open marker plus
+	# required fields but truncated before `=== END ISSUE NNN ===` (observed
+	# with openai/gpt-5.4-mini @ reasoning=medium on minimal canary diffs;
+	# see analysis/e2e-smoke-failure-25212177682.md). Without recovery the
+	# parser drops the block, falls back to passthrough+unclassified, and
+	# the editor downweights the finding. Always count the missing close
+	# marker in unmatched_markers so consolidator quality stays observable.
 	unmatched_markers=$((unmatched_markers + 1))
+	if [ -n "${block_file}" ] && [ -n "${block_lines}" ]; then
+		process_block "${block_id}"
+	else
+		dropped_unknown_reason=$((dropped_unknown_reason + 1))
+	fi
+	block_open=0
+	reset_block
 fi
 
 if [ "${marker_open_count}" -eq 0 ]; then

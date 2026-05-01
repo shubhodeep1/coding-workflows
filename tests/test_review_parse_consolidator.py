@@ -131,6 +131,19 @@ def test_anchor_mismatch_tags_line_unverified_and_preserves_passthrough() -> Non
 		assert "=== ISSUE PASSTHROUGH 004 ===" in issues
 
 
+def test_unterminated_block_is_recovered_at_eof() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		result, runtime = _run_parser(Path(td), "consolidator_unterminated_block.txt")
+		assert result.returncode == 0, result.stderr
+		stats = _load_kv_file(runtime / "parser_stats.txt")
+		issues = (runtime / "review_issues.txt").read_text(encoding="utf-8")
+		assert stats["parsed_blocks"] == "1"
+		assert stats["dropped_unknown_reason"] == "0"
+		assert "=== ISSUE 001 ===" in issues
+		assert "CLASSIFICATION: must-fix" in issues
+		assert "=== END ISSUE 001 ===" in issues
+
+
 def test_fail_open_when_no_markers_emits_passthrough_anchors() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		result, runtime = _run_parser(Path(td), "consolidator_garbled.txt", failopen="1")
