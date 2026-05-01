@@ -430,7 +430,13 @@ def build_parser() -> argparse.ArgumentParser:
 		"--token-budget",
 		type=int,
 		default=DEFAULT_TOKEN_BUDGET,
-		help="Hard cap on total tokens spent across mini calls (default 1.5M).",
+		help=(
+			"Best-effort cap on total tokens spent across mini calls. The script "
+			"performs a pre-flight estimate (input_chars/4 + max_output_tokens) "
+			"and stops scheduling new requests once the budget would be "
+			"exceeded; actual token usage from a final call may still overshoot "
+			"the target slightly (default 1.5M)."
+		),
 	)
 	parser.add_argument(
 		"--per-run-char-cap",
@@ -455,6 +461,20 @@ def build_parser() -> argparse.ArgumentParser:
 	return parser
 
 
+def _first_non_blank(*candidates: Any) -> str | None:
+	"""Return the first string candidate that is not None/empty/whitespace.
+
+	`os.getenv("X")` returning `"   "` is truthy in Python, so a naive
+	`os.getenv("X") or default` skips the fallback and yields whitespace
+	that later strips to `""`. This helper picks the first candidate that
+	carries actual content after stripping.
+	"""
+	for value in candidates:
+		if isinstance(value, str) and value.strip():
+			return value.strip()
+	return None
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = build_parser()
 	args = parser.parse_args(argv)
@@ -466,7 +486,9 @@ def main(argv: list[str] | None = None) -> int:
 
 	api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
 	gh_token = (os.getenv("GH_TOKEN") or "").strip()
-	model = (os.getenv("WORKFLOW_LOG_SUMMARY_MODEL") or args.model or DEFAULT_MODEL).strip()
+	model = _first_non_blank(
+		os.getenv("WORKFLOW_LOG_SUMMARY_MODEL"), args.model, DEFAULT_MODEL
+	) or DEFAULT_MODEL
 
 	stats: dict[str, Any] = {
 		"targeted": 0,
@@ -558,6 +580,15 @@ def main(argv: list[str] | None = None) -> int:
 			# fetch errors from "nothing to summarize".
 			stats["skipped_empty_logs"] += 1
 			continue
+		# Pre-flight token estimate using the same formula as the
+		# `_extract_tokens_used` fallback (~4 chars/token + max output).
+		# Skipping over-budget runs here keeps overshoot bounded — the
+		# alternative is per-call after-the-fact accounting that can blow
+		# past the cap on a single large summary.
+		estimated_tokens = (len(logs_text) // 4) + max(args.max_output_tokens, 0)
+		if stats["tokens_used"] + estimated_tokens > args.token_budget:
+			stats["skipped_budget_exhausted"] += len(targets) - index
+			break
 		try:
 			summary, tokens_used = summarizer.summarize(run, logs_text)
 		except Exception as exc:  # noqa: BLE001 — fail-open per run

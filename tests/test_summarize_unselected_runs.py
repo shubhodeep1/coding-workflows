@@ -574,6 +574,117 @@ def test_main_does_not_pass_archive_cache_so_payload_bytes_arent_retained():
 	)
 
 
+def test_first_non_blank_skips_whitespace_and_non_strings():
+	# Whitespace-only candidates must NOT be picked, so the env-var fallback
+	# chain doesn't yield an empty model after .strip().
+	assert summarizer._first_non_blank("  ", "", None, "real") == "real"
+	assert summarizer._first_non_blank(None, 42, "  ", "x") == "x"
+	# All blank → None so callers can fall through to the literal default.
+	assert summarizer._first_non_blank("  ", "", None) is None
+
+
+def test_main_uses_default_model_when_env_var_is_whitespace_only():
+	"""WORKFLOW_LOG_SUMMARY_MODEL='   ' is truthy in Python, so a naive
+	`os.getenv() or default` would skip the fallback and call OpenRouter
+	with model=''. Assert the helper falls through to DEFAULT_MODEL."""
+	with tempfile.TemporaryDirectory() as tmp:
+		report = Path(tmp) / "report.json"
+		_write_report(
+			report,
+			{"runs": [{"repository": "a/b", "run_id": 1, "created_at": "2026-04-01T00:00:00Z"}]},
+		)
+		captured_models: list[str] = []
+
+		class _FakeCollector:
+			@staticmethod
+			def _fetch_run_log_archive(repo, run_id, *, token, cache=None):
+				return b"<archive>"
+
+			@staticmethod
+			def extract_full_logs(_archive):
+				return [{"step_name": "build", "content": "ok"}]
+
+		class _ModelSpyingSummarizer:
+			def __init__(self, *_args, model=None, **_kw):
+				captured_models.append(model)
+
+			def summarize(self, *_a, **_k):
+				return ("- ok", 10)
+
+		original_loader = summarizer._load_collector_module
+		original_klass = summarizer.OpenRouterSummarizer
+		summarizer._load_collector_module = lambda: _FakeCollector
+		summarizer.OpenRouterSummarizer = _ModelSpyingSummarizer
+		try:
+			with _env(
+				OPENROUTER_API_KEY="orkey",
+				GH_TOKEN="ghs_test",
+				WORKFLOW_LOG_SUMMARY_MODEL="   ",
+			), _capture_std():
+				rc = summarizer.main(["--report", str(report)])
+		finally:
+			summarizer._load_collector_module = original_loader
+			summarizer.OpenRouterSummarizer = original_klass
+
+	assert rc == 0
+	assert captured_models, "summarizer was never instantiated"
+	assert captured_models[0] == summarizer.DEFAULT_MODEL
+
+
+def test_main_skips_run_when_preflight_estimate_would_exceed_budget():
+	"""Pre-flight check must skip a run whose estimated tokens would push
+	the total over the budget, instead of letting a single call overshoot."""
+	with tempfile.TemporaryDirectory() as tmp:
+		report = Path(tmp) / "report.json"
+		_write_report(
+			report,
+			{
+				"runs": [
+					{"repository": "a/b", "run_id": i, "created_at": f"2026-04-{i:02d}T00:00:00Z"}
+					for i in range(1, 4)
+				]
+			},
+		)
+		summarize_calls = {"n": 0}
+
+		class _FakeCollector:
+			@staticmethod
+			def _fetch_run_log_archive(repo, run_id, *, token, cache=None):
+				return b"<archive>"
+
+			@staticmethod
+			def extract_full_logs(_archive):
+				# Generate enough content that input_chars/4 alone exceeds
+				# the configured token budget.
+				return [{"step_name": "build", "content": "X" * 12_000}]
+
+		class _NeverCalledSummarizer:
+			def __init__(self, *_a, **_k):
+				pass
+
+			def summarize(self, *_a, **_k):
+				summarize_calls["n"] += 1
+				return ("- ok", 10)
+
+		original_loader = summarizer._load_collector_module
+		original_klass = summarizer.OpenRouterSummarizer
+		summarizer._load_collector_module = lambda: _FakeCollector
+		summarizer.OpenRouterSummarizer = _NeverCalledSummarizer
+		try:
+			# Tiny budget; input alone (~3000 tokens estimated) exceeds it.
+			with _env(OPENROUTER_API_KEY="orkey", GH_TOKEN="ghs_test"), _capture_std():
+				rc = summarizer.main(
+					["--report", str(report), "--token-budget", "100"]
+				)
+		finally:
+			summarizer._load_collector_module = original_loader
+			summarizer.OpenRouterSummarizer = original_klass
+
+	assert rc == 0
+	# Pre-flight should reject every run before any summarize() call.
+	assert summarize_calls["n"] == 0
+
+
 def test_main_breaks_loop_when_token_budget_exhausted():
 	"""After a single mini call exceeds the budget, remaining runs must be
 	accounted for in `skipped_budget_exhausted` in one shot — not iterated."""
