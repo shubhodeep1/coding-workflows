@@ -25,13 +25,21 @@ $ARGUMENTS
 
    Restate the parsed leads back to the user in the **Summary** so any miss is visible.
 
-2. **Resolve the upstream stable ref** — All subsequent reads of `shubhodeep1/coding-workflows` MUST be pinned to the stable ref. Resolve it once, up front:
-   - Try `mcp__github__list_tags` on `shubhodeep1/coding-workflows` and find the tag named exactly `stable` (this repo uses a moving `stable` pointer set by `scripts/mark-stable.sh`).
-   - If `stable` is not present, fall back to the highest semver tag (`vX.Y.Z`) returned by `mcp__github__list_tags`, or `mcp__github__get_latest_release`.
-   - Record the resolved tag name AND the commit SHA it points at in the **Evidence Ledger** as `UPSTREAM_REF`. Every later citation of an upstream file MUST include this ref.
-   - If neither tag nor release can be resolved after retries (see **Retry Rule**), record this under **Inaccessible Resources** and stop — the skill cannot produce a stable-pinned analysis without a ref. Do not silently fall back to `main`.
+2. **Resolve the upstream ref the consumer is actually running** — All subsequent reads of `shubhodeep1/coding-workflows` MUST be pinned to the ref the consumer's failing run was executing. Pinning to the *current* `stable` tag without checking the consumer's pin is wrong: if the consumer is pinned to `@v1.2.3` and `stable` has since moved to `@v1.3.0`, reading at `stable` analyses code the consumer is not running. Resolve once, up front:
+   - **First, inspect the consumer's wrapper YAML** (the workflows under `.github/workflows/<name>.yml` in this repo, plus any composite actions they delegate to) to find every `uses:` / `repository:` / `ref:` entry that references `shubhodeep1/coding-workflows`. The exact `ref` (tag, branch, or SHA) is the consumer's pin and is the authoritative input to `UPSTREAM_REF`.
+     - If the wrapper pins a specific tag (e.g. `@v1.2.3`) or SHA → that is `UPSTREAM_REF`.
+     - If the wrapper pins the moving `stable` pointer (e.g. `@stable`) → resolve `stable` via `mcp__github__list_tags` on `shubhodeep1/coding-workflows` (this repo uses a moving `stable` pointer set by `scripts/mark-stable.sh`); use the tag's commit SHA as `UPSTREAM_REF` so the analysis is pinned even if `stable` moves mid-investigation.
+     - If the wrapper pins a branch (e.g. `@main`) → resolve to the SHA of the failing workflow run's commit (read from the run metadata) and use that as `UPSTREAM_REF`. Note this case explicitly under **Open Questions** because the consumer is not on a stable release.
+   - **Fallback when the consumer pin cannot be determined** (e.g. the wrapper file is inaccessible after retries): try `mcp__github__list_tags` for `stable`, else the highest semver tag (`vX.Y.Z`), else `mcp__github__get_latest_release`. Record the fallback path and the assumption under **Open Questions**.
+   - **Also resolve `PREVIOUS_UPSTREAM_REF`** — the tag immediately preceding `UPSTREAM_REF` in semver order. List tags with `mcp__github__list_tags`, sort by semver, and pick the next one below `UPSTREAM_REF`. This is needed in Step 4 to scope the regression search ("changes merged between `PREVIOUS_UPSTREAM_REF` and `UPSTREAM_REF`"). If `UPSTREAM_REF` is the lowest tag, record that fact and skip the regression-search step.
+   - Record `UPSTREAM_REF` (tag/branch/SHA + resolved commit SHA) and `PREVIOUS_UPSTREAM_REF` in the **Evidence Ledger**. Every later citation of an upstream file MUST include `UPSTREAM_REF`.
+   - If `UPSTREAM_REF` cannot be resolved at all after retries (see **Retry Rule**), record this under **Inaccessible Resources** and stop — the skill cannot produce a pinned analysis without a ref. Do not silently fall back to `main`.
 
-3. **Download any logs** referenced in the input — For each log URL, use `curl --fail-with-body -sSL -o /tmp/<unique-name>.log -w '%{http_code}\n' <url>` so HTTP errors are detected reliably; plain `curl -sL` exits 0 on 4xx/5xx and silently downloads the server's error page. Verify the status code before treating the file as a log:
+3. **Download any logs** referenced in the input — Choose the fetch tool by URL shape; `curl` against a rendered GitHub page returns HTML, not log content.
+   - **GitHub Actions run / job URLs** (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, `.../runs/<id>/job/<id>`, `.../runs/<id>/attempts/<n>`): use the appropriate GitHub MCP tool (e.g. `mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`). These return the raw log payload. Do NOT `curl` these URLs.
+   - **Raw log URLs / artifact URLs / external (non-GitHub) URLs**: use `curl --fail-with-body -sSL -o /tmp/<unique-name>.log -w '%{http_code}\n' <url>` so HTTP errors are detected reliably; plain `curl -sL` exits 0 on 4xx/5xx and silently downloads the server's error page.
+
+   Verify the status / payload before treating the result as a log:
    - `2xx` → proceed.
    - `5xx`, `429`, network/timeout/connection-reset/DNS errors → transient; retry per the **Retry Rule**.
    - `401`, `403`, `404`, `410` → hard failure; record under **Inaccessible Resources** and follow the **Inaccessible resources** rule.
@@ -53,8 +61,8 @@ $ARGUMENTS
    - Scripts invoked by that workflow (under `scripts/`).
    - Prompt files invoked by those scripts (under `prompts/`).
    - Any contracts (`db/contracts/*.yml`), agents config (`agents.md`), or `codex_system_instructions.md` rules referenced by the failing path.
-   - PRs / issues in `shubhodeep1/coding-workflows` that touched the relevant files since the previous stable tag — these are the most likely culprits if the regression is upstream-introduced. Use `mcp__github__list_commits` with `path=<file>` and `mcp__github__search_issues` / `search_pull_requests` scoped to the repo.
-   - Cross-reference: intersect files changed in upstream PRs merged between the previous stable tag and the current `UPSTREAM_REF` with the files implicated by the consumer-side stack trace / log.
+   - PRs / issues in `shubhodeep1/coding-workflows` that touched the relevant files between `PREVIOUS_UPSTREAM_REF` and `UPSTREAM_REF` (resolved in Step 2) — these are the most likely culprits if the regression is upstream-introduced. Use `mcp__github__list_commits` with `path=<file>` (and a `since` / `sha` window bounded by the two refs) and `mcp__github__search_issues` / `search_pull_requests` scoped to the repo. If `PREVIOUS_UPSTREAM_REF` is null (Step 2 found `UPSTREAM_REF` was the lowest tag), skip this regression-window search and note it under **Open Questions**.
+   - Cross-reference: intersect files changed in upstream PRs merged between `PREVIOUS_UPSTREAM_REF` and `UPSTREAM_REF` with the files implicated by the consumer-side stack trace / log.
 
    **Retry transient errors** (5xx, 429, timeouts, connection resets, DNS failures) on every fetch — log download, GitHub MCP, raw HTTP — per the **Retry Rule**. A transient blip is not an excuse to give up on a lead.
 
