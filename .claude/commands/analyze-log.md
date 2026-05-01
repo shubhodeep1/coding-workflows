@@ -13,8 +13,8 @@ $ARGUMENTS
 
 After investigation, classify each finding as **EVIDENCE-BASED** (fully supported by log + code, plus reproduction when feasible) or **HYPOTHESIS** (plausible but unverified). Then:
 
-- **All findings are EVIDENCE-BASED and no artifacts are missing** → design the fix, apply it, verify it (re-run the repro / failing test when feasible), commit, push, open a PR. Do not ask. Report using the [Output Format](#output-format) afterward.
-- **Otherwise** (any HYPOTHESIS finding, any missing artifact, or any inaccessible resource) → stop before editing. Report using the [Output Format](#output-format) and ask the user how to proceed.
+- **All findings are EVIDENCE-BASED and no missing/inaccessible resource blocks root cause or fix verification** → design the fix, apply it, verify it (re-run the repro / failing test when feasible), commit, push, open a PR. Do not ask. Report using the [Output Format](#output-format) afterward. Non-blocking gaps (e.g. an inaccessible linked PR that doesn't affect the diagnosis) still get listed under `Artifacts needed` for transparency.
+- **Otherwise** (any HYPOTHESIS finding, or any missing/inaccessible resource that blocks root cause or fix verification) → stop before editing. Report using the [Output Format](#output-format) and ask the user how to proceed.
 - **Environmental failure** (service down, rate limit, runner outage) → no fix; say so explicitly.
 
 ## Output Format
