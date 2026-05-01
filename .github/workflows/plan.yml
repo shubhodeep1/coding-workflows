@@ -379,6 +379,18 @@ jobs:
           fi
 
           # Reuse already-fetched issue metadata instead of a redundant API call
+          ISSUE_STATE="$(jq -r '.state // "open"' "${ISSUE_META_FILE}")"
+          if [ "${ISSUE_STATE}" = "closed" ]; then
+            # Closed issues should not progress through the pipeline. The
+            # orchestrate-decompose-test smoke closes its child issues in
+            # cleanup before the clarify→plan→implement chain finishes;
+            # without this gate, plan keeps running on the closed issue,
+            # posts the plan comment, and (when AUTO_IMPLEMENT_ON_CLEAR_PLAN
+            # is set) auto-approves implement to fire on a closed issue.
+            echo "Issue #${ISSUE_NUMBER} is closed. Skipping planning run."
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
           ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}")"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is already in ai:planning phase."
@@ -1556,8 +1568,24 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          # Fallback: if gh_helpers.sh failed to source, gh_retry would be
+          # undefined and the next call would fail under `set -euo pipefail`.
+          # Same pattern used by every other gh_retry caller in this file.
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           echo "auto_approved=false" >> "$GITHUB_OUTPUT"
+
+          # Re-check state right before posting /approved: the issue may have
+          # been closed between the early validate-phase gate and now (the
+          # smoke test cleanup at test-and-mark-stable.yml:3127 races this
+          # path). Posting /approved on a closed issue triggers implement.yml
+          # on a dead issue and produces a misleading failure diagnostic.
+          CURRENT_STATE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.state // "open"' 2>/dev/null || echo "open")"
+          if [ "${CURRENT_STATE}" = "closed" ]; then
+            echo "Issue #${ISSUE_NUMBER} is closed; skipping auto-approval comment."
+            exit 0
+          fi
+
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
