@@ -1010,6 +1010,35 @@ jobs:
           empty_streak=0
           empty_streak_threshold=2
 
+          # Stuck-intent / announce-edit detection regex. Matches phrasings
+          # the model uses to narrate an upcoming edit ("I'll apply the
+          # patch", "Applying the requested overwrite", etc.) without ever
+          # invoking the corresponding tool. Used in three places below:
+          # (a) when stdout has content but the worktree delta is empty
+          # (cmd_rc==0 + non-empty stdout branch), and (b)/(c) when stdout
+          # is empty but the per-attempt stderr log carries the same
+          # announce-edit narrative — Codex CLI in --full-auto exec mode
+          # streams agent narrative on stderr and only emits the final
+          # assistant message on stdout, so a model that announces the
+          # edit and then exits without calling apply_patch leaves stdout
+          # empty and the announce phrase only on stderr.
+          #
+          # Verb set extended for run 25223836137 (issue #1909) where
+          # Codex narrated "Applying the requested overwrite to <file>
+          # now, with no other file changes." PR #1906 covered
+          # patch/edit/implementation/change/fix/plan/update/modification
+          # but `overwrite`/`rewrite`/`replacement` were missing from the
+          # noun alternation, so the stuck-intent branch never fired and
+          # the diagnostic mis-classified the failure as "empty output".
+          # Likewise the verb list in the `i'll/will (now |…)` clauses
+          # now includes `overwrite|rewrite|replace`, and the
+          # `patching|editing` gerund pattern now includes
+          # `overwriting|rewriting|replacing|writing`. False positives
+          # don't regress correctness: the regex only fires on already-
+          # empty-delta attempts, so broadening strictly increases
+          # recall on a path that's already a confirmed no-op.
+          ANNOUNCE_EDIT_REGEX='(apply_patch|applying (a |an |the |this |requested |first |minimal |approved |implementation |new |my |our |proposed )*(patch|edit|implementation|change|fix|plan|update|modification|overwrite|rewrite|replacement)|(patching|editing|overwriting|rewriting|replacing|writing) `?[A-Za-z0-9_./-]+|i.?ll (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace)|will (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace))'
+
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
@@ -1220,25 +1249,12 @@ jobs:
                 # is filtered out by the success-no-op regex above, so
                 # it never reaches this branch. Fail-open on grep error.
                 #
-                # Phrasing set extended for run 25215763575 (issue #1901)
-                # where Codex narrated "Applying the approved plan now
-                # with a minimal edit to <file>" / "Applying the requested
-                # minimal implementation now: I'll … patch <file>" — the
-                # original alternation set `(patch|edit)` after the
-                # adjective list, but Codex routinely reaches for
-                # synonyms like `plan` / `implementation` / `change` /
-                # `fix` / `update`, and the adjective set itself needs
-                # `approved`/`implementation`. Likewise the
-                # `i.?ll (now )?(apply|patch|edit|update)` clause now
-                # accepts more leading adverbs (`first`/`then`/`next`/
-                # `only`/`just`/`go ahead and`/`proceed to`) and the
-                # verb set adds `modify`/`write`/`create`/`add`/
-                # `change`/`implement`/`fix`. False positives don't
-                # regress correctness: this branch only fires when
-                # codex_delta is already empty, so broadening the
-                # regex strictly increases recall on a path that is
-                # already a confirmed no-op.
-                if grep -qEi '(apply_patch|applying (a |an |the |this |requested |first |minimal |approved |implementation |new |my |our |proposed )*(patch|edit|implementation|change|fix|plan|update|modification)|patching `?[A-Za-z0-9_./-]+|editing `?[A-Za-z0-9_./-]+|i.?ll (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix)|will (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix))' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                # Regex maintained as ANNOUNCE_EDIT_REGEX above the
+                # retry loop. False positives don't regress correctness:
+                # this branch only fires when codex_delta is already
+                # empty, so broadening strictly increases recall on a
+                # path that is already a confirmed no-op.
+                if grep -qEi "${ANNOUNCE_EDIT_REGEX}" "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   echo "::warning::Codex announced an edit/apply_patch on attempt ${attempt} but produced no file changes — counting toward empty_streak."
                   attempt_was_empty=true
                 fi
@@ -1257,7 +1273,26 @@ jobs:
                   implement_succeeded=true
                   break
                 fi
-                echo "::warning::Codex returned empty output on attempt ${attempt}."
+                # Stuck-intent on stderr: when stdout is empty but the
+                # per-attempt stderr log carries an announce-edit
+                # phrasing, the model narrated the edit (visible to the
+                # operator in the workflow log) without ever invoking
+                # apply_patch — the same failure mode the stdout branch
+                # detects above, just with the narrative on a different
+                # stream. Codex CLI in --full-auto exec mode streams
+                # agent narrative on stderr and only writes the final
+                # assistant message on stdout, so a model that exits
+                # after one announce-and-tool-call sequence leaves
+                # stdout empty. Run 25223836137 (issue #1909): "Applying
+                # the requested overwrite to tests/e2e_smoke_canary.txt
+                # now, with no other file changes." appeared only on
+                # stderr; the stdout-only stuck-intent check missed it
+                # and the bail message mis-reported "empty output".
+                if [ -f "${attempt_log_file}" ] && grep -qEi "${ANNOUNCE_EDIT_REGEX}" "${attempt_log_file}" 2>/dev/null; then
+                  echo "::warning::Codex announced an edit/apply_patch on attempt ${attempt} (in stderr) but produced no file changes — counting toward empty_streak."
+                else
+                  echo "::warning::Codex returned empty output on attempt ${attempt}."
+                fi
                 attempt_was_empty=true
               fi
             else
@@ -1283,7 +1318,16 @@ jobs:
               # count as "non-empty" here but as "empty" in the
               # cmd_rc==0 branch (drift between the two paths).
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
-                echo "::warning::Codex exited with code $cmd_rc and returned empty output on attempt ${attempt}."
+                # Mirror the cmd_rc==0 + empty-stdout branch: surface a
+                # stderr-side announce-edit phrase in the diagnostic so
+                # watchdog-killed runs that left an announce-and-stop
+                # narrative on stderr don't get mis-classified as a
+                # plain empty-output failure.
+                if [ -f "${attempt_log_file}" ] && grep -qEi "${ANNOUNCE_EDIT_REGEX}" "${attempt_log_file}" 2>/dev/null; then
+                  echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} after announcing an edit/apply_patch (in stderr) but producing no file changes."
+                else
+                  echo "::warning::Codex exited with code $cmd_rc and returned empty output on attempt ${attempt}."
+                fi
                 attempt_was_empty=true
               else
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
