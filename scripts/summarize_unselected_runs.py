@@ -429,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
 		timeout_seconds=args.timeout_seconds,
 		max_output_tokens=args.max_output_tokens,
 	)
-	archive_cache: dict[tuple[str, int], Any] = {}
+	archive_cache: dict[tuple[str, int], bytes | Exception] = {}
 
 	for index, run in enumerate(targets):
 		if stats["tokens_used"] >= args.token_budget:
