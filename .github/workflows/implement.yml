@@ -1174,11 +1174,32 @@ jobs:
                 # The success-no-op path leaves a flag file for the
                 # "Handle no-op implementation" step so it can close the
                 # issue with ai:closed instead of re-issuing it.
-                if grep -qEi '^([[:space:]]*([-[:space:]]*)?)?(no file changes were made|nothing to change|already (aligned|implemented|satisfied|up[- ]to[- ]date|done|exists|present|complete)|no changes needed|no repository changes (were )?made|no file changes made|no repository changes (were )?required|no files (were )?modified)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
+                if grep -qEi '^([[:space:]]*([-[:space:]]*)?)?(no file changes were made|nothing to change|already (aligned|implemented|satisfied|up[- ]to[- ]date|done|exists|present|complete)|no changes needed|no repository changes (were )?made|no file changes made|no repository changes (were )?required|no files (were )?modified|no repository changes (were )?needed|no file changes (were )?needed)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
                   echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
                   : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
                   break
+                fi
+                # Stuck-intent detection (run 25206967321 issue #1860,
+                # run 25206976031 issue #1859 attempts 2-5): when Codex
+                # returns non-empty output that announces an
+                # apply_patch / edit / patching action but the worktree
+                # delta is empty AND the success-no-op regex above did
+                # not match, the attempt is functionally as useless as
+                # an empty-output attempt — the model is stuck in a
+                # "I will apply_patch next" loop without ever invoking
+                # the tool. Count toward empty_streak so the same
+                # 2-attempt bail applies; otherwise the loop burns the
+                # full 5-attempt budget on identical no-op repetitions.
+                # Restricted to apply_patch / patch / edit / update verb
+                # phrases that ONLY appear in announce-the-edit
+                # contexts; the "applying ... if line N does not match"
+                # conditional-verify phrasing (run 25206976031 attempt 1)
+                # is filtered out by the success-no-op regex above, so
+                # it never reaches this branch. Fail-open on grep error.
+                if grep -qEi '(apply_patch|applying (a |an |the |this |requested |first |minimal )(patch|edit)|patching `?[A-Za-z0-9_./-]+|editing `?[A-Za-z0-9_./-]+|i.?ll (now )?(apply|patch|edit|update)|will (now )?(apply|patch|edit|update))' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                  echo "::warning::Codex announced an edit/apply_patch on attempt ${attempt} but produced no file changes — counting toward empty_streak."
+                  attempt_was_empty=true
                 fi
                 echo "::warning::Codex returned output but produced no file changes on attempt ${attempt}."
               else
@@ -1351,9 +1372,21 @@ jobs:
                 # Same redaction policy as the validator's offending-
                 # bytes block (`scripts/validate_changed_files_syntax.sh`):
                 # secret-like keys → "<redacted: secret-like key>",
-                # long opaque tokens → "<redacted: long opaque token>".
+                # long opaque tokens → "<redacted>" inline.
                 # Mirrors the policy keyword list verbatim — keep them
                 # in lockstep when adding new patterns.
+                #
+                # Opaque-token redaction is in-line (`gsub`) instead of
+                # line-erasing so tool-invocation structure markers
+                # (`tool <name>(...)`, `exec`, `apply_patch`) survive.
+                # Without this, runs where the model never invoked
+                # apply_patch were indistinguishable from runs where it
+                # did and the args were long — every tool line collapsed
+                # to `<redacted: long opaque token>`. The keyword
+                # detector above still erases lines that mention secrets
+                # by name; only purely-structural lines (paths, JSON
+                # arg values without secret keywords) are now preserved
+                # with token-shaped substrings replaced by `<redacted>`.
                 tail -n 40 "${a_log}" 2>/dev/null | awk '
                   {
                     line = $0
@@ -1362,10 +1395,7 @@ jobs:
                       print "<redacted: secret-like key>"
                       next
                     }
-                    if (match(line, /[A-Za-z0-9+\/=_-]{40,}/)) {
-                      print "<redacted: long opaque token>"
-                      next
-                    }
+                    gsub(/[A-Za-z0-9+\/=_-]{40,}/, "<redacted>", line)
                     print line
                   }
                 ' || printf '(empty log)\n'
