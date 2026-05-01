@@ -55,8 +55,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
-          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
+          # Fetch state alongside labels so a closed issue (e.g. cleanup-closed
+          # by the orchestrate-decompose-test smoke before the auto-approve
+          # comment fires the implement workflow) short-circuits before any
+          # Codex / install cost. Without the state gate, implement runs on
+          # the closed issue, posts a misleading "implementation-failed"
+          # diagnostics comment, and burns budget.
+          ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+          ISSUE_STATE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.state')"
+          ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -c '.labels')"
+          if [ "${ISSUE_STATE}" = "closed" ]; then
+            echo "Issue #${ISSUE_NUMBER} is closed. Skipping implementation steps."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+          elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementing label. Another implement run is in progress. Skipping."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           elif ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
@@ -891,6 +902,17 @@ jobs:
             handles commit and diff reporting separately.
           - Do NOT emit progress/status messages. Output ONLY repository changes.
 
+          EDIT TOOL DISCIPLINE (MANDATORY — prevents announce-without-editing stalls):
+          - Make every repository edit via `apply_patch` or the equivalent Serena edit
+            tool (mcp__serena__replace_symbol_body, mcp__serena__insert_after_symbol,
+            mcp__serena__insert_before_symbol). Do NOT shell out to `sed`/`awk`/`rg`
+            with literal special characters — they routinely fail shell quoting and
+            waste the entire attempt without producing a diff.
+          - Once you have located the file and lines to change, go straight to the
+            edit. Do NOT keep exploring. Announcing "I'll now apply_patch …" without
+            actually invoking the tool counts as a failed attempt and trips the
+            stuck-in-exploration bail.
+
           CONFLICT DETECTION:
           - Flag any factual conflicts between the implementation plan and the actual
             codebase (e.g., a function name in the plan doesn't match the code, a file
@@ -1197,7 +1219,26 @@ jobs:
                 # conditional-verify phrasing (run 25206976031 attempt 1)
                 # is filtered out by the success-no-op regex above, so
                 # it never reaches this branch. Fail-open on grep error.
-                if grep -qEi '(apply_patch|applying (a |an |the |this |requested |first |minimal )(patch|edit)|patching `?[A-Za-z0-9_./-]+|editing `?[A-Za-z0-9_./-]+|i.?ll (now )?(apply|patch|edit|update)|will (now )?(apply|patch|edit|update))' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                #
+                # Phrasing set extended for run 25215763575 (issue #1901)
+                # where Codex narrated "Applying the approved plan now
+                # with a minimal edit to <file>" / "Applying the requested
+                # minimal implementation now: I'll … patch <file>" — the
+                # original alternation set `(patch|edit)` after the
+                # adjective list, but Codex routinely reaches for
+                # synonyms like `plan` / `implementation` / `change` /
+                # `fix` / `update`, and the adjective set itself needs
+                # `approved`/`implementation`. Likewise the
+                # `i.?ll (now )?(apply|patch|edit|update)` clause now
+                # accepts more leading adverbs (`first`/`then`/`next`/
+                # `only`/`just`/`go ahead and`/`proceed to`) and the
+                # verb set adds `modify`/`write`/`create`/`add`/
+                # `change`/`implement`/`fix`. False positives don't
+                # regress correctness: this branch only fires when
+                # codex_delta is already empty, so broadening the
+                # regex strictly increases recall on a path that is
+                # already a confirmed no-op.
+                if grep -qEi '(apply_patch|applying (a |an |the |this |requested |first |minimal |approved |implementation |new |my |our |proposed )*(patch|edit|implementation|change|fix|plan|update|modification)|patching `?[A-Za-z0-9_./-]+|editing `?[A-Za-z0-9_./-]+|i.?ll (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix)|will (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix))' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   echo "::warning::Codex announced an edit/apply_patch on attempt ${attempt} but produced no file changes — counting toward empty_streak."
                   attempt_was_empty=true
                 fi

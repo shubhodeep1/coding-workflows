@@ -333,16 +333,32 @@ jobs:
             IS_FORCED_RECLARIFY="true"
           fi
 
+          # State gate: a closed issue should not produce side effects (label
+          # changes, /answer auto-post that triggers plan→implement). The
+          # orchestrate-decompose-test smoke (test-and-mark-stable.yml:3127)
+          # closes its child issues during cleanup and the trigger event
+          # payload may still show state=open if the close happened after
+          # the workflow was queued, so re-read state from the freshly
+          # fetched issue meta.
+          IS_CLOSED="false"
+          ISSUE_STATE="$(jq -r '.state // "open"' "${ISSUE_META_FILE}")"
+          if [ "${ISSUE_STATE}" = "closed" ]; then
+            IS_CLOSED="true"
+          fi
+
           SKIP_CODEX="false"
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
+          if [ "${IS_CLOSED}" = "true" ]; then
+            SKIP_CODEX="true"
+          elif [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
             SKIP_CODEX="true"
           fi
 
           echo "is_orchestrator_managed=${IS_ORCHESTRATOR_MANAGED}" >> "$GITHUB_OUTPUT"
           echo "is_forced_reclarify=${IS_FORCED_RECLARIFY}" >> "$GITHUB_OUTPUT"
+          echo "is_closed=${IS_CLOSED}" >> "$GITHUB_OUTPUT"
           echo "skip_codex=${SKIP_CODEX}" >> "$GITHUB_OUTPUT"
 
-          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} skip_codex=${SKIP_CODEX}"
+          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
 
       - name: Detect smoke test and tune LLM settings
         run: |
@@ -389,6 +405,7 @@ jobs:
           fi
 
       - name: Set clarification phase label
+        if: steps.clarify_route.outputs.is_closed != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -408,7 +425,7 @@ jobs:
           fi
 
       - name: Orchestrator-managed fast path
-        if: steps.clarify_route.outputs.skip_codex == 'true'
+        if: steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
