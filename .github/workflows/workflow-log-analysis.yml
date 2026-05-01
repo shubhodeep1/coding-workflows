@@ -935,10 +935,17 @@ jobs:
     # Bumped 30 → 60 after run 25115192726 cancelled at 30m19s on this job
     # — Codex was still mid-analysis ("considering whether I can combine
     # findings from two separate call sites") when the 30m cap fired and
-    # emitted `##[error]The operation was canceled.`. The orphan-workflows
-    # poller's outer DEADLINE in test-and-mark-stable.yml (dispatch step)
-    # still covers the new 60m cap with plenty of headroom.
-    timeout-minutes: 60
+    # emitted `##[error]The operation was canceled.`. Bumped 60 → 90 after
+    # run 25200117236 cancelled at 60m 11s — Codex (gpt-5.4 reasoning
+    # effort xhigh) was still in the "Plan update … → Draft final markdown
+    # section" phase (had not started generating output) when the 60m cap
+    # fired. Audit-prompt input size has not grown materially since the
+    # 30 → 60 bump (report file 51 KB this run vs. 33–58 KB pre-bump);
+    # the structural cause is xhigh deliberation latency variance, which
+    # the 60m cap couldn't absorb. The orphan-workflows poller's outer
+    # DEADLINE in test-and-mark-stable.yml (dispatch step) still covers
+    # the new 90m cap with headroom.
+    timeout-minutes: 90
     outputs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
     env:
