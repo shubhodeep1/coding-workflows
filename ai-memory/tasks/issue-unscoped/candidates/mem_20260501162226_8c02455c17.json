@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:14-35 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: No early job-level gate on issue.state=closed causes the workflow to trigger and consume runner quota on closed issues before later skip checks.\n  WHY: The state check is deferred to later steps, so closed-issue runs still burn runner minutes even though they eventually skip; correctness is preserved, but the inefficiency is real.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/plan.yml:14-35 | severity=low | confidence=3\n  PROBLEM: No early job-level gate on `issue.state=closed` \u2014 workflow triggers and consumes runner quota even on closed issues, with state check deferred to later steps (\"Validate-planning-phase-label\", \"Auto-approve clear plan\").\n  WHY: Runtime impact is minor resource inefficiency because the workflow still runs setup and then skips later, so no incorrect labels/comments are posted.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "588160bf25d4b772b3e481e63ae31fdc28911a53979c6dcb6bf450327a924d70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1906,
+    "run_id": "25221451024",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25221451024",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501162226_8c02455c17",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1906,
+    "run_id": "25221451024"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-01T16:22:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
