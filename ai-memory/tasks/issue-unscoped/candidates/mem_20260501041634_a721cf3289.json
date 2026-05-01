@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/summarize_unselected_runs.py:161-211 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: _parse_iso8601/select_targets passes r.get(\"created_at\") through without validating that it is a string, so malformed non-string created_at values can raise AttributeError and abort summarization.\n  WHY: Multiple reviewers reported the .strip() crash path and end-to-end failure; some treated it as a low-risk hardening gap because the current data source normally yields strings.\n- scripts/summarize_unselected_runs.py:273-278 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: build_summary_input can return only marker[:char_cap] when char_cap is smaller than the truncation marker, leaving an incomplete truncation indicator.\n  WHY: One reviewer confirmed the very-small-cap edge case, while another called it valid-but-edge-case and others said the behavior is intentional or already fixed.\n- scripts/summarize_unselected_runs.py:542 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: main() can pass an empty or whitespace-only repository string into _fetch_run_log_archive.\n  WHY: The reviewer said this would surface as a confusing downstream error and suggested skipping such runs first.\n- scripts/summarize_unselected_runs.py:394-399 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: json.dumps(stats_with_op, sort_keys=True) omits ensure_ascii=False explicitly but defaults True; non-ASCII chars emit escaped \\uXXXX which is safe but verbose.\n  WHY: One reviewer treated this as a portability/readability issue; others said the current code already has ensure_ascii=True, so the concern is disputed.\n- .github/workflows/workflow-log-analysis.yml:265-294 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new summarizer step uses continue-on-error: true, so a failure can silently skip the mini-summarization pass.\n  WHY: The reviewer says analysis_context.json then lacks the intended log_summary widening coverage.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/summarize_unselected_runs.py:163 | severity=low | confidence=1\n  PROBLEM: No type guard for non-string values before calling .strip().\n  WHY: HARDENING_RISK_SCORE: 1 \u2014 the reviewer treats this as a belt-and-suspenders guard because the current data source normally produces strings.\n- scripts/summarize_unselected_runs.py:542 | severity=low | confidence=1\n  PROBLEM: repository string could be empty if run dict has empty or whitespace-only repository field.\n  WHY: HARDENING_RISK_SCORE: 1 \u2014 the reviewer says this would produce a confusing error from _fetch_run_log_archive and suggests skipping such runs first.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/summarize_unselected_runs.py:161-173, 199-211 | severity=medium | confidence=4\n  PROBLEM: The sort key passes r.get(\"created_at\") directly to _parse_iso8601 without type validation, so a non-string created_at can raise AttributeError.\n  WHY: The reviewer says a bad run record can abort the entire summarization instead of being handled gracefully.\n- scripts/summarize_unselected_runs.py:273-278 | severity=low | confidence=3\n  PROBLEM: build_summary_input can return only a prefix of the truncation marker when char_cap is smaller than the marker length.\n  WHY: The reviewer says this leaves an incomplete truncation indicator for very small char_cap values.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/summarize_unselected_runs.py:161-173 | severity=low | confidence=3\n  PROBLEM: _parse_iso8601 has no isinstance(value, str) guard before calling .strip().\n  WHY: The reviewer treats this as a minor defensive-coding gap because the current data source is controlled JSON.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/summarize_unselected_runs.py:275-278 | severity=low | confidence=2\n  PROBLEM: build_summary_input returns marker[:char_cap] when char_cap is smaller than the truncation marker.\n  WHY: The reviewer calls this a valid but very edge-case behavior; the code is already clamped to char_cap >= 1, so the practical risk is low.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/summarize_unselected_runs.py:162-207 | severity=medium | confidence=3\n  PROBLEM: The sort key passes r.get(\"created_at\") directly to _parse_iso8601 without a type guard, so malformed non-string created_at values can crash select_targets.\n  WHY: The reviewer says AttributeError aborts summarization and blocks downstream analysis.\n- scripts/summarize_unselected_runs.py:394-399 | severity=low | confidence=2\n  PROBLEM: json.dumps(stats_with_op, sort_keys=True) relies on the default ensure_ascii=True behavior instead of stating it explicitly, so non-ASCII telemetry is emitted as \\uXXXX escapes.\n  WHY: The reviewer treats this as a portability/readability concern, although others say the current code already has ensure_ascii=True.\n- .github/workflows/workflow-log-analysis.yml:265-294 | severity=medium\n  PROBLEM: The new summarizer step uses continue-on-error: true, so a failure can silently skip the mini-summarization pass.\n  WHY: The reviewer says analysis_context.json then lacks the intended log_summary widening coverage.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4a6eaead5b71739e2a21a21062dd3ede49af5bb1854473ae5b9d1f77a7a03a12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1839,
+    "run_id": "25201255563",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25201255563",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501041634_a721cf3289",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1839,
+    "run_id": "25201255563"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-01T04:16:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
