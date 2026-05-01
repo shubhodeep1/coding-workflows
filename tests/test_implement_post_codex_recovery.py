@@ -1189,6 +1189,7 @@ def test_codex_success_detection_uses_baseline_diff() -> None:
 		"no repository changes (were )?required",
 		"no files (were )?modified",
 		"no repository changes (were )?needed",
+		"no file changes (were )?needed",
 	):
 		assert phrase in codex_block, (
 			f"Success-no-op regex should include the '{phrase}' completion signal "
