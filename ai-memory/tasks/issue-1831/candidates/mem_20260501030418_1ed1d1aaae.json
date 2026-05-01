@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What scope should this issue cover?**\nChoices:\n- **A** \u2014 One concrete workflow or script only; name it in your reply (for example `review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, or `validate.yml`) (RECOMMENDED)\n- **B** \u2014 One full subsystem with related files; name the subsystem in your reply\n- **C** \u2014 Cross-cutting repo-wide improvements; list the affected workflows in your reply\nReply: `Q1: A`\n**Q2: What does \"better\" mean for this issue?**\nChoices:\n- **A** \u2014 Fix a broken or flaky behavior (RECOMMENDED)\n- **B** \u2014 Reduce cost, runtime, retries, or API churn without changing visible behavior\n- **C** \u2014 Improve operator/developer clarity (logs, comments, alerts, or docs)\n- **D** \u2014 Intentionally change workflow behavior or policy\nReply: `Q2: A`\n**Q3: What should planning use as the acceptance anchor?**\nChoices:\n- **A** \u2014 A specific current problem; include the issue, PR, workflow run, or exact failure mode in your reply (RECOMMENDED)\n- **B** \u2014 Preserve current behavior and improve internals only. **Note:** incompatible with `Q2: D`\n- **C** \u2014 A new desired behavior from today's baseline\nReply: `Q3: A`",
+  "fingerprint": "0004af89fb0c423b7dd5600f2d468e37bad51d0b7525a382d24ce4a4a0fdf6bb",
+  "lineage": {
+    "issue_number": 1831,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25200116830",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25200116830",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260501030418_1ed1d1aaae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1831,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25200116830"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1831 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-01T03:04:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
