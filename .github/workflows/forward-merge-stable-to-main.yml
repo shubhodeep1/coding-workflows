@@ -24,6 +24,11 @@ name: Forward-merge stable to main
 permissions:
   contents: write
   pull-requests: write
+  # actions: read is required by the hard-failure TG alert step so
+  # the failing-step lookup against the Actions Jobs API works when
+  # GH_PAT is unset and we fall back to github.token. Without this,
+  # `failing_step` would always be empty on github.token-only runs.
+  actions: read
 
 concurrency:
   group: forward-merge-stable-to-main
