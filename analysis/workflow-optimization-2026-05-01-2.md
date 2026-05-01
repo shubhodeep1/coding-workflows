@@ -545,3 +545,107 @@ Ordered by end-to-end impact.
 | issue_pr_status / cancel / CI | No usable token totals observed | Mostly control-plane work |
 
 If you want, I can turn this into a **prioritized implementation checklist** mapped to specific workflow files and likely edit locations next.
+
+## Deep Audit — Workflows & Scripts (2026-05-01)
+
+### Section 1: Bug & Correctness Sweep
+
+#### CONSIST-001
+- **File path** — `.github/workflows/review_autofix.yml:485-495,3743-3756,4598-4610`; `scripts/review_rb_judge.sh:146-167`; contrast with `.github/workflows/issue_pr_status.yml:196-210`
+- **Severity** — High
+- **Category tag** — `consistency`
+- **Description** — Linked-issue fallback parsing is inconsistent across the repo, and the broader variants in `review_autofix.yml` and `review_rb_judge.sh` can mutate unrelated issues. `issue_pr_status.yml` deliberately limits fallback matching to closing-keyword references after documenting the #1469 regression risk, but `review_autofix.yml` and `review_rb_judge.sh` still accept bare prose forms like `issue #123` and `repo/issues/123`. On paths where GraphQL returns no `closingIssuesReferences`, those broader regexes can incorrectly add `ai:ready-to-merge` / `ai:review-blocked` or pull the wrong issue body into judge context for issues that were only mentioned, not closed.
+- **Recommended fix** — Move fallback issue extraction into a single helper in `scripts/gh_helpers.sh` and make every caller use the strict `issue_pr_status.yml` semantics: only `closingIssuesReferences` first, then explicit closing keywords or repo-scoped issue URLs as fallback. Remove support for bare `issue #N` / `issues/N` from `review_autofix.yml` and `scripts/review_rb_judge.sh`.
+
+#### BUG-001
+- **File path** — `.github/workflows/issue_pr_status.yml:412-429`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — The PR-close lineage finalization step fails closed when memory helper staging is unavailable. If `MEMORY_HELPERS_READY` is not `1`, or `scripts/memory_helpers.sh` is missing, the step exits `1` and marks the whole workflow red even though this repo’s memory contract is otherwise fail-open. That makes a transient support checkout problem or helper copy miss turn a label-sync workflow into a hard failure after the issue-label mutations have already run.
+- **Recommended fix** — Downgrade the missing-helper branches to `::warning::` + `exit 0`, matching the fail-open pattern already used by `scripts/memory_helpers.sh` wrappers and the review workflow’s memory-record steps. Keep `memory_finalize_task` best-effort rather than making issue-status closure depend on support-script availability.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path** — `scripts/orchestrate_poll_process.sh:4215-4364`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — `_load_actions_runs_cached()` claims to provide a single shared actions-runs fetch, but on a cold refresh it performs three REST calls: one `gh api -i ...status=in_progress`, then an additional queued-runs call, then an additional completed-runs call. That means each poll tick that misses the TTL burns 3 calls before any downstream consumer reads the cache, even though the helper’s own contract says “one conditional API retrieval per tick.” **Current call count:** 3 per cold refresh. **Proposed call count:** 1 per cold refresh by fetching one broader runs payload and filtering statuses locally before populating the existing `actions-runs-cache`.
+- **Recommended fix** — Extend the existing `actions-runs-cache` path in `_load_actions_runs_cached()` so it stores one superset payload per tick and derives `in_progress`, `queued`, and recent `completed` subsets locally. Reuse the current `actions-runs-cache` document flow rather than layering extra `gh api` calls on top of it.
+
+#### BATCH-001
+- **File path** — `.github/workflows/review_autofix.yml:485-530`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — In the post-merge validation dispatch path, when the initial linked-issue GraphQL fetch yields no labels, the workflow falls back to per-issue `gh issue view` calls inside the loop to determine whether `ai:orchestrator-validate-required` is present. **Current call count:** `1 + N` on that path (`1` PR fetch for fallback text parsing, then `N` issue-label fetches). **Proposed call count:** `2` total by batching the issue-label lookup for all parsed issue numbers in a single aliased GraphQL request.
+- **Recommended fix** — Reuse the aliased-GraphQL batching pattern already present in `issue_pr_status.yml` (the `ORCH_ALIAS_FRAGMENT` style) or extend `scripts/orchestrate_poll_process.sh`’s `_fetch_candidate_issue_details_graphql` pattern to fetch `{ number, labels }` for all candidate issues at once. Then keep the loop purely local.
+
+#### BATCH-002
+- **File path** — `scripts/review_rb_judge.sh:146-208`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — `review_rb_judge.sh` first fetches linked issue numbers via GraphQL, then immediately loops over those numbers and does one `gh api repos/.../issues/<n>` call per issue just to obtain bodies and seed `FIRST_ISSUE_BODY`. **Current call count:** `1 + N` for linked-issue context. **Proposed call count:** `1` by fetching `number` and `body` together in the original GraphQL query, or by reusing an already-prepared linked-issue context blob.
+- **Recommended fix** — Extend the initial `closingIssuesReferences` query to request `body` (and `title` if useful), following the same shape already used earlier in `review_autofix.yml`. If shared reuse is preferred, add a `gh_helpers.sh` helper that returns linked-issue metadata once and have both `review_autofix.yml` and `review_rb_judge.sh` call it.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/clarify.yml:161-239`; `.github/workflows/plan.yml:189-260`; `.github/workflows/validate.yml:185-240`; `.github/workflows/review_autofix.yml:798-860`; `.github/workflows/issue_pr_status.yml:41-171`; `.github/workflows/orchestrate.yml:132-210`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — Workflow support-source resolution, checkout fallback, and file staging are reimplemented in many workflows with near-identical logic: decide `stable` vs current SHA, try primary checkout, fall back to `main`, then copy a file allowlist into `scripts/` and related directories. The implementations have already drifted in file lists, fallback behavior, and failure handling, which is why some workflows fail-open on missing support files while others fail closed.
+- **Recommended fix** — Extract the bootstrap into a shared module, e.g. `scripts/workflow_support.sh`, with a signature like `fetch_workflow_support <mode> <dest_root> <script_ref> <required_file>...`. Update the callers in `clarify.yml`, `plan.yml`, `validate.yml`, `review_autofix.yml`, `issue_pr_status.yml`, and `orchestrate.yml` to invoke that one helper so fallback policy and required-file validation stay consistent.
+
+#### DUP-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:2678-2908,2978-3010,3158-3204`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — `test-and-mark-stable.yml` contains repeated “dispatch workflow → poll for registration → poll for completion” shells for `workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-memory-maintenance`, `internal-orchestrate`, and `internal-validate`. The blocks duplicate deadline math, `PRE` run capture, registration polling, status polling, and success/conclusion branching, making fixes to watcher behavior expensive and error-prone.
+- **Recommended fix** — Move this into `scripts/gh_helpers.sh` (or a new `scripts/workflow_dispatch_helpers.sh`) as `dispatch_and_wait_workflow <repo> <workflow_file> <register_timeout_secs> <completion_timeout_secs> [acceptable_conclusion ...] [--field key=value ...]`. Then update each `test-and-mark-stable.yml` caller to pass workflow-specific inputs and accepted conclusions.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No workflow crossed the reporting thresholds for GitHub’s 21,000-character expression limit.
+
+- **Largest observed single `${{ }}` expression** — `.github/workflows/update_workflows.yml:462-575`, about **545 characters**, leaving roughly **20,455 characters** of headroom.
+- **Largest workflow file by size** — `.github/workflows/review_autofix.yml`, **267,353 characters**.
+- **800 KB workflow-size alert threshold** — no workflow exceeded it; the largest file remains well below **819,200 characters**.
+
+Because the large workflows in this repo mostly keep long prompt bodies and shell logic outside `${{ }}` blocks, they are currently file-size risks, not expression-size risks.
+
+### Section 5: Cross-Cutting Concerns
+
+#### SHELL-001
+- **File path** — `.github/workflows/forward-merge-stable-to-main.yml:320-346,374-419`; `.github/workflows/orchestrate_poll.yml:502-544`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — Several multi-line failure-alert shells use `set -uo pipefail` instead of `set -euo pipefail`. In these blocks, a failed `source scripts/tg_helpers.sh`, a failed failing-step lookup pipeline, or another unexpected non-zero command can silently fall through and produce a partial or missing alert. The final `tg_send_msg ... || true` is already explicitly best-effort, so the missing `-e` only weakens error detection in the rest of the step.
+- **Recommended fix** — Switch these blocks to `set -euo pipefail` and keep only the intentionally non-fatal commands wrapped with `|| true`. That preserves best-effort alert sending without masking earlier script failures.
+
+#### DEAD-001
+- **File path** — `scripts/mark-stable.sh:1-14`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `scripts/mark-stable.sh` appears unreferenced by any workflow or script in this repository. The release flows implement their own stable-tag logic in workflow YAML, so this standalone helper is effectively dead code and can drift independently of the live release path.
+- **Recommended fix** — Either remove the script, or make one release workflow call it directly so there is a single implementation of stable-tag publication. If it is intentionally kept as a manual operator tool, document that in `README.md` and add an explicit caller comment in the release workflow.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | CONSIST-001 |
+| Medium | 6 | BUG-001, API-001, BATCH-001, BATCH-002, DUP-001, DUP-002 |
+| Low | 2 | SHELL-001, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 4 | Medium |
+| Code modularization | 7 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 4 | Small |
