@@ -106,6 +106,40 @@ def test_select_targets_requires_repo_and_run_id():
 	assert [r["run_id"] for r in picked] == [7]
 
 
+def test_select_targets_rejects_whitespace_or_non_string_repository():
+	runs = [
+		{"repository": "   ", "run_id": 1, "created_at": "2026-01-01T00:00:00Z"},
+		{"repository": "", "run_id": 2, "created_at": "2026-01-02T00:00:00Z"},
+		{"repository": 42, "run_id": 3, "created_at": "2026-01-03T00:00:00Z"},
+		{"repository": "a/b", "run_id": 4, "created_at": "2026-01-04T00:00:00Z"},
+	]
+	picked = summarizer.select_targets(runs, max_summaries=10)
+	# Only the last row has a usable repository string.
+	assert [r["run_id"] for r in picked] == [4]
+
+
+def test_select_targets_tolerates_non_string_created_at_in_sort_key():
+	"""A malformed `created_at` (int / dict / None) must not raise — it just
+	sorts as 'no timestamp' instead of aborting the whole window."""
+	runs = [
+		{"repository": "a/b", "run_id": 1, "created_at": 12345},
+		{"repository": "a/b", "run_id": 2, "created_at": {"not": "a string"}},
+		{"repository": "a/b", "run_id": 3, "created_at": None},
+		{"repository": "a/b", "run_id": 4, "created_at": "2026-04-01T00:00:00Z"},
+	]
+	# Must not raise; the well-formed row should sort newest among them.
+	picked = summarizer.select_targets(runs, max_summaries=10)
+	assert {r["run_id"] for r in picked} == {1, 2, 3, 4}
+	assert picked[0]["run_id"] == 4
+
+
+def test_parse_iso8601_returns_none_for_non_string_inputs():
+	assert summarizer._parse_iso8601(None) is None
+	assert summarizer._parse_iso8601(12345) is None
+	assert summarizer._parse_iso8601({"not": "a string"}) is None
+	assert summarizer._parse_iso8601(["2026-01-01"]) is None
+
+
 def test_select_targets_caps_and_sorts_newest_first():
 	runs = [
 		{"repository": "a/b", "run_id": i, "created_at": f"2026-01-{i:02d}T00:00:00Z"}

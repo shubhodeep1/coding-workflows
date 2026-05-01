@@ -159,7 +159,13 @@ def _to_int(value: Any, default: int = 0) -> int:
 		return default
 
 
-def _parse_iso8601(value: str | None) -> datetime | None:
+def _parse_iso8601(value: Any) -> datetime | None:
+	# Defensive type guard: callers pass run.get("created_at") through a
+	# sort key, so a malformed (non-string) value would otherwise raise
+	# AttributeError on .strip() and abort summarization for the whole
+	# window. Treat anything non-stringy as "no timestamp".
+	if not isinstance(value, str):
+		return None
 	if not value:
 		return None
 	normalized = value.strip()
@@ -190,7 +196,11 @@ def _is_run_eligible(run: Any) -> bool:
 	excerpts = run.get("log_excerpts")
 	if isinstance(excerpts, list) and excerpts:
 		return False
-	if not run.get("repository"):
+	# Repository must be a non-empty, non-whitespace string. The collector
+	# normally produces "owner/repo", but we guard against malformed rows
+	# so they don't reach _fetch_run_log_archive with an empty target.
+	repository = run.get("repository")
+	if not isinstance(repository, str) or not repository.strip():
 		return False
 	if _to_int(run.get("run_id"), 0) <= 0:
 		return False
