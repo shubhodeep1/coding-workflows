@@ -288,16 +288,19 @@ jobs:
           # Validate `vars`-sourced numeric inputs in-shell so a typo like
           # vars.WORKFLOW_LOG_SUMMARY_MAX_RUNS="abc" doesn't crash argparse
           # before the Python script can emit a fail-open ::warning:: +
-          # AI_MEMORY_TELEMETRY. Pattern matches MAX_CODEX_ATTEMPTS validation
-          # later in this workflow.
+          # AI_MEMORY_TELEMETRY. Pattern matches the `^[0-9]+$` shell guard
+          # used for MAX_CODEX_ATTEMPTS/CODEX_RETRY_BACKOFF_BASE_SECS later
+          # in this workflow — negatives are rejected here (the script
+          # treats 0 as "skip", so non-negative integers are the full
+          # accepted range).
           max_summaries="${WORKFLOW_LOG_SUMMARY_MAX_RUNS}"
           token_budget="${WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET}"
-          if ! [[ "${max_summaries}" =~ ^-?[0-9]+$ ]]; then
-            echo "::warning::Invalid WORKFLOW_LOG_SUMMARY_MAX_RUNS='${WORKFLOW_LOG_SUMMARY_MAX_RUNS}'; falling back to 100."
+          if ! [[ "${max_summaries}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid WORKFLOW_LOG_SUMMARY_MAX_RUNS='${WORKFLOW_LOG_SUMMARY_MAX_RUNS}' (must be a non-negative integer); falling back to 100."
             max_summaries="100"
           fi
-          if ! [[ "${token_budget}" =~ ^-?[0-9]+$ ]]; then
-            echo "::warning::Invalid WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET='${WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET}'; falling back to 1500000."
+          if ! [[ "${token_budget}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET='${WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET}' (must be a non-negative integer); falling back to 1500000."
             token_budget="1500000"
           fi
 
