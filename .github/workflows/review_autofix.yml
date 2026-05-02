@@ -1860,24 +1860,31 @@ jobs:
           fi
 
           if [ "$IS_SMOKE" = "true" ]; then
-            # Editor-only low-reasoning override for smoke runs. The earlier
-            # xhigh-on-smoke policy (mirroring PR #1723's implement-side
-            # rollback of low) was reinstating the same Phase 4b regression it
-            # was meant to prevent: at xhigh, openai/gpt-5.3-codex burns its
-            # reasoning budget on tool calls + reasoning summaries and exits
-            # cleanly with rc=0/empty stdout, producing 0 file changes —
-            # observed in run 25249170035 / PR #1982 (6 editor attempts, all
-            # empty, ~81k tokens consumed on attempt 1 with only 3 Serena
-            # calls). Drop reasoning to low for editor only when the smoke
-            # marker is present; non-smoke PRs continue to use the workflow
-            # default (xhigh) so production PRs aren't affected by this knob.
-            # PR #1723's malformed-Serena-call concern was specific to
-            # implement.yml on real issues; the smoke canary task is a
-            # single-line removal that the model can complete deterministically
-            # at low reasoning.
-            EDITOR_REASONING_EFFORT="low"
-            echo "EDITOR_REASONING_EFFORT=${EDITOR_REASONING_EFFORT}" >> "$GITHUB_ENV"
-            echo "🔬 Smoke test PR detected — overriding editor reasoning to ${EDITOR_REASONING_EFFORT} (Phase 4b empty-output mitigation)"
+            # Low-reasoning override for smoke runs (reviewers + editor).
+            # The earlier xhigh-on-smoke policy (mirroring PR #1723's
+            # implement-side rollback of low) was reinstating the same Phase 4b
+            # regression it was meant to prevent: at xhigh, openai/gpt-5.3-codex
+            # burns its reasoning budget on tool calls + reasoning summaries
+            # and exits cleanly with rc=0/empty stdout, producing 0 file
+            # changes — observed in run 25249170035 / PR #1982 (6 editor
+            # attempts, all empty, ~81k tokens consumed on attempt 1 with only
+            # 3 Serena calls). Drop reasoning to low for both reviewers and
+            # editor when the smoke marker is present; non-smoke PRs continue
+            # to use the workflow default (xhigh) so production PRs aren't
+            # affected by this knob. The smoke canary task is a single-line
+            # removal that the models can complete deterministically at low
+            # reasoning, and reviewers don't need deep reasoning to spot the
+            # bait line — keeping them at low slashes smoke-test runtime and
+            # cost without sacrificing gate coverage.
+            echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            # Patch the already-written Codex config so the reviewer phase
+            # (which copies ~/.codex/config.toml into each reviewer's
+            # isolated CODEX_HOME) picks up the low override. Without this
+            # sed the reviewer codex config would still hold the xhigh value
+            # baked in by the "Create Codex config" step that ran earlier.
+            sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
+            echo "🔬 Smoke test PR detected — overriding reviewer + editor reasoning to low (Phase 4b empty-output mitigation)"
             # Suppress per-phase Telegram alerts; the test-and-mark-stable
             # gate emits a single combined pass/fail notification at the
             # end via raw curl. SILENT > CRITICAL so all levels filter.
