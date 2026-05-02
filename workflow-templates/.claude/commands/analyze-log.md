@@ -9,7 +9,7 @@ $ARGUMENTS
    If `$ARGUMENTS` contains zero URLs, stop and ask the user for at least one log URL — this command is for log-anchored analysis. (If the user has only refs/IDs/prose without a log, point them at `/investigate-issue`.)
 
    Then download EACH log. Choose the fetch tool by URL shape; `curl` against a rendered GitHub page returns HTML, not log content.
-   - **GitHub Actions run / job URLs** (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, `.../runs/<id>/job/<id>`, `.../runs/<id>/attempts/<n>`): use the appropriate GitHub MCP tool (e.g. `mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`). These return the raw log payload. Do NOT `curl` these URLs.
+   - **GitHub Actions run / job URLs** (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, `.../runs/<id>/job/<id>`, `.../runs/<id>/attempts/<n>`): use the appropriate GitHub MCP tool (e.g. `mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`). When `GH_TOKEN` is set in the session environment (the SessionStart hook installs `gh` and authenticates with it), `gh run view --log <run-id>`, `gh run view --log --job <job-id>`, `gh run view --log-failed <run-id>` (failed-step lines only), and `gh api repos/<owner>/<repo>/actions/runs/<id>/logs` are also available. These return the raw log payload. Do NOT `curl` these rendered URLs.
    - **Raw log URLs / artifact URLs / external (non-GitHub) URLs**: use `curl --fail-with-body -sSL -o /tmp/<unique-name>.log -w '%{http_code}\n' <url>` so HTTP errors are detected reliably; plain `curl -sL` exits 0 on 4xx/5xx and silently downloads the server's error page.
 
    Use a **distinct `<unique-name>` per URL** (e.g. derived from run/job ID, or numbered `log-1.log`, `log-2.log`) so concurrent downloads don't overwrite each other. Track the local path for each log alongside its `log-<n>` index in the Evidence Ledger so later citations (`log-2 L42: "..."`) are unambiguous when multiple logs are in play.
@@ -53,7 +53,7 @@ $ARGUMENTS
    - Environment or configuration issues
    - References to PRs (`#1234`), issues, commit SHAs, branches, workflow run IDs, artifact URLs — these are leads to follow in Step 4.
 
-4. **Expand the investigation** — Before proposing any fix, follow every relevant reference. Be exhaustive about the **upstream** side because that is where the user is most likely to need a fix.
+4. **Expand the investigation — keep pulling artifacts until the root cause is nailed down.** Before proposing any fix, follow every relevant reference. Be exhaustive about the **upstream** side because that is where the user is most likely to need a fix. When a log/PR/comment names another run / job / artifact / commit / PR, fetch it; don't infer from the name alone. Either `mcp__github__*` or `gh` CLI works (see [Tool Access](#tool-access)) — if `GH_TOKEN` is set, both can reach run logs, job logs, PRs, issues, commits, and file contents at `UPSTREAM_SHA`. If the diagnosis isn't yet evidence-based, the next step is to read more, not to guess.
 
    **In this consumer repo (current working directory):**
    - PRs / issues referenced → fetch via `mcp__github__pull_request_read` / `mcp__github__issue_read`. Read description, comments, linked issues, recent reviews.
@@ -116,6 +116,15 @@ $ARGUMENTS
 
 11. **Cleanup** — Remove every temp log file written to `/tmp/` during Step 1 when done.
 
+## Tool Access
+
+GitHub reads can go through either of two equivalent paths — pick whichever is exposed in the current session:
+
+- **`mcp__github__*` MCP tools** — assumed always available. Preferred when the schema fits cleanly (e.g. `get_workflow_run_logs`, `get_job_logs`, `pull_request_read`, `issue_read`, `list_commits`, `get_file_contents`, `list_tags`, `search_issues`, `search_pull_requests`). All upstream reads MUST pass `ref=<UPSTREAM_SHA>`.
+- **`gh` CLI** — available when `gh` is installed in the session and `GH_TOKEN` is set in the environment (consumer repos that ship a SessionStart hook to install `gh` will have both). Commands like `gh run view --log <run-id>`, `gh run view --log --job <job-id>`, `gh run view --log-failed <run-id>`, and `gh api repos/<owner>/<repo>/actions/runs/<id>/logs` work for any repo the token has read access to. Useful as a fallback when an MCP call is awkward or returns truncated output. If `gh` is missing or returns 401/403, fall back to the MCP tool — don't stop the investigation.
+
+**Keep going until the diagnosis is evidence-based.** A single log rarely contains the whole story. If the root cause isn't yet supported by log + source citations at `UPSTREAM_SHA`, pull the next layer: re-fetch the run with `--log-failed`, fetch sibling/previous runs of the same workflow, fetch the linked PR/issue, fetch the upstream workflow YAML at `UPSTREAM_SHA`, fetch artifacts. Only stop reading when (a) you have an evidence-based proposed fix labeled `EVIDENCE-BASED`, (b) the missing piece is blocked by an **Inaccessible Resource** that is recorded transparently, or (c) every reasonable lead is exhausted. Read-only still applies — keep reading, don't start editing.
+
 ## Rules
 
 - **Read-only.** This command never edits files. It produces a report. The user takes `[UPSTREAM]` fixes to a session in `shubhodeep1/coding-workflows`; the user takes `[CONSUMER]` fixes to a session in this repo. If during investigation you would normally apply an `EVIDENCE-BASED` edit, do **not** — emit it as a proposed fix instead.
@@ -128,7 +137,7 @@ $ARGUMENTS
   - What conclusion is blocked without it
 
   Stop that specific line of inquiry, but continue the broader analysis if the primary log + `UPSTREAM_SHA` are accessible and the root cause / proposed fix is still supported by available evidence. Do not make claims that depend on the inaccessible content — surface those gaps under **Open Questions** instead. Abort the analysis only if (a) the primary log itself is inaccessible, (b) `UPSTREAM_SHA` cannot be resolved, or (c) the missing resource blocks the root-cause conclusion.
-- **Use the GitHub MCP tools (`mcp__github__*`) for all GitHub interactions.** The `gh` CLI is not assumed available.
+- **Prefer `mcp__github__*` for GitHub reads; fall back to `gh` CLI when `GH_TOKEN` is set and the MCP surface is awkward** (see [Tool Access](#tool-access)).
 - **Prioritize the root cause** — the first meaningful error in the log — over cascading failures.
 - **Multiple independent failures** → address each separately, each with its own evidence and proposed fix.
 - **Environmental failures** (service down, rate limit, runner outage) — say so explicitly rather than proposing a code fix. Mark them as **environmental / non-actionable** (no target-repo label, no Proposed Fix entry) and recommend re-running once the environment recovers. Only assign a target-repo label if the evidence shows an actual upstream or consumer code defect underlying the environmental symptom (e.g. a missing retry around a transiently-flaky service).
