@@ -54,10 +54,10 @@ verify_token() {
     return 0
   fi
 
-  if gh auth status >/dev/null 2>&1; then
+  if gh api /user --silent >/dev/null 2>&1; then
     log "gh authenticated OK; Actions logs are readable via 'gh run view --log'."
   else
-    log "WARNING: token is set but 'gh auth status' failed. Check scopes/expiry."
+    log "WARNING: 'gh api /user' failed. Token may be invalid, expired, or missing required permissions."
   fi
 }
 
