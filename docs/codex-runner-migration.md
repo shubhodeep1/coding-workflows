@@ -2,7 +2,7 @@
 
 > **Status**: planning — not yet executed.
 > **Owner**: solo developer (sole user of the workflows in this repo).
-> **Goal**: replace OpenRouter-via-GitHub-hosted-runners with a self-hosted VPS that runs Codex CLI against a ChatGPT Pro subscription, with OpenRouter as automatic fallback when the sub quota is exhausted.
+> **Goal**: replace OpenRouter-via-GitHub-hosted-runners with a self-hosted VPS that runs Codex CLI against a ChatGPT Plus or Pro subscription (tier TBD — see Q2), with OpenRouter as automatic fallback when the sub quota is exhausted.
 
 ## Why
 
@@ -15,7 +15,7 @@ OpenRouter (the existing path) becomes the fallback tier rather than disappearin
 
 ## Goals
 
-- Steady-state CI traffic flows through Codex CLI + ChatGPT Pro sub.
+- Steady-state CI traffic flows through Codex CLI + a ChatGPT Plus/Pro subscription.
 - Quota exhaustion automatically falls back to OpenRouter (existing account, existing key).
 - Stay within OpenAI's documented CI/CD auth pattern (single machine, serialized job stream, one `auth.json`).
 - Preserve GitHub Actions UX: triggers, logs, status checks, branch protection — all unchanged.
@@ -35,22 +35,31 @@ OpenRouter (the existing path) becomes the fallback tier rather than disappearin
 GitHub event (push, PR, workflow_dispatch, [cron])
         │
         ▼
-Self-hosted runner on VPS (label: codex-vps, concurrency: 1)
-        │
+Self-hosted runner on VPS  (label: codex-vps; serialization via single
+        │                   runner + shared concurrency.group)
         ▼  (per job)
-docker run --rm  codex-runner:latest  ──►  codex-wrapper.sh
-                                              │
-                                              ├─► Tier 1: Codex CLI default profile
-                                              │   (auth.json, ChatGPT Pro sub)
-                                              │       on quota error ▼
-                                              └─► Tier 2: Codex CLI --profile openrouter
-                                                  (existing OPENROUTER_API_KEY)
+codex-wrapper.sh   ←── runs on the host (not in a container).
+        │              Owns the sentinel + JSONL log on the host filesystem.
+        │              Decides which tier to run, then for each attempt does:
+        │
+        ├─► Tier 1:  docker run --rm \
+        │                -v ~/.codex:/home/runner/.codex \
+        │                -e <task env> \
+        │                codex-runner:latest  codex exec ...
+        │            (ChatGPT Plus/Pro sub via mounted auth.json)
+        │                  on quota error ▼
+        └─► Tier 2:  docker run --rm \
+                         -v ~/.codex:/home/runner/.codex \
+                         -e OPENROUTER_API_KEY \
+                         codex-runner:latest  codex exec --profile openrouter ...
+                     (existing OpenRouter account)
 ```
 
 Key properties:
 
-- One VPS, one registered runner, plus a shared workflow-level concurrency group → serialized job stream by construction.
-- Each job runs in a throwaway container; the entire `~/.codex` directory is mounted from the host so token refresh persists naturally (single-file bind mounts break when the CLI rewrites via atomic rename).
+- Wrapper runs on the host so it can read/write the sentinel and the JSONL log without bind-mount gymnastics; only `codex exec` runs inside the throwaway container.
+- One VPS + one registered runner gives "one job at a time" by construction. A shared `concurrency.group` declared by every migrated workflow protects the serialization invariant if a second runner is ever registered or a workflow is duplicated.
+- Each job runs in a fresh container; the entire `~/.codex` directory is bind-mounted from the host so token refresh persists naturally (single-file bind mounts break when the CLI rewrites via atomic rename).
 - Tier transitions happen inside the wrapper, transparent to the workflow.
 
 ## Components
@@ -63,7 +72,15 @@ Key properties:
 2. **GitHub Actions self-hosted runner**
    - Registered to this repo, label `codex-vps`.
    - Runs as a non-root system user (member of the `docker` group — see security note below).
-   - Every migrated workflow declares the **same** concurrency group (e.g. `concurrency: { group: codex-global, cancel-in-progress: false }`) so that even if a second runner is ever added or workflows fan out, GitHub still serializes them globally. Per-workflow `concurrency: 1` is not sufficient on its own.
+   - Serialization comes from two layers: (a) only one runner is registered, so GitHub will not dispatch a second job to the host while one is in flight; (b) every migrated workflow declares the **same** GitHub Actions concurrency group, e.g.
+
+     ```yaml
+     concurrency:
+       group: codex-global
+       cancel-in-progress: false
+     ```
+
+     so that if a second runner is ever added, or if a workflow is duplicated, GitHub still queues all matching runs into one ordered stream. (Note: GitHub Actions has no numeric `concurrency: 1` form — the group name is what enforces the queue.)
 
 3. **Codex CLI installation on the host**
    - Installed once.
@@ -125,9 +142,13 @@ Key properties:
 
 ### Phase 4 — Wrapper
 
-- Implement `codex-wrapper.sh` with Tier 1 only first; verify it still runs jobs end-to-end.
-- Add Tier 2 fallback path. Test by temporarily forcing a quota error (e.g. invalid auth.json) and confirming Tier 2 takes over.
-- Add sentinel + JSONL logging.
+- Implement `codex-wrapper.sh` (host-side) with Tier 1 only first; verify it still runs jobs end-to-end via `docker run` against `codex-runner:latest`.
+- Add Tier 2 fallback path.
+- Test the fallback by **injecting a synthetic quota error**, not by breaking auth (an invalid `auth.json` produces a 401 / authentication error that won't match the quota regex and would mask a real bug):
+  - Build the wrapper to honor an env var `CODEX_WRAPPER_FORCE_TIER1_ERROR=quota`, which short-circuits the Tier 1 invocation and emits the exact stderr string + exit code that a real quota event produces.
+  - Drive the test by setting that env var on a one-off workflow run and confirm Tier 2 fires, the sentinel is written, and the JSONL log records `tier=2`.
+  - Capture a real quota stderr sample once it occurs in production and pin it as the regex fixture, so this test stays honest.
+- Add sentinel + JSONL logging on the host (paths owned by the runner user, created in Phase 1).
 
 ### Phase 5 — Pilot one workflow
 
