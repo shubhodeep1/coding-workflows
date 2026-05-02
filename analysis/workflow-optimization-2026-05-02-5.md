@@ -583,3 +583,154 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the audited workflow/script 
 | Code modularization | 7 | Large |
 | Expression size reduction | 2 | Small |
 | Medium/Low fixes | 4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-02)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap/deadness is statically clear enough that the implement stage can act directly without changing observable behavior. `NEEDS_VERIFICATION` means the optimization is plausible but not fully provable from static reading alone, so a human or follow-on verification pass must confirm freshness/error-handling semantics first. `RISKY_SKIP` means the overlap sits in retry/pagination/race-sensitive logic and must stay manual-only even if it looks redundant.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Duplicate child/tracking issue reads in `orchestrate_clarify_respond`
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:61-76` and `.github/workflows/orchestrate_clarify_respond.yml:418-429`
+- **Current call count** — `4` calls when a tracking issue exists (`child issue` twice, `tracking issue` twice); `2` calls when no tracking issue exists
+- **Proposed call count** — `2` calls when a tracking issue exists; `1` call when no tracking issue exists
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{ISSUE_NUMBER}`, `GET /repos/{repo}/issues/{TRACKING_NUM}`
+- **Evidence**
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+  ```sh
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  The same child issue is fetched in both steps, and the same tracking issue is split into one title-only read and one body-only read.
+- **Proposed fix** — Consolidate the reads by persisting the step-1 child issue JSON and one full tracking issue JSON (title + body) into `${RUNNER_TEMP}` or step outputs, then have `Fetch issue and tracking context` reuse those payloads. If keeping the current step structure, fetch the tracking issue once with both fields and reuse its title for the smoke-test alert suppression check.
+- **Safety rationale** — This crosses workflow steps and also changes a non-retried preflight read into reused data for a later retried context-build step, so freshness and failure semantics are not fully provable from static reading alone.
+- **Downstream signal** — Verify whether edits to the child issue body or tracking issue title/body between lines `61-76` and `418-429` must be visible to the model; if not, persist the JSON from the first step and reuse it in the second.
+
+#### MERGE-002 — Clarify fetches overlapping issue-comment data twice when semantic cache is enabled
+- **Safety tag** — `RISKY_SKIP`
+- **File path and line ranges** — `.github/workflows/clarify.yml:375-390`
+- **Current call count** — `2` comment reads per run when `SEMANTIC_CACHE_BACKEND != none`
+- **Proposed call count** — `1` comment read per run when `SEMANTIC_CACHE_BACKEND != none`
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=...`
+- **Evidence**
+  ```sh
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+  ...
+  if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+    if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+  ```
+  The second call is a superset of the first call's data on semantic-cache-enabled runs.
+- **Proposed fix** — If this path is ever manually optimized, replace the pair with one `gh api --paginate --slurp` call, materialize the full comment array once, derive `ISSUE_COMMENTS_FILE` with a local `.[0:50]` slice, and derive `THREAD_HISTORY_FILE` from the same cached payload.
+- **Safety rationale** — One of the calls uses `--paginate`, which is an explicit `RISKY_SKIP` trigger because consolidating it changes page-boundary and fail-open behavior.
+- **Downstream signal** — Do not auto-implement; a human must compare bounded prompt context, thread-history ordering, and failure behavior on issues with `>100` comments before collapsing these two reads.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Implement failure diagnosis re-reads the same jobs payload the previous step already fetched
+- **Safety tag** — `RISKY_SKIP`
+- **File path and line ranges** — `.github/workflows/implement.yml:3087-3137` and `scripts/implement_diagnose_post_codex_failure.sh:124-153`
+- **Current call count** — `2` logical reads of the same jobs endpoint per failing implement run, with up to `3` attempts in each loop (`<=6` underlying attempts)
+- **Proposed call count** — `1` logical read on cache hit; keep the second read only as a cache-miss fallback
+- **Endpoint(s)** — `GET /repos/{repo}/actions/runs/{run_id}/jobs?per_page=100`
+- **Evidence**
+  ```sh
+  for _attempt in 1 2 3; do
+    RUN_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" || true)"
+    ...
+    FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
+  done
+  echo "failed_step_name=${FAILED_STEP_NAME}" >> "$GITHUB_OUTPUT"
+  ```
+  ```sh
+  for _attempt in 1 2 3; do
+    FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+    ...
+    FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
+      [.jobs[].steps[]
+        | select(
+            .conclusion == "failure"
+  ```
+  The first step already computes `FAILED_STEP_NAME`, then the diagnose script re-fetches the same endpoint to compute it again.
+- **Proposed fix** — Persist `FAILED_STEP_NAME` and optionally `RUN_JOBS_JSON` from `Capture post-Codex validation errors` into `${RUNTIME_DIR}`; update `scripts/implement_diagnose_post_codex_failure.sh` to read that cache first and only hit `/actions/runs/{run_id}/jobs` when the cache is missing or invalid.
+- **Safety rationale** — This is inside a retrying failure-diagnosis path that explicitly compensates for GitHub job-finalization races, which is an explicit `RISKY_SKIP` class.
+- **Downstream signal** — Do not auto-implement; a human must prove that a cached failed-step snapshot preserves `failure`, `cancelled`, and delayed-step-finalization behavior before removing the second jobs read.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — `review_rb_judge.sh` fetches every linked issue body even though only the first one is ever used
+- **Safety tag** — `SAFE_TO_MERGE`
+- **File path and line ranges** — `scripts/review_rb_judge.sh:159-170` and `scripts/review_rb_judge.sh:241-244`
+- **Current call count** — `N` issue-body reads, where `N` is the number of linked issues
+- **Proposed call count** — `1` issue-body read
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```sh
+  FIRST_ISSUE=""
+  FIRST_ISSUE_BODY=""
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    if [ -z "${FIRST_ISSUE}" ]; then
+      FIRST_ISSUE="${issue_number}"
+    fi
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if [ -z "${FIRST_ISSUE_BODY}" ]; then
+      FIRST_ISSUE_BODY="${BODY}"
+    fi
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+  ```sh
+  if [ -n "${FIRST_ISSUE}" ]; then
+    echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
+    echo "${FIRST_ISSUE_BODY}"
+  fi
+  ```
+  `BODY` is fetched on every iteration, but only `FIRST_ISSUE_BODY` is ever consumed.
+- **Proposed fix** — In `scripts/review_rb_judge.sh`, move the issue-body fetch inside the `if [ -z "${FIRST_ISSUE_BODY}" ]` block so only the first linked issue triggers the REST read.
+- **Safety rationale** — The later loop iterations' body reads have no downstream consumers, no side effects, and no special retry/pagination behavior, so removing them does not change observable behavior.
+- **Downstream signal** — In `scripts/review_rb_judge.sh`, guard the issue-body fetch with `if [ -z "${FIRST_ISSUE_BODY}" ]` so only the first linked issue is read.
+
+#### DEAD-API-002 — `issue_pr_status.yml` has an unreachable PR title/body refetch branch
+- **Safety tag** — `SAFE_TO_MERGE`
+- **File path and line ranges** — `.github/workflows/issue_pr_status.yml:205-208` (supporting event payload setup at `.github/workflows/issue_pr_status.yml:181-182`)
+- **Current call count** — up to `1` extra PR read on the fallback branch
+- **Proposed call count** — `0`
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{PR_NUMBER}`
+- **Evidence**
+  ```sh
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_BODY: ${{ github.event.pull_request.body || '' }}
+  ```
+  ```sh
+  PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+  On `pull_request.closed`, the workflow already has title/body from the event payload; this fallback only fires if both collapse to all-whitespace.
+- **Proposed fix** — Remove the REST fallback and run the closing-keyword regex directly against `${PR_TITLE} ${PR_BODY}`.
+- **Safety rationale** — This workflow only runs on a pull-request close event, and the same title/body are already present in the event payload; removing the fallback does not remove any reachable success path under GitHub's required-title contract.
+- **Downstream signal** — In `.github/workflows/issue_pr_status.yml`, delete the blank-payload `gh api pulls/{PR_NUMBER}` fallback and use the event payload string directly for the fallback regex path.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — Consolidation crosses parallel reviewer watchdog processes and must preserve shared-sentinel timing plus per-reviewer abort semantics.
+- BATCH-001: RISKY_SKIP — The seven-label sweep lives in `scripts/orchestrate_poll_process.sh`, a poller/race-defense path the policy explicitly excludes from auto-implementation.
+- API-002: NEEDS_VERIFICATION — The overlap is real, but replacing per-issue body reads with cached/batched data changes source shape across steps and needs a freshness/alert-behavior check first.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 2 | DEAD-API-001, DEAD-API-002 |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 2 | MERGE-002, REUSE-001 |
+
+### Implement-Stage Handoff
+- DEAD-API-001
+- DEAD-API-002
