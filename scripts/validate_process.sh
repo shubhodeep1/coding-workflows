@@ -1497,7 +1497,7 @@ PY2
 	# attempts `python3 -m pip install --user --quiet` (Q4=C); if that
 	# fails (PEP 668, offline runner, etc.) the check fails open with a
 	# ::warning:: — matches the fail-open convention used by
-	# verify_integration_fingerprints.py (see agents.md §18).
+	# verify_integration_fingerprints.py (see probably_unnecessary_but_read_if_stuck.md §18).
 	if [ "${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}" = "true" ]; then
 		local _pf_tool _pf_missing=""
 		for _pf_tool in pyflakes ruff; do
@@ -1948,6 +1948,11 @@ fi
   if [ -f README.md ]; then
     echo "=== README.MD ==="
     cat README.md
+    echo
+  fi
+  if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+    echo "=== OVERFLOW REFERENCE ==="
+    echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
     echo
   fi
 } > "${STATIC_CONTEXT_FILE}"

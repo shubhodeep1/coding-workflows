@@ -519,6 +519,14 @@ jobs:
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
 
+          # Soft install: probably_unnecessary_but_read_if_stuck.md holds the
+          # operator-runbook overflow split out of agents.md. Inliners reference
+          # it when present and suppress the pointer otherwise.
+          if [ ! -f probably_unnecessary_but_read_if_stuck.md ] \
+             && [ -f .codex-workflow-src/probably_unnecessary_but_read_if_stuck.md ]; then
+            install -m 0644 .codex-workflow-src/probably_unnecessary_but_read_if_stuck.md probably_unnecessary_but_read_if_stuck.md
+          fi
+
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
         env:

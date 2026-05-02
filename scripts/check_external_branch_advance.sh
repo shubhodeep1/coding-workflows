@@ -35,7 +35,7 @@
 #                       identity empty, or TARGET_BRANCH/LOCAL_HEAD_SHA
 #                       missing); caller fail-opens and continues.  This
 #                       mirrors the fail-open convention of the gate-job
-#                       self-trigger skip (agents.md §20.1) — GitHub API
+#                       self-trigger skip (probably_unnecessary_but_read_if_stuck.md §20.1) — GitHub API
 #                       blips must never silently drop the review.
 #
 # Exit code is 0 for all documented production outcomes, including
@@ -161,7 +161,7 @@ while IFS= read -r sha; do
 done <<< "${advance_shas}"
 
 # All advancing commits have self-like subjects.  The subject is
-# spoofable (agents.md §20.1 identity guard), so verify each commit's
+# spoofable (probably_unnecessary_but_read_if_stuck.md §20.1 identity guard), so verify each commit's
 # GitHub-attributed author/committer login against AUTOFIX_BOT_LOGIN
 # before concluding self_only.
 if [ -z "${REPOSITORY}" ]; then
