@@ -544,3 +544,123 @@ Ordered by end-to-end impact.
 | `test_and_mark_stable / Phase 4 wait/verify` | repeated Actions/PR polling in long-running smoke-test coordination |
 
 If you want, I can turn this into a prioritized implementation backlog with owner/team labels and a 1-week vs 1-month plan.
+
+## Deep Audit — Workflows & Scripts (2026-05-02)
+
+### Section 1: Bug & Correctness Sweep
+
+#### SEC-001
+- **File path** — `scripts/tg_helpers.sh:167-187,332-350,395-421`
+- **Severity** — High
+- **Category tag** — `security`
+- **Description** — The Telegram cleanup helpers trust any GitHub issue comment whose body contains the hidden markers `<!-- tg_cleanup:... -->` or `<!-- tg_phase:... -->`. The selector at lines 184-187 and 397-398 does not verify `user.login`, and the cleanup loops at lines 332-350 and 401-421 will delete Telegram messages based on IDs parsed from those comment bodies. That means any user who can comment on the issue can forge a marker comment and cause the bot to attempt deletion of arbitrary Telegram message IDs.
+- **Recommended fix** — Only honor marker comments authored by a trusted identity (for example the workflow bot / `github-actions[bot]`) and reject all others in the jq filter. For stronger protection, embed a signed nonce/HMAC in the marker and verify it before deleting messages. Reuse the existing `curl_gh_api` path so marker validation and deletion stay rate-limit aware.
+
+#### CONSIST-001
+- **File path** — `.github/workflows/review_autofix.yml:3774-3783; scripts/review_rb_judge.sh:153-156; .github/workflows/issue_pr_status.yml:196-210`
+- **Severity** — Medium
+- **Category tag** — `consistency`
+- **Description** — `issue_pr_status.yml` already narrowed its fallback linker to explicit closing references only (`close|fix|resolve #N` or full repo issue URLs) to avoid the documented false-positive bug on prose mentions. `review_autofix.yml` and `review_rb_judge.sh` still use the older broad regex that matches generic `issue #99` / `issues/99` prose. That parser drift means review paths can still set `ai:ready-to-merge` or judge-close unrelated issues when a PR body references issue numbers in documentation/examples rather than as closing links.
+- **Recommended fix** — Extract one shared helper in `scripts/gh_helpers.sh`, e.g. `resolve_closing_issue_numbers_from_pr_text <repo> <title> <body>`, and make `review_autofix.yml` and `review_rb_judge.sh` use the same closing-only logic already implemented in `issue_pr_status.yml`. Prefer “no fallback match” over the older broad regex.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001
+- **File path** — `scripts/review_rb_judge.sh:146-170`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — The judge first does one GraphQL `closingIssuesReferences` fetch to get linked issue numbers, then immediately loops over those numbers and performs per-issue REST reads to fetch bodies, even though only `FIRST_ISSUE_BODY` is consumed later. **Current call count:** `1 + N` (`1` GraphQL + up to `N` `GET /issues/{n}` calls). **Proposed call count:** `1` by extending the first GraphQL query to return `nodes { number body }` and selecting the first node directly.
+- **Recommended fix** — Fold `body` into the initial linked-issue GraphQL query and stop the per-issue REST loop. The batching pattern to extend is the repo’s existing alias/batched GraphQL style used in `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql` and in `review_autofix.yml`’s linked-issue cache step.
+
+#### API-001
+- **File path** — `.github/workflows/issue_pr_status.yml:253-381,503-510`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The workflow already classifies linked issues into `TRACKING_ISSUES` and `MANAGED_ISSUES` using a batched GraphQL query (and a conservative REST fallback), but the later Telegram-alert gate ignores that result and re-fetches each linked issue body one-by-one to rediscover whether the issue is orchestrator-managed. **Current call count:** `1` batched classification call **plus** up to `N` extra `GET /issues/{n}` body reads in the merged-alert step. **Proposed call count:** `1` classification call and `0` extra reads by exporting/reusing the earlier classification.
+- **Recommended fix** — Persist `TRACKING_ISSUES` / `MANAGED_ISSUES` or a single `HAS_ORCHESTRATED_ISSUE=true|false` flag into `$GITHUB_ENV` and consume that in the alert step. The batching pattern to extend is the workflow’s existing `ORCH_QUERY` alias batch; if you want to move it into a helper, mirror `scripts/orchestrate_poll_process.sh::_fetch_issue_labels_batch_graphql`.
+
+#### API-002
+- **File path** — `scripts/orchestrate_poll_process.sh:3412-3524`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The final-merge path repeatedly queries the same PR endpoint for different fields from the same payload. It fetches state/merged once when `final_pr` already exists (2 reads), then re-fetches state/mergeable/merged before merge (3 reads), then re-fetches the same three fields again after a failed merge attempt (3 reads). **Current call count:** up to `8` reads of `GET /repos/{repo}/pulls/{final_pr}` per poll tick. **Proposed call count:** `2` (`1` snapshot before the decision, `1` refresh after merge attempt).
+- **Recommended fix** — Cache the pull response in a local JSON variable (or a tiny helper) and parse `state`, `mergeable`, and `merged_at` from that single blob. Refresh once after `gh pr merge`. This should follow the same cycle-local cache pattern already used elsewhere in this script (for example `_load_actions_runs_cached`).
+
+#### BATCH-002
+- **File path** — `scripts/orchestrate_poll_process.sh:5121-5137`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — The failed-autofix recovery path probes `ai-review.yml`, `internal-review.yml`, and `review_autofix.yml` with three separate `gh run list` calls for the same branch to find the latest failed completed run. **Current call count:** `3` list calls per stalled issue. **Proposed call count:** `0` extra calls if the path reuses the poll cycle’s cached Actions run snapshot, or `1` single `/actions/runs` snapshot filtered client-side if that cache is unavailable.
+- **Recommended fix** — Extend `_load_actions_runs_cached` so it indexes recent review/autofix runs by branch + workflow path, then use that cache here instead of looping `gh run list`. That matches the existing batching/caching pattern already documented for this script in `README.md`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/implement.yml:2414-2458; scripts/orchestrate_poll_process.sh:4661-4699`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — The “count consecutive no-op ancestors” walk is implemented twice with near-identical logic: parse `Re-issued from #N` from the issue body, fetch parent comments, look for the `produced no repository changes` marker, and stop on first miss. The duplication increases drift risk in a path that already exists specifically as a belt-and-braces guard against infinite reissue loops.
+- **Recommended fix** — Move the traversal into a shared helper, e.g. `count_noop_ancestors <repo> <issue_num> <max_depth> [marker]`, in `scripts/gh_helpers.sh` or a new `scripts/issue_helpers.sh`. Update both callers: the implement workflow’s “Handle no-op implementation” step and the orchestrator’s reissue paths.
+
+#### DUP-002
+- **File path** — `.github/workflows/review_autofix.yml:3774-3781; scripts/review_rb_judge.sh:153-156; .github/workflows/issue_pr_status.yml:196-210`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — PR-text-to-issue fallback parsing exists in at least three places, with two broader regex variants and one safer closing-only variant. This is both duplicated code and already-demonstrated policy drift.
+- **Recommended fix** — Create one helper in `scripts/gh_helpers.sh`, for example `extract_linked_issue_numbers_from_pr_text <repository> <title> <body> <mode>`, where `mode=closing_only` is the default. Update `review_autofix.yml`, `review_rb_judge.sh`, and `issue_pr_status.yml` to call the helper instead of carrying inline regexes.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No expression-size findings met the reporting threshold.
+
+- **Largest workflow file observed** — `review_autofix.yml` at `269,830` bytes, well below the `800 KB` warning threshold and the `1 MB` hard limit.
+- **Largest `${{ }}` body observed** — `229` characters (`.github/workflows/internal-review.yml:65`), far below the `15,000` / `18,000` risk thresholds.
+- **Result** — No `run:` or `if:` expressions in audited workflows are currently close to GitHub’s `21,000`-character template-expression limit.
+
+### Section 5: Cross-Cutting Concerns
+
+#### SHELL-001
+- **File path** — `scripts/tg_helpers.sh:335-350,405-421`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — The cleanup loops use `for tg_id in ${id_list}; do` after mutating `IFS=','`. That is a classic SC2086/word-splitting pattern on comment-derived data and still permits glob expansion before `tg_delete_msg` is called. A malformed or forged marker such as `*` or embedded whitespace would be expanded by the shell instead of being treated as data.
+- **Recommended fix** — Replace the unquoted loop with array parsing:
+  - `IFS=',' read -r -a tg_ids <<< "${id_list}"`
+  - `for tg_id in "${tg_ids[@]}"; do ... done`
+  - validate `[[ "${tg_id}" =~ ^[0-9]+$ ]]` before deletion.
+  This also hardens the path implicated by `SEC-001`.
+
+#### DEBT-001
+- **File path** — `.github/workflows/implement.yml:549-550,639-640,2278-2279,3201-3202; scripts/review_run_reviewers.sh:13-14; scripts/tg_helpers.sh:26-28`
+- **Severity** — Low
+- **Category tag** — `tech-debt`
+- **Description** — Multiple callers redefine `gh_retry` / `curl_gh_api` as simple pass-through wrappers whenever `scripts/gh_helpers.sh` fails to source. That silently disables the repo’s documented rate-limit handling, alerting, and circuit-breaker behavior at exactly the moment support-script drift is already happening, making failures harder to diagnose and behavior inconsistent across workflows.
+- **Recommended fix** — Add a small bootstrap layer, e.g. `scripts/bootstrap_gh_helpers.sh`, that either:
+  1. stages a known-good helper copy and exports the real functions, or
+  2. emits a single explicit `GH_HELPERS_MODE=passthrough` warning/telemetry flag.
+  Then make workflows consume that bootstrap consistently instead of redefining ad hoc fallback functions inline.
+
+Additional cross-cutting notes from the audit:
+- **TODO/FIXME/HACK markers** — none found in `.github/workflows/*.yml`, `scripts/*.sh`, or `scripts/*.py`.
+- **Dead code** — no clearly provable unused functions/steps were identified from static inspection alone without dynamic call data.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | SEC-001 |
+| Medium | 5 | CONSIST-001, BATCH-001, API-001, API-002, BATCH-002 |
+| Low | 4 | DUP-001, DUP-002, SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1-2 | Medium |
+| API call optimization | 3-4 | Medium |
+| Code modularization | 5-6 | Medium |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 2-4 | Small |
