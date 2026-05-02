@@ -636,3 +636,122 @@ Pattern sweep note: I did **not** find `TODO`, `FIXME`, or `HACK` markers in `.g
 | Code modularization | `.github/workflows/issue_pr_status.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/validate.yml`, new shared support helper | Medium |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/validate.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/orchestrate_clarify_respond.yml` | Large |
 | Medium/Low fixes | `scripts/memory_helpers.sh`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml` | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-02)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap can be consolidated without changing endpoint scope, filters, auth, retry/error semantics, concurrency boundaries, or documented cache contracts; `NEEDS_VERIFICATION` means overlap is present but at least one of those preconditions could not be proven from static reading; `RISKY_SKIP` means the call sits in polling, retry, pagination, race-defense, or log-contract-sensitive code and must not be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — NEEDS_VERIFICATION
+- **ID** — `REUSE-001`
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/implement.yml:53-76`, `.github/workflows/implement.yml:543-552`, `.github/workflows/implement.yml:649-655`, `.github/workflows/implement.yml:3203-3211`
+- **Current call count** — 2 happy-path reads of the same issue endpoint (`/issues/{ISSUE_NUMBER}` in the precheck and again in `Fetch issue metadata`); worst-case 4 reads if the later guarded label fallbacks at 649-655 and 3203-3211 also have to refresh.
+- **Proposed call count** — 1 happy-path read by widening the precheck fetch to the full issue payload and seeding `ISSUE_META_FILE` once; keep the guarded fallbacks unchanged.
+- **Endpoint(s)** — `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence** —
+```sh
+ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+...
+gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+```
+
+```sh
+ISSUE_LABELS_JSON=""
+if [ -s "${ISSUE_META_FILE:-}" ]; then
+  ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+fi
+if [ -z "${ISSUE_LABELS_JSON}" ]; then
+  ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+fi
+```
+- **Proposed fix** — In `Precheck approval phase label`, fetch the full issue JSON once instead of only `{state, labels}`, then either (a) move `Create runtime workspace` earlier so that step can write `ISSUE_META_FILE` directly, or (b) persist the full JSON to a temp/env payload and have `Fetch issue metadata` materialize `ISSUE_META_FILE` from that cached value instead of calling `gh api` again. Leave the 649-655 and 3203-3211 fallbacks as parse-failure refreshes only.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the calls hit the same repo/issue endpoint in one job, but they are separated by several setup steps and currently use different error-handling semantics (`gh api` vs `gh_retry gh api`), so freshness and retry parity are not provable from static reading alone.
+- **Downstream signal** — Verify that no step between `Precheck approval phase label` and `Fetch issue metadata` intentionally relies on fresher issue title/body/labels, then widen the first fetch to full JSON, seed `ISSUE_META_FILE` once, and re-run the skip path plus both later label-fallback paths to confirm identical behavior.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **ID** — `REUSE-002`
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/issue_pr_status.yml:295-347`, `.github/workflows/issue_pr_status.yml:383-386`, `.github/workflows/issue_pr_status.yml:503-512`
+- **Current call count** — Happy path: 1 batched GraphQL classification call plus up to `N` later per-issue body reads in the merged-alert step. Batch-fallback path: `N` REST classification reads plus up to `N` later merged-alert reads.
+- **Proposed call count** — Happy path: 1 batched GraphQL classification call total. Batch-fallback path: `N` REST classification reads total. In both cases, the merged-alert step adds 0 extra GitHub reads when it reuses the earlier classification result.
+- **Endpoint(s)** — `POST /graphql`, fallback `GET /repos/{owner}/{repo}/issues/{issue_number}`, later `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence** —
+```sh
+_managed_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+  .data.repository | to_entries[] | .value | select(. != null) |
+  select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
+  select(
+    ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+    or
+    ((.body // "") | contains("Managed by: AI Orchestrator"))
+  ) | .number
+' 2>/dev/null || echo '')"
+MANAGED_ISSUES="${_managed_issues}"
+...
+echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+echo "${ISSUE_NUMBERS}" >> "$GITHUB_ENV"
+```
+
+```sh
+IS_ORCHESTRATED="false"
+while IFS= read -r issue_number; do
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+    IS_ORCHESTRATED="true"
+    break
+  fi
+done <<< "${LINKED_ISSUE_NUMBERS}"
+```
+- **Proposed fix** — In `Update linked issue labels when PR closes`, export either `HAS_ORCHESTRATED_LINKED_ISSUE=true|false` or the existing `MANAGED_ISSUES` set into `$GITHUB_ENV`. Then update `Send PR merged Telegram alert` to reuse that exported signal and skip the per-issue `_safe_gh_jq` loop unless the exported value is absent.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the earlier step already computes the exact managed/orchestrated signal in the same job, but changing the alert step to trust exported state must preserve the current conservative fail-open behavior on batch failure or partial fallback classification.
+- **Downstream signal** — Verify that the classification step always runs before `Send PR merged Telegram alert` on merged PRs, then export an affirmative-only orchestrated flag (or `MANAGED_ISSUES`) and confirm the alert still fails open when the batch classifier is missing, partial, or fallback-only.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — RISKY_SKIP
+- **ID** — `DEAD-API-001`
+- **Safety tag** — `RISKY_SKIP`
+- **File path and line ranges** — `scripts/orchestrate_poll_process.sh:4770-4776`
+- **Current call count** — 0 in-repo caller sites found by repository search; the unused helper still embeds 1 paginated comments read.
+- **Proposed call count** — 0 after manual contract review and removal (or documented adoption) of the helper.
+- **Endpoint(s)** — `GET /repos/{owner}/{repo}/issues/{issue_number}/comments?sort=created&direction=desc&per_page=100` with `--paginate`
+- **Evidence** —
+```sh
+read_standalone_state_json() {
+  local issue_num="$1"
+  local comments_json
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    comments_json='[]'
+  fi
+  _extract_standalone_state_json_from_comments "${comments_json}"
+}
+```
+
+```text
+Repo search of workflows/scripts returned only the definition:
+scripts/orchestrate_poll_process.sh:4770:read_standalone_state_json() {
+```
+- **Proposed fix** — Manually confirm whether `read_standalone_state_json()` is part of any out-of-file sourcing/test contract. If not, remove the helper. If a wrapper is still desired, convert one real caller to use it and document the cache/pagination contract instead of leaving an unreferenced paginated helper in the poller.
+- **Safety rationale** — `RISKY_SKIP` because the dead helper lives inside `orchestrate_poll_process.sh`, uses `--paginate`, and sits in a stall-recovery/race-defense area that the safety policy explicitly excludes from auto-implementation.
+- **Downstream signal** — Do not auto-implement; manually confirm no external script/test sources `orchestrate_poll_process.sh` for `read_standalone_state_json()`, then remove or formally adopt the helper under human review.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the overlap is real, but extending `gh_pr_with_all_comments` changes helper payload shape and downstream file-splitting behavior, so the helper contract needs review before consolidation.
+- BATCH-001: NEEDS_VERIFICATION — batching linked issue bodies into the PR-context helper is directionally correct, but it changes judge-input shape and fallback semantics in a hot review path.
+- API-002: RISKY_SKIP — this is a polling/log-download loop in `test-and-mark-stable`, so pagination/race-defense/log-output semantics push it into manual-review territory rather than auto-merge territory.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | DEAD-API-001 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
