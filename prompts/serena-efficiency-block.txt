@@ -1,21 +1,21 @@
 [READ_ONLY]
 SERENA MCP EFFICIENCY (MANDATORY):
-- Do NOT call mcp__serena__onboarding, mcp__serena__initial_instructions, or mcp__serena__check_onboarding_performed.
-- Skip straight to mcp__serena__activate_project and then use tools directly.
-- Prefer mcp__serena__get_symbols_overview and mcp__serena__find_symbol over raw file reads.
-- Use mcp__serena__find_referencing_symbols for impact analysis when needed.
-- Use mcp__serena__search_for_pattern instead of shell grep/rg when Serena is available.
-- In review/edit flows, prefer targeted Git MCP fetches (`mcp__git__git_status`, `mcp__git__git_diff`, `mcp__git__git_show`, `mcp__git__git_log`, `mcp__git__git_branch`) when Git MCP is available.
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Skip straight to activate_project and then use tools directly.
+- Prefer get_symbols_overview and find_symbol over raw file reads.
+- Use find_referencing_symbols for impact analysis when needed.
+- Use search_for_pattern instead of shell grep/rg when Serena is available.
+- In review/edit flows, prefer targeted Git MCP fetches (`git_status`, `git_diff`, `git_show`, `git_log`, `git_branch`) when Git MCP is available.
 - Keep existing preloaded diff/context artifacts as fallback when Git MCP is unavailable.
 - Never read the same file region twice. Plan reads upfront.
 - If Serena tools are unavailable or error, fall back to normal file operations.
 
 [READ_WRITE]
 SERENA MCP EFFICIENCY (MANDATORY):
-- Call mcp__serena__activate_project exactly once, then do NOT call mcp__serena__onboarding, mcp__serena__initial_instructions, or mcp__serena__check_onboarding_performed.
-- Prefer Serena read tools (mcp__serena__get_symbols_overview, mcp__serena__find_symbol, mcp__serena__find_referencing_symbols, mcp__serena__search_for_pattern) over full-file reads.
-- Prefer Serena edit tools (mcp__serena__replace_symbol_body, mcp__serena__insert_after_symbol, mcp__serena__insert_before_symbol, mcp__serena__rename_symbol) over full-file rewrites.
-- In review/edit flows, prefer targeted Git MCP fetches (`mcp__git__git_status`, `mcp__git__git_diff`, `mcp__git__git_show`, `mcp__git__git_log`, `mcp__git__git_branch`) when Git MCP is available.
+- Call activate_project exactly once, then do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Prefer Serena read tools (get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern) over full-file reads.
+- Prefer Serena edit tools (replace_symbol_body, insert_after_symbol, insert_before_symbol, rename_symbol) over full-file rewrites.
+- In review/edit flows, prefer targeted Git MCP fetches (`git_status`, `git_diff`, `git_show`, `git_log`, `git_branch`) when Git MCP is available.
 - Keep existing preloaded diff/context artifacts as fallback when Git MCP is unavailable.
 - Never read the same file region twice.
 - If Serena tools are unavailable or error, fall back to normal file operations.
