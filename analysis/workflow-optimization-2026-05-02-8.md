@@ -704,3 +704,126 @@ Ordered by end-to-end impact.
 | 25243564804 | implement | failure | 190 | Exact smoke-test task, no file changes after 2 attempts |
 
 If you want, I can also turn this into a **PR-ready action list** sorted by **“edit these workflows/scripts first”**.
+
+## Deep Audit — Workflows & Scripts (2026-05-02)
+
+### Section 1: Bug & Correctness Sweep
+
+No new high-confidence secret-leak or command-injection defects were found in the scoped workflows/scripts. The highest-confidence correctness issues were concentrated in wrapper gating and label-state mutation paths.
+
+- **ID** — `CONSIST-001`  
+  **File path** — `.github/workflows/internal-clarify.yml:3-16`  
+  **Severity** — Medium  
+  **Category tag** — `consistency`  
+  **Description** — The internal clarify wrapper subscribes to every `issue_comment.created` event but, unlike `internal-plan.yml:13-16` and `internal-implement.yml:13-18`, has no job-level `if:` guard. As written, any issue comment dispatches `clarify.yml`, including `/answer`, `/approved`, PR comments, and unrelated chatter; the callee has to no-op after runner allocation. That is inconsistent with the other internal wrappers and creates avoidable skipped/background runs.  
+  **Recommended fix** — Add an upstream predicate on `jobs.clarify` that mirrors the child workflow’s real eligibility rules, reusing the same wrapper pattern already used by `internal-plan.yml` and `internal-implement.yml`. At minimum, guard out PR comments and command comments that belong to plan/implement.
+
+- **ID** — `BUG-001`  
+  **File path** — `scripts/review_rb_judge.sh:78-110,600-615`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — This script defines `_resilient_phase_swap()` specifically to avoid `gh issue edit --remove-label` failures when a repo label definition is missing or the source label is absent, but both “merge” tails bypass that helper and call `gh issue edit "${issue_number}" --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' ... || true` directly. Because the command is best-effort and the script still writes `judge_handled=true`, the judge can report success while leaving the issue label unchanged.  
+  **Recommended fix** — Replace both direct `gh issue edit` loops with `_resilient_phase_swap "${issue_number}" "ai:ready-to-merge"`; that helper already exists in this file and matches the resilient pattern used elsewhere in the repo.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — `API-001`  
+  **File path** — `.github/workflows/review_autofix.yml:478-530,609-627,1401-1426,3675-3688`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — `review_autofix.yml` resolves linked issues multiple times across separate jobs/steps. The merged-PR validation path fetches `closingIssuesReferences` plus labels (`478-483`) and may then do up to **N** `gh issue view` calls (`503-509`) when labels are unknown. The deterministic-skip job performs another numbers-only GraphQL fetch (`609-614`). The main codex-agent path fetches linked issues again during PR metadata setup (`1401-1406`), and the late cache step can refetch yet again when `LINKED_ISSUES_JSON` is unset (`3675-3680`). **Current call count:** 3 baseline linked-issue fetches per merged run, 4 if the late cache misses, plus up to **N** per-issue label lookups on the fallback path. **Proposed call count:** 1 GraphQL fetch total, reused across downstream jobs via job outputs/env/artifact state.  
+  **Recommended fix** — Promote the earliest linked-issue fetch to a single job output containing `{number,title,body,labels}` and consume that everywhere else. Extend the cycle-local cache pattern already used in `scripts/orchestrate_poll_process.sh` for `_candidate_details_json` / `STALL_MANAGED_LINKED_PR_CACHE` rather than re-querying in each job.
+
+- **ID** — `BATCH-001`  
+  **File path** — `scripts/review_rb_judge.sh:146-170`  
+  **Severity** — Medium  
+  **Category tag** — `api-batching`  
+  **Description** — Judge context collection is an N+1 fetch. The script first gets linked issue numbers through one GraphQL call (`146-151`), then loops over those numbers and calls `repos/.../issues/${issue_number}` once per issue to obtain the body (`161-169`). **Current call count:** `1 + N` for `N` linked issues. **Proposed call count:** `1` by returning `nodes { number body title }` from the initial GraphQL query and selecting the first issue body locally.  
+  **Recommended fix** — Extend the existing GraphQL query instead of re-fetching each issue body over REST. The nearest existing batching pattern to copy is `_fetch_candidate_issue_details_graphql()` in `scripts/orchestrate_poll_process.sh`.
+
+- **ID** — `BATCH-002`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`  
+  **Severity** — High  
+  **Category tag** — `api-batching`  
+  **Description** — The “Wait for review workflow” poller performs several independent GitHub reads on every loop iteration: review-run lookup (`1188-1193`), jobs lookup (`1235-1237`, `1378-1379`, `1398-1399`), live log fetch (`1290-1292`, `1402-1403`), PR head SHA fetch (`1384-1385`), and review-comment count fetch (`1388-1389`). Once `ELAPSED >= 600`, each poll costs roughly **5-6 API calls**; with a 10-second poll interval and a 20-minute inactivity window, one wait block can burn roughly **600-720 requests**. **Current call count:** ~5-6 calls/tick. **Proposed call count:** ~2-3 calls/tick by caching one run snapshot and one jobs/log snapshot per iteration, and only refreshing PR metadata when the observed run/job changes.  
+  **Recommended fix** — Introduce a per-tick snapshot cache in `$RUNNER_TEMP`, following the cycle-local cache pattern from `scripts/orchestrate_poll_process.sh`, and use `gh_retry_to_file` from `scripts/gh_helpers.sh` so the loop reads one cached JSON/log bundle instead of issuing fresh calls for every derived field.
+
+- **ID** — `CONSIST-002`  
+  **File path** — `.github/workflows/review_autofix.yml:563-580,630-635`  
+  **Severity** — Medium  
+  **Category tag** — `consistency`  
+  **Description** — The `deterministic-skip-merge` job defines a bespoke `gh_retry()` that retries every failure up to 4 times but lacks the repo-standard permanent-failure detection and rate-limit-reset waiting from `scripts/gh_helpers.sh`. For permanent failures like 404/422 or an auto-merge configuration problem, it still spends **up to 4 calls**; for rate limits, it sleeps blindly instead of respecting reset headers. **Current call count:** up to 4 attempts per failing `gh label create`, `gh api`, or `gh pr merge`. **Proposed call count:** 1 attempt on permanent errors, standard retry budget only for transient/rate-limit failures.  
+  **Recommended fix** — Source `scripts/gh_helpers.sh` in this job or inline the same `_is_gh_permanent_failure` + `_gh_rate_limit_wait` semantics. The canonical implementation already exists in `scripts/gh_helpers.sh:381-615`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — `DUP-001`  
+  **File path** — `.github/workflows/review_autofix.yml:577-623,3728-3761`; `scripts/review_rb_judge.sh:57-110`; `scripts/label_helpers.sh:102-170`  
+  **Severity** — Low  
+  **Category tag** — `duplication`  
+  **Description** — The repo’s AI label catalog and resilient phase-label mutation logic are implemented in three places: central `scripts/label_helpers.sh`, an inline fallback in `review_autofix.yml`, and another fallback plus `_resilient_phase_swap()` in `scripts/review_rb_judge.sh`. These copies have already drifted: `review_rb_judge.sh` defines the resilient helper but does not consistently use it, while `review_autofix.yml` carries a separate `ensure_label_exists` signature.  
+  **Recommended fix** — Make `scripts/label_helpers.sh` the only owner. Export `ensure_label_exists <label_name> <repo>` and `set_issue_phase_label_resilient <issue_number> <target_label> <repo>` from that file, and update both callers to source it (or re-stage it exactly as they already do for `gh_helpers.sh`).
+
+- **ID** — `DUP-002`  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53`; `.github/workflows/mark-stable.yml:306-343,456-481`; `.github/workflows/review_autofix.yml:1289-1327`; `.github/workflows/test-and-mark-stable.yml:396-422,523-548,1133-1155`; `scripts/gh_helpers.sh:381-615`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Rate-limit/retry wrappers are duplicated across multiple workflows instead of reusing `scripts/gh_helpers.sh`. The copies are no longer behaviorally identical: the shared helper understands permanent failures and standardizes logging, while several inline versions retry everything and parse `/rate_limit` differently. This is exactly the kind of helper drift that causes one workflow to hot-loop while another fails fast.  
+  **Recommended fix** — Reuse `scripts/gh_helpers.sh` as the shared module. If sourcing the full helper is too heavy in some jobs, extract a small `scripts/gh_retry_minimal.sh` that exposes `gh_retry`, `gh_retry_to_file`, and `_safe_gh_jq`, then have all workflow `run:` blocks source that instead of carrying local copies.
+
+- **ID** — `DUP-003`  
+  **File path** — `.github/workflows/issue_pr_status.yml:188-217`; `.github/workflows/review_autofix.yml:478-496,609-627,3765-3779`; `scripts/review_rb_judge.sh:146-156`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — “Resolve linked issues for this PR” is copy-pasted across three call sites, mixing GraphQL `closingIssuesReferences` with slightly different regex fallbacks. `issue_pr_status.yml` deliberately uses a stricter closing-keyword regex, while some `review_autofix.yml` paths still accept broader `issue #N`/`issues/N` matches. That semantic drift means future bug fixes to one resolver can silently change label/close behavior in only part of the pipeline.  
+  **Recommended fix** — Move PR-linked-issue resolution into one shared helper, e.g. `resolve_linked_issues_for_pr <repo> <pr_number> <mode>` in a new `scripts/pr_link_helpers.sh`, where `mode` is explicit (`strict_closing_only`, `legacy_broad_fallback`, `graphql_only`). Update `issue_pr_status.yml`, `review_autofix.yml`, and `scripts/review_rb_judge.sh` to call it.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — `EXPR-001`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The interpolated `run:` block for “Wait for review workflow” is already about **16,626 characters**, which is over the 15,000-character medium-risk threshold and leaves only about **4,374 characters** before GitHub’s hard **21,000-character** expression failure. This block is still accumulating logic: rate-limit handling, job/log polling, editor-noop detection, and timeout diagnostics all live inline. Estimated headroom remaining: **~20.8%**.  
+  **Recommended fix** — Extract this wait loop into an external script (preferred), e.g. `scripts/test_and_mark_stable_wait_review.sh`, and keep the YAML step limited to env wiring and one shell invocation. If extraction is deferred, split log probing and timeout handling into separate steps before the block grows again.
+
+No workflow in `.github/workflows/` exceeds the 800 KB early-warning threshold. The largest files reviewed were `review_autofix.yml` at **269,254 bytes** and `test-and-mark-stable.yml` at **229,098 bytes**.
+
+### Section 5: Cross-Cutting Concerns
+
+No `TODO`/`FIXME`/`HACK` markers were found in the scoped workflow/script files. No standalone high-confidence findings surfaced in `scripts/*.py`; the actionable issues were concentrated in shell/YAML orchestration.
+
+- **ID** — `DEAD-001`  
+  **File path** — `scripts/validate_changed_files_syntax.sh:70-74`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — The secret-bearing path denylist contains unreachable patterns: `*,*.envrc` and `*,.env*` can never fire because the earlier `*.env*` arm already matches those cases. ShellCheck reports this as SC2221/SC2222. The logic still works, but the dead branches make future secret-pattern changes harder to audit safely.  
+  **Recommended fix** — Remove the unreachable arms or reorder the case patterns so each arm represents a distinct class of files. Keep the denylist comment aligned with the actual pattern set after the cleanup.
+
+- **ID** — `SHELL-001`  
+  **File path** — `scripts/review_commit_changes.sh:448-456`; `scripts/review_conflict_resolve.sh:852-854`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — Both scripts pass an unquoted credential-bearing URL to `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. ShellCheck flags this as SC2086. Current GitHub tokens are usually shell-safe, but the command is still vulnerable to word-splitting/glob expansion if token fixtures or future token formats introduce special characters.  
+  **Recommended fix** — Quote the full URL argument in both places: `git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"`.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BATCH-002 |
+| Medium | 8 | CONSIST-001, BUG-001, API-001, BATCH-001, CONSIST-002, DUP-002, DUP-003, EXPR-001 |
+| Low | 3 | DUP-001, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 1-2 (`.github/workflows/test-and-mark-stable.yml`, optionally new helper under `scripts/`) | Medium |
+| API call optimization | 3-4 (`.github/workflows/review_autofix.yml`, `scripts/review_rb_judge.sh`, `.github/workflows/test-and-mark-stable.yml`, optional shared helper) | Large |
+| Code modularization | 5-6 (`scripts/label_helpers.sh`, `scripts/gh_helpers.sh`, `.github/workflows/review_autofix.yml`, `scripts/review_rb_judge.sh`, `.github/workflows/issue_pr_status.yml`) | Medium |
+| Expression size reduction | 1-2 (`.github/workflows/test-and-mark-stable.yml`, optional extracted script) | Medium |
+| Medium/Low fixes | 4 (`.github/workflows/internal-clarify.yml`, `scripts/validate_changed_files_syntax.sh`, `scripts/review_commit_changes.sh`, `scripts/review_conflict_resolve.sh`) | Small |
