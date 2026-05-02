@@ -4,7 +4,7 @@ $ARGUMENTS
 
 ## Steps
 
-1. **Parse `$ARGUMENTS` and download every log** — Extract every `https?://...` token as a log URL; treat all remaining (non-URL) text as the user's free-form description. Record both up front in the **Evidence Ledger**: list every URL (numbered `L1`, `L2`, …) and quote the description verbatim under `User description:` (or note `none`). The description shapes prioritisation in Steps 3–4 (what to focus on, which leads to chase first); it does **not** override evidence — never invent facts to match it.
+1. **Parse `$ARGUMENTS` and download every log** — Extract every `https?://...` token as a log URL; treat all remaining (non-URL) text as the user's free-form description. Record both up front in the **Evidence Ledger**: list every URL (numbered `log-1`, `log-2`, …) and quote the description verbatim under `User description:` (or note `none`). The description shapes prioritisation in Steps 3–4 (what to focus on, which leads to chase first); it does **not** override evidence — never invent facts to match it.
 
    If `$ARGUMENTS` contains zero URLs, stop and ask the user for at least one log URL — this command is for log-anchored analysis. (If the user has only refs/IDs/prose without a log, point them at `/investigate-issue`.)
 
@@ -12,7 +12,7 @@ $ARGUMENTS
    - **GitHub Actions run / job URLs** (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, `.../runs/<id>/job/<id>`, `.../runs/<id>/attempts/<n>`): use the appropriate GitHub MCP tool (e.g. `mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`). These return the raw log payload. Do NOT `curl` these URLs.
    - **Raw log URLs / artifact URLs / external (non-GitHub) URLs**: use `curl --fail-with-body -sSL -o /tmp/<unique-name>.log -w '%{http_code}\n' <url>` so HTTP errors are detected reliably; plain `curl -sL` exits 0 on 4xx/5xx and silently downloads the server's error page.
 
-   Use a **distinct `<unique-name>` per URL** (e.g. derived from run/job ID, or numbered `log-1.log`, `log-2.log`) so concurrent downloads don't overwrite each other. Track the local path for each log alongside its `L<n>` index in the Evidence Ledger so later citations (`log-2 L42: "..."`) are unambiguous when multiple logs are in play.
+   Use a **distinct `<unique-name>` per URL** (e.g. derived from run/job ID, or numbered `log-1.log`, `log-2.log`) so concurrent downloads don't overwrite each other. Track the local path for each log alongside its `log-<n>` index in the Evidence Ledger so later citations (`log-2 L42: "..."`) are unambiguous when multiple logs are in play.
 
    Verify the status / payload of each download before treating the result as a log:
    - `2xx` → proceed.
