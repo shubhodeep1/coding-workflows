@@ -594,16 +594,15 @@ jobs:
             echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
             echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
-            # The smoke-canary task is a 3-line file overwrite — it does
-            # not need xhigh reasoning. At xhigh, gpt-5.3-codex has been
-            # observed announcing "Applying the required overwrite … using
-            # apply_patch" in its final assistant message and exiting
-            # without ever invoking the tool, tripping the empty_streak
-            # bail (run 25243564804 issue #1927; same pattern issue #1929).
-            # Drop reasoning to `low` for the smoke fixture so the model
-            # spends its budget on the apply_patch tool call instead of
-            # over-reasoning a trivial overwrite.
-            echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            # NOTE: Do NOT override MODEL_REASONING_EFFORT here. PR #1723
+            # (3ec845d) and PR #1933 (016cbad) bounced this back and forth
+            # between low and xhigh; both directions hit different
+            # manifestations of the same upstream gpt-5.3-codex/OpenRouter
+            # flakiness (low → unprefixed MCP calls; xhigh → "I'll
+            # apply_patch" announce-without-invoke). The workflow-level
+            # default is xhigh and matches what the regular path uses, so
+            # any breakage on the smoke fixture is also visible to real
+            # implements rather than masked by a smoke-only override.
           fi
 
       - name: Fetch issue comments
@@ -3312,6 +3311,53 @@ jobs:
               --metadata-json "$(jq -cn --arg job_status "${{ job.status }}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{job_status: $job_status, run_url: $run_url}')"
           fi
 
+      - name: Stage codex logs for upload (failure only)
+        if: (failure() || cancelled()) && env.RUNTIME_DIR != ''
+        run: |
+          set -euo pipefail
+          # Copy codex artefacts into a stable, non-/tmp staging dir so the
+          # upload-artifact step can glob them without hitting the
+          # actions/upload-artifact restriction on absolute /tmp paths,
+          # and survive the "Cleanup temporary artifacts" step that
+          # rm -rf's RUNTIME_DIR. Includes per-attempt stderr captures
+          # (codex_log_attempt_*.txt — where the OpenRouter response /
+          # finish_reason / tool-router rejection would surface), the
+          # combined codex log, codex stdout, the assembled prompt, and
+          # the codex CLI's own ~/.codex/log directory (raw HTTP wire
+          # logs when present).
+          STAGE_DIR="${RUNNER_TEMP:-/tmp}/codex-implement-failure-logs"
+          rm -rf "${STAGE_DIR}"
+          mkdir -p "${STAGE_DIR}/runtime" "${STAGE_DIR}/codex-home-log"
+          if [ -d "${RUNTIME_DIR:-}" ]; then
+            for f in codex_log.txt codex_output.txt codex_prompt.txt \
+                     post_codex_validation_errors.txt \
+                     implement_diagnose.log implement_diagnose_output.txt \
+                     implement_diagnose_result.json; do
+              [ -f "${RUNTIME_DIR}/${f}" ] && \
+                cp -f "${RUNTIME_DIR}/${f}" "${STAGE_DIR}/runtime/${f}" || true
+            done
+            for f in "${RUNTIME_DIR}"/codex_log_attempt_*.txt; do
+              [ -f "${f}" ] && cp -f "${f}" "${STAGE_DIR}/runtime/" || true
+            done
+          fi
+          if [ -d "${CODEX_HOME:-$HOME/.codex}/log" ]; then
+            # Limit to recent files to keep the artifact small.
+            find "${CODEX_HOME:-$HOME/.codex}/log" -maxdepth 2 -type f \
+              -mmin -60 -print0 2>/dev/null \
+              | xargs -0 -I{} cp -f {} "${STAGE_DIR}/codex-home-log/" 2>/dev/null || true
+          fi
+          echo "CODEX_FAILURE_LOG_DIR=${STAGE_DIR}" >> "$GITHUB_ENV"
+          echo "Staged $(find "${STAGE_DIR}" -type f | wc -l) file(s) for failure-log upload."
+
+      - name: Upload codex logs (failure only)
+        if: (failure() || cancelled()) && env.CODEX_FAILURE_LOG_DIR != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: codex-implement-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CODEX_FAILURE_LOG_DIR }}
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Exit safely
         if: failure() || cancelled()
         run: exit 0
@@ -3325,4 +3371,10 @@ jobs:
             rm -rf "${RUNTIME_DIR}"
           else
             echo "RUNTIME_DIR not set or unsafe; skipping cleanup"
+          fi
+          # Also clean the failure-log staging dir so successive runs on a
+          # warm runner don't see a stale copy.
+          if [ -n "${CODEX_FAILURE_LOG_DIR:-}" ] && \
+             [[ "${CODEX_FAILURE_LOG_DIR}" =~ ^${RUNNER_TEMP:-/tmp}/codex-implement-failure-logs$ ]]; then
+            rm -rf "${CODEX_FAILURE_LOG_DIR}"
           fi
