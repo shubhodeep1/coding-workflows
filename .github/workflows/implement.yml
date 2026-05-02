@@ -594,6 +594,16 @@ jobs:
             echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
             echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
+            # The smoke-canary task is a 3-line file overwrite — it does
+            # not need xhigh reasoning. At xhigh, gpt-5.3-codex has been
+            # observed announcing "Applying the required overwrite … using
+            # apply_patch" in its final assistant message and exiting
+            # without ever invoking the tool, tripping the empty_streak
+            # bail (run 25243564804 issue #1927; same pattern issue #1929).
+            # Drop reasoning to `low` for the smoke fixture so the model
+            # spends its budget on the apply_patch tool call instead of
+            # over-reasoning a trivial overwrite.
+            echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
           fi
 
       - name: Fetch issue comments
