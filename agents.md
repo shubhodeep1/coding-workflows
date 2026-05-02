@@ -23,24 +23,24 @@ Reduce token usage by using Serena's LSP-backed semantic tools instead of full-f
 Rules:
 - ALWAYS use Serena semantic tools over full-file reads.
 - NEVER read an entire file if symbol tools suffice.
-- NEVER rewrite an entire file if `mcp__serena__replace_symbol_body` or `mcp__serena__insert_after_symbol` can do it.
+- NEVER rewrite an entire file if `replace_symbol_body` or `insert_after_symbol` can do it.
 
 ### Reading code (use INSTEAD of cat/read):
-- `mcp__serena__get_symbols_overview` — file structure (classes, functions, exports)
-- `mcp__serena__find_symbol` — jump to a symbol definition
-- `mcp__serena__find_referencing_symbols` — find all callers/usages
-- `mcp__serena__search_for_pattern` — regex search (replaces grep)
+- `get_symbols_overview` — file structure (classes, functions, exports)
+- `find_symbol` — jump to a symbol definition
+- `find_referencing_symbols` — find all callers/usages
+- `search_for_pattern` — regex search (replaces grep)
 
 ### Editing code (use INSTEAD of full-file writes):
-- `mcp__serena__replace_symbol_body` — replace a function/class body
-- `mcp__serena__insert_after_symbol` / `mcp__serena__insert_before_symbol` — add code around a symbol
-- `mcp__serena__rename_symbol` — rename across codebase (LSP refactor)
+- `replace_symbol_body` — replace a function/class body
+- `insert_after_symbol` / `insert_before_symbol` — add code around a symbol
+- `rename_symbol` — rename across codebase (LSP refactor)
 
 ### Workflow:
-1. `mcp__serena__get_symbols_overview` → understand file structure
-2. `mcp__serena__find_symbol` → drill into specific functions
-3. `mcp__serena__find_referencing_symbols` → understand change impact
-4. Edit with `mcp__serena__replace_symbol_body` / `mcp__serena__insert_after_symbol` — NOT full-file rewrites
+1. `get_symbols_overview` → understand file structure
+2. `find_symbol` → drill into specific functions
+3. `find_referencing_symbols` → understand change impact
+4. Edit with `replace_symbol_body` / `insert_after_symbol` — NOT full-file rewrites
 
 ### Search result limits:
 - Serena results may truncate at ~29k chars. Do NOT re-run via shell grep. Instead narrow the query or split into targeted lookups.
