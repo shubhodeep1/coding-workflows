@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extraneous editor-bait comment line, so it has 4 lines instead of the required 3.\n  WHY: The task requires exactly three lines with no extra content, so any exact content validation will fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains an extra editor-bait comment line, so it has 4 lines instead of the required 3 lines.\n  WHY: The task explicitly requires the file to contain exactly three lines with no comments or extra content, so exact-match validation will fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains an extraneous comment line that violates the requirement for exactly three lines.\n  WHY: The task explicitly requires exactly three lines with no extra content, so any exact content check will fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of exactly 3 lines because of an editor-bait comment line.\n  WHY: The task requires \"exactly these three lines (no more, no less)\", so downstream exact-match or line-count validation will fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains an extra editor-bait comment line, so it has 4 lines instead of the required 3 lines.\n  WHY: The task says the file must contain exactly three lines with no comments or extra content, so exact content comparison will fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file has a trailing editor-bait comment, which makes it 4 lines instead of the required 3.\n  WHY: Any validation that checks for an exact match to the three specified lines will fail.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required 3 lines because of an unauthorized comment line.\n  WHY: The task explicitly requires exactly three lines with no comments or extra content, so exact content validation will fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "04477e2edd28ba95670d09e6563e30b8d005a257b651b1551cc90201bf47a2dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1992,
+    "run_id": "25253094074",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25253094074",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260502140402_85354a30aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1992,
+    "run_id": "25253094074"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-02T14:04:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
