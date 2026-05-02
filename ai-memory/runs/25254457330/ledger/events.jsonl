@@ -1,0 +1,1 @@
+{"actor": "shubhodeep1", "entry_id": "run_event_20260502144642_9649da2204", "event_type": "phase_started", "issue_number": 2000, "message": "Clarification phase started for issue #2000", "metadata": {}, "pr_number": null, "run_id": "25254457330", "schema_version": "run_ledger_entry.v1", "status": "ok", "timestamp": "2026-05-02T14:46:42Z", "workflow": "clarify"}
