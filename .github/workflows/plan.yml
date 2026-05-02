@@ -826,10 +826,10 @@ jobs:
 
           SERENA MCP EFFICIENCY (MANDATORY):
           {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-          - For large files (>5000 lines), use mcp__serena__get_symbols_overview with depth=0 first to
-            get a high-level map, then drill into specific symbols with mcp__serena__find_symbol.
+          - For large files (>5000 lines), use get_symbols_overview with depth=0 first to
+            get a high-level map, then drill into specific symbols with find_symbol.
             Do NOT use depth=1+ on very large files — it will exceed character limits.
-          - When mcp__serena__search_for_pattern returns "answer is too long", NARROW the query (target
+          - When search_for_pattern returns "answer is too long", NARROW the query (target
             a single function/class name or a specific subdirectory). Do NOT retry the same
             broad pattern or fall back to shell grep/rg with equivalent patterns.
 
@@ -854,7 +854,7 @@ jobs:
             request large ranges speculatively. Use Serena symbol tools or targeted line
             ranges (e.g. sed -n '10,30p') instead of full-file reads.
           - Never read the same file region twice. Plan your reads upfront.
-          - Prefer Serena MCP tools (mcp__serena__get_symbols_overview, mcp__serena__find_symbol) over raw file reads
+          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
             when available — they return only relevant symbols with far fewer tokens.
           - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
             with the same patterns. Refine the Serena query or narrow the scope instead.

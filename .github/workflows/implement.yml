@@ -920,7 +920,7 @@ jobs:
             request large ranges speculatively. Use Serena symbol tools or targeted line
             ranges (e.g. sed -n '10,30p') instead of full-file reads.
           - Never read the same file region twice. Plan your reads upfront.
-          - Prefer Serena MCP tools (mcp__serena__get_symbols_overview, mcp__serena__find_symbol) over raw file reads
+          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
             when available — they return only relevant symbols with far fewer tokens.
           - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
             with the same patterns. Refine the Serena query or narrow the scope instead.
@@ -1104,7 +1104,7 @@ jobs:
               # attempts). Codex CLI prints `exec\n<cmd> in <cwd> <status>:`
               # so awk pairs each `exec` line with the following command
               # line. Long commands (>500 chars — typical for serialized
-              # MCP calls like `mcp__serena__find_symbol` with a long
+              # MCP calls like `find_symbol` with a long
               # body arg) are truncated to 500 chars + `…[truncated]`
               # rather than dropped, so the model still sees that the
               # call was tried even if the full args are clipped. Dedup
