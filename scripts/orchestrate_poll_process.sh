@@ -9694,7 +9694,7 @@ sys.exit(1)
                   ;;
                 *)
                   rm -f ./pre_assembled_static.txt
-                  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+                  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
                   rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
                     scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
                     scripts/codex_model_catalog.json
