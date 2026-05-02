@@ -12,8 +12,8 @@
 #   SERENA_VERSION                Git ref to install (default: "main")
 #   SERENA_LANGUAGES              Space-separated list of languages to force (e.g. "typescript python")
 #   SERENA_DISABLED               Set to "true" to skip Serena setup entirely
-#   CONTEXT7_DISABLED             Set to "true" to skip Context7 MCP setup (default: "true")
-#   GIT_MCP_DISABLED              Set to "true" to skip Git MCP setup (default: "true")
+#   CONTEXT7_DISABLED             Set to "true" to skip Context7 MCP setup (default: "false")
+#   GIT_MCP_DISABLED              Set to "true" to skip Git MCP setup (default: "false")
 #   MCP_HANDSHAKE_PROBE_ENABLED   When "true" (default), each optional MCP server
 #                                 (Context7, Git) is probed via a JSON-RPC
 #                                 ``initialize`` exchange before its config block
@@ -620,7 +620,7 @@ echo "Serena MCP server appended to ${CODEX_CONFIG}"
 CONTEXT7_CONFIG_TOUCHED="true"
 remove_mcp_server_blocks "context7" "${CODEX_CONFIG}" || echo "::warning::Failed to clean existing Context7 MCP config; continuing without updating Context7 MCP config." >&2
 
-if [ "${CONTEXT7_DISABLED:-true}" != "true" ]; then
+if [ "${CONTEXT7_DISABLED:-false}" != "true" ]; then
 	# Defense-in-depth: pin context7 to a known-good version (PR #1705) AND
 	# probe its handshake before committing the config block. The pin
 	# prevents the regression we already saw; the probe catches future
@@ -654,7 +654,7 @@ else
 	echo "::warning::Failed to clean existing Git MCP config; continuing without updating Git MCP config." >&2
 fi
 
-if [ "${GIT_MCP_DISABLED:-true}" != "true" ]; then
+if [ "${GIT_MCP_DISABLED:-false}" != "true" ]; then
 	if [ "${GIT_CONFIG_CLEANED}" = "true" ]; then
 		GIT_MCP_BIN="$(uvx --from "mcp-server-git" which mcp-server-git 2>/dev/null || true)"
 		if [ -z "${GIT_MCP_BIN}" ] || [ ! -x "${GIT_MCP_BIN}" ]; then
