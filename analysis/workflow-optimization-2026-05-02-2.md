@@ -444,3 +444,118 @@ Ordered by end-to-end impact.
 | Prompt cache | No prompt-cache create/read counters were emitted, only disable flags |
 | Precise queue time | Runner-wait markers are frequent, but queue duration is not consistently measured numerically in the sampled logs |
 | Full token accounting | Token totals are only available for a subset of runs via summaries/diagnostic comments, not globally across all workflows |
+
+## Deep Audit — Workflows & Scripts (2026-05-02)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path** — `scripts/tg_helpers.sh:312-356,381-427`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — Both cleanup walkers page forward through issue comments and delete matching tracking comments during the same pagination pass. In `tg_cleanup_phase_msgs()` and `tg_cleanup_msgs()`, page `N` is fetched, matching comments are deleted, then `page=$((page + 1))` advances. Once page-1 comments are removed, later comments shift left into earlier pages, so some tracked comments can be skipped and their Telegram messages remain undeleted. This is a real TOCTOU/pagination bug whenever an issue has enough comments to span multiple pages.
+- **Recommended fix** — Split discovery from deletion. Either:
+  1. collect all matching comment IDs across all pages first, then delete them in a second pass; or
+  2. repeatedly re-fetch `page=1` until no matching tracking comments remain.  
+  Keep the Telegram delete + GitHub comment delete pairing, but make pagination immutable during discovery.
+
+#### CONSIST-001
+- **File path** — `.github/workflows/issue_pr_status.yml:235-251`
+- **Severity** — Medium
+- **Category tag** — `consistency`
+- **Description** — The inline fallback `set_issue_phase_label_resilient()` is not behaviorally equivalent to the canonical helper in `scripts/label_helpers.sh:146-195`. If `label_helpers.sh` exists but does not export `set_issue_phase_label_resilient`, the fallback only POSTs the target label and never removes prior phase labels. That can leave contradictory phase state such as `ai:implementing` + `ai:merged` or `ai:ready-to-merge` + `ai:closed`. Because this workflow explicitly fetches support files across refs and falls back between refs, mixed-version execution is already an expected path.
+- **Recommended fix** — Replace the inline fallback with the full canonical implementation from `scripts/label_helpers.sh`, or hard-fail with a clear “support ref too old” error when the symbol is missing. Do not keep a degraded add-only fallback for phase labels.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path** — `.github/workflows/review_autofix.yml:478-527`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — The standalone-validate dispatch step already does one GraphQL fetch for `closingIssuesReferences`, but when that returns empty and the workflow falls back to regex-derived issue numbers, it then performs `gh issue view ... --json labels` inside a loop for each candidate issue. Current classification cost on the fallback path is **1 + N** calls (`1` PR fetch/body parse path + up to `N` per-issue label reads). This is exactly the per-iteration REST pattern CLAUDE.md §15 says to avoid.
+- **Recommended fix** — After deriving fallback issue numbers, batch-fetch their labels in one aliased GraphQL request and drive the loop from that result. Projected classification cost becomes **2 total** calls instead of **1 + N**. Extend the existing batching style used in `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql` to return `{number, labels}` for an arbitrary issue set.
+
+#### API-002
+- **File path** — `.github/workflows/issue_pr_status.yml:253-350,501-512`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The main label-sync step already batches linked issues into `TRACKING_ISSUES` / `MANAGED_ISSUES` using GraphQL, but the later “Send PR merged Telegram alert” step re-fetches each linked issue body with `_safe_gh_jq "repos/.../issues/{n}"` to rediscover whether any issue is orchestrator-managed. That is a second pass over the same issue set with **N extra issue reads** in the same execution path even though the earlier step already classified those issues.
+- **Recommended fix** — Export a single boolean such as `HAS_ORCHESTRATED_LINKED_ISSUE` (or the already-built managed/tracking sets) to `$GITHUB_ENV` in the label-sync step and reuse it in the alert step. Current extra cost is **N** calls; proposed extra cost is **0**. If a shared batch helper is preferred, mirror the `number → metadata` map shape used by `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/internal-cancel-on-pr-close.yml:1-15, .github/workflows/internal-clarify.yml:1-17, .github/workflows/internal-implement.yml:1-19, .github/workflows/internal-issue-pr-status.yml:1-14, .github/workflows/internal-memory-maintenance.yml:1-15, .github/workflows/internal-orchestrate-clarify-respond.yml:1-15, .github/workflows/internal-orchestrate-poll.yml:1-20, .github/workflows/internal-orchestrate.yml:1-24, .github/workflows/internal-plan.yml:1-18, .github/workflows/internal-validate.yml:1-35`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — The internal wrapper workflows are near-identical thin shims over reusable workflows on `@main`: same trigger skeleton, same secret forwarding, same `uses:` shape, and only minor input differences. This is >70% structural duplication across ten files, which raises drift risk whenever wrapper pinning, secret forwarding, or default inputs change.
+- **Recommended fix** — Generate these wrappers from one shared module instead of hand-maintaining them. A concrete option is a generator script such as `scripts/render_internal_wrapper.py render_wrapper(workflow_name, target_workflow, inputs_map, secrets_mode)` and a checked-in manifest listing the wrappers. Callers updated: all `internal-*.yml` files above.
+
+#### DUP-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:396-415,521-540,714-733,1133-1155,1828-1847`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — `test-and-mark-stable.yml` defines the same local `gh_api_safe()` rate-limit wrapper five separate times. These copies are already drifting in comments and surrounding behavior, and any future bugfix to rate-limit handling, stderr preservation, or fallback semantics must be applied five times inside one workflow.
+- **Recommended fix** — Extract the helper to a shared script, e.g. `scripts/test_mark_stable_helpers.sh::gh_api_safe(endpoint, ...)`, and source it from each phase step. Callers updated: create-issue, plan wait, PR wait, review wait, and orchestrator wait blocks in `test-and-mark-stable.yml`.
+
+#### DUP-003
+- **File path** — `.github/workflows/issue_pr_status.yml:41-172,466-499,555-593`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — `issue_pr_status.yml` contains three separate support-fetch implementations in one job: the initial memory/helper fetch, the merged-alert fetch for `tg_helpers.sh`, and the cleanup fetch for `tg_helpers.sh`. All three repeat support-ref resolution, staged clone directory setup, self-repo shortcuts, and copy logic.
+- **Recommended fix** — Move support checkout into one reusable script, e.g. `scripts/fetch_support_helpers.sh fetch_support_helpers --workflow-source <repo> --ref <ref> --dest-root <dir> --files gh_helpers.sh tg_helpers.sh memory_helpers.sh ...`, then reuse it from all three steps. Callers updated: the three `issue_pr_status.yml` steps above.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — The “wait for review/autofix” `run:` block contains `${{ }}` interpolations and is already approximately **16,626 characters**, leaving only about **4,374 characters of headroom** before GitHub’s hard **21,000-character** template-expression limit. This block has grown with live-log heuristics, bait-SHA handling, and early-exit diagnostics; it is below the hard cap today but is well into the warning zone and is exactly the kind of block that has previously broken this repo.
+- **Recommended fix** — Extract the full wait loop to an external script under `scripts/` and pass the few dynamic values through env vars. Preferred target shape: `scripts/test_and_mark_stable_wait_review.sh wait_for_review(pr_number, test_repo, bait_sha, review_timeout, poll_interval)`. That matches the repo’s existing mitigation pattern in `scripts/orchestrate_poll_process.sh` and `scripts/review_commit_changes.sh`.
+
+No audited workflow exceeded the 800 KB workflow-file warning threshold; the largest was `review_autofix.yml` at 268,567 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001
+- **File path** — `scripts/mark-stable.sh:1-14`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `scripts/mark-stable.sh` appears unreferenced by any checked-in workflow or repository script, while its behavior overlaps with the maintained release workflows (`.github/workflows/mark-stable.yml` and `.github/workflows/promote-main-to-stable.yml`). It performs direct tag mutation and push operations without the workflow-level checks, summaries, or consumer-dispatch safeguards. [NEEDS VERIFICATION]
+- **Recommended fix** — If this script is no longer an operator entrypoint, remove it. If it is still intended for manual use, document that explicitly and move it behind a clearer manual-only path/name so it does not look like an active workflow dependency.
+
+#### DEBT-001
+- **File path** — `scripts/tg_helpers.sh:175-205,246-276,346-350,417-421`
+- **Severity** — Low
+- **Category tag** — `tech-debt`
+- **Description** — `tg_helpers.sh` uses `curl_gh_api` for GitHub **reads**, but falls back to raw `curl https://api.github.com/...` for GitHub **writes** (comment create/patch/delete). Those write paths therefore bypass the repo’s standard retry, rate-limit backoff, alerting, and `GITHUB_API_URL` override handling. The result is one helper with two different API reliability contracts.
+- **Recommended fix** — Route the GitHub write calls through a single shared helper as well, preferably `curl_gh_api` or a thin `gh_retry gh api` wrapper for issue-comment mutations. Keep one transport contract for all GitHub calls made by `tg_helpers.sh`.
+
+#### SHELL-001
+- **File path** — `.github/workflows/mark-stable.yml:450-489`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — The repository-dispatch loop iterates with `for REPO in $REPOS; do`, where `REPOS` is a newline-delimited `jq` result. This is the classic SC2086 word-splitting pattern: it depends on the current data shape staying shell-safe rather than iterating over a proper array. Today’s repo slugs happen to be simple, but the loop is still fragile shell style.
+- **Recommended fix** — Read the JSON array into a bash array and iterate safely: `mapfile -t repos < <(jq -r '.[]' "$CONSUMER_FILE")` then `for REPO in "${repos[@]}"; do ...; done`. That removes the latent shell-splitting hazard without changing behavior.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 6 | BUG-001, CONSIST-001, API-001, API-002, DUP-002, EXPR-001 |
+| Low | 5 | DUP-001, DUP-003, DEAD-001, DEBT-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2 | Medium |
+| Code modularization | 3-12 | Medium |
+| Expression size reduction | 1 | Medium |
+| Medium/Low fixes | 4-6 | Medium |
