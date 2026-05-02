@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The canary file has an extra fourth bait-comment line, so it no longer matches the required exact three-line content.\n  WHY: This violates the task\u2019s explicit three-line/no-extra-content requirement and will fail the E2E smoke validation; severity disagreement noted because one reviewer marked it critical while the others did not specify severity.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The previous AI autofix run added a bait comment as a fourth line, so the canary file has extra content beyond the required three lines.\n  WHY: The task explicitly requires exactly three lines with no comments or extra content, and the smoke gate greps for the bait marker to fail when it remains.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required 3 lines because a fourth comment line was added.\n  WHY: The task explicitly required replacing the file content with only the three specified lines, so the extra line will cause the E2E smoke validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains an extra fourth line, a bait comment, that violates the requirement to have exactly three lines.\n  WHY: The E2E smoke validation harness performs an exact content match against the expected three-line output, so the fourth line causes validation failure.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The last run diff added an extra fourth line to the canary file, violating the explicit requirement that it contain exactly three lines.\n  WHY: The E2E smoke validation harness compares the file against an exact three-line match, so the extra line causes the content check to fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains four lines instead of the required exact three lines because of the added bait comment.\n  WHY: The E2E smoke validation performs an exact content match against the three-line specification, so the extra line causes validation failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The last AI autofix run added an extraneous fourth line to the canary file, violating the explicit requirement that it contain exactly three lines with no extra content.\n  WHY: The E2E smoke validation harness expects the canary file to match the exact three-line specification, so the extra comment line causes the comparison to fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6cad6f786a8a54dd89cf6a8647e2c644fb9b891cf2b493dd7e831515c4e6f648",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1992,
+    "run_id": "25253051580",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25253051580",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260502134854_14b19e3913",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1992,
+    "run_id": "25253051580"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-02T13:48:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
