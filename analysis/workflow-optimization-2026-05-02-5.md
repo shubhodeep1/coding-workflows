@@ -467,3 +467,119 @@ Ordered by end-to-end impact.
 | `review_autofix` consolidator in `25237552686` | 58,177 |
 | `workflow_log_analysis` summarize-unselected-runs in `25246056978` | 153,540 |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-02)
+
+### Section 1: Bug & Correctness Sweep
+
+No additional material correctness defects were identified in the thin wrapper/internal `workflow_call` workflows beyond the findings below.
+
+- **ID** — BUG-001  
+  **File path** — `scripts/review_run_reviewers.sh:42-47,896-903,941-942`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The reviewer-close sentinel is stored at a global path, `/tmp/pr_closed_sentinel_${PR_NUMBER}`. The preflight path creates it on close detection, and each reviewer watchdog later aborts immediately if that file exists. Because the filename is keyed only by PR number and is never namespaced to `RUN_ID`/`RUN_ATTEMPT` or cleaned at job start, a stale sentinel can incorrectly short-circuit later runs on the same PR when `/tmp` persists across jobs or on self-hosted runners. This is a real cross-run state leak in otherwise stateless review logic. [NEEDS VERIFICATION]  
+  **Recommended fix** — Move the sentinel into `${RUNNER_TEMP}` or another job-scoped directory and include `${GITHUB_RUN_ID}` in the filename. Also delete any job-local sentinel at script start before spawning reviewer watchdogs. Reuse the repo’s existing job-scoped temp pattern (`RUNTIME_DIR` / `${RUNNER_TEMP}` used throughout `clarify.yml`, `implement.yml`, and `orchestrate.yml`).
+
+- **ID** — SEC-001  
+  **File path** — `scripts/review_commit_changes.sh:448-455; scripts/review_conflict_resolve.sh:852-853; .github/workflows/issue_pr_status.yml:475-490,564-579`  
+  **Severity** — High  
+  **Category tag** — `security`  
+  **Description** — Multiple paths persist `GH_PAT` inside authenticated remote URLs (`https://x-access-token:${GH_PAT}@...`) before push/clone operations. In the scripts this is done via `git remote set-url origin ...`; in `issue_pr_status.yml` it is embedded into `WF_REMOTE_URL` for helper-script clones. That leaves the token in process arguments and repository config/clone command strings, increasing exposure through command echo, debug output, crash dumps, or later `git remote -v` inspection. The two shell-script call sites also omit quoting around the interpolated variables, which ShellCheck flags.  
+  **Recommended fix** — Replace URL-embedded credentials with the safer `http.extraHeader=Authorization: Basic ...` pattern already used in the integration-ref resolver blocks (`clarify.yml` / `implement.yml`) and in `orchestrate.yml`’s authenticated git setup. For pushes, prefer `git -c http.extraHeader=... push ...`; for clones/fetches, wrap `git` as the resolver blocks already do instead of rewriting `origin`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — API-001  
+  **File path** — `scripts/review_run_reviewers.sh:32-49,930-947`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The script does one PR-state preflight call (`GET /pulls/{pr}`) before fan-out, then each reviewer watchdog independently polls the same PR-state endpoint every ninth watchdog cycle. With the default six-reviewer panel, each ~90-second window costs 6 identical PR-state reads after the initial preflight. Current call count: `1 + (reviewer_count × poll_windows)`; with six reviewers, each poll window costs 6 calls. Proposed call count: `1 + poll_windows` by using one shared job-level PR-state watcher that writes a single sentinel/cache file for all reviewers. This is a classic per-iteration API call inside parallel loops.  
+  **Recommended fix** — Add a single background PR-state watcher in `review_run_reviewers.sh` (or `gh_helpers.sh`) that updates a shared `${RUNNER_TEMP}` state file/sentinel, and have reviewer watchdogs only read that local file. Extend the repo’s existing cycle-local cache pattern from `scripts/orchestrate_poll_process.sh` rather than keeping one `gh api` loop per reviewer.
+
+- **ID** — BATCH-001  
+  **File path** — `scripts/orchestrate_poll_process.sh:6353-6359`  
+  **Severity** — High  
+  **Category tag** — `api-batching`  
+  **Description** — Standalone-stall candidate discovery performs 7 separate `gh issue list --label ...` calls every poll cycle, one for each pipeline label (`ai:clarification`, `ai:planning`, `ai:awaiting-approval`, `ai:implementing`, `ai:done`, `ai:ready-to-merge`, `ai:review-blocked`). Current call count: 7 REST calls per sweep before candidate-detail hydration. Proposed call count: 1 batched query for the label sweep. This is exactly the kind of repeated N-call pattern CLAUDE.md §15 says to batch.  
+  **Recommended fix** — Replace the 7-label loop with one aliased GraphQL helper or a single search query that unions the label predicates, then feed the deduped issue numbers into the existing `_fetch_candidate_issue_details_graphql` path. The closest existing batching pattern to extend is `_fetch_standalone_marker_issues_graphql` / `_fetch_candidate_issue_details_graphql` in the same file.
+
+- **ID** — API-002  
+  **File path** — `.github/workflows/issue_pr_status.yml:503-512`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The merged-alert step iterates `LINKED_ISSUE_NUMBERS` and issues one `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""'` call per linked issue just to determine whether any linked issue is orchestrator-managed. Current call count: `N` issue-body reads per merged PR, where `N` is the number of linked issues. Proposed call count: 1 batched issue-body fetch for all linked issues, then local evaluation.  
+  **Recommended fix** — Add a small batched GraphQL helper in `gh_helpers.sh` that accepts issue numbers and returns `{number, body}` records, then reuse it here. Model it after `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`; this path only needs `body`, so it can be cheaper than the full candidate-details query.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — DUP-001  
+  **File path** — `.github/workflows/clarify.yml:47-120; .github/workflows/plan.yml:76-152; .github/workflows/implement.yml:223-297; .github/workflows/orchestrate_clarify_respond.yml:83-157; .github/workflows/validate.yml:67-141`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The “Resolve integration ref” shell block is near-identical in five reusable workflows: it validates `ISSUE_NUMBER`, stages a checkout of `shubhodeep1/coding-workflows`, constructs an authenticated git wrapper, tries `stable`/`main` fallback logic, then executes `scripts/resolve_integration_ref.sh`. This duplication is already large enough that any auth/fallback fix now requires five synchronized edits.  
+  **Recommended fix** — Extract the wrapper logic into a shared executable, e.g. `scripts/run_integration_ref_resolver.sh <repo> <issue_number>`, with env `GH_TOKEN`, `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`. Callers to update: `clarify.yml`, `plan.yml`, `implement.yml`, `orchestrate_clarify_respond.yml`, and `validate.yml`. Keep `scripts/resolve_integration_ref.sh` as the inner resolver and make the new helper responsible only for authenticated staging/fallback.
+
+- **ID** — DUP-002  
+  **File path** — `.github/workflows/clarify.yml:211-277; .github/workflows/plan.yml:239-305; .github/workflows/implement.yml:383-542; .github/workflows/orchestrate.yml:312-408; .github/workflows/orchestrate_clarify_respond.yml:257-360; .github/workflows/orchestrate_poll.yml:266-363; .github/workflows/review_autofix.yml:848-1060`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The “Stage workflow support files” block is duplicated across the main AI workflows. Each version creates `scripts/`, copies a curated allowlist from `.codex-workflow-src` with `main` fallback, conditionally stages schemas/prompts/context files, and sometimes writes a `scripts/.gitignore`. The blocks are structurally >70% identical and are now one of the main maintenance hotspots in the workflow layer.  
+  **Recommended fix** — Introduce a shared script such as `scripts/stage_workflow_support.sh <profile>` where `profile` selects the needed support set (`clarify`, `plan`, `implement`, `review`, `orchestrate`, `poll`). Signature should accept `SCRIPT_REF`, `wf_source`, and booleans for prompts/schema/context staging. Update the seven workflows above to call that script instead of inlining the copy/fallback logic.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — EXPR-001  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Wait for review workflow on PR` `run:` block contains `${{ }}` interpolations and currently measures about **16,626 characters**. That is below GitHub Actions’ hard 21,000-character expression ceiling, but above the requested 15,000-character medium-risk threshold. Estimated headroom remaining: **4,374 characters**. This block already embeds a large polling helper (`gh_api_safe`), review-run discovery, job-status inspection, log scraping, PR/head/comment probes, and timeout reporting in one interpolated shell body, so future edits are likely to push it over the limit.  
+  **Recommended fix** — Extract the entire wait loop into a dedicated script such as `scripts/wait_for_review_run.sh`, passing `PR_NUMBER`, `TEST_REPO`, `BAIT_SHA`, `POLL_INTERVAL`, and `REVIEW_TIMEOUT` via env. If a full extraction is too invasive, split live-log probing and timeout/reporting into a second step so the first `run:` block shrinks materially.
+
+No workflow exceeds the 800 KB early-warning threshold; the largest audited workflow is `review_autofix.yml` at 268,569 bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — DEAD-001  
+  **File path** — `scripts/orchestrate_poll_process.sh:4770-4776`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `read_standalone_state_json()` is defined but has no callers in the repository. The surrounding write path uses `get_standalone_state_comment_id()` and cached `comments_json` directly instead. Keeping an unreferenced helper around this close to hot poller code increases audit surface without buying behavior.  
+  **Recommended fix** — Remove the unused helper, or wire a real caller to it and delete the duplicate direct parsing path. If retained intentionally for future use, add a comment stating that it is reserved and why.
+
+- **ID** — DEAD-002  
+  **File path** — `scripts/review_issue_ledger.sh:10-15,866-917`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — Two pieces of dead scaffolding remain in the ledger parser: the shell `trim()` helper at lines 10-15 is not referenced by the shell logic, and `CURRENT_FLOOR` is declared/populated but never read after assignment. Repository search shows parsing work is handled by embedded `awk`-side `trim()` functions instead, and no later ledger transition logic consumes `CURRENT_FLOOR`.  
+  **Recommended fix** — Delete the unused shell `trim()` helper and remove `CURRENT_FLOOR` unless a follow-on feature is about to consume it. If floor-category persistence is intended, thread it into the final-state emission so the variable is not write-only.
+
+- **ID** — SHELL-001  
+  **File path** — `scripts/self_heal_validation.sh:155-155`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — The self-heal Codex invocation uses `cat "${SELF_HEAL_PROMPT_FILE}" | codex exec ...`, which ShellCheck flags as SC2002. It is not a correctness failure today, but it adds an unnecessary process and makes stdin ownership less clear in an already failure-sensitive recovery path.  
+  **Recommended fix** — Replace the pipeline with input redirection: `codex exec --model "${MODEL_EDITOR}" --full-auto < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"`. That preserves behavior while simplifying error attribution.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the audited workflow/script set.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | SEC-001, BATCH-001 |
+| Medium | 6 | BUG-001, API-001, API-002, DUP-001, DUP-002, EXPR-001 |
+| Low | 3 | DEAD-001, DEAD-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 4 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 7 | Large |
+| Expression size reduction | 2 | Small |
+| Medium/Low fixes | 4 | Small |
