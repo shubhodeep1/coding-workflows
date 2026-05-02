@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which area should be improved?**\nChoices:\n- **A** \u2014 Clarification/planning flow (`clarify` / `plan` workflows, issue-question handling)\n- **B** \u2014 Implementation/review flow (`implement` / `review_autofix`, PR creation or autofix behavior) (RECOMMENDED)\n- **C** \u2014 Orchestrator/validation flow (`orchestrate*`, `validate`, stall recovery, multi-issue automation)\n- **D** \u2014 Workflow maintenance/update flow (`update_workflows`, memory maintenance, release/stability tooling)\nReply: `Q1: B`\n**Q2: What kind of improvement do you want in that area?**\nChoices:\n- **A** \u2014 Fix a bug or broken behavior (RECOMMENDED)\n- **B** \u2014 Improve reliability/safety without changing intended behavior\n- **C** \u2014 Add or change user-visible behavior/capability\nReply: `Q2: A`\n**Q3: What concrete problem should be addressed first?**\nChoices:\n- **A** \u2014 A specific failing workflow run, issue, or PR; reply with the exact workflow/issue/PR link or number (RECOMMENDED)\n- **B** \u2014 A recurring symptom; reply with the exact observed behavior and where it happens\n- **C** \u2014 A general code-quality improvement with no specific failure; reply with the exact file or component to target\nReply: `Q3: A`",
+  "fingerprint": "6010fc874e29d5a3258561325fcaa1fd97e90a169bad630db416cb2291dcafbf",
+  "lineage": {
+    "issue_number": 1985,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25252927278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25252927278",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260502132858_79836afbea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1985,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25252927278"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #1985 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-02T13:28:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
