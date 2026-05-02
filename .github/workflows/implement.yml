@@ -532,6 +532,11 @@ jobs:
             fi
             if [ -f "${src}" ]; then
               install -m 0644 "${src}" probably_unnecessary_but_read_if_stuck.md
+              # Track in FETCHED_MANIFEST so the post-Codex cleanup step
+              # removes it before staging; otherwise a consumer-repo
+              # implementation PR would silently include the staged
+              # workflow artifact.
+              echo "probably_unnecessary_but_read_if_stuck.md" >> "${FETCHED_MANIFEST}"
             fi
           fi
 
