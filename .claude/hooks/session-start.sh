@@ -54,13 +54,20 @@ verify_token() {
     return 0
   fi
 
-  # Probe the actual capability we care about: reading Actions runs in this
-  # repo. 'gh run list' resolves the repo from the git remote and exits
-  # non-zero if the token lacks actions:read.
+  # Two-stage probe so a missing actions:read scope doesn't get reported as
+  # "token broken" — gh remains usable for PRs, issues, commits, and file
+  # contents even when Actions logs are gated.
+  if ! gh auth status >/dev/null 2>&1; then
+    log "WARNING: 'gh auth status' failed. Token is set but gh cannot authenticate (likely invalid or expired)."
+    return 0
+  fi
+
+  log "gh authenticated; PR/issue/commit/file reads should work via 'gh' for any repo this token can access."
+
   if gh run list -L 1 >/dev/null 2>&1; then
-    log "gh authenticated; Actions logs are readable via 'gh run view --log <id>'."
+    log "gh has actions:read for this repo; Actions logs are readable via 'gh run view --log <id>'."
   else
-    log "WARNING: 'gh run list' failed. Token may be invalid, expired, or missing actions:read for this repo."
+    log "NOTE: 'gh run list' failed — token likely lacks actions:read for this repo. Other gh reads (PRs/issues/files) still work; use mcp__github__get_workflow_run_logs for Actions logs."
   fi
 }
 
