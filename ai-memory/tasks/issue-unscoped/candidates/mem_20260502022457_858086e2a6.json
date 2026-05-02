@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/session-start.sh:49-62 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `gh auth status` can warn about scopes/expiry even when the hook is using valid `GH_TOKEN`/`GITHUB_TOKEN` auth.\n  WHY: Multiple reviewers reported that the check is hitting the wrong authentication path for the intended environment-variable-based workflow.\n- .claude/settings.json:6-11 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: Unquoted `$CLAUDE_PROJECT_DIR` risks word-splitting in the hook command when the project path contains spaces.\n  WHY: Reviewers reported that a spaced project directory can break execution of the session-start hook command.\n- .claude/hooks/session-start.sh:35-37 | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The `curl` download is not checked independently, so network or SSL failures can be obscured by the later piped command.\n  WHY: If `curl` fails in the pipeline, the script can continue into later apt steps and fail with less clear errors.\n- .claude/hooks/session-start.sh:22-30 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `sudo -n true` preflight treats password-required sudo as unavailable, causing gh installation to be skipped.\n  WHY: On systems where sudo exists but prompts for a password, the hook returns early after logging insufficient privileges instead of completing the install.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .claude/hooks/session-start.sh:57-61 | confidence=4\n  PROBLEM: The warning about `gh auth status` is misleading for environment-variable auth.\n  WHY: `gh auth status` checks stored `gh auth login` credentials, so users with only `GH_TOKEN`/`GITHUB_TOKEN` set can see a false warning about scopes or expiry.\n- .claude/settings.json:10 | confidence=3\n  PROBLEM: Unquoted `$CLAUDE_PROJECT_DIR` risks word-splitting on paths with spaces.\n  WHY: If the project directory contains spaces, the command field can split into multiple arguments and fail to execute the hook correctly.\n- .claude/hooks/session-start.sh:35-37 | confidence=3\n  PROBLEM: The `curl` output is piped onward without an independent failure check.\n  WHY: If `curl` fails, the script can continue into later apt commands and surface only cryptic follow-on errors.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .claude/hooks/session-start.sh:49-62 | confidence=4\n  PROBLEM: `gh auth status` validates stored credentials, not the environment-variable auth path used by the hook.\n  WHY: The hook can warn about token scopes or expiry even when `GH_TOKEN` or `GITHUB_TOKEN` is valid for the intended `gh run view --log` usage.\n- .claude/settings.json:6 | confidence=3\n  PROBLEM: Unquoted `$CLAUDE_PROJECT_DIR` risks word-splitting on paths with spaces.\n  WHY: If `CLAUDE_PROJECT_DIR` contains spaces, the shell expansion in the command field can split into multiple arguments and fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .claude/hooks/session-start.sh:57-61 | confidence=4\n  PROBLEM: `gh auth status` validates credentials in `gh`'s store, not the `GH_TOKEN`/`GITHUB_TOKEN` env vars the hook expects.\n  WHY: Claude Code can set a valid env-var token without `gh auth login`, so the warning can mislead users into thinking the token is invalid.\n- .claude/settings.json:6 | confidence=2\n  PROBLEM: Unquoted `$CLAUDE_PROJECT_DIR` risks word-splitting on paths with spaces.\n  WHY: If `CLAUDE_PROJECT_DIR` contains spaces, the shell expansion in the command field could split into multiple arguments and cause the hook to fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .claude/hooks/session-start.sh:22-30 | confidence=4\n  PROBLEM: The `sudo -n true` check skips gh installation when sudo exists but requires a password.\n  WHY: In cloud environments that allow sudo only interactively, the hook logs insufficient privileges and gives up instead of completing the automation.\n- .claude/hooks/session-start.sh:49-62 | confidence=5\n  PROBLEM: `gh auth status` can produce a false warning even when `GH_TOKEN`/`GITHUB_TOKEN` is valid.\n  WHY: Users can have working env-var auth for `gh run view --log` but still hit the warning because `gh auth status` is checking a different auth path.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .claude/settings.json:11 | confidence=2\n  PROBLEM: `$CLAUDE_PROJECT_DIR` is unquoted, so paths with spaces can split the hook command.\n  WHY: If the project directory contains spaces, the command string can be broken into multiple arguments and fail to execute correctly.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "bdfc1411a45b2b880f510d9d561a86fb8e5644ec7bbab13f039e4a735416de8a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1923,
+    "run_id": "25241055166",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25241055166",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260502022457_858086e2a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1923,
+    "run_id": "25241055166"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-02T02:24:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
