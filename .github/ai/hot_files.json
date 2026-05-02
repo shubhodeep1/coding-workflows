@@ -4,6 +4,7 @@
 	"hot_files": [
 		"README.md",
 		"agents.md",
+		"probably_unnecessary_but_read_if_stuck.md",
 		"scripts/orchestrate_poll_process.sh",
 		"scripts/orchestrate_lib.py",
 		".github/workflows/implement.yml",

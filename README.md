@@ -67,12 +67,12 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `CHECK_RUNS_POLL_INTERVAL_SECS` | No | `20` | review_autofix | Target sleep interval between check-run status poll attempts in the wait loop. Integer in `5..300`; invalid values clamp to `20`. Each poll iteration runs one `gh_retry gh api --paginate --slurp "/repos/{repo}/commits/{sha}/check-runs?per_page=100"` call (≥1 underlying GitHub API requests once pagination + `gh_retry` are accounted for), so a given iteration's wall-clock duration can exceed this interval when retries/backoff apply. |
 | `REVIEW_FLOOR_KEYWORDS_FILE` | No | (built-in catalog in script) | review_autofix | Optional path to a custom floor-rule keyword catalog consumed by `scripts/review_floor_rules.sh`. When unset, missing, or unreadable, the script falls back to its built-in keywords and logs a warning. |
 | `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` | No | `8` | review_autofix | Seconds the post-commit and editor-changes-lost retrigger steps wait before checking for an already-queued peer review run on the same PR branch. If a peer is found the retrigger skips its own `workflow_dispatch` to avoid creating a redundant queued run (and extra API/UI noise) in the `pr-autofix-${PR}` concurrency group (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). Must be an integer in `0..60`; invalid values clamp to `8`. |
-| `AUTOFIX_SKIP_SELF_TRIGGERED` | No | `true` | review_autofix | Skip the full reviewer/editor cycle on `pull_request.synchronize` events whose HEAD commit is a `[ai-autofix]` commit pushed by the configured bot account (GitHub-attributed identity, see `AUTOFIX_BOT_LOGIN`). These synchronize events are self-triggered by the prior autofix commit and otherwise cost a second full review pass (5 reviewers + consensus + editor) per fix round — roughly 2× LLM spend per autofix iteration. The gate job in `review_autofix.yml` queries the HEAD commit via one `GET /repos/{repo}/commits/{sha}` call and extracts `(commit.message first line, author.login, committer.login)` — `.author.login` / `.committer.login` are GitHub-resolved from the push credentials and are not user-controlled (unlike `.commit.author.email`, which git will accept from any local config). The gate sets `should_run=false` only when the subject starts with `[ai-autofix]` AND at least one of `.author.login` / `.committer.login` equals `AUTOFIX_BOT_LOGIN` (default `codex`); fails open on API error or when both logins are empty. The post-commit `workflow_dispatch` retrigger step applies a mirror guard; when `AUTOFIX_CONTINUATION_ENABLED=true` (default) the mirror skips only ledger-only commits (§20.3) and the legacy opt-out case, so productive `[ai-autofix]` commits immediately dispatch the next iteration via `workflow_dispatch` (see `AUTOFIX_CONTINUATION_ENABLED` and agents.md §20.4). `[ai-merge-resolve]` / conflict-resolved pushes also dispatch a follow-up verification pass for post-conflict-resolution safety. `workflow_dispatch`, `opened`, `reopened`, and `ready_for_review` events always run regardless of this flag. Set to `false` to opt out and restore the legacy "every commit re-verifies" behaviour. Safety net for orchestrator-tracked PRs: the orchestrator stall cron (`internal-orchestrate-poll.yml`, `*/5 * * * *`) re-kicks autofix via `workflow_dispatch` (which bypasses the skip) if a phase-timer threshold trips; continuation closes the same gap in-run for non-orchestrator PRs. Audit via `AUTOFIX_GATE_SKIP reason=self_triggered_autofix` / `AUTOFIX_GATE_NO_SKIP_IDENTITY` / `AUTOFIX_GATE_SKIP_QUERY_FAILED` / `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix` log lines (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). |
+| `AUTOFIX_SKIP_SELF_TRIGGERED` | No | `true` | review_autofix | Skip the full reviewer/editor cycle on `pull_request.synchronize` events whose HEAD commit is a `[ai-autofix]` commit pushed by the configured bot account (GitHub-attributed identity, see `AUTOFIX_BOT_LOGIN`). These synchronize events are self-triggered by the prior autofix commit and otherwise cost a second full review pass (5 reviewers + consensus + editor) per fix round — roughly 2× LLM spend per autofix iteration. The gate job in `review_autofix.yml` queries the HEAD commit via one `GET /repos/{repo}/commits/{sha}` call and extracts `(commit.message first line, author.login, committer.login)` — `.author.login` / `.committer.login` are GitHub-resolved from the push credentials and are not user-controlled (unlike `.commit.author.email`, which git will accept from any local config). The gate sets `should_run=false` only when the subject starts with `[ai-autofix]` AND at least one of `.author.login` / `.committer.login` equals `AUTOFIX_BOT_LOGIN` (default `codex`); fails open on API error or when both logins are empty. The post-commit `workflow_dispatch` retrigger step applies a mirror guard; when `AUTOFIX_CONTINUATION_ENABLED=true` (default) the mirror skips only ledger-only commits (§20.3) and the legacy opt-out case, so productive `[ai-autofix]` commits immediately dispatch the next iteration via `workflow_dispatch` (see `AUTOFIX_CONTINUATION_ENABLED` and probably_unnecessary_but_read_if_stuck.md §20.4). `[ai-merge-resolve]` / conflict-resolved pushes also dispatch a follow-up verification pass for post-conflict-resolution safety. `workflow_dispatch`, `opened`, `reopened`, and `ready_for_review` events always run regardless of this flag. Set to `false` to opt out and restore the legacy "every commit re-verifies" behaviour. Safety net for orchestrator-tracked PRs: the orchestrator stall cron (`internal-orchestrate-poll.yml`, `*/5 * * * *`) re-kicks autofix via `workflow_dispatch` (which bypasses the skip) if a phase-timer threshold trips; continuation closes the same gap in-run for non-orchestrator PRs. Audit via `AUTOFIX_GATE_SKIP reason=self_triggered_autofix` / `AUTOFIX_GATE_NO_SKIP_IDENTITY` / `AUTOFIX_GATE_SKIP_QUERY_FAILED` / `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix` log lines (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). |
 | `AUTOFIX_BOT_LOGIN` | No | `codex` | review_autofix | GitHub login that the gate job accepts as the authoritative bot identity for the self-triggered autofix skip. Compared against `.author.login` / `.committer.login` on the HEAD commit API response — both are GitHub-attributed (resolved server-side from push credentials), not user-controlled git metadata. Override if you run the workflow under a fork of codex that pushes as a different bot account (e.g. `codex-bot`, `my-org-codex`). Unset or empty falls back to the default `codex` (via shell `${AUTOFIX_BOT_LOGIN:-codex}` expansion) — to disable the skip entirely, set `AUTOFIX_SKIP_SELF_TRIGGERED=false` instead. |
 | `AUTOFIX_SKIP_DOC_ONLY` | No | `true` | review_autofix | Deterministic pre-review skip — doc-only branch. When `true`, the gate job skips the reviewer panel + editor cycle if every changed file in the PR matches the doc-only glob set: `*.md`, `*.txt`, `*.rst` (case-insensitive suffix on basename), `LICENSE*`, `CHANGELOG*` (case-insensitive prefix on basename — matches GitHub's own LICENSE/CHANGELOG detection, which recognises `license.txt`, `Changelog.md`, `LICENCE`, etc.), or `docs/**` (case-insensitive, depth-agnostic but rooted: `docs/x/y.md` matches; `src/docs/x.py` does NOT). When the gate fires, the new sibling job `deterministic-skip-merge` adds `ai:review-skipped` to the PR, sets `ai:ready-to-merge` on every linked issue (resolved via GraphQL `closingIssuesReferences` only — no body/title regex fallback, because the doc-only skip path is the most likely place for incidental issue references in prose to false-match; orchestrator-managed PRs use explicit `Fixes #N` keywords which GraphQL resolves correctly), and enables auto-merge (squash) — mirroring the tail of the normal codex-agent path so the orchestrator phase machine still advances. Merge-conflict resolver, summarizer, and review-blocked judge are all skipped on this path; if a doc-only PR happens to have a conflict, auto-merge blocks and the orchestrator stall cron re-dispatches per existing recovery contracts. Set to `false` to disable the doc-only branch (the size-threshold branch via `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS` still applies). Per-PR override: title contains `[force-review]` OR PR carries the `force-review` label — skip is bypassed and full review runs. The doc-only `/files` lookup is skipped entirely when the size-threshold branch already qualifies (cheaper path runs first), so most small-and-doc-only PRs cost zero extra API calls beyond the existing PR-state fetch. Paginated `/files` output is merged via `jq -s 'add // []'` so the doc-only check stays correct on PRs with > 1 page of files. Audit via `AUTOFIX_GATE_DET_SKIP_OVERRIDE` / `AUTOFIX_GATE_DET_SKIP_EVAL pr=<n> files=<k\|skipped> additions=<a> deletions=<d> max_add=<x> max_del=<y> doc_only=<bool> small_diff=<bool> skip=<bool> reason=<docs_only\|small_diff\|empty>` / `AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE` log lines. Fails open: any `/files` lookup failure leaves the doc-only check inconclusive and a non-small PR runs full review. |
 | `AUTOFIX_SKIP_MAX_ADDITIONS` | No | `10` | review_autofix | Deterministic pre-review skip — size-threshold branch (additions). Together with `AUTOFIX_SKIP_MAX_DELETIONS`, defines the max diff size that auto-qualifies for the skip path **regardless of file types**. The gate skips reviewer panel + editor when total additions ≤ this value AND total deletions ≤ `AUTOFIX_SKIP_MAX_DELETIONS` (both bounds simultaneously). Totals are read from the `additions` and `deletions` fields on the existing `GET /repos/{repo}/pulls/{n}` response — no separate `/files` call is made on this branch. The size-threshold branch is OR-ed with the doc-only branch (`AUTOFIX_SKIP_DOC_ONLY`) — a small-but-code change still skips, accepting that risk in exchange for cycle-time savings on trivial fixes. Setting this value to `0` does **not** fully disable the branch — `additions ≤ 0` still matches a PR with zero additions (and `0/0` diffs do occur in edge cases like metadata-only renames or whitespace-only no-op pushes). To effectively suppress the size-threshold branch, set both this and `AUTOFIX_SKIP_MAX_DELETIONS` to `-1` so no non-negative addition/deletion count can satisfy the bound; alternatively rely on the per-PR `force-review` override. Per-PR override: `[force-review]` title marker or `force-review` label. Must be an integer; on parse failure the bash arithmetic `[ X -le Y ]` test fails which evaluates as "not small" (full review runs — fails open). |
 | `AUTOFIX_SKIP_MAX_DELETIONS` | No | `10` | review_autofix | Deterministic pre-review skip — size-threshold branch (deletions). See `AUTOFIX_SKIP_MAX_ADDITIONS`; both bounds must be satisfied for the size-threshold branch to fire. Setting this value to `0` does **not** fully disable the branch — `deletions ≤ 0` still matches a 0-deletion PR. Set to `-1` (together with `AUTOFIX_SKIP_MAX_ADDITIONS=-1`) to suppress the size-threshold branch entirely. Per-PR override: `[force-review]` title marker or `force-review` label. Must be an integer; fails open to "not small" on parse failure. |
-| `AUTOFIX_CONTINUATION_ENABLED` | No | `true` | review_autofix | When `true` (the default), the `Re-trigger review via workflow_dispatch` step in `review_autofix.yml` proceeds to dispatch the next autofix iteration via `workflow_dispatch` after a **productive** `[ai-autofix]` commit (`DID_COMMIT=true` AND `LEDGER_ONLY_COMMIT!=true` AND `CONFLICT_RESOLVED!=true`). This closes the ~0–120 min idle window where an `[ai-autofix]` push would otherwise wait for the orchestrator stall cron (which does not scan non-orchestrator PRs at all). Ledger-only commits (§20.3) still route to the clean-review tail in the same run — no continuation dispatch is issued. Conflict-resolved commits keep their pre-continuation dispatch path. Set to `false` to restore the pre-continuation behaviour where `AUTOFIX_SKIP_SELF_TRIGGERED` alone gated productive autofixes out of the dispatch step. `workflow_dispatch` bypasses the gate job's self-triggered skip by design — continuation is a first-class successor run, not a redundant verification. Pre-dispatch guard: settle delay (`AUTOFIX_CONTINUATION_SETTLE_SECS`). Iteration-cap handling remains in the dispatched run's `retrigger_guard` path (which gates reviewers/editor and routes exhaustion to the review-blocked judge). Alerts: the continuation path is silent (no Telegram); stall-cron `Stall recovery: re-triggered review …` alerts are unchanged and still fire only for genuine orchestrator-tracked stalls. Continuation dispatches **bypass** the post-commit peer-dedup (`autofix_retrigger_has_inflight_peer`) because the only same-branch peer is the gate-skipped self-triggered synchronize run, which cannot be a successor — leaving dedup enabled for continuation would stall non-orchestrator PRs that the stall cron does not scan. Legacy non-continuation dispatches and the `editor-changes-lost` retrigger retain peer-dedup. Audit via `AUTOFIX_CONTINUATION_DISPATCH_ISSUED` / `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected ... continuation=true` / `AUTOFIX_PEER_CHECK_BYPASSED reason=continuation_dispatch` / `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix continuation_enabled=<val>` log lines. See agents.md §20.4 for the contract. |
+| `AUTOFIX_CONTINUATION_ENABLED` | No | `true` | review_autofix | When `true` (the default), the `Re-trigger review via workflow_dispatch` step in `review_autofix.yml` proceeds to dispatch the next autofix iteration via `workflow_dispatch` after a **productive** `[ai-autofix]` commit (`DID_COMMIT=true` AND `LEDGER_ONLY_COMMIT!=true` AND `CONFLICT_RESOLVED!=true`). This closes the ~0–120 min idle window where an `[ai-autofix]` push would otherwise wait for the orchestrator stall cron (which does not scan non-orchestrator PRs at all). Ledger-only commits (§20.3) still route to the clean-review tail in the same run — no continuation dispatch is issued. Conflict-resolved commits keep their pre-continuation dispatch path. Set to `false` to restore the pre-continuation behaviour where `AUTOFIX_SKIP_SELF_TRIGGERED` alone gated productive autofixes out of the dispatch step. `workflow_dispatch` bypasses the gate job's self-triggered skip by design — continuation is a first-class successor run, not a redundant verification. Pre-dispatch guard: settle delay (`AUTOFIX_CONTINUATION_SETTLE_SECS`). Iteration-cap handling remains in the dispatched run's `retrigger_guard` path (which gates reviewers/editor and routes exhaustion to the review-blocked judge). Alerts: the continuation path is silent (no Telegram); stall-cron `Stall recovery: re-triggered review …` alerts are unchanged and still fire only for genuine orchestrator-tracked stalls. Continuation dispatches **bypass** the post-commit peer-dedup (`autofix_retrigger_has_inflight_peer`) because the only same-branch peer is the gate-skipped self-triggered synchronize run, which cannot be a successor — leaving dedup enabled for continuation would stall non-orchestrator PRs that the stall cron does not scan. Legacy non-continuation dispatches and the `editor-changes-lost` retrigger retain peer-dedup. Audit via `AUTOFIX_CONTINUATION_DISPATCH_ISSUED` / `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected ... continuation=true` / `AUTOFIX_PEER_CHECK_BYPASSED reason=continuation_dispatch` / `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix continuation_enabled=<val>` log lines. See probably_unnecessary_but_read_if_stuck.md §20.4 for the contract. |
 | `AUTOFIX_CONTINUATION_SETTLE_SECS` | No | `10` | review_autofix | Seconds the continuation path `sleep`s between the push and the `workflow_dispatch` call, to let GitHub's internal indices catch up before the dispatched run checks out the new HEAD SHA. Integer in `1..60`; invalid or out-of-range values clamp to `10`. Not applied to the conflict-resolved dispatch path (that keeps its existing `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` peer-wait). |
 | `ENABLE_REVIEWER_TWO_PASS` | No | `true` | review_autofix | When true, reviewers run two passes per iteration: pass 1 at `medium` reasoning (broad sweep), then pass 2 at the scheduled reasoning level with a cross-pollination summary of pass 1 findings. Set to `false` to use a single pass at the scheduled reasoning level. |
 | `XPOLL_SUMMARISER_MODEL` | No | `openai/gpt-5.4-mini` | review_autofix | Model slug (resolved through codex-cli's OpenRouter provider) used by `scripts/summarize_reviewer_consensus.sh`. After each review pass finishes, this model consolidates every reviewer's output into one ledger: a `=== CONSENSUS FINDINGS ===` block with cross-reviewer dedup (entries carry `flagged_by: [slug, ...]`) followed by per-reviewer sections. The pass-1 ledger feeds pass-2 reviewers; the pass-2 ledger is written to `REVIEWER_CONSENSUS_FILE` and feeds the editor + memory-record step. |
@@ -394,7 +394,7 @@ jobs:
 > `vars.AUTOFIX_BOT_LOGIN` to override the expected bot login.
 >
 > **Mid-run external-push gates** — The self-triggered skip above catches
-> *post-run* autofix events. The companion *mid-run* gates (`agents.md §20.2`)
+> *post-run* autofix events. The companion *mid-run* gates (`probably_unnecessary_but_read_if_stuck.md §20.2`)
 > catch the case where a non-autofix push lands on the PR branch **while** the
 > reviewer/editor cycle is mid-flight (~15-30 min). Two evaluation points in
 > `jobs.codex-agent`, both backed by `scripts/check_external_branch_advance.sh`:
@@ -804,142 +804,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate_poll.yml` | `schedule` (every ~5 min) | Orchestrator progress poller + judge + auto-recovery. Polling cadence is driven entirely by the wrapper workflow's cron schedule; the legacy self-retrigger path (cooldown sleep + `workflow_dispatch` at end-of-run) and its rate-limit circuit-breaker gate have been removed. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 
-## Workflow Log Analysis And Improvement
-
-This repository includes [`.github/workflows/comprehensive-test-and-release.yml`](.github/workflows/comprehensive-test-and-release.yml) for chaining workflow-log analysis into an orchestrator-driven improvement follow-up. Release dispatch (`test-and-mark-stable.yml`) is no longer invoked from this workflow; it remains available as a standalone workflow for marking stable releases.
-
-### How to run
-
-Run **Actions -> Workflow Log Analysis And Improvement -> Run workflow**.
-
-`workflow_dispatch` inputs:
-
-| Input | Default | Description |
-|---|---|---|
-| `phase_timeout` | `30` | Per-phase inactivity timeout (minutes) for dispatch-monitor loops. |
-| `lookback_days_fallback` | `7` | Workflow-log-analysis window used when the saved timestamp cursor is missing or invalid. |
-
-### Phase behavior
-
-1. **Phase 2 (`phase2-collect-and-analyze-logs`)** dispatches `workflow-log-analysis.yml` with `codex_mode=true`, waits for completion, and resolves the analysis window from `analysis/last_collection_timestamp.txt`:
-   - if the file contains a valid UTC ISO timestamp (`YYYY-MM-DDTHH:MM:SSZ`), that value is passed as `since`.
-   - otherwise the workflow falls back to `lookback_days_fallback`.
-   - after a successful run, the workflow writes the current UTC timestamp back to `analysis/last_collection_timestamp.txt` and commits/pushes it when changed.
-2. **Phase 3 (`phase3-dispatch-orchestrator`)** dispatches `internal-orchestrate.yml` with a project description that links to the analysis report, then waits for the orchestrator to open a tracking issue and emits the tracking issue number as a job output.
-
-Job identifiers retain their `phase2-*` / `phase3-*` names for backward compatibility with any external references; there is no `phase1-*` job in this workflow.
-
-## Workflow Log Analysis
-
-This repository includes [`.github/workflows/workflow-log-analysis.yml`](.github/workflows/workflow-log-analysis.yml) to collect AI workflow telemetry and generate a markdown optimization report.
-
-### How to run
-
-Run **Actions -> Workflow Log Analysis -> Run workflow**.
-
-Triggers:
-
-- `workflow_dispatch` (manual).
-
-`workflow_dispatch` inputs:
-
-| Input | Default | Description |
-|---|---|---|
-| `since` | `""` | Optional ISO-8601 timestamp. When set, collector runs with `scripts/collect_workflow_logs.py --since <timestamp>`. |
-| `lookback_days` | `"7"` | Days of workflow runs to collect when `since` is empty. Passed to `scripts/collect_workflow_logs.py --lookback-days`. |
-| `codex_mode` | `true` | Deprecated no-op input retained for backward compatibility with existing callers. The workflow always runs the Codex-first analysis path; the value is ignored. |
-| `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
-| `tracking_issue` | `"0"` | Optional tracking issue number used for terminal Codex/analyzer failure labeling (`ai:log-analysis-failed`) and `AI_PHASE_FAILURE_V1` marker comments. `0`/empty keeps fail-open warning behavior without issue mutation. |
-
-Pipeline behavior (Codex-only):
-
-1. **Collector** writes `workflow_log_report.json` (run metrics + 4 KB per-step `log_excerpts`) and a categorised full-log directory under `${RUNNER_TEMP}/workflow-log-output/` (`summary.json` + `errors/`/`slow/`/`recent/` trees with untruncated step logs).
-2. **Artifacts:** `workflow-log-report` and `workflow-log-output` (both retention 7 days).
-3. **Analyzer (`--codex-mode`)** consumes `workflow_log_report.json` and writes `analysis/analysis_context.json` (aggregates + capped quick-index lists). It does NOT call any LLM.
-4. **Codex pass** receives the rendered prompt + `analysis_context.json` + the on-disk path of the downloaded `workflow-log-output` artifact, then writes `analysis/workflow-optimization-<UTC-date>.md`. Codex attempts are bounded by `MAX_CODEX_ATTEMPTS` (default `3`) with exponential backoff base `CODEX_RETRY_BACKOFF_BASE_SECS` (default `10`).
-5. **Commit step** age-purges any sibling `analysis/workflow-optimization-*.md` whose filename date stamp is older than `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` (default `30`) in the same commit as the new report.
-
-Failure surfacing: terminal Codex/analyzer failures are issue-context aware — when `tracking_issue` is set to a positive integer the workflow emits `AI_PHASE_FAILURE_V1` and applies `ai:log-analysis-failed`; otherwise it emits a fail-open warning and exits without issue mutation.
-
-Repository selection behavior:
-
-1. If `repos_override` is set, only those repositories are used.
-2. Otherwise, the workflow reads `.github/ai/consumer_repos.json` (if present) and also includes `${GITHUB_REPOSITORY}`.
-3. Duplicates and empty entries are removed.
-
-### Auth and configuration
-
-- `GH_PAT` is preferred for GitHub API/push operations, with `github.token` fallback in workflow steps.
-- `OPENROUTER_API_KEY` is required for the Codex passes (consumed via Codex CLI's `env_key` setting in `~/.codex/config.toml`).
-- Telegram notification is optional. If either `TG_BOT_SECRET` or `TG_ADMIN_CHAT_ID` is missing, notification is skipped.
-
-### Collector input/output contract
-
-Collector script: [`scripts/collect_workflow_logs.py`](scripts/collect_workflow_logs.py)
-
-- Primary CLI used by the workflow: `--lookback-days <N> --output workflow_log_report.json --repo <owner/repo>...`
-- Full CLI contract from `build_parser`:
-  - `--repo` (repeatable)
-  - window selector (exactly one): `--lookback-days` or `--since`
-  - `--output` (default `workflow_log_report.json`)
-  - `--log-output-dir` (optional categorized full-log export directory)
-  - `--per-page` (default `100`)
-  - `--max-pages` (default `10`)
-  - `--max-runs` (default `0`)
-  - `--max-log-runs` (default `15`)
-  - `--success-sample-rate` (default `0.07` = ~7%) — fraction of successful runs randomly sampled for log analysis
-- Token handling in `main`: uses `GH_TOKEN` with `GITHUB_TOKEN` fallback.
-- All workflow families are collected (no family filter). The `workflow_families` field in the report is derived from observed runs rather than a static list.
-- Workflow family normalization covers pipeline families (`clarify`, `plan`, `implement`, `review_autofix`, `validate`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `issue_pr_status`, `cancel_on_pr_close`, `memory_maintenance`) and keeps fallback buckets (for example `ci`, `workflow_log_analysis`, and sanitized filename-derived families) so non-pipeline runs remain observable.
-- For notable runs (failed, retries > 0, top 10 slowest per repository, and ~7% randomly sampled successful runs), the collector also downloads raw run logs from `repos/{repo}/actions/runs/{run_id}/logs`, extracts ZIP contents in memory, and stores truncated per-step excerpts. Random sampling uses a deterministic seed derived from the collection window for reproducibility.
-
-When `--log-output-dir` is set, collector additionally writes:
-
-- `<log-output-dir>/summary.json` (same schema payload as `--output`)
-- `<log-output-dir>/errors/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
-- `<log-output-dir>/slow/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
-- `<log-output-dir>/recent/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
-
-Full-log downloads for disk export are restricted to the selected `errors`/`slow`/`recent` runs and deduplicated per `(repository, run_id)` across overlapping categories.
-
-Generated JSON report (`workflow_log_report.json`) includes:
-
-- `schema_version` (`workflow_log_collector.v2`)
-- `generated_at`
-- `scope` (`repositories`, `workflow_families` (observed, not static), `source`, `success_sample_rate`)
-- `runs` (per-run metrics including `workflow_family`, `duration_seconds`, `retries`, `failure_point`, optional `log_excerpts` as `{step_name, excerpt}` entries for notable runs, optional `_success_sampled: true` flag for randomly sampled successful runs)
-- `summary` (`total_runs`, success/failure/cancelled/other counts, `avg_duration_seconds`, `p50_duration_seconds`, `p95_duration_seconds`, `sampled_success_runs`)
-- `errors` (includes `scope: "logs"` entries when run log download/extraction fails; collection continues)
-
-### Analyzer input/output contract
-
-Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_logs.py)
-
-The analyzer is now a context-prep stage only — it loads the collector report, computes aggregates, and writes `analysis_context.json`. The Codex pass that follows reads that JSON plus the `workflow-log-output` artifact directory directly. There is no inference call inside the Python script.
-
-- CLI used by the workflow: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (the `--codex-mode` flag is a no-op alias retained for backward compatibility; `analysis_context.json` is written alongside the resolved output path, so with `--output <report.md>` it lands at `dirname(<report.md>)/analysis_context.json` — `--output` overrides `--output-dir` for this purpose. The path is printed on stdout).
-- `load_input_data` accepts either:
-  - `--input` with a collector report (`runs` list), a combined bundle object (`run_metrics`, `summary_stats`), or a JSON array of run metrics.
-  - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json`.
-- `prepare_analysis_context` produces the JSON payload Codex consumes. Quick-index caps:
-  - `failing_runs`, `slow_runs`, `recent_runs`: each capped at `RUN_LIST_CAP = 100` normalized rows.
-  - `errors`: capped at `ERRORS_CAP = 250`.
-  - `deep_dive_logs` is intentionally **NOT** present — full untruncated logs live in the `workflow-log-output` artifact.
-- Output path behavior from `resolve_dated_output_path`:
-  - default: `analysis/workflow-optimization-YYYY-MM-DD.md` (used to derive the sibling `analysis_context.json` path).
-  - same-day collisions: `analysis/workflow-optimization-YYYY-MM-DD-2.md`, `-3.md`, etc.
-- Model resolution for the Codex passes only: the workflow defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.4` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL`.
-- `main` prints the analysis-context path on stdout and exits non-zero on input/write errors only.
-
-### Workflow outputs
-
-- Artifacts (retention 7 days):
-  - `workflow-log-report` — `workflow_log_report.json` (aggregated metrics + 4 KB per-step `log_excerpts` quick-index).
-  - `workflow-log-output` — categorised full-log directory (`summary.json` + `errors/`/`slow/`/`recent/` trees with untruncated step logs).
-- Repository commit: generated markdown report `analysis/workflow-optimization-<date>.md` is committed/pushed to `${{ github.ref_name }}`. The commit step also `git rm`s reports older than `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` (default `30`) in the same commit.
-- No-op behavior: if neither the generated report nor any staged purge deletions produce a diff after Codex runs, commit/push is skipped (`No report changes to commit.`). Because old-report purges are staged before the diff check, they may still be committed even when the newly generated report content is unchanged.
-- Telegram summary: when configured, sends a completion message with report URL and workflow run URL, or a CRITICAL failure message when the analysis status is unknown/failed.
-- Low-data windows are valid: the analyzer still writes a context payload (and Codex still produces a report) when input data is sparse — `prepare_analysis_context` flags `insufficient_data: true` and supplies `analysis_guidance` so the model frames the response as a collection-gap notice rather than fabricating findings.
+<!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
 
 ## Required Secrets
 

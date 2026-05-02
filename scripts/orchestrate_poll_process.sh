@@ -157,6 +157,11 @@ assemble_judge_static_context() {
       cat README.md
       echo
     fi
+    if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+      echo "=== OVERFLOW REFERENCE ==="
+      echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
+      echo
+    fi
   } > "${out_file}"
 }
 
@@ -2877,7 +2882,7 @@ _refresh_integration_resolver_tooling() {
   # resolver-side of conflict resolution: the prepare/resolve scripts,
   # the post-resolver fingerprint verifier, the touched-subset guard,
   # and the prompt templates the resolver renders.  Adding entries
-  # here is a contract change — see agents.md §18.
+  # here is a contract change — see probably_unnecessary_but_read_if_stuck.md §18.
   local refresh_files=(
     "scripts/review_conflict_prepare.sh"
     "scripts/review_conflict_resolve.sh"
@@ -9689,7 +9694,7 @@ sys.exit(1)
                   ;;
                 *)
                   rm -f ./pre_assembled_static.txt
-                  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+                  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
                   rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
                     scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
                     scripts/codex_model_catalog.json

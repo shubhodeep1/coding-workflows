@@ -984,6 +984,21 @@ jobs:
             fi
           fi
 
+          # Soft install: probably_unnecessary_but_read_if_stuck.md holds the
+          # operator-runbook overflow split out of agents.md (env var ref,
+          # autofix internals, orchestrator auto-heal, validation self-heal,
+          # workflow-log-analysis runbook, etc.). Editor inliners point at it
+          # when included; if absent the pointer line is suppressed.
+          if [ ! -f probably_unnecessary_but_read_if_stuck.md ]; then
+            src=".codex-workflow-src/probably_unnecessary_but_read_if_stuck.md"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md" ]; then
+              src=".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" probably_unnecessary_but_read_if_stuck.md
+            fi
+          fi
+
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
             src=".codex-workflow-src/prompts/mode-judge-review-blocked.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-judge-review-blocked.txt" ]; then
@@ -1239,6 +1254,11 @@ jobs:
               echo "=== README.MD (trimmed) ==="
               # Keep overview/variables; exclude wrapper and automation docs.
               awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
+              echo
+            fi
+            if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+              echo "=== OVERFLOW REFERENCE ==="
+              echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
               echo
             fi
           } > ./pre_assembled_static.txt
@@ -1905,7 +1925,7 @@ jobs:
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
           echo "TARGET_BRANCH=${HEAD_REF}" >> "$GITHUB_ENV"
           # Capture the SHA reviewers/editor will operate against so the
-          # mid-run stale-base gates (see agents.md §20.2) can detect an
+          # mid-run stale-base gates (see probably_unnecessary_but_read_if_stuck.md §20.2) can detect an
           # external push that happens between here and "Push all pending
           # commits" ~30 minutes later.  Use the SHA AFTER the hard-reset
           # above (not github.event.pull_request.head.sha, which may be
@@ -2559,7 +2579,7 @@ jobs:
       - name: Pre-editor stale-base gate
         # Skip the expensive editor LLM call when the PR branch advanced
         # with a non-autofix commit during the reviewer pass.  See
-        # agents.md §20.2.  The gate is fail-open: detection failures
+        # probably_unnecessary_but_read_if_stuck.md §20.2.  The gate is fail-open: detection failures
         # (fetch errors, API blips) fall through to the editor so a
         # GitHub API glitch never silently drops a review.
         # Claude-branch-review mode never runs the editor, so this
@@ -4007,7 +4027,7 @@ jobs:
           # review_autofix run against the new tip, so pushing our
           # locally-committed autofix on top would either lose the
           # external change via merge or hard-fail at the merge-retry
-          # step below.  See agents.md §20.2.
+          # step below.  See probably_unnecessary_but_read_if_stuck.md §20.2.
           if [ -x "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" ]; then
             pre_push_out="$(bash "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" || printf 'ADVANCE=unknown\n')"
             pre_push_val="$(printf '%s\n' "${pre_push_out}" | grep -E '^ADVANCE=' | tail -n 1 | cut -d= -f2 || true)"
@@ -4159,7 +4179,7 @@ jobs:
           # the post-resolution reviewer pass runs (conflict-resolved code
           # is higher-risk than a vanilla autofix edit).
           #
-          # Autofix continuation (agents.md §20.4): when the just-pushed
+          # Autofix continuation (probably_unnecessary_but_read_if_stuck.md §20.4): when the just-pushed
           # [ai-autofix] commit is a productive edit (DID_COMMIT=true,
           # LEDGER_ONLY_COMMIT!=true, CONFLICT_RESOLVED!=true) and
           # AUTOFIX_CONTINUATION_ENABLED is not `false`, the dispatch
@@ -4237,7 +4257,7 @@ jobs:
           # is not met, so it never advances retrigger_guard or invokes
           # rb_judge. Handing the iteration to that peer stalls the cycle
           # until the orchestrator stall cron recovers — and the cron does
-          # not scan non-orchestrator PRs at all (agents.md §20.4). Bypass
+          # not scan non-orchestrator PRs at all (probably_unnecessary_but_read_if_stuck.md §20.4). Bypass
           # the peer check in the continuation case; legacy non-continuation
           # dispatches keep their existing dedup semantics.
           if [ "${is_continuation_dispatch}" = "true" ]; then

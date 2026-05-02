@@ -92,6 +92,11 @@ case "${phase}" in
 				awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
 				echo
 			fi
+			if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+				echo "=== OVERFLOW REFERENCE ==="
+				echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
+				echo
+			fi
 		} > "${output}"
 		;;
 	plan)
@@ -117,6 +122,11 @@ case "${phase}" in
 				echo "=== README.MD (trimmed) ==="
 				# Keep overview/variables; exclude wrapper/automation docs.
 				awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
+				echo
+			fi
+			if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+				echo "=== OVERFLOW REFERENCE ==="
+				echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
 				echo
 			fi
 		} > "${output}"
@@ -160,6 +170,11 @@ case "${phase}" in
 					cat agents.md
 					echo
 				fi
+			fi
+			if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+				echo "=== OVERFLOW REFERENCE ==="
+				echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
+				echo
 			fi
 		} > "${output}"
 		;;
