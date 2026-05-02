@@ -1,19 +1,12 @@
----
-name: investigate-issue
-description: Investigate a PR, issue, or workflow log from a consumer repo by tracing back through the stable-tagged version of shubhodeep1/coding-workflows (workflows, scripts, prompts, related PRs/issues/runs/comments) and produce an evidence-backed proposed fix. Read-only — never edits files. The user takes the proposed fix to a session in the appropriate target repo based on the fix label — `shubhodeep1/coding-workflows` for `[UPSTREAM]` fixes, the consumer repo for `[CONSUMER]` fixes, or both for `[BOTH]` fixes — to verify and implement.
----
+Investigate a problem reported against this consumer repo whose root cause likely lives in the upstream workflow library `shubhodeep1/coding-workflows`. `$ARGUMENTS` is **free-form prose** that may contain any combination of GitHub PR URLs, issue URLs, Actions run/job URLs, raw log URLs, `#1234` / `owner/repo#1234` references, workflow run IDs / job IDs, commit SHAs, branch / tag names, file paths, stack traces, and quoted error messages. Trace back through every relevant reference (PRs, issues, Actions logs, comments, commits) and produce an evidence-backed proposed fix. Investigation reads against the **upstream ref the consumer is actually running**, not `main`.
 
-# investigate-issue
-
-Investigate a problem reported against this consumer repo whose root cause likely lives in the upstream workflow library `shubhodeep1/coding-workflows`. Trace back through every relevant reference (PRs, issues, Actions logs, comments, commits) and produce an evidence-backed proposed fix. Investigation reads against the **stable-tagged** version of the upstream repo, not `main`.
-
-This skill is **read-only**. It produces a structured report; it never edits files in this consumer repo. Take the proposed fix to a session in `shubhodeep1/coding-workflows` to verify and implement.
+This command is **read-only**. It produces a structured report; it never edits files in this consumer repo. The user takes the proposed fix to a session in the appropriate target repo (`shubhodeep1/coding-workflows` for `[UPSTREAM]` fixes, this repo for `[CONSUMER]` fixes, both for `[BOTH]` fixes) to verify and implement.
 
 $ARGUMENTS
 
 ## Steps
 
-1. **Parse the input** — `$ARGUMENTS` is free-form prose. Scan it for every actionable lead:
+1. **Parse `$ARGUMENTS`** — Scan the prose for every actionable lead. Be greedy; missing a lead silently is worse than restating an irrelevant one.
    - GitHub PR URLs / `#1234` references / `owner/repo#1234` references
    - GitHub issue URLs / `#1234` references
    - Actions log URLs (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, raw log URLs, job log URLs)
@@ -22,8 +15,9 @@ $ARGUMENTS
    - Branch names, tag names
    - File paths and stack traces
    - Error messages quoted in prose
+   - Any free-form description of expected behaviour, suspected cause, or what the user has already tried — capture this verbatim; it shapes prioritisation in Steps 3–4 but never overrides evidence.
 
-   Restate the parsed leads back to the user in the **Summary** so any miss is visible.
+   Restate the parsed leads (and the verbatim user description, or `none`) back to the user in the **Summary** so any miss is visible. If `$ARGUMENTS` contains zero actionable leads (no URLs, no refs, no SHAs, no file paths — just vague prose), stop and ask the user for at least one concrete reference.
 
 2. **Resolve the upstream ref the consumer is actually running** — All subsequent reads of `shubhodeep1/coding-workflows` MUST be pinned to the ref the consumer's failing run was executing. Pinning to the *current* `stable` tag without checking the consumer's pin is wrong: if the consumer is pinned to `@v1.2.3` and `stable` has since moved to `@v1.3.0`, reading at `stable` analyses code the consumer is not running. Resolve once, up front, into **two distinct fields**:
 
@@ -44,11 +38,13 @@ $ARGUMENTS
    - **Fallback when the consumer pin cannot be determined** (e.g. the wrapper file is inaccessible after retries): try `mcp__github__list_tags` for `stable`, else the highest semver tag (`vX.Y.Z`), else `mcp__github__get_latest_release`. Set `UPSTREAM_TAG` and `UPSTREAM_SHA` from whichever succeeded. Record the fallback path and the assumption under **Open Questions**.
    - **Also resolve `PREVIOUS_UPSTREAM_TAG` and `PREVIOUS_UPSTREAM_SHA`** — the tag immediately preceding `UPSTREAM_TAG` in semver order, plus its resolved SHA. List tags with `mcp__github__list_tags`, sort by semver, pick the entry below `UPSTREAM_TAG`. This is needed in Step 4 to scope the regression search ("changes merged between `PREVIOUS_UPSTREAM_SHA` and `UPSTREAM_SHA`"). If `UPSTREAM_TAG` is the lowest tag (or is a branch / direct SHA), set both `PREVIOUS_*` fields to null and skip the regression-search step.
    - Record `UPSTREAM_TAG`, `UPSTREAM_SHA`, `PREVIOUS_UPSTREAM_TAG`, `PREVIOUS_UPSTREAM_SHA` in the **Evidence Ledger**. Every later upstream tool call MUST pass `ref=<UPSTREAM_SHA>`. Every citation should be written as `<owner>/<repo>@<UPSTREAM_TAG> (<short-sha>):<file>:<line>` so the reader sees both the human label and the canonical SHA.
-   - If `UPSTREAM_SHA` cannot be resolved at all after retries (see **Retry Rule**), record this under **Inaccessible Resources** and stop — the skill cannot produce a pinned analysis without a SHA. Do not silently fall back to `main`.
+   - If `UPSTREAM_SHA` cannot be resolved at all after retries (see **Retry Rule**), record this under **Inaccessible Resources** and stop — the command cannot produce a pinned analysis without a SHA. Do not silently fall back to `main`.
 
 3. **Download any logs** referenced in the input — Choose the fetch tool by URL shape; `curl` against a rendered GitHub page returns HTML, not log content.
    - **GitHub Actions run / job URLs** (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, `.../runs/<id>/job/<id>`, `.../runs/<id>/attempts/<n>`): use the appropriate GitHub MCP tool (e.g. `mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`). These return the raw log payload. Do NOT `curl` these URLs.
    - **Raw log URLs / artifact URLs / external (non-GitHub) URLs**: use `curl --fail-with-body -sSL -o /tmp/<unique-name>.log -w '%{http_code}\n' <url>` so HTTP errors are detected reliably; plain `curl -sL` exits 0 on 4xx/5xx and silently downloads the server's error page.
+
+   Use a distinct `<unique-name>` per URL (e.g. derived from run/job ID, or numbered `log-1.log`, `log-2.log`) so concurrent downloads don't overwrite each other. Track the local path for each log alongside its `L<n>` index in the Evidence Ledger so later citations (`log-2 L42: "..."`) are unambiguous when multiple logs are in play.
 
    Verify the status / payload before treating the result as a log:
    - `2xx` → proceed.
@@ -78,7 +74,7 @@ $ARGUMENTS
    **Retry transient errors** (5xx, 429, timeouts, connection resets, DNS failures) on every fetch — log download, GitHub MCP, raw HTTP — per the **Retry Rule**. A transient blip is not an excuse to give up on a lead.
 
 5. **Identify every distinct issue** — List each unique issue. For each:
-   - Exact error message or log line (with line number in the saved log file)
+   - Exact error message or log line (with `log-<n> L<line>` reference into the saved log file when multiple logs are present, otherwise just `L<line>`)
    - Root cause, not symptom
    - Whether it is the primary failure or a cascading/secondary failure
    - Whether the root cause is **upstream** (in `shubhodeep1/coding-workflows@<UPSTREAM_TAG> (<short-sha>)`), **consumer-side**, or **environmental** (runner / network / external service)
@@ -87,7 +83,8 @@ $ARGUMENTS
 
 7. **Build the Evidence Ledger** — Every claim and every proposed fix must cite:
    - `UPSTREAM_TAG`, `UPSTREAM_SHA`, `PREVIOUS_UPSTREAM_TAG`, `PREVIOUS_UPSTREAM_SHA` (the four fields resolved in Step 2) once at the top
-   - Log line number(s) and exact text (with the `/tmp/` path of the saved log)
+   - The list of parsed leads from Step 1 (URLs, refs, SHAs, paths) and the user's verbatim description (or `none`)
+   - Log line number(s) and exact text — `log-<n> L<line>: "..."` when multiple logs are present, otherwise just `L<line>: "..."` (with the `/tmp/` path of each saved log)
    - Source location: `<repo>@<UPSTREAM_TAG> (<short-sha>):<file>:<line>` for upstream; `<file>:<line>` for consumer
    - Commit SHA / PR # that introduced the relevant code (when applicable)
    - Test output or reproduction result (when applicable)
@@ -105,7 +102,7 @@ $ARGUMENTS
    - `[CONSUMER]` — change must be made in this consumer repo (e.g. wrapper YAML, pinned ref, secret).
    - `[BOTH]` — coordinated change required.
 
-   Do **NOT** apply fixes. This skill is read-only. Surface the proposed diff (as a fenced code block with `file:line` anchors) and let the user open a session in the appropriate repo to implement it.
+   Do **NOT** apply fixes. This command is read-only. Surface the proposed diff (as a fenced code block with `file:line` anchors) and let the user open a session in the appropriate repo to implement it.
 
 10. **Final output structure** — Always produce, in this order:
     - **Summary** (1–3 lines, including the parsed leads from Step 1 and `UPSTREAM_TAG (UPSTREAM_SHA)`)
@@ -117,13 +114,13 @@ $ARGUMENTS
     - **Open Questions** — surface remaining ambiguity rather than guessing
     - **Next Step for the User** — one-sentence instruction telling the user which repo to open a session against (`shubhodeep1/coding-workflows` for `[UPSTREAM]` fixes, this repo for `[CONSUMER]` fixes, both for `[BOTH]` fixes) and a copy-paste-ready prompt summarising the proposed change. If the only finding is environmental, instruct the user to re-run after the environment recovers and explain why no code change is recommended.
 
-11. **Cleanup** — Remove temp log files from `/tmp/` when done.
+11. **Cleanup** — Remove every temp log file written to `/tmp/` during Step 3 when done.
 
 ## Rules
 
-- **Read-only.** This skill never edits files in the consumer repo. It produces a report. The user takes `[UPSTREAM]` fixes to a session in `shubhodeep1/coding-workflows`; the user takes `[CONSUMER]` fixes to a session in this repo. If during investigation you would normally apply an `EVIDENCE-BASED` edit, do **not** — emit it as a proposed fix instead.
+- **Read-only.** This command never edits files in the consumer repo. It produces a report. The user takes `[UPSTREAM]` fixes to a session in `shubhodeep1/coding-workflows`; the user takes `[CONSUMER]` fixes to a session in this repo. If during investigation you would normally apply an `EVIDENCE-BASED` edit, do **not** — emit it as a proposed fix instead.
 - **Always pin upstream reads to `UPSTREAM_SHA`.** Reading upstream files at `main` is a bug — the consumer is not running `main`. Every `mcp__github__get_file_contents` call against `shubhodeep1/coding-workflows` MUST pass `ref=<UPSTREAM_SHA>` (the resolved SHA from Step 2, never the bare tag name — moving tags like `stable` can shift mid-investigation).
-- **Always download the complete log.** Never truncate or skip sections.
+- **Always download the complete log.** Never truncate or skip sections. When multiple log URLs are present, this rule applies to each — download every accessible log in full before drawing conclusions.
 - **Retry Rule**: For transient HTTP/GitHub errors (5xx, 429, timeouts, connection resets, DNS failures), retry with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before declaring failure. Applies to every fetch: the log download, GitHub MCP calls, raw HTTP follow-ups.
 - **Inaccessible resources** — If a resource is still unreachable after retries, or returns a hard failure (401, 403, 404, 410), or is auth-walled / expired / private, record it under **Inaccessible Resources**:
   - The exact URL
@@ -131,7 +128,7 @@ $ARGUMENTS
   - What conclusion is blocked without it
 
   Stop that specific line of inquiry, but continue the broader analysis if the primary log + `UPSTREAM_SHA` are accessible and the root cause / proposed fix is still supported by available evidence. Do not make claims that depend on the inaccessible content — surface those gaps under **Open Questions** instead. Abort the analysis only if (a) the primary log itself is inaccessible, (b) `UPSTREAM_SHA` cannot be resolved, or (c) the missing resource blocks the root-cause conclusion.
-- **Use the GitHub MCP tools (`mcp__github__*`) for all GitHub interactions.** The `gh` CLI is not assumed available. The skill operates against whatever scope the host session permits; it does not attempt to widen scope.
+- **Use the GitHub MCP tools (`mcp__github__*`) for all GitHub interactions.** The `gh` CLI is not assumed available. The command operates against whatever scope the host session permits; it does not attempt to widen scope.
 - **Prioritise the root cause** — the first meaningful error in the log — over cascading failures.
 - **Multiple independent failures** → address each separately, each with its own evidence and proposed fix.
 - **Environmental failures** (service down, rate limit, runner outage) — say so explicitly rather than proposing a code fix. Mark them as **environmental / non-actionable** (no target-repo label, no Proposed Fix entry — target-repo labels are reserved for `[UPSTREAM]` / `[CONSUMER]` / `[BOTH]` code defects) and recommend re-running once the environment recovers. Only assign a target-repo label if the evidence shows an actual upstream or consumer code defect underlying the environmental symptom (e.g. a missing retry around a transiently-flaky service).
