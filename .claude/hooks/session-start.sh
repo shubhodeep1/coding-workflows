@@ -62,7 +62,7 @@ verify_token() {
     return 0
   fi
 
-  log "gh authenticated; PRs, issues, commits, and file contents are readable via 'gh' CLI."
+  log "gh authenticated; PR/issue/commit/file reads should work via 'gh' for any repo this token can access."
 
   if gh run list -L 1 >/dev/null 2>&1; then
     log "gh has actions:read for this repo; Actions logs are readable via 'gh run view --log <id>'."
