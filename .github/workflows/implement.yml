@@ -932,17 +932,6 @@ jobs:
             handles commit and diff reporting separately.
           - Do NOT emit progress/status messages. Output ONLY repository changes.
 
-          EDIT TOOL DISCIPLINE (MANDATORY — prevents announce-without-editing stalls):
-          - Make every repository edit via `apply_patch` or the equivalent Serena edit
-            tool (mcp__serena__replace_symbol_body, mcp__serena__insert_after_symbol,
-            mcp__serena__insert_before_symbol). Do NOT shell out to `sed`/`awk`/`rg`
-            with literal special characters — they routinely fail shell quoting and
-            waste the entire attempt without producing a diff.
-          - Once you have located the file and lines to change, go straight to the
-            edit. Do NOT keep exploring. Announcing "I'll now apply_patch …" without
-            actually invoking the tool counts as a failed attempt and trips the
-            stuck-in-exploration bail.
-
           CONFLICT DETECTION:
           - Flag any factual conflicts between the implementation plan and the actual
             codebase (e.g., a function name in the plan doesn't match the code, a file
