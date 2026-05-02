@@ -521,10 +521,18 @@ jobs:
 
           # Soft install: probably_unnecessary_but_read_if_stuck.md holds the
           # operator-runbook overflow split out of agents.md. Inliners reference
-          # it when present and suppress the pointer otherwise.
-          if [ ! -f probably_unnecessary_but_read_if_stuck.md ] \
-             && [ -f .codex-workflow-src/probably_unnecessary_but_read_if_stuck.md ]; then
-            install -m 0644 .codex-workflow-src/probably_unnecessary_but_read_if_stuck.md probably_unnecessary_but_read_if_stuck.md
+          # it when present and suppress the pointer otherwise.  Mirrors the
+          # .codex-workflow-src/ → .codex-workflow-src-main/ fallback used
+          # elsewhere in this job so consumer repos pinned to an older
+          # script_ref still get the file when it's available in main.
+          if [ ! -f probably_unnecessary_but_read_if_stuck.md ]; then
+            src=".codex-workflow-src/probably_unnecessary_but_read_if_stuck.md"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md" ]; then
+              src=".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" probably_unnecessary_but_read_if_stuck.md
+            fi
           fi
 
       - name: Fetch issue metadata
