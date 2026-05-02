@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nRef context: `25115c35b8e1dbea64e166f88757eddcd739c27a` on branch `main`. Integration branch metadata is not present, so there is no branch-mismatch blocker.\n\nClarification mapping: no `Q<ID>` items existed for this issue. The auto-posted `/answer [auto-answered-by-clarify]` confirms the task was already fully specified.\n\n1. Files likely to change\n- [tests/e2e_smoke_canary.txt](tests/e2e_smoke_canary.txt) \u2014 replace the full file content so it contains only the required three lines.\n\n2. Functions or modules to implement\n- None. This is a direct content update to an existing text file; no code paths, workflows, or modules need changes.\n\n3. Data structures affected\n- The canary text payload stored in [tests/e2e_smoke_canary.txt](tests/e2e_smoke_canary.txt), with these keys and values in order:\n- `status: ok`\n- `run_id: alt-25254380200`\n- `updated-by: ai-pipeline`\n\n4. API or interface changes\n- None.\n- No workflow inputs, env vars, DB contracts, scripts, or public interfaces change.\n- No README or `agents.md` update should be needed because behavior does not change beyond this fixture/canary content.\n\n5. Potential risks or edge cases\n- Ensure the file contains exactly the specified three lines in the specified order.\n- Do not introduce extra whitespace, extra blank lines, or an incorrect `run_id`.\n- Do not modify any file other than [tests/e2e_smoke_canary.txt](tests/e2e_smoke_canary.txt).\n\n6. Testing considerations\n- Verify the final file content matches the requested three-line payload with no additional content.\n- Verify only [tests/e2e_smoke_canary.txt](tests/e2e_smoke_canary.txt) is changed in the diff.\n- A simple post-change content check is sufficient; no broader test suite impact is expected.\n\nConflict check\n- No factual conflicts found.\n- The referenced file already exists, and the current content differs only in the `run_id` line, which is consistent with the requested scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a22b58081121b1c25dd3c1816f5072d1f6389eca7fea945ef1fc6ca7d1c9c742",
+  "lineage": {
+    "issue_number": 1995,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25254423865",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25254423865",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1995"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260502144637_9429d18d24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1995,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25254423865"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1995",
+  "timestamps": {
+    "created_at": "2026-05-02T14:46:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
