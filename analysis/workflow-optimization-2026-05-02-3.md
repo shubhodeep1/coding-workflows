@@ -497,3 +497,150 @@ Ranked by expected failure-rate or rerun-rate reduction.
 | `25244790668` | `review_autofix` | n/a | n/a | n/a | n/a | n/a | Serena stats missing |
 
 If you want, I can turn this into a prioritized implementation checklist mapped to specific workflow files and likely edit points.
+
+## Deep Audit — Workflows & Scripts (2026-05-02)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — `BUG-001`  
+  **File path** — `scripts/memory_helpers.sh:216-233`  
+  **Severity** — High  
+  **Category tag** — `bug`  
+  **Description** — `memory_finalize_task()` and `memory_promote()` call `python3 ... ai_memory.py` directly and do not preserve the helper library’s documented fail-open contract. Under `set -euo pipefail`, their callers in `.github/workflows/implement.yml:2949-2969` and `.github/workflows/issue_pr_status.yml:428-445` will fail the whole workflow on any transient memory write error, even though `README.md` says memory run events are fail-open.  
+  **Recommended fix** — Wrap both functions the same way `memory_record_run_event()`, `memory_record_candidate()`, and `memory_processed_command_complete()` already do: catch non-zero exits, emit `_memory_warn` + `_memory_telemetry`, and return `0`. Reuse the existing fail-open pattern already implemented elsewhere in `scripts/memory_helpers.sh`.
+
+- **ID** — `BUG-002`  
+  **File path** — `.github/workflows/internal-review.yml:98-118`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The claude-branch push path treats GitHub API lookup failure as “no open PR exists.” `existing_pr="$(gh api ... || echo "")"` and `base_ref="$(gh api ... || echo 'main')"` both fail open; if the PR lookup hits a transient 5xx/rate limit/auth blip, the job emits `proceed=true` and dispatches `review_autofix.yml` even when the synchronized PR review path is already running. That creates duplicate expensive review runs instead of suppressing them.  
+  **Recommended fix** — Make PR lookup failure a soft skip, not a proceed path: use `gh_retry`/`scripts/gh_helpers.sh`, and only set `proceed=true` after a successful API response that definitively shows no open PR. If lookup fails, emit `proceed=false` with a warning so the next push/retry re-evaluates cleanly.
+
+- **ID** — `SEC-001`  
+  **File path** — `scripts/setup_serena.sh:173-177`  
+  **Severity** — High  
+  **Category tag** — `security`  
+  **Description** — The script installs `uv` via `curl -LsSf https://astral.sh/uv/install.sh | sh`. That executes remote network content immediately on the runner with no checksum, signature, or pinned artifact verification. Because this helper runs in multiple privileged workflows, compromise of the installer path would become a supply-chain compromise of the Actions pipeline.  
+  **Recommended fix** — Replace the pipe-to-shell install with a pinned, verifiable path: download a versioned release artifact, verify checksum/signature, then execute it; or install `uv` from a trusted package source already pinned elsewhere in the repo. Keep the current fail-open wrapper (`warn_and_exit`) around the safer installer.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — `API-001`  
+  **File path** — `.github/workflows/review_autofix.yml:478-530`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The post-merge validate-dispatch step already does one GraphQL fetch for `closingIssuesReferences`, but on the body/title fallback path it rebuilds `issue_nodes_json` with `labels: null` and then performs `gh issue view ... --json labels` once per linked issue inside the `while` loop. Current call count on the fallback path is `2 + N` (`1` PR fetch + `1` initial discovery + `N` per-issue label fetches). Proposed call count is `2`: one PR/body fallback fetch plus one alias-based GraphQL labels fetch for all issue numbers.  
+  **Recommended fix** — Extend the alias-fragment batching pattern already used in `.github/workflows/issue_pr_status.yml:286-336` so the fallback issue-number list is rehydrated with labels in one GraphQL call before the loop. That preserves loop logic while eliminating the per-issue REST calls.
+
+- **ID** — `API-002`  
+  **File path** — `.github/workflows/clarify.yml:385-390`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — When semantic cache is enabled, the step fetches the same issue comments twice: once bounded to `per_page=50` into `ISSUE_COMMENTS_FILE`, then again with `--paginate --slurp per_page=100` into `THREAD_HISTORY_FILE`. Current call count is `2` for the same resource in the same execution path; proposed call count is `1`.  
+  **Recommended fix** — Fetch the paginated/slurped comments once, write that raw JSON to a temp file, derive the bounded prompt context and the full thread-history projection from the same local payload. Mirror the repo’s existing “fetch once, reuse many” snapshot pattern already used for issue metadata caches in `implement.yml`.
+
+- **ID** — `API-003`  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:27-103`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The workflow always performs a proactive `/rate_limit` header fetch inside `_rl_wait`, then separately lists queued runs and in-progress runs from the same endpoint and merges them client-side. On the common no-op path, current call count is effectively `3` (`1` `/rate_limit` helper path available + `2` Actions run listings) before any cancellation attempt. Proposed call count is `1`: list branch-scoped PR runs once and filter `queued|in_progress` locally; only hit `/rate_limit` if an actual retryable error occurs.  
+  **Recommended fix** — Replace the two `actions/runs` scans with one paginated branch/event-scoped snapshot, filtered client-side for both statuses. Then source `scripts/gh_helpers.sh` and use its retry logic instead of the inline `_rl_wait` path so `/rate_limit` is only consulted on demand.
+
+- **ID** — `API-004`  
+  **File path** — `.github/workflows/internal-review.yml:98-101`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The claude-branch resolver does two independent `gh api` requests every push: one for open PRs on the branch and one for repository default branch. Current call count is `2`; proposed call count is `1` via a single GraphQL query that returns both `defaultBranchRef.name` and the branch’s open PR nodes.  
+  **Recommended fix** — Add a small GraphQL-first helper in `scripts/gh_helpers.sh`, modeled after the repo’s existing GraphQL-first helpers, that returns `{ default_branch, existing_pr_number }` in one request. This also makes it easy to add `gh_retry` and eliminate the current fail-open dispatch bug.
+
+- **ID** — `BATCH-001`  
+  **File path** — `scripts/check_external_branch_advance.sh:175-199`  
+  **Severity** — Low  
+  **Category tag** — `api-batching`  
+  **Description** — For every advancing self-like commit, the script calls `gh api repos/{repo}/commits/{sha}` to resolve GitHub-attributed author/committer identities. Current call count is `1 + N` on the API side after local `git rev-list` (`N` = advancing commits). Proposed call count is `1` GraphQL alias query for all candidate SHAs. The current comment says commit sets are “usually tiny,” but this code runs in the hot review/autofix path and can still amplify retries during stacked autofix or force-push scenarios. [NEEDS VERIFICATION]  
+  **Recommended fix** — Extend the alias-based GraphQL batching style already used in `.github/workflows/issue_pr_status.yml` to fetch author/committer logins for all `self_subject_shas` at once. If GraphQL commit-by-SHA resolution proves unreliable for detached SHAs, cache the per-SHA REST results within the script so repeated checks in the same run do not re-fetch them.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — `DUP-001`  
+  **File path** — `.github/workflows/clarify.yml:60-119`; `.github/workflows/plan.yml:89-140`; `.github/workflows/implement.yml:237-290`; `.github/workflows/validate.yml:84-132`; `.github/workflows/orchestrate_clarify_respond.yml:97-150`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The “canonical integration resolver” bootstrap is copied almost verbatim across five workflows: stage temp dirs, clone `shubhodeep1/coding-workflows`, fetch `stable` or `${{ github.sha }}`, sanitize clone logs, locate `scripts/resolve_integration_ref.sh`, and invoke it with `REPO/ISSUE/GH_TOKEN`. This is drift-prone; any auth, fallback, or log-redaction fix must be replicated in five places.  
+  **Recommended fix** — Move the bootstrap into a shared script, e.g. `scripts/resolve_integration_ref_bootstrap.sh`, with a function signature like `resolve_integration_ref_bootstrap <repository> <issue_number> <resolver_repo> <resolver_ref>`. Update callers in `clarify.yml`, `plan.yml`, `implement.yml`, `validate.yml`, and `orchestrate_clarify_respond.yml` to call the shared helper and consume a single `ref=` output contract.
+
+- **ID** — `DUP-002`  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:27-52`; `.github/workflows/mark-stable.yml:308-334`; `.github/workflows/orchestrate_poll.yml:66-97`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Three workflows carry their own inline `_rl_wait`/`_gh_retry` implementations even though `scripts/gh_helpers.sh` already owns the canonical retry and rate-limit behavior. The bodies are near-identical but not fully identical, which means retry policy changes can drift across control-plane workflows.  
+  **Recommended fix** — Standardize on `scripts/gh_helpers.sh` as the owner module. Either check out/support-copy it earlier in each workflow, or add a tiny bootstrapping helper with the signature `source_gh_retry_or_inline_fallback`. Update `cancel_on_pr_close.yml`, `mark-stable.yml`, and `orchestrate_poll.yml` to use the shared implementation instead of maintaining inline copies.
+
+- **ID** — `DUP-003`  
+  **File path** — `.github/workflows/workflow-log-analysis.yml:460-510`; `.github/workflows/workflow-log-analysis.yml:831-878`; `.github/workflows/workflow-log-analysis.yml:1159-1205`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The workflow contains three near-identical Codex-pass runners: base analysis, deep audit, and API-redundancy. Each block assembles a prompt file, validates `MAX_CODEX_ATTEMPTS`, retries `codex exec`, handles empty output, and writes an output section. The only real variation is prompt template, output heading, and failure emitter.  
+  **Recommended fix** — Extract this into a shared script such as `scripts/run_codex_report_pass.sh` with a signature like `run_codex_report_pass <prompt_template> <context_file> <output_file> <log_file> <max_attempts> <heading_regex>`. Update the three workflow jobs to pass their prompt and heading requirements instead of inlining the whole control loop.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — `EXPR-001`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Phase 4b: Wait for review & autofix completion` `run:` block is approximately **16,626 characters** and contains GitHub expressions, so it is already at about **79.2%** of the 21,000-character expression ceiling. Estimated headroom is only **4,374 characters**. This is the same workflow family that has already hit the expression limit multiple times, and this block contains extensive inline helper functions, polling logic, and commentary that are likely to keep growing.  
+  **Recommended fix** — Extract the wait-loop into a dedicated script under `scripts/` and keep the workflow step limited to argument/env wiring. That is the same mitigation already used elsewhere in the repo (`scripts/orchestrate_poll_process.sh`, `scripts/render_prompt.sh`) to avoid expression blowups.
+
+No `if:` expression in the audited workflows crossed the 15,000-character threshold, and no workflow file exceeds the 800 KB early-warning threshold. The largest audited workflow files are still below the 1 MB hard limit.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — `CONSIST-001`  
+  **File path** — `.github/workflows/internal-clarify.yml:3-16`; `.github/workflows/internal-orchestrate-clarify-respond.yml:3-13`; comparison baselines `.github/workflows/internal-plan.yml:13-16`, `.github/workflows/internal-implement.yml:13-17`  
+  **Severity** — Medium  
+  **Category tag** — `consistency`  
+  **Description** — Wrapper comment routing is inconsistent. `internal-plan.yml` and `internal-implement.yml` gate on `/answer` and `/approved`, but `internal-clarify.yml` and `internal-orchestrate-clarify-respond.yml` trigger on every created issue comment and delegate skip logic downstream. That inconsistency is a direct source of the repo’s skip-only workflow fan-out and queue churn.  
+  **Recommended fix** — Normalize wrapper behavior around command-prefixed gating at the wrapper boundary. Either add the same lightweight `if:` command filters to `internal-clarify.yml` / `internal-orchestrate-clarify-respond.yml`, or centralize comment routing in one shared dispatcher workflow so only actionable comments invoke reusable workflows.
+
+- **ID** — `DEAD-001`  
+  **File path** — `scripts/memory_helpers.sh:226-233`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `memory_promote()` is defined but has no callers in any audited workflow or script. That makes it dead wrapper code, and because it also lacks fail-open handling, it is dead code with divergent behavior from the rest of the helper library.  
+  **Recommended fix** — Either remove `memory_promote()` if it is obsolete, or wire it into a real call site and align it with the library’s fail-open wrapper pattern before use.
+
+- **ID** — `DEAD-002`  
+  **File path** — `scripts/orchestrate_poll_process.sh:9754-9784`; `scripts/orchestrate_poll_process.sh:10003-10057`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `RB_FOLLOWUP_REFUSED` and `IF_BLOCKERS_SOURCE` are assigned but never read. Search across the repository only finds their definitions/assignments, not any consumer logic. That leaves dead state transitions in one of the repo’s most complex scripts and makes later maintenance harder because the variables look semantically important but currently do nothing.  
+  **Recommended fix** — Remove the unused variables, or add the missing consumer logic if they were intended for diagnostics/state reporting. Either way, document the intended lifecycle in the surrounding comment block so future changes do not resurrect more inert state.
+
+- **ID** — `SHELL-001`  
+  **File path** — `scripts/validate_process.sh:197-205`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — `tg_notify()` uses `local msg="$1$(_tg_link_suffix)"`, which triggers ShellCheck `SC2155` (“declare and assign separately to avoid masking return values”). In a `set -e` script, this pattern can hide failures inside `_tg_link_suffix` instead of surfacing them cleanly.  
+  **Recommended fix** — Split declaration from assignment: `local msg` on one line, then `msg="$1$(_tg_link_suffix)"` on the next. Apply the same cleanup to other SC2155 sites such as `scripts/orchestrate_poll_process.sh:2684`.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, SEC-001 |
+| Medium | 10 | BUG-002, API-001, API-002, API-003, API-004, DUP-001, DUP-002, DUP-003, EXPR-001, CONSIST-001 |
+| Low | 4 | BATCH-001, DEAD-001, DEAD-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 5 | Medium |
+| Code modularization | 9 | Large |
+| Expression size reduction | 1 | Small |
+| Medium/Low fixes | 5 | Small |
