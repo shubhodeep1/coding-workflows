@@ -504,3 +504,137 @@ If you want, I can next turn this into a shorter exec-ready memo or a prioritize
 | Code modularization | 9 | Large |
 | Expression size reduction | 1 | Small |
 | Medium/Low fixes | 3 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-01)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is statically proven safe to collapse without changing data shape, timing, retry/failure behavior, or concurrency semantics. `NEEDS_VERIFICATION` means the overlap looks real, but at least one safety precondition is not fully provable from static reading alone. `RISKY_SKIP` means the duplicate-looking call lives in a poll/retry/recovery/judge path or other race-sensitive flow and must not be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File paths** — `.github/workflows/test-and-mark-stable.yml:372-375` and `.github/workflows/test-and-mark-stable.yml:377-377`  
+  **Current call count** — `2`  
+  **Proposed call count** — `1`  
+  **Endpoint(s)** — `POST /repos/{repo}/issues`; `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — the create step immediately re-reads the same issue resource just to extract the URL:
+  ```bash
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+  The follow-up GET is only used for the log line; the POST response already contains the created issue object, so `.number` and `.html_url` can be parsed from one captured JSON blob.  
+  **Proposed fix** — In `Create E2E test issue`, capture the `POST /issues` response once (for example into `issue_json`), parse both `.number` and `.html_url`, and delete the follow-up `GET /issues/{issue_number}`.  
+  **Safety rationale** — Same workflow job step, no intervening mutation, identical auth scope, no pagination, and removing the redundant GET does not change retry/failure behavior because both calls are plain `gh api` and the POST already must succeed for the step to continue.  
+  **Downstream signal** — Replace the two-call issue-creation sequence with one captured `POST /issues` response and parse both `.number` and `.html_url` from that JSON.
+
+- **ID** — `MERGE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File paths** — `.github/workflows/implement.yml:53-76` and `.github/workflows/implement.yml:522-531`  
+  **Current call count** — `2` mandatory issue fetches before Codex work starts  
+  **Proposed call count** — `1` mandatory issue fetch, with the existing parse/missing-cache fallback preserved  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — the workflow fetches the same issue once for precheck gating, then fetches it again for full metadata, and later already prefers the cached file when present:
+  ```bash
+  # Precheck approval phase label
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" \
+    --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ```
+
+  ```bash
+  # Fetch issue metadata
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  ```
+
+  ```bash
+  # Later validation already reuses ISSUE_META_FILE when available
+  if [ -s "${ISSUE_META_FILE:-}" ]; then
+    ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+  fi
+  ```
+  **Proposed fix** — Persist a full issue snapshot during the precheck path (either by creating the runtime workspace earlier or by writing to a temporary file under `${RUNNER_TEMP}`), then have `Fetch issue metadata` become a cache-validation/no-op step and keep the existing `gh_retry gh api ... --jq '[.labels[].name]'` fallback only for missing/invalid cache cases.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because consolidating these calls crosses workflow steps and changes semantics from an immediate plain `gh api` gate to a reused snapshot that currently would survive a long install/bootstrap gap; static reading does not prove that freshness and retry differences are irrelevant.  
+  **Downstream signal** — Verify that no step between `Precheck approval phase label` and `Fetch issue metadata` mutates issue state/labels or relies on the later `gh_retry` behavior; only then collapse the two `GET /issues/{n}` calls into one persisted snapshot.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File paths** — `.github/workflows/review_autofix.yml:1351-1365` and `scripts/review_rb_judge.sh:153-156`  
+  **Current call count** — `2` on the judge’s “no linked issues from GraphQL” fallback path  
+  **Proposed call count** — `1` on that path  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr_number}`  
+  **Evidence** — `review_autofix.yml` already fetches PR metadata and materializes a local `PR_META_FILE`, but the judge fallback re-fetches PR title/body from GitHub instead of reading that file:
+  ```bash
+  # review_autofix.yml
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+
+  ```bash
+  # scripts/review_rb_judge.sh
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  fi
+  ```
+  **Proposed fix** — In `scripts/review_rb_judge.sh`, read fallback `PR_DATA` from `${PR_META_FILE}` (or the already-built `PR_META_JSON`) first, and only call `_safe_gh_jq "repos/.../pulls/${PR_NUMBER}"` if the local file is missing, empty, or invalid.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because the judge can run materially later than metadata collection, so a human edit to PR title/body during the same run could change fallback linked-issue discovery.  
+  **Downstream signal** — Verify that every `review_rb_judge.sh` invocation is preceded by creation of `PR_META_FILE` and that using cached PR title/body for fallback issue discovery is acceptable during the judge window; otherwise keep the live fetch.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File paths** — `.github/workflows/review_autofix.yml:1381-1441` and `.github/workflows/review_autofix.yml:1832-1836`  
+  **Current call count** — `1` GraphQL linked-issue fetch plus `1` extra REST issue-title fetch on the smoke-detect fallback path  
+  **Proposed call count** — `1` GraphQL fetch on cache-hit path  
+  **Endpoint(s)** — GraphQL `repository.pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number,title,body}}}`; `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — early metadata collection already fetches linked issue titles/bodies and writes a linked-issue context file, but smoke detection later re-fetches the linked issue title from REST:
+  ```bash
+  if gh_retry "${_linked_tmp}" api graphql \
+    ... \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+  ```
+
+  ```bash
+  if [ "$IS_SMOKE" = "false" ]; then
+    ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '...\K\d+\b' || true)
+    if [ -n "${ISSUE_NUM:-}" ]; then
+      ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+    fi
+  fi
+  ```
+  **Proposed fix** — Export a lightweight number→title cache from the early linked-issue GraphQL result (or keep a JSON temp file beside `LINKED_ISSUE_CONTEXT_FILE`) and have `Detect smoke test and tune LLM settings` consult that cache first; keep the REST lookup only when the early GraphQL fetch failed or the parsed issue number is absent from the cached set.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because the early linked-issue fetch intentionally does not persist a success marker on failure and truncates at `first:50`, so naive reuse could turn current fail-open behavior into a false “not smoke” decision.  
+  **Downstream signal** — Verify that smoke detection only trusts cached linked-issue titles when the early GraphQL fetch succeeded and the parsed issue number is present in that cached payload; otherwise preserve the current live REST fallback.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `RISKY_SKIP` — valid redundancy, but it lives inside a live review wait/backoff loop with observable log parsing, so it needs manual watcher-semantics review rather than auto-implementation.
+- `BATCH-001`: `NEEDS_VERIFICATION` — the batch-label fix is plausible, but the fallback path mixes GraphQL-linked issues with regex-derived candidates and needs a human check on false-positive/label-removal behavior.
+- `BATCH-002`: `RISKY_SKIP` — the per-issue body loop is real, but it is inside the review-blocked judge path, so batching should not be auto-applied without validating judge/recovery semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | `MERGE-001` |
+| NEEDS_VERIFICATION | 3 | `MERGE-002`, `REUSE-001`, `REUSE-002` |
+| RISKY_SKIP | 0 | — |
+
+### Implement-Stage Handoff
+
+- `MERGE-001`
