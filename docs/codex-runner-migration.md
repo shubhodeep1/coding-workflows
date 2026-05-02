@@ -49,8 +49,8 @@ docker run --rm  codex-runner:latest  ──►  codex-wrapper.sh
 
 Key properties:
 
-- One VPS, one registered runner, `concurrency: 1` → serialized job stream by construction.
-- Each job runs in a throwaway container; `auth.json` is mounted from the host so token refresh persists naturally.
+- One VPS, one registered runner, plus a shared workflow-level concurrency group → serialized job stream by construction.
+- Each job runs in a throwaway container; the entire `~/.codex` directory is mounted from the host so token refresh persists naturally (single-file bind mounts break when the CLI rewrites via atomic rename).
 - Tier transitions happen inside the wrapper, transparent to the workflow.
 
 ## Components
@@ -62,8 +62,8 @@ Key properties:
 
 2. **GitHub Actions self-hosted runner**
    - Registered to this repo, label `codex-vps`.
-   - Runs as a non-root system user.
-   - Configured with `concurrency: 1` at the workflow level on every migrated workflow.
+   - Runs as a non-root system user (member of the `docker` group — see security note below).
+   - Every migrated workflow declares the **same** concurrency group (e.g. `concurrency: { group: codex-global, cancel-in-progress: false }`) so that even if a second runner is ever added or workflows fan out, GitHub still serializes them globally. Per-workflow `concurrency: 1` is not sufficient on its own.
 
 3. **Codex CLI installation on the host**
    - Installed once.
@@ -103,6 +103,11 @@ Key properties:
 ### Phase 1 — VPS + runner skeleton
 
 - Provision VPS, harden, install Docker.
+- Create the runner system user; add to the `docker` group (with the caveat acknowledged in the security risk below).
+- Pre-create runtime paths owned by the runner user before first job runs:
+  - `mkdir -p /var/lib/codex && chown <runner-user>: /var/lib/codex` (sentinel lives here)
+  - `install -o <runner-user> -g <runner-user> -m 0644 /dev/null /var/log/codex-runs.jsonl` (JSONL log; logrotate optional)
+  - `mkdir -p /home/<runner-user>/.codex && chown -R <runner-user>: /home/<runner-user>/.codex` (will hold `auth.json` + `config.toml` after Phase 2 `codex login`)
 - Register a GitHub Actions self-hosted runner with label `codex-vps`.
 - Migrate one trivial workflow (e.g. a hello-world) to `runs-on: [self-hosted, codex-vps]` to prove the pipe end-to-end.
 
@@ -143,7 +148,11 @@ Key properties:
 - **Quota detection false positives**: a non-quota error misclassified as quota would burn OpenRouter credits. *Mitigation*: strict regex on the exact OpenAI quota error strings; everything else propagates as failure.
 - **VPS as single point of failure**: if the VPS dies, all CI stops. *Mitigation*: runner registration tokens + a documented rebuild runbook so a fresh VPS can be online in <30 min.
 - **Sub TOS interpretation drift**: OpenAI could tighten the CI/CD auth guide later. *Mitigation*: Tier 2 is already the OpenRouter path we use today, so a TOS change is a config flip (force sentinel to permanent) rather than a re-architecture.
-- **Self-hosted security boundary**: fork PRs would execute arbitrary code on the VPS if ever accepted. *Mitigation*: solo-dev repo with no external contributors today; if that changes, gate fork PRs explicitly in workflow conditions.
+- **Self-hosted security boundary**: fork PRs would execute arbitrary code on the VPS if ever accepted, and the runner user has Docker socket access — which is functionally equivalent to root on the host. *Mitigations* (defense in depth):
+  - Solo-dev repo with no external contributors today.
+  - GitHub repo setting **"Require approval for first-time contributors"** (or stricter: "Require approval for all outside collaborators") set on Actions, as the primary defense if outside contributors are ever added.
+  - Explicitly gate fork-PR triggers (`if: github.event.pull_request.head.repo.fork == false`) on every self-hosted workflow.
+  - Consider rootless Docker or a `docker run` proxy (e.g. sysbox / restricted socket) before opening the repo to outside contributors — current plan assumes solo use only.
 - **State leakage between jobs**: prevented by `docker run --rm` per job. *Mitigation*: enforce in the wrapper; never let a job run on the host directly.
 
 ## Cron caveat
