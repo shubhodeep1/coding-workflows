@@ -772,3 +772,163 @@ Ordered by end-to-end impact.
 | copilot reviewer / Cleanup artifacts | list artifacts + delete per artifact | run 25243342317 | reduce synchronous deletes or narrow scope |
 
 If you want, I can turn this into a **PR-ready action plan** with concrete YAML/script changes ranked by implementation effort.
+
+## Deep Audit — Workflows & Scripts (2026-05-02)
+
+### Section 1: Bug & Correctness Sweep
+
+#### Finding 1
+- **ID** — BUG-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:3575-3591; .github/ai/label_contract.v1.json:76-103`
+- **Severity** — High
+- **Category tag** — `bug`
+- **Description** — The alt-model smoke gate waits for `ai:in-review|ai:ready-to-merge|ai:merged` and fails on `ai:clarify-failed|ai:plan-failed|ai:implement-failed`, but the repository’s canonical label contract defines neither `ai:in-review` nor `ai:implement-failed`. The contract defines `ai:done` for “Implementation PR created” and `ai:implementation-failed` for the implement no-op failure path. In practice this means the happy-path wait can miss the normal post-implement state and the failure-path check can miss the actual terminal failure label, producing false timeouts and misclassified outcomes.
+- **Recommended fix** — Replace the hard-coded label checks with contract labels: success should include `ai:done|ai:ready-to-merge|ai:merged`, and failure should check `ai:implementation-failed`. Prefer centralizing the accepted phase labels in `scripts/label_helpers.sh` or generating them from `.github/ai/label_contract.v1.json` so release-gate jobs stop open-coding workflow-state literals.
+
+#### Finding 2
+- **ID** — BUG-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:3368-3418; .github/workflows/clarify.yml:407-425,980-1001,1060-1069`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — The “clarify rejects unsolvable” test expects immediate terminal labels `ai:awaiting-clarification`, `ai:rejected`, or `ai:clarification-needed`, but the actual clarify workflow shown here only transitions to `ai:clarification`, `ai:blocked`, or `ai:planning`, plus comments. Because the tested labels are never emitted by `clarify.yml`, the gate’s fast rejection branch is dead code and the test falls back to slower heuristics (`ai:clarification` persistence and comment text matching). That weakens the test’s determinism and can hide regressions in the clarify phase contract.
+- **Recommended fix** — Align the test with the real clarify contract. Either:
+  1. make the clarify workflow emit one canonical rejection label and codify it in `.github/ai/label_contract.v1.json`, or  
+  2. remove the dead-label branch from the test and assert on the labels/comments that `clarify.yml` actually emits today (`ai:clarification`, `ai:blocked`, and the clarification-question comment marker).
+
+#### Finding 3
+- **ID** — BUG-003
+- **File path** — `scripts/label_helpers.sh:163-187`
+- **Severity** — High
+- **Category tag** — `bug`
+- **Description** — `set_issue_phase_label_resilient()` does a read-modify-write over the full issue label set: it GETs all labels, computes a new array in jq, then PUTs the entire label list back. Any concurrent workflow that adds or removes labels between the GET and PUT can be overwritten, because the PUT writes the stale snapshot. This is a classic TOCTOU race on a shared mutable resource, and this helper is exactly the kind of code reused by multiple label-mutating workflows.
+- **Recommended fix** — Stop replacing the full label set. Reuse the safer targeted-edit pattern already implemented in `scripts/orchestrate_poll_process.sh:1173-1205`, where the code inspects current labels and then issues a single `gh issue edit ... --remove-label ... --add-label ...` call only for the labels being changed. That preserves unrelated labels added by other concurrent workflows.
+
+#### Finding 4
+- **ID** — SEC-001
+- **File path** — `.github/workflows/update_workflows.yml:387-403`
+- **Severity** — High
+- **Category tag** — `security`
+- **Description** — The notification step fetches `scripts/tg_helpers.sh` from `coding-workflows@stable` at runtime and immediately `source`s it. That is execution of mutable remote branch content inside a job that already holds `GH_PAT`, `TG_BOT_SECRET`, and `TG_ADMIN_CHAT_ID`. A later force-push or compromised `stable` branch can change the code being executed without changing this workflow file.
+- **Recommended fix** — Do not source remote branch content directly. Prefer one of:
+  - source the checked-in local `scripts/tg_helpers.sh` from this repository checkout, or
+  - fetch a pinned blob by immutable commit SHA and verify its digest before sourcing.  
+  If the step must bootstrap before checkout in other contexts, add a tiny committed bootstrap helper under `scripts/` or a local composite action and call that instead of executing mutable branch content.
+
+---
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### Finding 5
+- **ID** — BATCH-001
+- **File path** — `scripts/orchestrate_poll_process.sh:6353-6359,6377-6414`
+- **Severity** — High
+- **Category tag** — `api-batching`
+- **Description** — The standalone stall sweep fans out into seven separate `gh issue list --label ...` calls every cycle for `ai:clarification`, `ai:planning`, `ai:awaiting-approval`, `ai:implementing`, `ai:done`, `ai:ready-to-merge`, and `ai:review-blocked`, then performs the candidate-details GraphQL fetch afterward anyway. This is repeated REST polling over the same repo/open-issue set on the hot orchestrator path.
+- **Recommended fix** — Replace the seven per-label REST list calls with one GraphQL search query using aliases (one alias per label) and merge the results once, then feed the deduped issue numbers into the existing `_fetch_candidate_issue_details_graphql()` cache path. The natural extension point is the existing batch-query style used in `_fetch_candidate_issue_details_graphql()` and `_fetch_linked_pr_status_graphql()`.
+- **Current call count / proposed call count** — Current: 7 label-list REST calls per sweep before the later candidate-details fetch. Proposed: 1 aliased GraphQL label-search call per sweep before the later candidate-details fetch.
+- **Existing batching pattern to extend** — `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql`
+
+#### Finding 6
+- **ID** — BATCH-002
+- **File path** — `scripts/check_external_branch_advance.sh:175-202`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — After the cheap local subject-line filter, the script loops over every “self-like” advancing commit and does one `gh api repos/.../commits/<sha>` call per SHA to read `.author.login` and `.committer.login`. On busy branches or after rebases, that becomes an N-call loop on the same decision path.
+- **Recommended fix** — Batch the identity lookup with a single GraphQL query that aliases each commit OID, then evaluate the returned author/committer identities locally. The call pattern is the same alias-batching already used elsewhere in `scripts/orchestrate_poll_process.sh` for issue batches.
+- **Current call count / proposed call count** — Current: `N` REST calls for `N` self-like SHAs. Proposed: 1 GraphQL call with `N` aliases.
+- **Existing batching pattern to extend** — `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql` alias construction style
+
+#### Finding 7
+- **ID** — API-001
+- **File path** — `scripts/orchestrate_poll_process.sh:1384-1437,4525-4529,4600-4603,5850-5955`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — `_find_all_linked_prs()` unions three separate lookup strategies per issue: timeline cross-references, `gh pr list --head`, and `gh pr list --search "#<n> in:body"`. That helper is then called by both `close_linked_pr()` and `surface_reissue_closed_without_pr()`. The same script already has a batched issue-details GraphQL cache that includes linked PR state (`linked_pr`) for candidate issues, but these callers bypass it and re-query GitHub.
+- **Recommended fix** — Thread the existing `_fetch_candidate_issue_details_graphql()` cache into these callers and consume `.linked_pr` first. Fall back to `_find_all_linked_prs()` only on cache miss. If a separate helper is needed, add a cache-aware wrapper such as `get_cached_or_linked_prs <issue_num>`.
+- **Current call count / proposed call count** — Current: 3 API calls per `_find_all_linked_prs()` invocation. Proposed: 0 on cache hit, 1 on cache miss for the normal path.
+- **Existing batching pattern to extend** — `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql`
+
+---
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### Finding 8
+- **ID** — DUP-001
+- **File path** — `.github/workflows/cancel_on_pr_close.yml:27-52; .github/workflows/mark-stable.yml:308-333,457-482; .github/workflows/orchestrate_poll.yml:66-92; .github/workflows/review_autofix.yml:1293-1326; .github/workflows/test-and-mark-stable.yml:3810-3835; scripts/gh_helpers.sh:390-430`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — The repository carries at least five near-identical inline rate-limit retry wrappers (`_rl_wait`, `_gh_retry`, or local `gh_retry`) even though `scripts/gh_helpers.sh` already provides the canonical `gh_retry`. The copies repeat the same backoff logic, temp-file handling, and rate-limit parsing, but drift in behavior and diagnostics.
+- **Recommended fix** — Create a tiny shared bootstrap module, e.g. `scripts/bootstrap_gh_retry.sh`, with:
+  - `_gh_retry <cmd...>`
+  - `_gh_rate_limit_wait`  
+  Then source that bootstrap helper in early steps that run before the full support-script fetch, and use `scripts/gh_helpers.sh` everywhere else. Update callers in `cancel_on_pr_close.yml`, `mark-stable.yml`, `orchestrate_poll.yml`, `review_autofix.yml`, and `test-and-mark-stable.yml`.
+
+#### Finding 9
+- **ID** — DUP-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:2929-2955,3031-3057,3211-3257,3322-3335`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — `test-and-mark-stable.yml` repeats the same “snapshot latest run id → dispatch workflow → poll for newly created run id → poll until completion → accept/reject conclusions” shell block for multiple workflows (`update_workflows`, `internal-memory-maintenance`, `orchestrate`, `internal-validate`, and the clarify negative-test run capture). The copies already differ in tiny ways (`per_page`, accepted conclusions, sleep interval), which makes future fixes likely to land in only some copies.
+- **Recommended fix** — Extract a shared script, for example `scripts/wait_workflow_run.sh`, with a signature like:
+  - `wait_workflow_run.sh --repo <owner/repo> --workflow <file> --pre-run-id <id> --deadline-secs <n> [--branch <ref>] [--head-sha <sha>] [--accept success,failure,skipped]`  
+  Then replace the repeated blocks in `test-and-mark-stable.yml` with parameterized calls to that script.
+
+---
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### Finding 10
+- **ID** — EXPR-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1454`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — The “wait for review workflow” `run:` block is already very large and contains multiple `${{ }}` interpolations inside a monolithic shell script. Measured block size is about **16,626 characters**, leaving only about **4,374 characters** of headroom before GitHub’s 21,000-character template-expression hard failure. This repository has already hit that limit multiple times, and this block is structurally the same kind of high-risk embedded polling script.
+- **Recommended fix** — Extract the entire review-wait loop to an external script under `scripts/` and pass only small scalar inputs through `env:` (`PR_NUMBER`, `BAIT_SHA`, `REVIEW_TIMEOUT`, etc.). That removes the block from expression-size accounting and also makes the polling logic testable.
+- **Estimated current character count / headroom** — ~16,626 current characters; ~4,374 characters remaining to the 21,000 limit.
+
+_No workflow file in `.github/workflows/` currently exceeds the 800 KB early-warning threshold; the largest audited workflow remains well below the 1 MB hard cap._
+
+---
+
+### Section 5: Cross-Cutting Concerns
+
+_No `TODO`, `FIXME`, or `HACK` markers were found in the audited `.github/workflows/*.yml` and `scripts/*.{sh,py}` files._
+
+#### Finding 11
+- **ID** — CONSIST-001
+- **File path** — `.github/workflows/cancel_on_pr_close.yml:27-52; .github/workflows/mark-stable.yml:308-333,457-482; .github/workflows/orchestrate_poll.yml:66-92; .github/workflows/review_autofix.yml:1293-1326; .github/workflows/test-and-mark-stable.yml:3810-3835; scripts/gh_helpers.sh:390-430`
+- **Severity** — Medium
+- **Category tag** — `consistency`
+- **Description** — The duplicated inline retry helpers are not behaviorally equivalent to the canonical `scripts/gh_helpers.sh:gh_retry()`. The shared helper classifies permanent failures (`_is_gh_permanent_failure`), emits global rate-limit Telegram cooldown alerts, and trips the repo-wide rate-limit breaker. The inline copies do not. As a result, the same GitHub API failure is handled differently depending on which workflow hit it.
+- **Recommended fix** — Standardize on one retry implementation. Either source `scripts/gh_helpers.sh` directly once support files exist, or factor a bootstrap-safe subset into a shared helper that preserves the same semantics as `gh_retry()`. Do not maintain parallel retry stacks with different retryability rules.
+
+#### Finding 12
+- **ID** — SHELL-001
+- **File path** — `scripts/check_external_branch_advance.sh:180-182`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — The loop `for sha in ${self_subject_shas}; do` relies on unquoted word splitting. Today the values are commit SHAs, so the risk is low, but this is still the SC2086/SC2046 class of shell pattern that shellcheck flags because it silently depends on the contents never containing unexpected IFS characters.
+- **Recommended fix** — Convert the rev-list output to an array and iterate safely, e.g. `mapfile -t self_subject_shas < <(git rev-list ...)` followed by `for sha in "${self_subject_shas[@]}"; do ... done`. That removes the implicit-splitting dependency and aligns with the rest of the repo’s strict-shell posture.
+
+---
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 4 | BUG-001, BUG-003, SEC-001, BATCH-001 |
+| Medium | 7 | BUG-002, BATCH-002, API-001, DUP-001, DUP-002, EXPR-001, CONSIST-001 |
+| Low | 1 | SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 4 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 6 | Large |
+| Expression size reduction | 1 | Small |
+| Medium/Low fixes | 4 | Small |
