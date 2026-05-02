@@ -21,8 +21,13 @@ install_gh() {
   fi
 
   local sudo=""
-  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
-    sudo="sudo"
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo="sudo -n"
+    else
+      log "Insufficient privileges (not root and no passwordless sudo); skipping gh install."
+      return 0
+    fi
   fi
 
   $sudo install -d -m 0755 /etc/apt/keyrings
@@ -41,6 +46,11 @@ verify_token() {
     log "WARNING: neither GH_TOKEN nor GITHUB_TOKEN is set."
     log "  Add GH_TOKEN to your Claude Code cloud environment variables to enable"
     log "  Actions log access (scopes: repo + workflow, or fine-grained actions:read)."
+    return 0
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    log "WARNING: token is set but 'gh' is not installed; skipping auth check."
     return 0
   fi
 
