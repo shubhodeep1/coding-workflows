@@ -62,7 +62,8 @@ _gh_actions_escape()
 #     not on the issue; retrying just burns API budget.)
 #   * HTTP 404 Not Found             (resource doesn't exist)
 #   * HTTP 422 Unprocessable Entity  (validation / already-exists)
-#   * "Resource not accessible by integration"  (token scope)
+#   * "Resource not accessible by integration"      (GITHUB_TOKEN scope)
+#   * "Resource not accessible by personal access token" (PAT scope)
 #
 # Returns 0 (true) if the text indicates such a failure.
 # Conservative on purpose — only matches conditions that retrying
@@ -70,7 +71,7 @@ _gh_actions_escape()
 # ---------------------------------------------------------------
 _is_gh_permanent_failure()
 {
-	printf '%s' "$1" | grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 422|Resource not accessible by integration"
+	printf '%s' "$1" | grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 422|Resource not accessible by (integration|personal access token)"
 }
 
 # ---------------------------------------------------------------
