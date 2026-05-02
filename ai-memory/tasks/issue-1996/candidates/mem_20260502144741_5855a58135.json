@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repository should be changed?**\nChoices:\n- **A** \u2014 A specific GitHub workflow in `.github/workflows/` (RECOMMENDED)\n- **B** \u2014 A specific script or helper in `scripts/`\n- **C** \u2014 Documentation only (`README.md`, `agents.md`, or docs)\n- **D** \u2014 Another specific area you will name\nReply: `Q1: A`\n**Q2: What type of improvement do you want in that area?**\nChoices:\n- **A** \u2014 Bug fix for incorrect current behavior (RECOMMENDED)\n- **B** \u2014 New feature / capability\n- **C** \u2014 Reliability / operational hardening\n- **D** \u2014 Performance / API usage reduction\n- **E** \u2014 Documentation / clarity only\nReply: `Q2: A`\n**Q3: What exact outcome should change after the work is done?**\nChoices:\n- **A** \u2014 You will provide a concrete failing behavior, error, or regression to fix (RECOMMENDED)\n- **B** \u2014 You will provide a concrete workflow step/job/script to improve and how success should be measured\n- **C** \u2014 You want a general code review only, with findings but no implementation\nReply: `Q3: A`",
+  "fingerprint": "e796e061f433d313ce5379f5c3db245b668c1a3d312a3e7464c629a8e0771016",
+  "lineage": {
+    "issue_number": 1996,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25254389373",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25254389373",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260502144741_5855a58135",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1996,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25254389373"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #1996 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-02T14:47:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
