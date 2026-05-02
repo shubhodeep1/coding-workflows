@@ -1,17 +1,25 @@
-Download the full log from the following URL and analyze it for errors, failures, and issues. This consumer-repo variant traces the failure back through the **upstream** workflow library (`shubhodeep1/coding-workflows`) at the ref the consumer is actually running, and produces an evidence-backed proposed fix biased toward the upstream repo. **Read-only — never edits files.** The user takes the proposed fix to a session in the appropriate target repo (`shubhodeep1/coding-workflows` for `[UPSTREAM]` fixes, this repo for `[CONSUMER]` fixes) to verify and implement.
+Download the full logs from every URL in `$ARGUMENTS` and analyze them for errors, failures, and issues. `$ARGUMENTS` may contain **one or more log URLs** (newline- or whitespace-separated; mix and match accepted) and an **optional free-form description** of what the user expects you to focus on (suspected cause, what changed recently, which step failed, etc.). The description may appear before, between, or after the URLs. This consumer-repo variant traces the failure back through the **upstream** workflow library (`shubhodeep1/coding-workflows`) at the ref the consumer is actually running, and produces an evidence-backed proposed fix biased toward the upstream repo. **Read-only — never edits files.** The user takes the proposed fix to a session in the appropriate target repo (`shubhodeep1/coding-workflows` for `[UPSTREAM]` fixes, this repo for `[CONSUMER]` fixes) to verify and implement.
 
 $ARGUMENTS
 
 ## Steps
 
-1. **Download the log** — Choose the fetch tool by URL shape; `curl` against a rendered GitHub page returns HTML, not log content.
+1. **Parse `$ARGUMENTS` and download every log** — Extract every `https?://...` token as a log URL; treat all remaining (non-URL) text as the user's free-form description. Record both up front in the **Evidence Ledger**: list every URL (numbered `log-1`, `log-2`, …) and quote the description verbatim under `User description:` (or note `none`). The description shapes prioritisation in Steps 3–4 (what to focus on, which leads to chase first); it does **not** override evidence — never invent facts to match it.
+
+   If `$ARGUMENTS` contains zero URLs, stop and ask the user for at least one log URL — this command is for log-anchored analysis. (If the user has only refs/IDs/prose without a log, point them at `/investigate-issue`.)
+
+   Then download EACH log. Choose the fetch tool by URL shape; `curl` against a rendered GitHub page returns HTML, not log content.
    - **GitHub Actions run / job URLs** (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, `.../runs/<id>/job/<id>`, `.../runs/<id>/attempts/<n>`): use the appropriate GitHub MCP tool (e.g. `mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`). These return the raw log payload. Do NOT `curl` these URLs.
    - **Raw log URLs / artifact URLs / external (non-GitHub) URLs**: use `curl --fail-with-body -sSL -o /tmp/<unique-name>.log -w '%{http_code}\n' <url>` so HTTP errors are detected reliably; plain `curl -sL` exits 0 on 4xx/5xx and silently downloads the server's error page.
 
-   Verify the status / payload before treating the result as a log:
+   Use a **distinct `<unique-name>` per URL** (e.g. derived from run/job ID, or numbered `log-1.log`, `log-2.log`) so concurrent downloads don't overwrite each other. Track the local path for each log alongside its `log-<n>` index in the Evidence Ledger so later citations (`log-2 L42: "..."`) are unambiguous when multiple logs are in play.
+
+   Verify the status / payload of each download before treating the result as a log:
    - `2xx` → proceed.
    - `5xx`, `429`, network/timeout/connection-reset/DNS errors → transient; retry per the **Retry Rule** in the Rules section.
    - `401`, `403`, `404`, `410` → hard failure; record the URL under **Inaccessible Resources** and follow the **Inaccessible resources** rule.
+
+   If at least one log downloads successfully, continue with the accessible logs. If **all** provided URLs are inaccessible after retries, stop — there is nothing to analyse.
 
 2. **Resolve the upstream ref the consumer is actually running** — All subsequent reads of `shubhodeep1/coding-workflows` MUST be pinned to the ref the consumer's failing run was executing. Pinning to the *current* `stable` tag without checking the consumer's pin is wrong: if the consumer is pinned to `@v1.2.3` and `stable` has since moved to `@v1.3.0`, reading at `stable` analyses code the consumer is not running. Resolve once, up front, into **two distinct fields**:
 
@@ -35,7 +43,7 @@ $ARGUMENTS
    - Record `UPSTREAM_TAG`, `UPSTREAM_SHA`, `PREVIOUS_UPSTREAM_TAG`, `PREVIOUS_UPSTREAM_SHA` in the **Evidence Ledger**. Every later upstream tool call MUST pass `ref=<UPSTREAM_SHA>`. Every citation should be written as `<owner>/<repo>@<UPSTREAM_TAG> (<short-sha>):<file>:<line>`.
    - If `UPSTREAM_SHA` cannot be resolved at all after retries, record this under **Inaccessible Resources** and stop — the analysis cannot be pinned without a SHA. Do not silently fall back to `main`.
 
-3. **Read the full log carefully** — Do not skim or summarize. Read the entire log from start to finish. Pay attention to:
+3. **Read every log carefully** — Do not skim or summarize. Read each downloaded log from start to finish. When multiple logs are present, read them in the order the user provided them (the first URL is usually the primary failure; subsequent ones are corroborating runs, retries, or related jobs). Use the user's description (recorded in the Evidence Ledger in Step 1) to prioritise which signals to chase first, but do not let it cause you to skip parts of any log. Pay attention to:
    - Error messages, stack traces, exceptions
    - Failed assertions or test failures
    - Exit codes, signal kills, OOM errors
@@ -66,7 +74,7 @@ $ARGUMENTS
    **Retry transient errors when fetching from GitHub or any HTTP source** according to the **Retry Rule** in the Rules section. A transient blip is not an excuse to give up on a lead.
 
 5. **Identify every distinct issue** — List each unique issue. For each:
-   - Exact error message or log line (with line number in the saved log file)
+   - Exact error message or log line (with `log-<n> L<line>` reference into the saved log file when multiple logs are present, otherwise just `L<line>`)
    - Root cause, not symptom
    - Whether it is the primary failure or a cascading/secondary failure
    - Whether the root cause is **upstream** (in `shubhodeep1/coding-workflows@<UPSTREAM_TAG> (<short-sha>)`), **consumer-side**, or **environmental** (runner / network / external service)
@@ -75,7 +83,8 @@ $ARGUMENTS
 
 7. **Build the Evidence Ledger** — Every claim and every proposed fix must cite:
    - `UPSTREAM_TAG`, `UPSTREAM_SHA`, `PREVIOUS_UPSTREAM_TAG`, `PREVIOUS_UPSTREAM_SHA` (resolved in Step 2) once at the top
-   - Log line number(s) and exact text (with the `/tmp/` path of the saved log, when applicable)
+   - The list of input log URLs and their saved `/tmp/` paths (numbered `log-1`, `log-2`, …) plus the user's verbatim description (or `none`), recorded in Step 1
+   - Log line number(s) and exact text — `log-<n> L<line>: "..."` when multiple logs are present, otherwise just `L<line>: "..."`
    - Source location: `<repo>@<UPSTREAM_TAG> (<short-sha>):<file>:<line>` for upstream; `<file>:<line>` for consumer
    - Commit SHA / PR # that introduced the relevant code (when applicable)
    - Test output or reproduction result (when applicable)
@@ -105,13 +114,13 @@ $ARGUMENTS
     - **Open Questions** — surface remaining ambiguity rather than guessing
     - **Next Step for the User** — one-sentence instruction telling the user which repo to open a session against (`shubhodeep1/coding-workflows` for `[UPSTREAM]` fixes, this repo for `[CONSUMER]` fixes, both for `[BOTH]` fixes) and a copy-paste-ready prompt summarising the proposed change. If the only finding is environmental, instruct the user to re-run after the environment recovers and explain why no code change is recommended.
 
-11. **Cleanup** — Remove the temp log file from `/tmp/` when done.
+11. **Cleanup** — Remove every temp log file written to `/tmp/` during Step 1 when done.
 
 ## Rules
 
 - **Read-only.** This command never edits files. It produces a report. The user takes `[UPSTREAM]` fixes to a session in `shubhodeep1/coding-workflows`; the user takes `[CONSUMER]` fixes to a session in this repo. If during investigation you would normally apply an `EVIDENCE-BASED` edit, do **not** — emit it as a proposed fix instead.
 - **Always pin upstream reads to `UPSTREAM_SHA`.** Reading upstream files at `main` is a bug — the consumer is not running `main`. Every `mcp__github__get_file_contents` call against `shubhodeep1/coding-workflows` MUST pass `ref=<UPSTREAM_SHA>` (the resolved SHA from Step 2, never the bare tag name — moving tags like `stable` can shift mid-investigation).
-- **Always download the complete log.** Never truncate or skip sections.
+- **Always download the complete log.** Never truncate or skip sections. When `$ARGUMENTS` lists multiple URLs, this rule applies to each — download every accessible log in full before drawing conclusions.
 - **Retry Rule**: For transient HTTP/GitHub errors (5xx, 429, timeouts, connection resets, DNS failures), retry with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before declaring failure. This applies to the initial log download **and** to every follow-up fetch (PRs, issues, workflow files, artifacts, related runs).
 - **Inaccessible resources** — If a resource is still unreachable after retries, or returns a hard failure (401, 403, 404, 410), or is auth-walled / expired / private, record it under **Inaccessible Resources**:
   - The exact URL
