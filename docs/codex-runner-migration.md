@@ -31,6 +31,14 @@ OpenRouter (the existing path) becomes the fallback tier rather than disappearin
 
 ## Architecture
 
+### Conventions used in this doc
+
+- The runner system user is **`codex-runner`**, with home directory **`/home/codex-runner`** (referred to as `$RUNNER_HOME` below). Wherever an earlier draft said `~/.codex`, read it as `$RUNNER_HOME/.codex` — the wrapper resolves this from the runner user's `$HOME`, not from `~`, so a stray `sudo` or systemd unit can't accidentally point at root's home.
+- The Codex CLI binary inside the container also runs under a UID that maps to `$RUNNER_HOME/.codex` via the bind mount (using `--user "$(id -u codex-runner):$(id -g codex-runner)"` so file ownership of newly written/refreshed files stays correct on the host).
+- Inside the container, the checked-out repo is bind-mounted to **`/workspace`** and set as the working directory.
+
+### Diagram
+
 ```
 GitHub event (push, PR, workflow_dispatch, [cron])
         │
@@ -39,18 +47,24 @@ Self-hosted runner on VPS  (label: codex-vps; serialization via single
         │                   runner + shared concurrency.group)
         ▼  (per job)
 codex-wrapper.sh   ←── runs on the host (not in a container).
-        │              Owns the sentinel + JSONL log on the host filesystem.
+        │              Owns /var/lib/codex/tier-until + /var/log/codex-runs.jsonl.
         │              Decides which tier to run, then for each attempt does:
         │
         ├─► Tier 1:  docker run --rm \
-        │                -v ~/.codex:/home/runner/.codex \
-        │                -e <task env> \
+        │                --user "$(id -u codex-runner):$(id -g codex-runner)" \
+        │                -v "$RUNNER_HOME/.codex":/home/codex-runner/.codex \
+        │                -v "$GITHUB_WORKSPACE":/workspace -w /workspace \
+        │                -v "$SSH_AUTH_SOCK":/ssh-agent.sock -e SSH_AUTH_SOCK=/ssh-agent.sock \
+        │                -e GH_TOKEN -e <task env> \
         │                codex-runner:latest  codex exec ...
         │            (ChatGPT Plus/Pro sub via mounted auth.json)
         │                  on quota error ▼
         └─► Tier 2:  docker run --rm \
-                         -v ~/.codex:/home/runner/.codex \
-                         -e OPENROUTER_API_KEY \
+                         --user "$(id -u codex-runner):$(id -g codex-runner)" \
+                         -v "$RUNNER_HOME/.codex":/home/codex-runner/.codex \
+                         -v "$GITHUB_WORKSPACE":/workspace -w /workspace \
+                         -v "$SSH_AUTH_SOCK":/ssh-agent.sock -e SSH_AUTH_SOCK=/ssh-agent.sock \
+                         -e GH_TOKEN -e OPENROUTER_API_KEY \
                          codex-runner:latest  codex exec --profile openrouter ...
                      (existing OpenRouter account)
 ```
@@ -59,7 +73,10 @@ Key properties:
 
 - Wrapper runs on the host so it can read/write the sentinel and the JSONL log without bind-mount gymnastics; only `codex exec` runs inside the throwaway container.
 - One VPS + one registered runner gives "one job at a time" by construction. A shared `concurrency.group` declared by every migrated workflow protects the serialization invariant if a second runner is ever registered or a workflow is duplicated.
-- Each job runs in a fresh container; the entire `~/.codex` directory is bind-mounted from the host so token refresh persists naturally (single-file bind mounts break when the CLI rewrites via atomic rename).
+- Each job runs in a fresh container. Three bind mounts every time:
+  1. `$RUNNER_HOME/.codex` (whole directory, not just `auth.json` — Codex rewrites via atomic rename, which breaks single-file bind mounts) so token refresh persists across jobs.
+  2. `$GITHUB_WORKSPACE` → `/workspace` (set as `-w`) so `codex exec` reads/writes the checked-out repo, including all repo-local prompt and instruction assets (`CLAUDE.md`, `codex_system_instructions.md`, `unattended_llm_system_instructions.md`, `prompts/`, `.git/`, etc.). Existing prompt assembly is unchanged because the same paths exist inside the container.
+  3. `$SSH_AUTH_SOCK` for git push/pull and any `ssh`-based MCP tools. `GH_TOKEN` is forwarded as env so `gh` works without re-auth.
 - Tier transitions happen inside the wrapper, transparent to the workflow.
 
 ## Components
@@ -83,11 +100,11 @@ Key properties:
      so that if a second runner is ever added, or if a workflow is duplicated, GitHub still queues all matching runs into one ordered stream. (Note: GitHub Actions has no numeric `concurrency: 1` form — the group name is what enforces the queue.)
 
 3. **Codex CLI installation on the host**
-   - Installed once.
-   - `codex login` performed once interactively to produce `~/.codex/auth.json`.
-   - `~/.codex/config.toml` with two profiles:
-     - default: ChatGPT sub auth, model `gpt-5.4` (or current production choice), reasoning level matching today's setup.
-     - `openrouter`: `base_url=https://openrouter.ai/api/v1`, `env_key=OPENROUTER_API_KEY`, model `openai/gpt-5.4`.
+   - Installed once on the VPS.
+   - `codex login` performed once interactively as the `codex-runner` user to produce `$RUNNER_HOME/.codex/auth.json`.
+   - `$RUNNER_HOME/.codex/config.toml` with two profiles. **Note on model identifiers**: the Codex CLI direct provider takes OpenAI's bare model names (`gpt-5.4`, `gpt-5.3-codex`); the OpenRouter provider takes prefixed slugs (`openai/gpt-5.4`, `openai/gpt-5.3-codex`). The same logical model is therefore named differently per profile — match whichever convention the existing repo workflows already use for OpenRouter (typically `openai/<model>`, see README env defaults).
+     - default profile: ChatGPT sub auth, `model = "gpt-5.4"` (or current production choice), reasoning level matching today's setup.
+     - `openrouter` profile: `base_url = "https://openrouter.ai/api/v1"`, `env_key = "OPENROUTER_API_KEY"`, `model = "openai/gpt-5.4"`.
 
 4. **Runner Docker image (`codex-runner:latest`)**
    - Base: a minimal image with Node, git, ssh, jq, gh, and the Codex CLI binary preinstalled.
@@ -120,24 +137,24 @@ Key properties:
 ### Phase 1 — VPS + runner skeleton
 
 - Provision VPS, harden, install Docker.
-- Create the runner system user; add to the `docker` group (with the caveat acknowledged in the security risk below).
+- Create the `codex-runner` system user (`useradd -m -s /bin/bash codex-runner`); add to the `docker` group (with the caveat acknowledged in the security risk below).
 - Pre-create runtime paths owned by the runner user before first job runs:
-  - `mkdir -p /var/lib/codex && chown <runner-user>: /var/lib/codex` (sentinel lives here)
-  - `install -o <runner-user> -g <runner-user> -m 0644 /dev/null /var/log/codex-runs.jsonl` (JSONL log; logrotate optional)
-  - `mkdir -p /home/<runner-user>/.codex && chown -R <runner-user>: /home/<runner-user>/.codex` (will hold `auth.json` + `config.toml` after Phase 2 `codex login`)
-- Register a GitHub Actions self-hosted runner with label `codex-vps`.
+  - `mkdir -p /var/lib/codex && chown codex-runner: /var/lib/codex` (sentinel lives here)
+  - `install -o codex-runner -g codex-runner -m 0644 /dev/null /var/log/codex-runs.jsonl` (JSONL log; logrotate optional)
+  - `mkdir -p /home/codex-runner/.codex && chown -R codex-runner: /home/codex-runner/.codex` (will hold `auth.json` + `config.toml` after Phase 2 `codex login`)
+- Register a GitHub Actions self-hosted runner with label `codex-vps`, running as the `codex-runner` user.
 - Migrate one trivial workflow (e.g. a hello-world) to `runs-on: [self-hosted, codex-vps]` to prove the pipe end-to-end.
 
 ### Phase 2 — Codex CLI on the host
 
-- Install Codex CLI on the VPS.
-- `codex login` to populate `~/.codex/auth.json`.
-- Manual smoke test: `codex exec` against a small prompt. Confirm token refresh writes back to `auth.json`.
+- Install Codex CLI on the VPS as the `codex-runner` user.
+- `sudo -iu codex-runner codex login` to populate `/home/codex-runner/.codex/auth.json`.
+- Manual smoke test: `codex exec` against a small prompt. Confirm token refresh writes back to `auth.json` under `/home/codex-runner/.codex/` (not under root or another user's home).
 
 ### Phase 3 — Container image + OpenRouter profile
 
-- Build `codex-runner:latest` with all required tooling.
-- Add the `openrouter` profile to `~/.codex/config.toml`.
+- Build `codex-runner:latest` with all required tooling. The image must define a UID/GID that matches `codex-runner` on the host so bind-mounted files have correct ownership when the container writes to them (or invoke `docker run --user "$(id -u codex-runner):$(id -g codex-runner)"`, which is what the wrapper does).
+- Add the `openrouter` profile to `/home/codex-runner/.codex/config.toml` (model name uses the `openai/<model>` slug — see Components #3).
 - Smoke-test `--profile openrouter` against the same prompt as Phase 2; verify feature parity (tool calls, reasoning behavior).
 
 ### Phase 4 — Wrapper
