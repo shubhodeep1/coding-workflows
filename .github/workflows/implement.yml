@@ -844,8 +844,8 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'true' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'true' }}
+          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
+          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -3315,16 +3315,21 @@ jobs:
         if: (failure() || cancelled()) && env.RUNTIME_DIR != ''
         run: |
           set -euo pipefail
-          # Copy codex artefacts into a stable, non-/tmp staging dir so the
-          # upload-artifact step can glob them without hitting the
-          # actions/upload-artifact restriction on absolute /tmp paths,
-          # and survive the "Cleanup temporary artifacts" step that
-          # rm -rf's RUNTIME_DIR. Includes per-attempt stderr captures
-          # (codex_log_attempt_*.txt — where the OpenRouter response /
-          # finish_reason / tool-router rejection would surface), the
-          # combined codex log, codex stdout, the assembled prompt, and
-          # the codex CLI's own ~/.codex/log directory (raw HTTP wire
-          # logs when present).
+          # Copy codex artefacts into a staging dir under RUNNER_TEMP for
+          # two reasons:
+          #   1. The "Cleanup temporary artifacts" step below rm -rf's
+          #      ${RUNTIME_DIR}, so without staging the upload step
+          #      either races the cleanup or sees an empty path.
+          #   2. The upload-artifact step's `path:` glob is more
+          #      predictable when rooted at a single dir we control,
+          #      versus a fan-out of /tmp/codex-implement-${RUN_ID}/...
+          #      and ~/.codex/log/... that future cleanups might touch.
+          # Files captured: per-attempt stderr (codex_log_attempt_*.txt
+          # — where the OpenRouter response / finish_reason / tool-router
+          # rejection would surface), the combined codex log, codex
+          # stdout, the assembled prompt, the diagnose-step outputs,
+          # and the codex CLI's own ~/.codex/log directory (raw HTTP
+          # wire logs when present).
           STAGE_DIR="${RUNNER_TEMP:-/tmp}/codex-implement-failure-logs"
           rm -rf "${STAGE_DIR}"
           mkdir -p "${STAGE_DIR}/runtime" "${STAGE_DIR}/codex-home-log"
@@ -3341,10 +3346,14 @@ jobs:
             done
           fi
           if [ -d "${CODEX_HOME:-$HOME/.codex}/log" ]; then
-            # Limit to recent files to keep the artifact small.
-            find "${CODEX_HOME:-$HOME/.codex}/log" -maxdepth 2 -type f \
-              -mmin -60 -print0 2>/dev/null \
-              | xargs -0 -I{} cp -f {} "${STAGE_DIR}/codex-home-log/" 2>/dev/null || true
+            # Copy ALL files under ~/.codex/log/ — no wall-clock cutoff.
+            # The job can run up to 180 min and a single Codex attempt
+            # up to 130 min (IMPLEMENT_MAX_WALL=7800s), so any modified-
+            # time filter risks dropping the earliest session log on a
+            # multi-retry failure — exactly the case this artifact
+            # exists for. retention-days plus the cleanup step below
+            # cap the storage cost at the runner level instead.
+            cp -rf "${CODEX_HOME:-$HOME/.codex}/log/." "${STAGE_DIR}/codex-home-log/" 2>/dev/null || true
           fi
           echo "CODEX_FAILURE_LOG_DIR=${STAGE_DIR}" >> "$GITHUB_ENV"
           echo "Staged $(find "${STAGE_DIR}" -type f | wc -l) file(s) for failure-log upload."

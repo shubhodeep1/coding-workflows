@@ -1935,6 +1935,115 @@ def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:
 	)
 
 
+def test_failure_log_artifact_upload_contract() -> None:
+	"""Pin the failure-only codex-log artifact upload added in #1940.
+
+	The artifact captures per-attempt stderr (codex_log_attempt_*.txt — the
+	only place the OpenRouter response / finish_reason / tool-router
+	rejection surfaces), the combined codex log, codex stdout, the assembled
+	prompt, the diagnose-step outputs, and the codex CLI's own ~/.codex/log
+	directory (raw HTTP wire logs). This exists because the redacted last-
+	40-stderr-lines diagnostic comment posted by the "Run Codex
+	implementation" step is not enough to root-cause empty-completion
+	failures.
+	"""
+	stage_block = _step_block_text("Stage codex logs for upload (failure only)")
+	upload_block = _step_block_text("Upload codex logs (failure only)")
+	cleanup_block = _step_block_text("Cleanup temporary artifacts")
+
+	# Both staging and upload must gate on failure() OR cancelled() so a
+	# successful run leaves zero artifact artefacts. Both also gate on the
+	# env vars they read so an early-skip path (env unset) doesn't try to
+	# stage a directory that doesn't exist.
+	assert "if: (failure() || cancelled()) && env.RUNTIME_DIR != ''" in stage_block, (
+		"Stage step must gate on failure() || cancelled() AND RUNTIME_DIR being "
+		"set, so early-skip paths don't try to stage a non-existent dir"
+	)
+	assert "if: (failure() || cancelled()) && env.CODEX_FAILURE_LOG_DIR != ''" in upload_block, (
+		"Upload step must gate on failure() || cancelled() AND the env var "
+		"the staging step exports, so the upload doesn't fire when staging "
+		"was skipped"
+	)
+
+	# Staging dir must live under RUNNER_TEMP, not directly in RUNTIME_DIR,
+	# so it survives the cleanup step's rm -rf "${RUNTIME_DIR}".
+	assert 'STAGE_DIR="${RUNNER_TEMP:-/tmp}/codex-implement-failure-logs"' in stage_block, (
+		"Staging dir must be rooted at RUNNER_TEMP so the existing "
+		"Cleanup step that wipes RUNTIME_DIR doesn't also wipe the "
+		"about-to-be-uploaded files"
+	)
+
+	# The per-attempt stderr captures are the critical artefact — every
+	# other file is bonus context. Pin the glob explicitly so a refactor
+	# that drops it fails this test.
+	assert 'codex_log_attempt_*.txt' in stage_block, (
+		"Per-attempt stderr captures (codex_log_attempt_*.txt) are the "
+		"primary artefact — they hold the only model-side output we have "
+		"for empty-completion debugging"
+	)
+	# And the combined log + prompt + stdout + diagnose outputs.
+	for f in (
+		"codex_log.txt",
+		"codex_output.txt",
+		"codex_prompt.txt",
+		"post_codex_validation_errors.txt",
+		"implement_diagnose.log",
+		"implement_diagnose_output.txt",
+		"implement_diagnose_result.json",
+	):
+		assert f in stage_block, (
+			f"Staging step must copy {f} so post-mortem has the full "
+			f"context block, not just per-attempt stderr"
+		)
+
+	# ~/.codex/log must be copied WITHOUT a wall-clock filter — the job
+	# can run for up to 180 min and a single Codex attempt up to 130 min,
+	# so any -mmin -N filter risks dropping the earliest session log on a
+	# multi-retry failure (Copilot review on PR #1940). The cleanup +
+	# retention-days bound storage cost instead.
+	assert '${CODEX_HOME:-$HOME/.codex}/log' in stage_block, (
+		"Staging step must copy ~/.codex/log (the codex CLI's own session "
+		"log directory — raw HTTP wire logs)"
+	)
+	assert '-mmin' not in stage_block, (
+		"Do NOT use a -mmin filter on the ~/.codex/log copy: a single "
+		"Codex attempt can run 130 min (IMPLEMENT_MAX_WALL=7800s) and a "
+		"job can run 180 min, so any wall-clock filter risks dropping "
+		"the earliest session log on a multi-retry failure — exactly "
+		"the case this artifact exists for"
+	)
+
+	# The artifact name must be unique per (run_id, run_attempt) so a
+	# rerun-failed-jobs invocation doesn't conflict with the prior
+	# attempt's upload.
+	assert 'codex-implement-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}' in upload_block, (
+		"Artifact name must be unique per (run_id, run_attempt) so "
+		"rerun-failed-jobs doesn't 409 on a duplicate name"
+	)
+	assert 'if-no-files-found: ignore' in upload_block, (
+		"Upload step must fail-open on empty staging dir so an early-skip "
+		"failure path doesn't add a second cascading failure"
+	)
+	assert 'retention-days:' in upload_block, (
+		"Upload step must declare retention-days explicitly (artifacts "
+		"can otherwise hit the org-default ceiling and get pruned at "
+		"unpredictable times)"
+	)
+
+	# The cleanup step must also rm the staging dir on a warm runner so
+	# the next implement job on the same runner doesn't see a stale
+	# CODEX_FAILURE_LOG_DIR pointing at a previous run's files.
+	assert 'CODEX_FAILURE_LOG_DIR' in cleanup_block, (
+		"Cleanup step must remove CODEX_FAILURE_LOG_DIR so warm runners "
+		"don't leak stale staging dirs across implement jobs"
+	)
+	assert 'codex-implement-failure-logs' in cleanup_block, (
+		"Cleanup step's rm guard must reference the same staging-dir "
+		"name as the staging step — drift between the two would leave "
+		"stale dirs on warm runners"
+	)
+
+
 def test_review_pipeline_integration_chain_module_runs_clean() -> None:
 	integration_test = REPO_ROOT / "tests" / "test_review_pipeline_integration.py"
 	env = os.environ.copy()

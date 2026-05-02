@@ -520,8 +520,8 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'true' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'true' }}
+          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
+          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
