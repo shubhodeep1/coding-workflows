@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines specified in Issue #2024.\n  WHY: The added fourth comment/bait line violates the explicit three-line contract and no-extra-content constraint, so any strict consumer or validation of the canary payload will fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 \u2014 `# E2E_EDITOR_BAIT_25273372573: this line should be removed by the editor (smoke gate)` | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the exactly 3 lines required by Issue #2024.\n  WHY: The issue specification explicitly states the file must be exactly three lines: `status: ok`, `run_id: 25273372573`, and `updated-by: ai-pipeline`. The constraint section additionally forbids comments, headers, or any extra content. The fourth comment line violates this contract. The E2E smoke-test gate in `.github/workflows/test-and-mark-stable.yml` (line ~1499) verifies that the bait marker is absent from the canary file after review \u2014 if the editor does not remove this line and the PR is merged, the gate will fail with `status=bait_remained`. Any downstream consumer that expects exactly three lines (including the `test-and-mark-stable.yml` canary verification at the post-review checkpoint) will receive malformed input.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The task explicitly requires exactly three lines (no more, no less) and no comments, headers, or extra content; the added fourth line is a comment/bait line that violates the contract, and any validation script checking line count will fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines specified in Issue #2024.\n  WHY: The task explicitly requires the file to contain exactly three lines with no extra content: 1. `status: ok` 2. `run_id: 25273372573` 3. `updated-by: ai-pipeline`. The fourth line (the E2E_EDITOR_BAIT comment) violates the constraint \"Do not add comments, headers, or any extra content.\" Any consumer script or validation reading this canary file expects precisely three lines matching the required payload, so the extra content breaks the format contract.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 \u2014 `# E2E_EDITOR_BAIT_25273506680-1-9606: this line should be removed by the editor (smoke gate)` | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines specified in Issue #2024.\n  WHY: The canary file is consumed as a strict 3-line payload (`status: ok`, `run_id: <N>`, `updated-by: ai-pipeline`). Any downstream consumer that reads this canary \u2014 by line count, by exact content match, or by indexed line access \u2014 will fail when a fourth line is present. The original issue explicitly requires \"exactly three lines (no more, no less)\" and forbids \"comments, headers, or any extra content.\" The injected bait comment on line 4 directly violates this contract.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 (\"# E2E_EDITOR_BAIT_25273372573: this line should be removed by the editor (smoke gate)\") | severity=medium | confidence=5\n  PROBLEM: File contains four lines instead of the required exactly three lines specified in issue #2024.\n  WHY: Downstream smoke test validation or canary consumers expect precisely the three-line payload with no extra content; the added comment violates the line count and format contract, causing parse failure or mismatch.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines specified in Issue #2024.\n  WHY: The issue explicitly requires the file to be exactly three lines (status: ok, run_id: 25273372573, updated-by: ai-pipeline) with no comments, headers, or any extra content. The added fourth comment line violates this strict format contract. Any smoke test validation checking line count or parsing this canary file will fail because the format does not match the expected three-line payload.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5ff2408ffe873e57241d166648415dc5393bbd9ca4c6b2ffc37dd0dc59cddb2b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2028,
+    "run_id": "25273506680",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25273506680",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503075848_e576f759f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2028,
+    "run_id": "25273506680"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T07:58:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
