@@ -43,25 +43,74 @@ install_gh() {
 # non-GitHub remotes (gitlab.com, bitbucket.org, …) and arbitrary
 # `/git/owner/repo`-shaped URLs don't yield a plausible-looking slug
 # that `gh -R` would then probe against the wrong github.com repo.
+#
+# Host whitelisting parses the host explicitly rather than relying on
+# substring globs: `*github.com/*` would otherwise also match
+# `evilgithub.com/o/r`, and `*localhost*/git/*` would match
+# `localhost.evil.com/git/o/r`. Splitting the URL into host/path means
+# the host check is exact (`host = github.com`) and lookalike domains
+# can't sneak through.
+#
 # Empty output → caller logs a NOTE and skips the probe.
 extract_repo_slug() {
-  local url="$1"
+  local url="$1" host="" path="" rest=""
   url="${url%/}"
   url="${url%.git}"
   url="${url%/}"
 
-  local path=""
+  # Split into host and path. Two URL families are accepted:
+  #   1. `scheme://[userinfo@]host[:port]/path` (HTTPS, ssh:// scheme)
+  #   2. `userinfo@host:path`                   (scp-style SSH)
+  # Anything else returns empty.
   case "${url}" in
-    *github.com:*)            path="${url##*github.com:}" ;;       # SSH: git@github.com:o/r
-    *github.com/*)            path="${url##*github.com/}" ;;       # HTTPS: https://github.com/o/r
-    *://*127.0.0.1*/git/*)    path="${url##*/git/}" ;;             # Claude Code Web proxy (IP form)
-    *://*localhost*/git/*)    path="${url##*/git/}" ;;             # Claude Code Web proxy (hostname form)
+    *://*)
+      rest="${url#*://}"
+      # Strip user[:pass]@ if present. Use ## (greedy) so multi-`@` URLs
+      # (an oddity, but possible in malformed input) collapse to the
+      # last `@` rather than leaving a trailing `@host` in `rest`.
+      case "${rest}" in
+        *@*) rest="${rest##*@}" ;;
+      esac
+      case "${rest}" in
+        */*)
+          host="${rest%%/*}"   # everything before first `/`
+          path="${rest#*/}"    # everything after first `/`
+          host="${host%%:*}"   # drop :port if present
+          ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *@*:*)
+      rest="${url##*@}"
+      case "${rest}" in
+        *:*)
+          host="${rest%%:*}"
+          path="${rest#*:}"
+          ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 0 ;;
+  esac
+
+  # Exact host whitelist. For the Claude Code Web proxy (127.0.0.1 /
+  # localhost) the path must additionally start with `git/` — otherwise
+  # an arbitrary localhost service (a local Gitea, a dev server, …)
+  # would yield a slug that `gh -R` would then send at the wrong repo.
+  case "${host}" in
+    github.com) ;;
+    127.0.0.1|localhost)
+      case "${path}" in
+        git/*) path="${path#git/}" ;;
+        *) return 0 ;;
+      esac
+      ;;
     *) return 0 ;;
   esac
 
   # Require exactly two non-empty path segments. URLs with extra segments
   # (e.g. .../pulls, .../tree/main, .../actions/runs/123) would otherwise
-  # be returned as bogus slugs like "bar/pulls" via suffix matching.
+  # be returned as bogus slugs.
   case "${path}" in
     */*/*) return 0 ;;     # more than two segments
     /*)    return 0 ;;     # leading slash (no owner)

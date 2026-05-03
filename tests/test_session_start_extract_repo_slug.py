@@ -3,9 +3,10 @@
 right <owner>/<repo> for every URL shape the hook is expected to handle.
 
 The slug is the only thing deciding whether the SessionStart hook reports
-actions:read availability accurately. A silent regression in this awk-based
-extraction would re-introduce the misleading "token likely lacks actions:read"
-message that PR #2012 was opened to fix.
+actions:read availability accurately. A silent regression in this URL parser
+(currently bash parameter expansion + a `grep -E` character-set check) would
+re-introduce the misleading "token likely lacks actions:read" message that
+PR #2012 was opened to fix.
 
 Both the in-repo hook and the workflow-templates copy are exercised — they
 must stay byte-identical because the consumer-sync step in
@@ -62,6 +63,22 @@ CASES: list[tuple[str, str]] = [
     ("http://attacker.com/git/foo/bar", ""),
     # Localhost proxy form (alternate to 127.0.0.1) should still work.
     ("http://localhost:46539/git/owner/repo", "owner/repo"),
+    # Lookalike hostnames must NOT match the github.com / 127.0.0.1 /
+    # localhost whitelist. The previous substring-glob implementation
+    # (`*github.com/*`, `*localhost*/git/*`, `*127.0.0.1*/git/*`) would
+    # happily yield a slug for any of these — the parser now splits the
+    # URL into host/path and matches the host exactly.
+    ("https://evilgithub.com/foo/bar", ""),
+    ("https://github.com.attacker.com/foo/bar", ""),
+    ("https://notgithub.com/foo/bar", ""),
+    ("http://localhost.evil.com:8080/git/foo/bar", ""),
+    ("http://127.0.0.1.evil.com/git/foo/bar", ""),
+    ("http://attacker127.0.0.1/git/foo/bar", ""),
+    ("http://my127.0.0.1host:8080/git/foo/bar", ""),
+    # 127.0.0.1 / localhost without the `/git/` prefix is rejected too —
+    # it could be any local service, not the Claude Code Web proxy.
+    ("http://127.0.0.1:8080/foo/bar", ""),
+    ("http://localhost:3000/foo/bar", ""),
     # Edge cases — should produce empty output.
     ("https://github.com/", ""),
     ("https://github.com/foo", ""),  # one path segment — must NOT capture host as owner
