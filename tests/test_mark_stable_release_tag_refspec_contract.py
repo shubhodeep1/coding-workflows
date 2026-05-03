@@ -71,13 +71,13 @@ def test_script_pushes_all_three_tags_via_refs_tags() -> None:
 	assert 'git push -f origin "refs/tags/${MAJOR}"' in text, (
 		"scripts/mark-stable.sh: major-version push must use refs/tags/${MAJOR}"
 	)
-	assert not re.search(r'^\s*git push origin "\$\{VERSION_TAG\}"\s*$', text, re.MULTILINE), (
+	assert not re.search(r'^\s*git push origin "\$\{?VERSION_TAG\}?"\s*$', text, re.MULTILINE), (
 		"scripts/mark-stable.sh: bare 'git push origin \"${VERSION_TAG}\"' would re-introduce the regression"
 	)
 	assert not re.search(r"^\s*git push -f origin stable\s*$", text, re.MULTILINE), (
 		"scripts/mark-stable.sh: bare 'git push -f origin stable' would re-introduce the regression"
 	)
-	assert not re.search(r'^\s*git push -f origin "\$\{MAJOR\}"\s*$', text, re.MULTILINE), (
+	assert not re.search(r'^\s*git push -f origin "\$\{?MAJOR\}?"\s*$', text, re.MULTILINE), (
 		"scripts/mark-stable.sh: bare 'git push -f origin \"${MAJOR}\"' would re-introduce the regression"
 	)
 
@@ -90,7 +90,7 @@ def test_script_creates_annotated_release_tag_like_workflows() -> None:
 		"so manual and automated release paths produce identical tag metadata"
 	)
 	assert not re.search(
-		r'^\s*git tag -f "\$\{VERSION_TAG\}" origin/stable\s*$', text, re.MULTILINE
+		r'^\s*git tag -f "\$\{?VERSION_TAG\}?" origin/stable\s*$', text, re.MULTILINE
 	), (
 		"scripts/mark-stable.sh: lightweight 'git tag -f \"${VERSION_TAG}\" origin/stable' "
 		"would re-introduce metadata divergence with the workflow release path"
@@ -107,7 +107,15 @@ def test_script_releases_from_stable_branch_for_workflow_parity() -> None:
 		"scripts/mark-stable.sh: VERSION_TAG must be created from origin/stable, "
 		"matching the workflow release path"
 	)
-	assert "origin/main" not in text and "git fetch origin main" not in text, (
+	# Strip shell comments so harmless docstring mentions of `origin/main`
+	# (e.g. a future "# was previously origin/main" comment) don't trip the guard;
+	# we only care about executable lines actually referencing main.
+	code_lines = "\n".join(
+		line for line in text.splitlines() if not line.lstrip().startswith("#")
+	)
+	# `origin/main` catches `git tag -f X origin/main` (local remote-tracking ref);
+	# `git fetch origin main` catches the fetch-side regression (different syntax).
+	assert "origin/main" not in code_lines and "git fetch origin main" not in code_lines, (
 		"scripts/mark-stable.sh: must not fetch or tag from origin/main — that "
 		"would tag a main commit that hasn't been validated on the stable branch"
 	)
