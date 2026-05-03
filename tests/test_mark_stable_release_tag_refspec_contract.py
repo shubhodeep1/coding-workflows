@@ -84,10 +84,21 @@ def test_script_pushes_all_three_tags_via_refs_tags() -> None:
 
 def test_script_creates_annotated_release_tag_like_workflows() -> None:
 	text = _read(SCRIPT)
-	assert 'git tag -fa "${VERSION_TAG}" -m "Release ${VERSION_TAG}" origin/stable' in text, (
+	assert 'git tag -a "${VERSION_TAG}" -m "Release ${VERSION_TAG}" origin/stable' in text, (
 		"scripts/mark-stable.sh: VERSION_TAG must be an annotated tag (-a/-m), "
 		"matching the workflows' `git tag -a \"$VERSION\" -m \"Release $VERSION\"` "
 		"so manual and automated release paths produce identical tag metadata"
+	)
+	# The workflows do not pass -f when creating the immutable VERSION tag, so a
+	# rerun against an already-tagged version fails loudly. Pin the same safety
+	# semantic for the script: forcing here would silently retarget the local
+	# immutable tag before the push fails.
+	assert not re.search(
+		r'^\s*git tag -fa? "\$\{?VERSION_TAG\}?"', text, re.MULTILINE
+	), (
+		"scripts/mark-stable.sh: must not use 'git tag -f' / 'git tag -fa' for "
+		"the immutable VERSION_TAG — that diverges from the workflow safety "
+		"model (which fails if the tag already exists locally)"
 	)
 	assert not re.search(
 		r'^\s*git tag -f "\$\{?VERSION_TAG\}?" origin/stable\s*$', text, re.MULTILINE
@@ -118,6 +129,32 @@ def test_script_releases_from_stable_branch_for_workflow_parity() -> None:
 	assert "origin/main" not in code_lines and "git fetch origin main" not in code_lines, (
 		"scripts/mark-stable.sh: must not fetch or tag from origin/main — that "
 		"would tag a main commit that hasn't been validated on the stable branch"
+	)
+
+
+def test_script_distinguishes_missing_branch_from_other_lsremote_failures() -> None:
+	text = _read(SCRIPT)
+	# rc=2 from `git ls-remote --exit-code` means "no matching ref"; any other
+	# non-zero is a real failure (auth/network/transport). Collapsing both into
+	# "create the branch first" steers operators toward the wrong remediation
+	# on auth/transport errors.
+	assert re.search(r"LSREMOTE_RC.*-eq\s+2", text), (
+		"scripts/mark-stable.sh: must distinguish git ls-remote rc=2 (missing) "
+		"from other failures (auth/transport) so misleading 'create the branch' "
+		"guidance is only emitted for the actual missing-branch case"
+	)
+
+
+def test_script_refuses_to_retarget_existing_origin_release_tag() -> None:
+	text = _read(SCRIPT)
+	# The workflows create the immutable version tag without -f, so a rerun
+	# against an already-released VERSION_TAG fails before any push. Mirror
+	# that safety in the script with an explicit origin-side check; otherwise
+	# a rerun silently retargets the local immutable tag before the push fails.
+	assert 'git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}"' in text, (
+		"scripts/mark-stable.sh: must check that refs/tags/${VERSION_TAG} is "
+		"unused on origin before creating any tags, mirroring the workflow's "
+		"non-forced `git tag -a` safety semantic"
 	)
 
 
