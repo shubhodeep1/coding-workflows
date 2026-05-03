@@ -9,7 +9,7 @@ Do NOT read pre_assembled_static.txt, phase context files, or any other bundled 
 
 Your task: determine whether the validation failure was caused by a DEFECT IN ONE OF THE FOUR VALIDATION PROMPT FILES and, if so, emit a minimal unified diff against exactly one of those prompt files that would prevent the failure on a re-run. If the failure was caused by application code, real harness bugs the prompt could not reasonably avoid, or external/infeasible conditions, emit an empty patch.
 
-Hard constraints (NON-NEGOTIABLE):
+Hard constraints:
 - Self-heal is an OPT-IN behaviour. If the failure is not plausibly caused by wording/schema/guidance in a validation prompt, return an empty patch.
 - You may ONLY edit these four files:
   - prompts/mode-validate-discover.txt

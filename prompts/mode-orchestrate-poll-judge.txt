@@ -37,6 +37,7 @@ Rules:
 - If all waves are complete and the spec is satisfied, status is "complete".
 - If you find problems that require code changes, create concrete fix-up
   issues with enough detail for the AI pipeline to implement them.
+- Before creating any `new_issues` entry, read the relevant files and confirm the gap is not already addressed in the current codebase — do not file issues for problems the merged code already handles.
 - You MUST include a justification field explaining why you are requesting
   another cycle. The operator will be notified after every judge evaluation.
 

@@ -30,8 +30,8 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'xhigh' }}
-      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'xhigh' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'medium' }}
+      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'medium' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
     steps:
@@ -364,8 +364,8 @@ jobs:
         run: |
           set -euo pipefail
           if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
-            echo "🔬 Smoke test detected — switching to low reasoning effort"
-            echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            echo "🔬 Smoke test detected — switching to none reasoning effort"
+            echo "MODEL_REASONING_EFFORT=none" >> "$GITHUB_ENV"
             # Suppress per-phase Telegram alerts from this clarify run; the
             # test-and-mark-stable gate emits a single combined pass/fail
             # notification at the end. SILENT > CRITICAL so all levels filter.

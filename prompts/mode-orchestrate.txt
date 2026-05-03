@@ -30,26 +30,7 @@ Rules:
   optional, so `Issue1:` is equivalent; whitespace between the digits
   and the trailing `:` / `(` is also allowed), honor that enumeration
   verbatim.
-  MANDATORY procedure before you emit any JSON:
-    1. Scan the project description for the structural markers above.
-       (Casual mentions like "as introduced by Issue 5 last week" do NOT
-       count — only markers where the digits are followed (after
-       optional whitespace) by `:` or `(` are structural. `.` and `-`
-       are intentionally NOT structural markers because they collide
-       with prose endings like "fixed in Issue 1.")
-    2. Count the **distinct** structural-marker numbers you find — call
-       this `AUTHOR_N`. (Distinct, not max: a non-contiguous enumeration
-       like `Issue 1:` + `Issue 3:` has `AUTHOR_N = 2`, not 3.)
-    3. Your `issues[]` array MUST have **at least `AUTHOR_N` entries**, one
-       per enumerated sub-task, in the stated order, with the stated
-       `dependency_edges`. Anything fewer than `AUTHOR_N` issues is a hard
-       failure — the orchestrator's post-LLM validator (which uses the
-       same distinct-marker counting rule described above,
-       case-insensitive) will reject your output and re-prompt you with
-       the actual emitted/expected counts as feedback. Do NOT try to be
-       clever and merge enumerated sub-tasks into a single issue
-       "because they're related"; that is exactly the failure mode this
-       rule exists to prevent.
+  Before emitting any JSON: scan the project description for the structural markers above (casual mentions like "as introduced by Issue 5 last week" don't count — only markers where the digits are followed by `:` or `(` are structural; `.` and `-` are not structural markers). Count the distinct structural-marker numbers to get `AUTHOR_N` (distinct, not max: `Issue 1:` + `Issue 3:` gives `AUTHOR_N = 2`). Your `issues[]` array MUST have at least `AUTHOR_N` entries in stated order with stated `dependency_edges`. Anything fewer is a hard failure — the post-LLM validator will reject and re-prompt with the actual vs. expected counts. Do NOT merge enumerated sub-tasks into a single issue "because they're related"; that is exactly the failure mode this rule exists to prevent.
   The author has already done the decomposition work; do NOT collapse
   explicitly-enumerated issues into a single issue even if they appear to
   share a single concern, share a directory, share a file family, or look
@@ -64,7 +45,7 @@ Rules:
 - If a feature naturally spans many files or modules, split it into sequential
   issues (foundation first, then layers that depend on it).
 - Per-issue implementation-time budget: each issue MUST be scoped so the
-  downstream `implement.yml` editor (`codex exec`, `xhigh` reasoning) can
+  downstream `implement.yml` editor (`codex exec`, `none` reasoning) can
   finish it within ONE 60-minute attempt. The implement watchdog's
   per-attempt wall-time is 130 minutes (`EDITOR_MAX_WALL=7800`), and the
   3-hour job budget usually allows at most ~1 full-length attempt before
@@ -96,7 +77,7 @@ Rules:
 - Do not propose issues that duplicate existing functionality.
 - Do not write code. Only produce the decomposition JSON.
 
-Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable issues):
+Single-repo invariant (violations produce unimplementable issues):
 
 - All orchestrator-generated sub-issues MUST complete entirely within this
   repository. The downstream planner checks out only this repo's working
@@ -104,18 +85,7 @@ Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable iss
   must not require creating commits, opening PRs, publishing releases, or
   making any other direct changes in other repositories to be considered
   complete.
-- DO NOT generate sub-issues that require creating new external repositories
-  (e.g. "create a `<owner>/<name>` fixture repo and commit X there").
-- DO NOT generate sub-issues whose acceptance criteria require committing
-  files into, opening PRs against, or running CI in repositories other than
-  this one.
-- DO NOT generate sub-issues that require creating, modifying, or otherwise
-  depending for completion on direct changes in other repositories. Also do
-  not depend on unspecified, implicitly discovered, or nonexistent external
-  repos. Read-only fetches/clones of explicitly identified `<owner>/<repo>`
-  targets at explicit refs are allowed only when the implementation and
-  acceptance criteria remain entirely in this repo and the behavior can be
-  validated with deterministic in-tree/offline coverage.
+- Do not generate sub-issues that require creating new external repositories, committing files into or opening PRs against other repos, running CI in other repos, or making any direct changes in other repositories. Do not depend on unspecified, implicitly discovered, or nonexistent external repos. Read-only fetches/clones of explicitly identified `<owner>/<repo>` targets at explicit refs are allowed only when the implementation and acceptance criteria remain entirely in this repo and behavior can be validated with deterministic in-tree/offline coverage.
 - Mentions of other repositories for context are fine when the WORK happens
   in this repo. Examples that ARE in scope: editing
   `.github/ai/consumer_repos.json` (which lists external dispatch targets),
@@ -132,7 +102,7 @@ Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable iss
   a note in `project_summary`, rather than filing an unimplementable
   sub-issue.
 
-File partitioning rules (MANDATORY — prevents merge conflicts between parallel
+File partitioning rules (prevents merge conflicts between parallel
 sibling issues within the same wave):
 
 - For EVERY issue, populate the optional `files_touched` array with every
@@ -159,14 +129,7 @@ sibling issues within the same wave):
   populated by the poller every time a sibling merge-tree conflict is
   detected). Consumer repos do NOT need to create either file; the set
   simply starts empty on a new repo and builds itself as the poller
-  observes real conflicts. When planning a wave, assume at most ONE
-  sibling in any given wave may touch each hot file. If multiple proposed
-  tasks all need to touch the same hot file, prefer one of these patterns:
-    (a) Funnel all hot-file edits for the wave into a single trailing
-        "docs-and-glue" issue that depends_on every peer in the wave, so it
-        runs after the peers merge.
-    (b) Serialize the conflicting tasks into separate waves via
-        `dependency_edges`.
+  observes real conflicts. When planning a wave, assume at most ONE sibling in any given wave may touch each hot file. If multiple proposed tasks all need the same hot file, either funnel all hot-file edits for the wave into a single trailing "docs-and-glue" issue that depends_on every peer so it runs after the peers merge, or serialize the conflicting tasks into separate waves via `dependency_edges`.
 
 - Docs editing discipline: when a task must edit `README.md`, `agents.md`, or
   any Markdown documentation, prefer inserting new content under existing

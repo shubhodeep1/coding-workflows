@@ -34,7 +34,7 @@ Mandatory guardrails:
 - Preserve env var names consumed by runtime (`VALIDATION_TEST_USERNAME`, `VALIDATION_TEST_PASSWORD`, `VALIDATION_TEST_API_KEY`) when those vars are required by the app/harness startup path.
 - Use simple `KEY=VALUE` lines compatible with Docker Compose `env_file`.
 
-Docker build-context path rules (CRITICAL):
+Docker build-context path rules:
 - `docker compose` resolves `build.context` relative to the compose file's directory, NOT the working directory.
 - Since `validation/docker-compose.test.yml` lives inside `validation/`, a `context: .` resolves to the `validation/` directory.
 - To reference the repository root as the build context, use `context: ..` (one level up from the compose file).
@@ -51,11 +51,11 @@ Docker build-context path rules (CRITICAL):
   This resolves to `validation/validation/Dockerfile.app` which does not exist.
 - After generating the compose file, mentally verify that `<resolved_context>/<dockerfile>` points to a real file.
 
-YAML indentation rule (CRITICAL):
+YAML indentation rule:
 - `validation/docker-compose.test.yml` and any other generated `.yml`/`.yaml` file MUST use **2-space indentation**. YAML spec disallows TAB characters as indentation; `docker compose config` and every YAML parser will reject tab-indented YAML with an error like `found character that cannot start any token`. This is the ONE exception to the repo-wide "tabs for indentation" style rule.
 - Shell scripts (`.sh`), Dockerfiles, and Python may continue to use tabs per the repo convention. Only YAML files are spaces-only.
 
-Docker Compose healthcheck YAML rules (CRITICAL):
+Docker Compose healthcheck YAML rules:
 - Every entry in a `healthcheck.test` list MUST be an explicitly quoted string.
 - YAML auto-casts bare values like `true`, `false`, `yes`, `no`, `null`, and bare numbers into non-string types. Docker Compose schema validation rejects these with: `services.<name>.healthcheck.test.N must be a string`.
 - CORRECT:
@@ -67,7 +67,7 @@ Docker Compose healthcheck YAML rules (CRITICAL):
       test: ["CMD", mongosh, --eval, db.runCommand('ping').ok]
 - Always wrap every healthcheck test entry in double quotes inside the YAML list.
 
-Docker Compose variable interpolation rules (CRITICAL):
+Docker Compose variable interpolation rules:
 - Docker Compose interpolates `$VAR` and `${VAR}` in string values at config-render time, BEFORE the container shell ever runs.
 - Any `$` that is meant for the in-container shell (POSIX shell variables, command substitution, parameter expansion) MUST be escaped as `$$` in the compose file. Compose collapses `$$` to a literal `$` after rendering, and the container shell then evaluates it normally.
 - This rule applies to EVERY Compose string field — including `healthcheck.test`, `command`, `entrypoint`, `environment` values, `labels`, etc. The healthcheck case is the most common foot-gun because the command often uses temp shell variables.
@@ -104,7 +104,7 @@ Canary requirement (mandatory):
   - If the app container itself needs to issue DB queries, use a language-native client from the app container (for example `python3` + `pymongo`, `psycopg2`, `redis-py`) and add a canary assertion that imports/uses that client instead of requiring `mongosh`/`psql`/`redis-cli` in the app image.
 - If canary fails, remaining tests must be skipped and the failure must clearly indicate canary/infrastructure gating.
 
-CRITICAL — robust service-state detection in canary:
+robust service-state detection in canary:
 - NEVER parse human-readable `docker compose ps` text output (columns, status words) to determine whether a service container is running. Output formatting varies across Docker Compose versions and produces false negatives when the service is actually healthy.
 - ALWAYS resolve the container ID first with `docker compose ps -q <service>` and then use `docker inspect` for machine-readable state fields.
 - Recommended pattern for the canary "service is running" check (this should be the FIRST TAP assertion, i.e. `ok 1` / `not ok 1`; subsequent checks increment sequentially):
@@ -129,7 +129,7 @@ CRITICAL — robust service-state detection in canary:
 - The "service is running" check must always be TAP assertion #1. All subsequent checks (endpoint reachability, tool presence, etc.) use sequentially increasing numbers (ok 2, ok 3, …).
 - Endpoint reachability (`curl`) and in-container tool checks are corroborating signals that should be emitted as separate TAP assertions (for example `ok 2 - app port is reachable`, `ok 3 - required tools present`). Do NOT conflate them with the "service is running" TAP line or use their failure as the sole reason to report the service as not running.
 
-CRITICAL — shell-mode parity between canary tool checks and test invocations:
+shell-mode parity between canary tool checks and test invocations:
 - A canary assertion that proves a CLI tool is present in the container (for example `command -v forge`) MUST be run under the **same shell invocation mode** as the subsequent test command that relies on that tool (for example `npm run test:forge`, `npx hardhat test`, `forge test`, `pytest`). Mismatched modes produce the false-positive failure pattern where canary reports `ok` but the test reports `command not found`.
 - Concretely: `docker compose exec -T <svc> /bin/sh -lc '...'` (login shell) is NOT equivalent to `docker compose exec -T <svc> /bin/sh -c '...'` (non-login). On Debian/Ubuntu/bookworm base images, `/bin/sh -lc` sources `/etc/profile`, which sets PATH to a hard-coded list (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) and **drops any `ENV PATH=` from the Dockerfile**. Tools installed under `/root/.foundry/bin`, `/root/.local/bin`, `/home/*/bin`, etc. therefore disappear from PATH inside login shells even though the Dockerfile appears to add them.
 - Hard rule: generated validation tests MUST default to `/bin/sh -c` (non-login) for BOTH the canary tool-presence check and the test invocation. Do NOT use `/bin/sh -lc` for `npm`, `npx`, `yarn`, `pnpm`, `forge`, `cast`, `anvil`, `hardhat`, `pytest`, `python -m`, `go test`, `cargo`, `mvn`, `gradle`, or any other tool whose PATH entry comes from the Dockerfile `ENV PATH=` directive.
@@ -137,7 +137,7 @@ CRITICAL — shell-mode parity between canary tool checks and test invocations:
 - Before finalizing `validation/tests/*.sh`, mentally diff every `docker compose exec` line: the flag set used in `00_canary.sh` to verify a binary's presence MUST match the flag set used everywhere that binary is subsequently invoked.
 - When the consumer repo uses Foundry (`forge`/`cast`/`anvil`/`chisel`), the recommended Dockerfile shape is `ENV PATH=/root/.foundry/bin:$PATH` combined with `/bin/sh -c` invocations (NOT `-lc`). Do not rely on `~/.bashrc` additions written by `foundryup`; those only apply to interactive shells.
 
-CRITICAL — deterministic MongoDB / mongosh assertions:
+deterministic MongoDB / mongosh assertions:
 - NEVER parse raw `mongosh` stdout text with `grep`, `awk`, or string matching for assertions. Shell output formatting varies across mongosh versions and environments (whitespace, BSON decorators, cursor metadata, banners).
 - ALWAYS use the `--quiet` flag with `mongosh` to suppress connection banners and prompts.
 - For boolean existence checks (for example `event_id=evt-001` in `validation_smoke.inbound_events`), prefer a single sentinel token from `mongosh` and compare exact equality (`FOUND` / `MISSING`).
@@ -168,7 +168,7 @@ CRITICAL — deterministic MongoDB / mongosh assertions:
 - If `mongosh` is unavailable in the container, use `python3` with `pymongo` or a direct HTTP health-check as a fallback.
 - ALWAYS add a brief retry/sleep loop (e.g. 5 attempts, 1s apart) before the assertion to tolerate async write propagation. The HTTP 202 response only means the request was accepted, not that the write has landed.
 
-CRITICAL — installing `mongosh` in `validation/Dockerfile.app` (mongodb-mongosh is NOT in Debian/Ubuntu default repos):
+installing `mongosh` in `validation/Dockerfile.app` (mongodb-mongosh is NOT in Debian/Ubuntu default repos):
 - `mongosh` is NOT packaged in the default Debian apt repositories (bullseye, bookworm, trixie) or the default Ubuntu apt repositories. Any `apt-get install mongodb-mongosh` (or bare `apt-get install mongosh`) that relies only on the base image's default apt sources WILL fail with `E: Unable to locate package mongosh` or `E: Unable to locate package mongodb-mongosh` (depending on which package name is used). The compose build aborts at that `RUN` layer with exit code 100 and the harness never reaches application startup — the canonical `preflight_compose_up` / `failed to build/start compose services` harness-error signature.
 - PREFERRED approach: do NOT install `mongosh` in the image at all. Use `python3` + `pymongo` for every MongoDB assertion instead. `python:*-slim` already ships Python, so only `pip install pymongo` is required, with no extra apt repo plumbing and no GPG key management. Apply the same sentinel-token / bounded-retry discipline described above, just with pymongo calls replacing `mongosh --eval`. Minimal Dockerfile example:
     FROM python:3.12-slim
@@ -212,7 +212,7 @@ CRITICAL — installing `mongosh` in `validation/Dockerfile.app` (mongodb-mongos
       exit 1
     fi
 
-CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
+Ethereum / Hardhat JSON-RPC health checks:
 - Hardhat JSON-RPC (and any standard Ethereum node) returns a **JSON object**, not a JSON array.
 - Response shape: `{"jsonrpc":"2.0","id":1,"result":"0x1"}`.
 - NEVER index the response with a number (`jq '.[0]'`, `jq '.[1]'`, etc.) — that causes:
@@ -253,7 +253,7 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 - For `eth_blockNumber` probes, parse `.result` the same way (it is a hex string like `"0x0"`).
 - If the project uses Hardhat, Anvil, or Ganache as a local node, apply this exact pattern for the canary health check. Never assume an array-shaped response.
 
-CRITICAL — Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shutdown):
+Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shutdown):
 - Any generated `validation/Dockerfile*` MUST use **exec-form** (JSON array) `CMD` and `ENTRYPOINT` so PID 1 is the actual application process and receives SIGTERM directly from `docker compose stop`.
 - CORRECT (exec-form, PID 1 is the app). These are illustrative ALTERNATIVES, not composable — a real Dockerfile must contain at most one `CMD` and at most one `ENTRYPOINT`; if you emit multiple `CMD` lines only the last one takes effect and the earlier ones are silently discarded. Pick the shape that matches how the app-under-test actually starts; do not treat these examples as prescriptive runtime choices (do not install packages you do not already need):
     # Option 1: a compiled binary or wrapper script installed inside the image
@@ -268,8 +268,8 @@ CRITICAL — Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shu
     # Option 2: shell-form with a Node entrypoint
     CMD node server.js
   Shell-form makes `/bin/sh -c "..."` PID 1. POSIX `sh` does not forward SIGTERM to its child by default, so `docker compose stop` times out and docker escalates to SIGKILL. The container exits with code **137** (= 128 + SIGKILL), which fails the `graceful_shutdown` assertion even though the app itself was perfectly healthy right up to teardown. This is one of the two most common causes of false-negative shutdown failures in this harness; the other is the PID-1 kernel signal rule described next.
-- CRITICAL sub-rule — Linux PID-1 kernel signal semantics. Exec-form alone is NOT sufficient when PID 1 does not install a user-space SIGTERM handler. The Linux kernel has a "don't accidentally kill init" safeguard: **signals sent to PID 1 are silently dropped unless PID 1 has explicitly registered a handler for them.** SIGKILL and SIGSTOP are the only exceptions (kernel always honours them). A container running `python3 -m http.server` as PID 1 will therefore IGNORE SIGTERM, `docker compose stop` will time out, and docker will escalate to SIGKILL — producing the same exit 137 as shell-form CMD, even though the CMD is written in perfect exec-form. The symptom in validation logs is identical: `not ok N - graceful_shutdown: app exited with code 137`, with container logs showing the app serving healthy responses right up to teardown.
-- MANDATORY: the compose service MUST set `init: true` (preferred) OR the Dockerfile MUST install and use `tini` as PID 1 whenever ANY of the following is true:
+- Sub-rule — Linux PID-1 kernel signal semantics. Exec-form alone is NOT sufficient when PID 1 does not install a user-space SIGTERM handler. The Linux kernel has a "don't accidentally kill init" safeguard: **signals sent to PID 1 are silently dropped unless PID 1 has explicitly registered a handler for them.** SIGKILL and SIGSTOP are the only exceptions (kernel always honours them). A container running `python3 -m http.server` as PID 1 will therefore IGNORE SIGTERM, `docker compose stop` will time out, and docker will escalate to SIGKILL — producing the same exit 137 as shell-form CMD, even though the CMD is written in perfect exec-form. The symptom in validation logs is identical: `not ok N - graceful_shutdown: app exited with code 137`, with container logs showing the app serving healthy responses right up to teardown.
+- Required: the compose service MUST set `init: true` (preferred) OR the Dockerfile MUST install and use `tini` as PID 1 whenever ANY of the following is true:
   1. The CMD is a Python stdlib module that does not install its own SIGTERM handler. Non-exhaustive list: `python3 -m http.server`, `python -m http.server`, `python3 -m SimpleHTTPServer`, `python -m SimpleHTTPServer`, `python3 -m pydoc`, `python -m pydoc`, `python3 -m smtpd`, `python -m smtpd`, `python3 -m CGIHTTPServer`. These all block in `serve_forever()` with no signal handling and exhibit exit 137 on SIGTERM as PID 1.
   2. The app is a **synthetic fallback app** — i.e. the repo under validation has no long-running runtime of its own (it is a library, CLI, workflow template, or documentation repo) and the harness is generating a placeholder service purely to have something to smoke-test. Synthetic fallback apps MUST set `init: true` unconditionally; the cost is negligible and it eliminates the entire PID-1 signal-handling bug class.
   3. The CMD is a simple shell-less Python script that calls `http.server.HTTPServer`, `socketserver.TCPServer`, `socketserver.UDPServer`, `wsgiref.simple_server.make_server`, or any other stdlib server constructor without wiring `signal.signal(signal.SIGTERM, ...)` to a clean-shutdown handler. If you cannot immediately point at a SIGTERM handler in the app code, assume there isn't one and use `init: true`.
@@ -321,9 +321,8 @@ CRITICAL — Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shu
 - Do NOT "fix" this by raising `stop_grace_period` — the app never stops, so no amount of extra grace will save it; you'll just wait longer for the same SIGKILL.
 - After generating the Dockerfile AND the compose file, mentally verify BOTH: (a) "If I ran `docker run <image>` and then `docker stop`, would PID 1 itself receive SIGTERM?" — if PID 1 is `/bin/sh -c …` or an un-exec'd wrapper script, the answer is no (rewrite to exec-form). AND (b) "Does PID 1 install a SIGTERM handler, or is there a signal-forwarding init (tini/`init: true`) in front of it?" — if neither, the kernel will drop SIGTERM (add `init: true`).
 
-CRITICAL — graceful shutdown container resolution:
-- After `docker compose stop <service>`, the container moves to `exited` state.
-- `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
+graceful shutdown container resolution:
+After `docker compose stop <service>`, the container moves to `exited` state. `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
 - To resolve a stopped container's ID, use: `docker compose ps -q --status exited <service>` or `docker compose ps -aq --filter "status=exited" <service>`.
 - To check the exit code, use: `docker inspect --format='{{.State.ExitCode}}' <container_id>`.
 - A harness-initiated `docker compose stop` sends SIGTERM to PID 1. Any of the following outcomes is a graceful shutdown and MUST be treated as pass:
@@ -358,8 +357,8 @@ CRITICAL — graceful shutdown container resolution:
       exit 1
     fi
 
-CRITICAL — post-restart readiness polling in graceful_shutdown:
-- The `graceful_shutdown` script verifies a full stop/start cycle. After `docker compose start <service>` (or equivalent re-up), the container needs a non-trivial warm-up window before its listener re-binds and health endpoints respond. A single immediate `curl` produces a deterministic false negative ("restarted but endpoint unreachable") even though the app is perfectly healthy a second or two later.
+post-restart readiness polling in graceful_shutdown:
+The `graceful_shutdown` script verifies a full stop/start cycle. After `docker compose start <service>` (or equivalent re-up), the container needs a non-trivial warm-up window before its listener re-binds and health endpoints respond. A single immediate `curl` produces a deterministic false negative ("restarted but endpoint unreachable") even though the app is perfectly healthy a second or two later.
 - Hard rule: after restart, the test MUST poll the readiness endpoint with bounded retries BEFORE asserting reachability. Do NOT issue one immediate `curl` and assert on its result.
 - Retry budget: reuse the same health-timeout / poll-interval semantics already used by `02_startup_health_checks.sh` / `00_canary.sh`. Typical values are 30 attempts × 1s, or `${HEALTH_TIMEOUT_SECONDS:-30}` total with `${HEALTH_POLL_INTERVAL_SECONDS:-1}s` between attempts. Never hardcode a single-shot check.
 - Success condition: exit the retry loop as soon as the readiness probe returns a success (HTTP 2xx or the project's documented health signature). Only emit `not ok` after the full budget is exhausted.
@@ -417,15 +416,15 @@ CRITICAL — post-restart readiness polling in graceful_shutdown:
     ASSERTION=$((ASSERTION + 1))
 - Do NOT "fix" this by loosening the post-restart assertion or by dropping the restart leg of `graceful_shutdown` — the restart leg exists specifically to catch apps that shut down cleanly but fail to re-initialize. Fix the readiness polling.
 
-CRITICAL — independent readiness gating for tests that run after graceful_shutdown:
-- `11_error_format_validation.sh` (and any other HTTP-assertion script ordered after `10_graceful_shutdown.sh`) runs against the same long-running app service. If `graceful_shutdown` leaves the container mid-restart, the next script hits an empty listener and emits the canonical cascade signature `status=000 err=curl: (56) Recv failure: Connection reset by peer`. This is a harness false negative, not an app defect.
+independent readiness gating for tests that run after graceful_shutdown:
+`11_error_format_validation.sh` (and any other HTTP-assertion script ordered after `10_graceful_shutdown.sh`) runs against the same long-running app service. If `graceful_shutdown` leaves the container mid-restart, the next script hits an empty listener and emits the canonical cascade signature `status=000 err=curl: (56) Recv failure: Connection reset by peer`. This is a harness false negative, not an app defect.
 - Hard rule: every HTTP-assertion test that could run after `10_graceful_shutdown.sh` MUST perform its own independent readiness wait before asserting. Do NOT assume the previous test left the app ready.
 - Ordering alternative: if the readiness wait would duplicate too much logic, re-order tests so that `11_error_format_validation.sh` runs BEFORE `10_graceful_shutdown.sh`. The harness executes scripts in lexical `NN_*.sh` order, so rename accordingly (`10_error_format_validation.sh`, `11_graceful_shutdown.sh`). Both orderings are acceptable; mixed ordering without a readiness gate is NOT.
 - Readiness wait specification: the wait MUST be bounded (reuse `${HEALTH_TIMEOUT_SECONDS:-30}` / `${HEALTH_POLL_INTERVAL_SECONDS:-1}s`), MUST poll the same canonical readiness URL as `00_canary.sh` / `02_startup_health_checks.sh`, and MUST fail with a dedicated `not ok` line (for example `not ok 1 - app not ready before error_format assertions (attempts=30 last_status=000 curl_exit=56)`) that is clearly distinguishable from the actual test's assertions. This prevents misclassification of readiness races as route/format defects.
 - When in doubt, generate a small shared helper such as `validation/tests/_lib/wait_ready.sh` that exposes a single function (`wait_for_ready URL TIMEOUT INTERVAL`) and `source` it from both `10_graceful_shutdown.sh` and every downstream HTTP assertion script. Duplication is acceptable; omission is not.
 
-CRITICAL — stdout/stderr capture in existing_test_suite_execution:
-- `06_existing_test_suite_execution.sh` wraps each custom test command (`python3 tests/foo.py`, `npm test`, `pytest`, `go test`, etc.) in its own TAP assertion. When one of those commands fails, the assertion message is the only diagnostic that reaches the artifact tail. If the wrapper discards stdout or stderr, the root cause is invisible and the orchestrator cannot distinguish a genuine app bug from a harness mis-invocation (wrong cwd, missing env, bad interpreter).
+stdout/stderr capture in existing_test_suite_execution:
+`06_existing_test_suite_execution.sh` wraps each custom test command (`python3 tests/foo.py`, `npm test`, `pytest`, `go test`, etc.) in its own TAP assertion. When one of those commands fails, the assertion message is the only diagnostic that reaches the artifact tail. If the wrapper discards stdout or stderr, the root cause is invisible and the orchestrator cannot distinguish a genuine app bug from a harness mis-invocation (wrong cwd, missing env, bad interpreter).
 - Hard rule: every custom test invocation MUST capture BOTH stdout and stderr to per-test temp files, and on failure MUST emit a bounded tail of each stream as part of the `not ok` diagnostic. Never swallow output with `>/dev/null`, `2>/dev/null`, or a bare `|| true`.
 - Tail bound: emit at most the last 40 lines of stdout and the last 40 lines of stderr, each prefixed with `# stdout:` / `# stderr:` so they round-trip through the TAP parser as comments and do not break numbering.
 - The `ok` line on success MUST remain a single line (no attached output); capture files may be removed or left in place.
@@ -467,8 +466,8 @@ CRITICAL — stdout/stderr capture in existing_test_suite_execution:
 - Apply this wrapper to every entry in `custom_tests:` from `.ai/validate.yml` hints and to every auto-detected test command. Do NOT special-case Python: Python unittest/pytest failures surface on stderr and are the most common source of `failed (no stderr)` artifact lines.
 - If the command is expected to be long-running or interactive, wrap it with a bounded timeout (for example `timeout 120 bash -c "$cmd"`) and include the exit code in the diagnostic. Do NOT allow a hung custom test to consume the whole validation budget silently.
 
-CRITICAL — custom_tests external tool dependency analysis (prevents FileNotFoundError in custom tests):
-- When `.ai/validate.yml` hints declare `custom_tests:` (or you auto-detect a project-specific test suite), the declared test files often invoke external binaries that are NOT part of the base image. The canonical failure mode is `FileNotFoundError: [Errno 2] No such file or directory: 'git'` surfacing as a Python traceback inside `03_existing_test_suite_execution.sh` / `06_existing_test_suite_execution.sh`, because `python:3.12-slim` (and most `*-slim` base images) ship without `git`, `make`, `rsync`, `unzip`, `openssl`, `jq`, and friends. The harness must detect these needs up front instead of crashing mid-run.
+custom_tests external tool dependency analysis (prevents FileNotFoundError in custom tests):
+When `.ai/validate.yml` hints declare `custom_tests:` (or you auto-detect a project-specific test suite), the declared test files often invoke external binaries that are NOT part of the base image. The canonical failure mode is `FileNotFoundError: [Errno 2] No such file or directory: 'git'` surfacing as a Python traceback inside `03_existing_test_suite_execution.sh` / `06_existing_test_suite_execution.sh`, because `python:3.12-slim` (and most `*-slim` base images) ship without `git`, `make`, `rsync`, `unzip`, `openssl`, `jq`, and friends. The harness must detect these needs up front instead of crashing mid-run.
 - Hard rule: before writing `validation/Dockerfile.app`, statically scan every file referenced by `custom_tests:` (AND every `.sh` script the harness generates that invokes tools not already on the base image) for external binary invocations. Emit a union set of tools and install ALL of them via `apt-get` in a single `RUN` layer. Then extend `00_canary.sh` with a tool-presence assertion for each tool so the image fails fast with a clear TAP diagnostic instead of a Python traceback mid-run.
 - Patterns to scan for in each custom test file:
   - Python: `subprocess.run(["<bin>", ...])`, `subprocess.call([...])`, `subprocess.Popen([...])`, `subprocess.check_output([...])`, `subprocess.check_call([...])`, `os.system("<cmd> ...")`, `os.popen("<cmd> ...")`, `shutil.which("<bin>")`, `sh.<bin>(...)` (if the `sh` package is imported).
@@ -504,13 +503,11 @@ CRITICAL — custom_tests external tool dependency analysis (prevents FileNotFou
 - Do NOT assume `python:*-slim` has any of these tools. `python:3.12-slim` ships only Python, `bash`, coreutils, and a handful of libc utilities. Every other tool must be installed explicitly.
 - Do NOT rely on the stdout/stderr capture wrapper in `existing_test_suite_execution` as a substitute for this check. The wrapper surfaces the failure; it does not prevent it. Apply BOTH rules: static dependency analysis here, plus stdout/stderr capture in the existing_test_suite_execution section above.
 
-CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
-- Docker Compose services declare synthetic test credentials with an override-or-default expression:
+robust synthetic env-var assertions in env_var_validation tests:
+Docker Compose services declare synthetic test credentials with an override-or-default expression:
     environment:
       VALIDATION_TEST_API_KEY: "${VALIDATION_TEST_API_KEY:-validation-api-key}"
-- This means the container sees EITHER the value injected by the CI job environment OR the compose
-  default fallback. A test that hardcodes one fixed expected value will produce a false negative
-  whenever the other branch is active.
+This means the container sees EITHER the value injected by the CI job environment OR the compose default fallback. A test that hardcodes one fixed expected value will produce a false negative whenever the other branch is active.
 - When asserting env var values inside the container, the test MUST accept BOTH branches:
   1. An explicitly provided CI env override (the outer value of $VALIDATION_TEST_API_KEY if set), OR
   2. The default fallback value defined in the compose file (e.g. `validation-api-key`).
@@ -540,18 +537,8 @@ CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
   using their respective compose default values.
 - Always include both expected and actual values in failure messages to aid debugging.
 
-CRITICAL — inline Python inside generated validation/tests/*.sh scripts:
-- Codex-generated test scripts frequently embed short Python snippets via
-  `python3 - <<'PY' ... PY` heredocs or `python3 -c '...'` arguments.
-  These patterns are a high-risk source of `harness_error` outcomes
-  because nested shell quoting (especially `docker compose exec -T svc /bin/sh -c '...'`
-  wrapping a heredoc or `python3 -c`) mangles single quotes inside the
-  Python source at runtime, producing `SyntaxError: f-string: expecting a
-  valid expression after '{'` or `unterminated string literal` errors
-  that never reproduce in static review. The pre-flight phase statically
-  ast-parses every quoted python3 heredoc under `validation/**/*.sh` and
-  fails fast on SyntaxError, but the easiest fix is to avoid the nesting
-  in the first place.
+inline Python inside generated validation/tests/*.sh scripts:
+Codex-generated test scripts frequently embed short Python snippets via `python3 - <<'PY' ... PY` heredocs or `python3 -c '...'` arguments. These patterns are a high-risk source of `harness_error` outcomes because nested shell quoting (especially `docker compose exec -T svc /bin/sh -c '...'` wrapping a heredoc or `python3 -c`) mangles single quotes inside the Python source at runtime, producing `SyntaxError: f-string: expecting a valid expression after '{'` or `unterminated string literal` errors that never reproduce in static review. The pre-flight phase statically ast-parses every quoted python3 heredoc under `validation/**/*.sh` and fails fast on SyntaxError, but the easiest fix is to avoid the nesting in the first place.
 - Hard rule: do NOT nest a `python3 - <<"PY"` or `python3 -c '...'` inside
   another shell layer (`/bin/sh -c '...'`, `docker compose exec -T svc /bin/sh -c '...'`,
   `bash -lc '...'`, `sudo sh -c '...'`, etc.) when the Python source contains
@@ -620,7 +607,7 @@ PY
   bug even when the Python parses in isolation, because the outer shell
   eats the single quotes inside the heredoc body at runtime.
 
-CRITICAL — importlib dynamic module loading for dependency_auditing import checks:
+importlib dynamic module loading for dependency_auditing import checks:
 - When verifying that a Python module is importable (e.g. for `dependency_auditing`),
   do NOT use raw `importlib.util.spec_from_file_location` + `exec_module` without
   registering the module in `sys.modules` first. Python 3.12's `dataclasses`
@@ -663,7 +650,7 @@ CRITICAL — importlib dynamic module loading for dependency_auditing import che
   `importlib.import_module` handles `sys.modules` registration automatically
   and is the correct API for "does this module load?" audits.
 
-CRITICAL — dependency_auditing sidecar scripts MUST set sys.path to repo root:
+dependency_auditing sidecar scripts MUST set sys.path to repo root:
 - Any Python sidecar file generated under `validation/tests/_lib/` for
   dependency_auditing MUST contain BOTH of the following lines before any
   `importlib.import_module()` call:
@@ -674,7 +661,7 @@ CRITICAL — dependency_auditing sidecar scripts MUST set sys.path to repo root:
   This is the single most common cause of false `No module named 'scripts'`
   harness failures. Omitting these lines is a harness defect.
 
-CRITICAL — sibling imports when dynamically loading modules from subdirectories:
+sibling imports when dynamically loading modules from subdirectories:
 - When a Python entry point lives in a subdirectory (e.g.
   `backend/appsflyer_event_worker.py`) and uses bare sibling imports such as
   `from db_indexes import ...`, the module's parent directory MUST be on
@@ -694,7 +681,7 @@ CRITICAL — sibling imports when dynamically loading modules from subdirectorie
   directory (e.g. `/workspace/backend`) when the entry point uses bare
   sibling imports.
 
-CRITICAL — dependency_auditing binary audit MUST be a sidecar file (NOT inline Python):
+dependency_auditing binary audit MUST be a sidecar file (NOT inline Python):
 - The `dependency_auditing` category typically has two checks: (1) an import
   audit (already uses sidecar `validation/tests/_lib/import_audit.py`) and
   (2) a custom binary audit that AST-walks test files for subprocess calls

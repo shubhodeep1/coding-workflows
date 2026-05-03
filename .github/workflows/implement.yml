@@ -13,7 +13,7 @@ name: AI Implement
 
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
-  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
+  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'none' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
@@ -600,7 +600,7 @@ jobs:
             # manifestations of the same upstream gpt-5.3-codex/OpenRouter
             # flakiness (low → unprefixed MCP calls; xhigh → "I'll
             # apply_patch" announce-without-invoke). The workflow-level
-            # default is xhigh and matches what the regular path uses, so
+            # default is none and matches what the regular path uses, so
             # any breakage on the smoke fixture is also visible to real
             # implements rather than masked by a smoke-only override.
           fi
@@ -905,12 +905,7 @@ jobs:
           plan, and comments) is provided BELOW at the end of this prompt — do NOT read
           implementation_context.txt separately.
 
-          Your job:
-
-          1. Implement the approved implementation plan.
-          2. Modify repository files as required.
-          3. Keep changes minimal and safe.
-          4. Avoid modifying unrelated files.
+          Implement the approved implementation plan. Modify only the files the plan requires; keep changes minimal and safe.
 
           SERENA MCP EFFICIENCY (MANDATORY):
           {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}

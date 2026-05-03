@@ -32,7 +32,7 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
 fi
 
 MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.3-codex}"
-MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-none}"
 # Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)
 # see it even when the caller relied on our default fallback. In CI the workflow
 # env: block already exports MODEL_EDITOR, but standalone/local invocations

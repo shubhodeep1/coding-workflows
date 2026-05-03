@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Consolidate N reviewer outputs from one review pass into a single findings
-# ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: xhigh).
+# ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: none).
 #
 # Invoked twice per review run:
 #   --prefix pass1  --output ${CROSS_POLLINATION_FILE}  → feeds pass-2 reviewers
@@ -23,7 +23,7 @@
 #   SUPPORT_SCRIPTS_DIR               helper scripts (for gh_helpers.sh)
 #   CODEX_HOME                        shared codex home (source of config.toml)
 #   XPOLL_SUMMARISER_MODEL            default: openai/gpt-5.4-mini
-#   XPOLL_SUMMARISER_REASONING        default: medium
+#   XPOLL_SUMMARISER_REASONING        default: none
 #   XPOLL_SUMMARISER_LINES_PER_REVIEWER  target lines per reviewer section (default 160)
 #   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS   per-attempt timeout (default 2400)
 #   XPOLL_SUMMARISER_MAX_INPUT_LINES     pre-truncate per-reviewer input above this (default 3000)
@@ -60,7 +60,7 @@ fi
 : "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
 
 SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.4-mini}"
-SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-medium}"
+SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-none}"
 SUMMARISER_TARGET_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"
 SUMMARISER_CALL_TIMEOUT="${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS:-2400}"
 SUMMARISER_MAX_INPUT_LINES="${XPOLL_SUMMARISER_MAX_INPUT_LINES:-3000}"
@@ -146,7 +146,7 @@ OUTPUT FORMAT (sentinel-delimited, in this exact order, nothing before or after)
 
 (one per-reviewer section per input block, in input order)
 
-DEDUPLICATION RULES FOR THE CONSENSUS BLOCK:
+Deduplication rules for the consensus block:
 1. Two findings are duplicates when they refer to the same file AND their line
    ranges overlap OR abut within 5 lines AND they describe the same root cause
    (same class of bug — e.g. both "null-deref on req.user", not merely "bug on
@@ -157,7 +157,7 @@ DEDUPLICATION RULES FOR THE CONSENSUS BLOCK:
 3. Findings from ONE reviewer still appear in CONSENSUS with flagged_by: [that_slug].
    Do not suppress singletons.
 
-PER-REVIEWER SECTIONS:
+Per-reviewer sections:
 4. Preserve EVERY distinct finding from each input block. If space is tight,
    prefer high-severity / high-confidence first; NEVER drop silently — collapse
    related items into a single bullet suffixed "(N related items)".
@@ -167,7 +167,7 @@ PER-REVIEWER SECTIONS:
 7. If a source block reported no findings, its body is:
    (No findings reported.)
 
-GLOBAL CONSTRAINTS:
+Global constraints:
 8. No prose. No preambles. No markdown headers other than the === sentinels.
 9. Target total length <= ${target_lines} lines. Count before replying; compress
    per-reviewer sections further (never the CONSENSUS block) if over.
@@ -192,7 +192,7 @@ PROMPT_HEADER
 
 echo "summariser (${PREFIX}): ${n_reviewers} input(s); target_lines=${target_lines}; prompt_bytes=$(wc -c < "${prompt_file}")"
 
-# ── Isolated CODEX_HOME with gpt-5.4-mini + xhigh reasoning ──────────────
+# ── Isolated CODEX_HOME with gpt-5.4-mini + none reasoning ───────────────
 # Mirrors the reviewer pattern at scripts/review_run_reviewers.sh:906-1024:
 # copy the base CODEX_HOME, then sed-patch model_reasoning_effort in the
 # config.toml so the editor's shared CODEX_HOME is NEVER mutated.

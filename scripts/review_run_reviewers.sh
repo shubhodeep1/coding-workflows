@@ -208,7 +208,7 @@ run_cache_probe || true
 
 # ── Cross-reviewer consensus summariser ──────────────────────────────────
 # After each review pass (pass-1 and pass-2) completes, all reviewer outputs
-# are fed as a single prompt to codex-cli (openai/gpt-5.4-mini, xhigh
+# are fed as a single prompt to codex-cli (openai/gpt-5.4-mini, none
 # reasoning) which emits ONE consolidated findings ledger (CONSENSUS block +
 # per-reviewer sections). The pass-1 ledger feeds pass-2 reviewers; the
 # pass-2 ledger (written to REVIEWER_CONSENSUS_FILE) feeds the editor and
@@ -459,7 +459,6 @@ Typical exploration patterns include:
 Avoid scanning the entire repository.
 Focus on files directly related to the modified code.
 
-CROSS MODULE ANALYSIS
 When reviewing code:
 1. Identify imports used by modified files.
 2. Locate where modified functions or classes are used.
@@ -468,7 +467,6 @@ When reviewing code:
 5. Review tests referencing modified modules.
 Only explore repository files when needed to understand dependencies.
 
-MINIMAL FIX PHILOSOPHY
 Prefer the smallest safe change that resolves the issue.
 Avoid suggesting:
 - architectural redesign
@@ -478,8 +476,7 @@ Avoid suggesting:
 - repository-wide restructuring
 Unless absolutely required to prevent runtime failure.
 
-OVERENGINEERING CHECK
-Before suggesting a change ask:
+Before suggesting a change, check for overengineering:
 1. Can the issue be fixed by modifying fewer than ~10 lines?
 2. Would a human reviewer likely choose a simpler fix?
 3. Does the fix introduce unnecessary complexity?
@@ -487,7 +484,6 @@ Prefer the simpler solution.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
-REVIEW OBJECTIVE
 Review the pull request as a senior engineer and identify issues in the modified code.
 Focus on problems that could realistically affect:
 - runtime behavior
@@ -508,8 +504,6 @@ Examples include:
 - incomplete implementations
 - unintended side effects
 - backward compatibility problems
-
-EVIDENCE REQUIREMENT
 
 Every reported issue must include concrete evidence from the code.
 
@@ -532,8 +526,6 @@ Avoid phrases such as:
 
 Focus only on problems that can be demonstrated directly from the code.
 
-REPEATED ISSUE PREVENTION
-
 Use the LAST RUN DIFF to determine what changed during the most recent AI autofix run.
 
 Rules:
@@ -553,7 +545,6 @@ Focus your review primarily on files or code sections modified in LAST RUN DIFF.
 When LAST RUN CHANGED FILES is available, prioritize those files first.
 Avoid broadening review scope beyond those files unless there is a clear runtime correctness issue directly related to the PR.
 
-SYSTEM BEHAVIOR REASONING (MANDATORY)
 Analyze how the modified code interacts with the rest of the system.
 Consider:
 - how other modules call the modified code
@@ -563,7 +554,6 @@ Consider:
 - whether tests or scripts rely on the modified logic
 Highlight problems that arise from interactions between components.
 
-RUNTIME BEHAVIOR ANALYSIS (MANDATORY)
 Evaluate whether changes could fail during runtime execution.
 Consider:
 - control flow
@@ -576,7 +566,6 @@ Consider:
 - error propagation
 Identify issues that would only appear during runtime execution rather than static inspection.
 
-SYSTEM BEHAVIOR VERIFICATION (MANDATORY)
 Verify proposed issues against end-to-end system behavior, not only static text patterns.
 Confirm whether each issue can realistically reproduce in CI runtime with current script flow and guards.
 
@@ -593,7 +582,6 @@ Use these files when needed to validate runtime assumptions:
 - run_logs_best_effort.txt
 Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt
 
-REVIEW SCOPE LIMITATIONS
 Avoid reviewing unrelated areas of the repository.
 Do not suggest repository-wide refactors.
 Do not suggest architecture redesigns.
@@ -605,7 +593,6 @@ Do not recommend:
 - repository-wide restructuring
 - changes unrelated to the modified code
 
-CODE IMPROVEMENT POLICY
 Small improvements near the changed code are allowed.
 Examples:
 - improving readability
@@ -617,34 +604,13 @@ However:
 Do not recommend large refactors.
 Do not expand changes beyond the scope of the PR unless necessary for correctness.
 
-ADDITIONAL REVIEW DIMENSION — HARDENING & SECURITY (ADVISORY ONLY)
+Additional review dimension — hardening & security (advisory only)
 
 In addition to correctness and functionality, evaluate whether the proposed changes introduce opportunities for small-scale hardening improvements.
 
-These recommendations MUST follow strict limits:
+These recommendations must follow strict limits. Allowed: input validation improvements, additional error handling, safer defaults, defensive checks, logging improvements, edge case handling, security hygiene (escaping, sanitization, bounds checks), safer environment variable handling, safer file/path handling, timeout/retry protections, avoiding silent failures.
 
-ALLOWED:
-• Input validation improvements
-• Additional error handling
-• Safer defaults
-• Defensive checks
-• Logging improvements
-• Edge case handling
-• Security hygiene (escaping, sanitization, bounds checks)
-• Safer environment variable handling
-• Safer file/path handling
-• Timeout / retry protections
-• Avoiding silent failures
-
-NOT ALLOWED:
-• Refactoring large blocks of code
-• Rewriting functions
-• Renaming variables or functions
-• Changing architecture
-• Introducing new dependencies
-• Reorganizing modules
-• Modifying unrelated files
-• Performance micro-optimizations unrelated to safety
+Not allowed: refactoring large blocks of code, rewriting functions, renaming variables or functions, changing architecture, introducing new dependencies, reorganizing modules, modifying unrelated files, performance micro-optimizations unrelated to safety.
 
 Scope constraint:
 Hardening recommendations must be implementable in ≤10 lines of code per suggestion.
@@ -671,7 +637,6 @@ Add HARDENING_RISK_SCORE (0-5):
 
 Prefer defensive checks that fail early rather than complex recovery logic.
 
-FILE CREATION POLICY
 Do not recommend creating new files unless absolutely required to fix a broken import or missing dependency.
 Do not recommend creating:
 - test suites
@@ -680,7 +645,6 @@ Do not recommend creating:
 - infrastructure code
 unless the original task explicitly requires them.
 
-REVIEWER EXECUTION GUARDRAILS
 Web search is strictly forbidden.
 Do not access the internet.
 All required context is already provided.
@@ -708,13 +672,25 @@ Confidence scale:
 4 = high confidence with concrete code evidence
 5 = certain — clear bug with obvious runtime failure path
 
-Example:
+Example (report this):
 
 File: src/cache_manager.py
 Code: lock.acquire() without corresponding release in exception path
 Problem: lock may remain held if an exception occurs
 Runtime impact: subsequent cache operations will deadlock
 ISSUE_CONFIDENCE: 4
+
+Counter-example (do NOT report this):
+
+File: src/api_client.py
+Code: response = requests.get(url)
+Problem: network request might time out
+Why it fails at runtime: could cause a hang
+ISSUE_CONFIDENCE: 1  ← speculative; the code does not show a missing timeout
+                       and requests has a global timeout already. Pattern-
+                       matched from "network call = possible timeout", not
+                       from concrete missing code. Drop this and report only
+                       when you can show the exact missing or broken path.
 
 OUTPUT RULES
 Output plain text only.
@@ -1191,7 +1167,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   fi
 
   # ── Consolidate all pass-1 reviewer outputs into one ledger ──
-  # One codex-cli call (gpt-5.4-mini, xhigh reasoning) produces a consensus
+  # One codex-cli call (gpt-5.4-mini, none reasoning) produces a consensus
   # ledger + per-reviewer sections. Retries 3×; hard-fails the workflow on
   # final failure (triggers job-level Telegram failure alert).
   PASS1_LEDGER_FILE="${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt"
@@ -1203,7 +1179,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "Cross-pollination summary: $(wc -c < "${CROSS_POLLINATION_FILE}") bytes"
 
   # ── PASS 2: deep review at full thinking, with cross-pollination ──
-  echo "=== PASS 2: Deep review (${REVIEWER_REASONING_EFFORT:-xhigh} reasoning) ==="
+  echo "=== PASS 2: Deep review (${REVIEWER_REASONING_EFFORT:-medium} reasoning) ==="
   PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
   assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"
 

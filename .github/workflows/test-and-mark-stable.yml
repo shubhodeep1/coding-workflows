@@ -502,7 +502,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       # ── Phase 2: Wait for Plan to complete ──────────────────────
       - name: "Phase 2: Wait for plan to complete"
@@ -673,7 +673,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       # ── Phase 3: Approve and wait for implementation ────────────
       - name: "Phase 3a: Approve the plan"
@@ -852,7 +852,7 @@ jobs:
       # Forces the review/autofix pipeline to exercise the editor's
       # change-applying path. The smoke-test issue body mandates the canary
       # be EXACTLY three lines; we append a 4th obviously-removable line
-      # which reviewers will flag (low-reasoning is sufficient — the issue
+      # which reviewers will flag (none-reasoning is sufficient — the issue
       # text spells out the requirement) and the editor must trim. The
       # post-review verification step then confirms the bait is gone and
       # the editor produced at least one commit on top of the bait. This
@@ -879,7 +879,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: "Phase 3b1: Apply force-review label to smoke PR"
         id: force-review-label
@@ -1465,7 +1465,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       # ── Phase 4b: Verify the editor removed the bait commit ───
       # Closes the loop on Phase 3c: confirms the reviewer→editor→commit
@@ -2180,7 +2180,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       # ── Phase 7: Verify cancel_on_pr_close fires on PR close ───
       # Closes the smoke-test PR and watches internal-cancel-on-pr-close.yml
@@ -2278,7 +2278,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       # The previous Phase 8 in this job re-ran the LLM analyser across
       # the 6 captured phases to produce a single combined report and
@@ -2784,7 +2784,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
@@ -2842,7 +2842,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
@@ -2907,7 +2907,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
@@ -2966,7 +2966,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1d: Orchestrate decompose end-to-end test
@@ -3122,7 +3122,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: Cleanup orchestrate test issues
         if: always()
@@ -3268,7 +3268,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1f: Clarify-rejects-unsolvable negative test
@@ -3448,7 +3448,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: Cleanup negative-test issue
         if: always() && steps.create.outputs.issue_number != ''
@@ -3646,7 +3646,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: "Soft-error analyser (alt-model plan)"
         if: always() && steps.capture_alt_runs.outputs.plan_run_id != ''
@@ -3659,7 +3659,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: "Soft-error analyser (alt-model implement)"
         if: always() && steps.capture_alt_runs.outputs.implement_run_id != ''
@@ -3672,7 +3672,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: "Soft-error analyser (alt-model review_autofix)"
         if: always() && steps.capture_alt_runs.outputs.review_autofix_run_id != ''
@@ -3686,7 +3686,7 @@ jobs:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
-          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+          reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
       - name: Cleanup alt-model artifacts
         if: always() && steps.create.outputs.issue_number != ''

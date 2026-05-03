@@ -97,8 +97,8 @@ env:
     qwen/qwen3.6-plus
     x-ai/grok-4.1-fast
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
-  REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
-  EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
+  REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'medium' }}
+  EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'none' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
@@ -106,7 +106,7 @@ env:
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
   # failure — job-level "Telegram failure" step surfaces the incident.
   XPOLL_SUMMARISER_MODEL: ${{ vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-5.4-mini' }}
-  XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'medium' }}
+  XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'none' }}
   XPOLL_SUMMARISER_LINES_PER_REVIEWER: ${{ vars.XPOLL_SUMMARISER_LINES_PER_REVIEWER || '160' }}
   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}
   XPOLL_SUMMARISER_MAX_INPUT_LINES: ${{ vars.XPOLL_SUMMARISER_MAX_INPUT_LINES || '3000' }}
@@ -1860,7 +1860,7 @@ jobs:
           fi
 
           if [ "$IS_SMOKE" = "true" ]; then
-            # Low-reasoning override for smoke runs (reviewers + editor).
+            # None-reasoning override for smoke runs (reviewers + editor).
             # The earlier xhigh-on-smoke policy (mirroring PR #1723's
             # implement-side rollback of low) was reinstating the same Phase 4b
             # regression it was meant to prevent: at xhigh, openai/gpt-5.3-codex
@@ -1868,23 +1868,23 @@ jobs:
             # and exits cleanly with rc=0/empty stdout, producing 0 file
             # changes — observed in run 25249170035 / PR #1982 (6 editor
             # attempts, all empty, ~81k tokens consumed on attempt 1 with only
-            # 3 Serena calls). Drop reasoning to low for both reviewers and
+            # 3 Serena calls). Drop reasoning to none for both reviewers and
             # editor when the smoke marker is present; non-smoke PRs continue
-            # to use the workflow default (xhigh) so production PRs aren't
-            # affected by this knob. The smoke canary task is a single-line
-            # removal that the models can complete deterministically at low
-            # reasoning, and reviewers don't need deep reasoning to spot the
-            # bait line — keeping them at low slashes smoke-test runtime and
-            # cost without sacrificing gate coverage.
-            echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-            echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            # to use the workflow default so production PRs aren't affected by
+            # this knob. The smoke canary task is a single-line removal that
+            # the models can complete deterministically at none reasoning, and
+            # reviewers don't need deep reasoning to spot the bait line —
+            # keeping them at none slashes smoke-test runtime and cost without
+            # sacrificing gate coverage.
+            echo "REVIEWER_REASONING_EFFORT=none" >> "$GITHUB_ENV"
+            echo "EDITOR_REASONING_EFFORT=none" >> "$GITHUB_ENV"
             # Patch the already-written Codex config so the reviewer phase
             # (which copies ~/.codex/config.toml into each reviewer's
-            # isolated CODEX_HOME) picks up the low override. Without this
-            # sed the reviewer codex config would still hold the xhigh value
+            # isolated CODEX_HOME) picks up the none override. Without this
+            # sed the reviewer codex config would still hold the medium value
             # baked in by the "Create Codex config" step that ran earlier.
-            sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
-            echo "🔬 Smoke test PR detected — overriding reviewer + editor reasoning to low (Phase 4b empty-output mitigation)"
+            sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "none"/' ~/.codex/config.toml
+            echo "🔬 Smoke test PR detected — overriding reviewer + editor reasoning to none (Phase 4b empty-output mitigation)"
             # Suppress per-phase Telegram alerts; the test-and-mark-stable
             # gate emits a single combined pass/fail notification at the
             # end via raw curl. SILENT > CRITICAL so all levels filter.
@@ -2150,7 +2150,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-          echo "Reviewer reasoning effort: ${REVIEWER_REASONING_EFFORT:-xhigh}"
+          echo "Reviewer reasoning effort: ${REVIEWER_REASONING_EFFORT:-medium}"
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
@@ -3826,7 +3826,7 @@ jobs:
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           JUDGE_FIX_COUNT: ${{ steps.retrigger_guard.outputs.judge_fix_count }}
-          JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'xhigh' }}
+          JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'medium' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
