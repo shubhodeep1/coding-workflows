@@ -2260,13 +2260,32 @@ jobs:
           fi
           git show --stat HEAD > "${LAST_COMMIT_STAT_FILE}" || true
 
-          if git rev-parse HEAD~1 >/dev/null 2>&1; then
-            git diff "HEAD~1...HEAD" > "${LAST_RUN_DIFF_FILE}" || true
-            git diff --name-only "HEAD~1...HEAD" > "${LAST_RUN_CHANGED_FILES_FILE}" || true
-            git diff --stat "HEAD~1...HEAD" > "${LAST_RUN_DIFF_STAT_FILE}" || true
+          # LAST_RUN_DIFF must reflect actual prior AI autofix work on PR head,
+          # not whatever HEAD~1 happens to be. The downstream OSCILLATION GUARD
+          # in the editor prompt (scripts/review_apply_fixes.sh:441-462) tells
+          # the model to leave any hunk visible in LAST_RUN_DIFF alone unless
+          # it can attach a "regression fingerprint" + "runtime failure path".
+          # The previous unconditional `git diff HEAD~1...HEAD` fed the editor
+          # the diff of impl commits, smoke-test bait commits, and manual
+          # pushes — falsely tripping the guardrail on first-iteration runs.
+          # Smoke run 25254574828 hit this: bait commit was at HEAD,
+          # last_run_diff showed the bait line, OSCILLATION GUARD activated,
+          # editor produced empty output across 6 attempts (3 + 3 retry) at
+          # reasoning=low → Phase 4b bait-removed verification failed.
+          # Walk back recent commits and only use the diff of the most recent
+          # `[ai-autofix]`/`[judge-fix]` commit, matching the existing prefix
+          # convention used by review_apply_fixes.sh:2838 and the iteration
+          # counter at line 2096-2105.
+          LAST_AUTOFIX_SHA="$(git log --format='%H%x09%s' -n 50 2>/dev/null \
+            | awk -F'\t' '$2 ~ /^\[(ai-autofix|judge-fix)\]/ { print $1; exit }' \
+            || true)"
+          if [ -n "${LAST_AUTOFIX_SHA}" ] && git rev-parse "${LAST_AUTOFIX_SHA}^" >/dev/null 2>&1; then
+            git diff "${LAST_AUTOFIX_SHA}^...${LAST_AUTOFIX_SHA}" > "${LAST_RUN_DIFF_FILE}" || true
+            git diff --name-only "${LAST_AUTOFIX_SHA}^...${LAST_AUTOFIX_SHA}" > "${LAST_RUN_CHANGED_FILES_FILE}" || true
+            git diff --stat "${LAST_AUTOFIX_SHA}^...${LAST_AUTOFIX_SHA}" > "${LAST_RUN_DIFF_STAT_FILE}" || true
           else
-            echo "Initial run — no previous commit" > "${LAST_RUN_DIFF_FILE}"
-            echo "Initial run — no previous commit" > "${LAST_RUN_CHANGED_FILES_FILE}"
+            echo "No previous AI autofix run on PR head" > "${LAST_RUN_DIFF_FILE}"
+            echo "No previous AI autofix run on PR head" > "${LAST_RUN_CHANGED_FILES_FILE}"
             echo "FIRST_RUN_NO_PREVIOUS_AI_CHANGES" > "${LAST_RUN_DIFF_STAT_FILE}"
           fi
 
