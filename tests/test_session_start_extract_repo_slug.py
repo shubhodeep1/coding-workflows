@@ -23,6 +23,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOK = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
 TEMPLATE_HOOK = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh"
+SETTINGS = REPO_ROOT / ".claude" / "settings.json"
+TEMPLATE_SETTINGS = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 
 # (url, expected_slug). Empty expected = parser should produce no slug
 # (caller treats that as "couldn't derive — skip the actions:read probe").
@@ -86,6 +88,15 @@ def main() -> int:
             f"propagate stale behaviour."
         )
 
+    # settings.json must also be byte-identical — it registers the SessionStart
+    # hook in consumer repos and is mirrored by the same claude_sync step.
+    if SETTINGS.read_bytes() != TEMPLATE_SETTINGS.read_bytes():
+        failures.append(
+            f"{TEMPLATE_SETTINGS.relative_to(REPO_ROOT)} must be byte-identical to "
+            f"{SETTINGS.relative_to(REPO_ROOT)}; consumer auto-sync would otherwise "
+            f"propagate stale SessionStart registration."
+        )
+
     for hook in (HOOK, TEMPLATE_HOOK):
         for url, expected in CASES:
             got = extract(hook, url)
@@ -102,7 +113,8 @@ def main() -> int:
 
     print(
         f"PASS: extract_repo_slug across {len(CASES)} URL shapes in "
-        f"{HOOK.relative_to(REPO_ROOT)} and {TEMPLATE_HOOK.relative_to(REPO_ROOT)}"
+        f"{HOOK.relative_to(REPO_ROOT)} and {TEMPLATE_HOOK.relative_to(REPO_ROOT)}; "
+        f"hook and settings.json parity checks passed"
     )
     return 0
 

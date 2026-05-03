@@ -107,7 +107,7 @@ verify_token() {
   if gh run list -L 1 -R "${repo_slug}" >/dev/null 2>&1; then
     log "gh has actions:read for ${repo_slug}; Actions logs readable via 'gh run view --log <id> -R ${repo_slug}'."
   else
-    log "NOTE: 'gh run list -R ${repo_slug}' failed — token likely lacks actions:read for ${repo_slug}. Other gh reads (PRs/issues/files) still work via 'gh ... -R ${repo_slug}'; use mcp__github__get_workflow_run_logs for Actions logs."
+    log "NOTE: 'gh run list -R ${repo_slug}' failed — possible causes: token lacks actions:read, repo not accessible to this token (403/404), incorrect derived slug, or transient error. Actions log access unavailable; if PR/issue/file reads via 'gh -R ${repo_slug}' also fail, verify token scopes with 'gh auth status'."
   fi
 }
 
