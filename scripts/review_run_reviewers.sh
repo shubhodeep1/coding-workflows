@@ -672,13 +672,25 @@ Confidence scale:
 4 = high confidence with concrete code evidence
 5 = certain — clear bug with obvious runtime failure path
 
-Example:
+Example (report this):
 
 File: src/cache_manager.py
 Code: lock.acquire() without corresponding release in exception path
 Problem: lock may remain held if an exception occurs
 Runtime impact: subsequent cache operations will deadlock
 ISSUE_CONFIDENCE: 4
+
+Counter-example (do NOT report this):
+
+File: src/api_client.py
+Code: response = requests.get(url)
+Problem: network request might time out
+Why it fails at runtime: could cause a hang
+ISSUE_CONFIDENCE: 1  ← speculative; the code does not show a missing timeout
+                       and requests has a global timeout already. Pattern-
+                       matched from "network call = possible timeout", not
+                       from concrete missing code. Drop this and report only
+                       when you can show the exact missing or broken path.
 
 OUTPUT RULES
 Output plain text only.

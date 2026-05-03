@@ -45,7 +45,7 @@ Rules:
 - If a feature naturally spans many files or modules, split it into sequential
   issues (foundation first, then layers that depend on it).
 - Per-issue implementation-time budget: each issue MUST be scoped so the
-  downstream `implement.yml` editor (`codex exec`, `xhigh` reasoning) can
+  downstream `implement.yml` editor (`codex exec`, `none` reasoning) can
   finish it within ONE 60-minute attempt. The implement watchdog's
   per-attempt wall-time is 130 minutes (`EDITOR_MAX_WALL=7800`), and the
   3-hour job budget usually allows at most ~1 full-length attempt before
