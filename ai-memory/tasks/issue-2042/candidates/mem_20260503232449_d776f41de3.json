@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Remove Serena, Context7, and Git MCP integrations from active code paths\",\"issues\":[{\"id\":\"remove-mcp-from-clarify-plan-orchestrate\",\"title\":\"Remove MCP bootstrap and prompt-block usage from clarify/plan/orchestrate workflows\",\"priority\":1},{\"id\":\"remove-mcp-from-implement-path\",\"title\":\"Remove MCP integrations from implement workflow and implement prompts\",\"priority\":2},{\"id\":\"remove-mcp-from-review-path\",\"title\":\"Remove MCP integrations from review_autofix workflow and review helper scripts\",\"priority\":2},{\"id\":\"remove-mcp-from-orchestrate-poll-path\",\"title\":\"Remove MCP integrations from orchestrate_poll runtime path and judge prompts\",\"priority\":2},{\"id\":\"remove-mcp-from-validate-path\",\"title\":\"Remove MCP integrations from validate workflow and validation prompts\",\"priority\":2},{\"id\":\"remove-shared-mcp-rendering-and-ci-guards\",\"title\":\"Remove shared MCP placeholder rendering logic and CI checks\",\"priority\":3},{\"id\":\"delete-mcp-assets-and-final-active-code-cleanup\",\"title\":\"Delete obsolete MCP helper assets and finish active-code cleanup\",\"priority\":4},{\"id\":\"remove-mcp-sections-from-instructions-and-readme\",\"title\":\"Remove MCP guidance and env vars from instruction docs and README\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"remove-mcp-from-clarify-plan-orchestrate\",\"to\":\"remove-shared-mcp-rendering-and-ci-guards\"},{\"from\":\"remove-mcp-from-implement-path\",\"to\":\"remove-shared-mcp-rendering-and-ci-guards\"},{\"from\":\"remove-mcp-from-review-path\",\"to\":\"remove-shared-mcp-rendering-and-ci-guards\"},{\"from\":\"remove-mcp-from-orchestrate-poll-path\",\"to\":\"remove-shared-mcp-rendering-and-ci-guards\"},{\"from\":\"remove-mcp-from-validate-path\",\"to\":\"remove-shared-mcp-rendering-and-ci-guards\"},{\"from\":\"remove-shared-mcp-rendering-and-ci-guards\",\"to\":\"delete-mcp-assets-and-final-active-code-cleanup\"},{\"from\":\"delete-mcp-assets-and-final-active-code-cleanup\",\"to\":\"remove-mcp-sections-from-instructions-and-readme\"}]}",
+  "fingerprint": "b658c9ecd03bd5032942c43cb317e6da441fff9f37f7c340434b1569fa3741d9",
+  "lineage": {
+    "issue_number": 2042,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25293687452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25293687452",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260503232449_d776f41de3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2042,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25293687452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Remove Serena, Context7, and Git MCP integrations from active code paths' into 8 issues (tracking #2042)",
+  "timestamps": {
+    "created_at": "2026-05-03T23:24:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
