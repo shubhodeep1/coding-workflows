@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `d2e081ad077195c8ceae76545d025259e5dc6d97` on `orchestrator/project-2042`.\n\nImplementation plan\n\n1. Phase-0 scope confirmation\n- Run the required grep triplet first against the implement path and record the remaining implement-side hits before editing.\n- Confirm the hits are limited to the scoped implement files: [implement.yml](.github/workflows/implement.yml), implement prompts under [prompts/](prompts), the implement diagnose helper [implement_diagnose_post_codex_failure.sh](scripts/implement_diagnose_post_codex_failure.sh), and [test_implement_post_codex_recovery.py](tests/test_implement_post_codex_recovery.py).\n- Flag any additional implement-path hits outside that set before making changes, because the issue explicitly says to stay inside `files_touched`.\n\n2. Files likely to change\n- [implement.yml](.github/workflows/implement.yml)\n- [mode-implement.txt](prompts/mode-implement.txt)\n- [mode-implement-diagnose.txt](prompts/mode-implement-diagnose.txt)\n- [mode-implement-repair.txt](prompts/mode-implement-repair.txt)\n- [mode-implement-repair-syntax.txt](prompts/mode-implement-repair-syntax.txt)\n- [implement_diagnose_post_codex_failure.sh](scripts/implement_diagnose_post_codex_failure.sh)\n- [test_implement_post_codex_recovery.py](tests/test_implement_post_codex_recovery.py)\n\n3. Functions/modules to update\n- In [implement.yml](.github/workflows/implement.yml):\n  - Remove the `Setup Serena MCP server` step and its env forwarding (`SERENA_*`, `CONTEXT7_*`, `GIT_MCP_*`).\n  - Remove the inline implementation prompt block\u2019s `SERENA MCP EFFICIENCY` section and replace any Serena-specific edit guidance with `apply_patch` or direct shell edits.\n  - Remove post-run Serena reporting/leak handling tied to `.serena`, including `.serena` cleanup and Serena stats/report steps, while preserving the rest of the implement flow.\n  - Keep non-MCP setup, memory retrieval, validation, repair, branch creation, commit, and PR flows behaviorally unchanged.\n- In [implement_diagnose_post_codex_failure.sh](scripts/implement_diagnose_post_codex_failure.sh):\n  - Remove diagnose-time rendering dependency on `prompts/serena-efficiency-block.txt`.\n  - Keep fallback prompt assembly and JSON-contract handling unchanged apart from MCP prompt-block removal.\n- In implement prompts:\n  - Strip leftover Serena/Context7/Git MCP wording.\n  - Ensure any edit instructions now explicitly point to `apply_patch` or shell-based writes.\n- In [test_implement_post_codex_recovery.py](tests/test_implement_post_codex_recovery.py):\n  - Update assertions that currently expect Serena-specific prompt text or `.serena` workflow behavior.\n  - Keep coverage centered on workflow-contract behavior, not reimplemented logic.\n\n4. Data structures / interfaces affected\n- Workflow step graph in [implement.yml](.github/workflows/implement.yml): step presence, step names, env propagation, and artifact cleanup behavior.\n- Inline prompt template content injected during the `Run Codex implementation` step.\n- Diagnose helper prompt-render path: currently coupled to `prompts/serena-efficiency-block.txt`.\n- Test fixtures/assertions that pin exact prompt strings and workflow run-block contents.\n\n5. API or interface changes\n- No external API changes.\n- Internal workflow interface change: implement phase will stop forwarding MCP-related environment variables and stop setting up MCP servers.\n- Prompt interface change: implement/repair/diagnose prompts will no longer instruct the model to use Serena tools; they will instruct `apply_patch` or shell edits instead.\n\n6. Risks and edge cases\n- Behavior-preservation risk: removing MCP setup must not disturb unrelated Codex config, memory retrieval, validation, retry, commit, or PR creation paths.\n- Cleanup risk: deleting `rm -rf .serena` is correct only if no later implement-path step still assumes that directory exists or must be scrubbed.\n- Diagnose-path risk: [implement_diagnose_post_codex_failure.sh](scripts/implement_diagnose_post_codex_failure.sh) currently renders `mode-implement-diagnose.txt` through `render_prompt.sh` only when `prompts/serena-efficiency-block.txt` is available; removing that dependency must preserve raw/fallback prompt behavior.\n- Test brittleness risk: several tests pin exact prompt substrings from [implement.yml](.github/workflows/implement.yml), so wording-only changes still require synchronized test updates.\n- Scope risk: [internal-implement.yml](.github/workflows/internal-implement.yml) exists in the repo but is not named in the issue scope; unless the Phase-0 grep proves it is part of the implement-path hits covered by this issue, leave it untouched.\n\n7. Testing considerations\n- Run the targeted implement recovery suite in [test_implement_post_codex_recovery.py](tests/test_implement_post_codex_recovery.py).\n- Prioritize the tests that pin:\n  - retry prompt content\n  - diagnose prompt contract / fixup metadata\n  - workflow step extraction from `implement.yml`\n  - any `.serena` cleanup or Serena-report expectations\n- Re-run the Phase-0 grep triplet after edits to confirm no active-code Serena/Context7/Git MCP references remain in the scoped implement files.\n- If there is a repository-local test that validates prompt rendering for the diagnose helper, run it as well; otherwise rely on the existing diagnose contract tests in [test_implement_post_codex_recovery.py](tests/test_implement_post_codex_recovery.py).\n\nCodebase conflict note\n- The issue says \u201cno longer reference Serena, Context7, or Git MCP\u201d in the implement path, and the codebase currently still has active implement-path references in both [implement.yml](.github/workflows/implement.yml) and [implement_diagnose_post_codex_failure.sh](scripts/implement_diagnose_post_codex_failure.sh), not just in prompt wording. The implementation should treat the diagnose helper\u2019s prompt-render dependency on `prompts/serena-efficiency-block.txt` as part of the required removal.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ebbb45367212c58d5ea04ec1defd246e3f58ae5ea067448bba85bd87a6724e27",
+  "lineage": {
+    "issue_number": 2044,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25293860704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25293860704",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2044"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260503232859_824f25cbba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2044,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25293860704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2044",
+  "timestamps": {
+    "created_at": "2026-05-03T23:28:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
