@@ -561,3 +561,144 @@ No in-scope `TODO` / `FIXME` / `HACK` markers were found in the audited workflow
 | Code modularization | 8 | Large |
 | Expression size reduction | 2 | Small |
 | Medium/Low fixes | 4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-03)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the repository-local evidence is strong enough that the implement stage can apply the change directly without further review. `NEEDS_VERIFICATION` means there is a plausible consolidation/reuse win, but static reading does not prove freshness, error-handling, or step-boundary semantics well enough to auto-implement safely. `RISKY_SKIP` means the call may be redundant, but it lives in a protected retry/race/poller path (or otherwise trips an explicit audit guard), so it must stay out of unattended implementation and requires manual review.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:61-76`; `.github/workflows/orchestrate_clarify_respond.yml:418-429`
+- **Current call count** — 4 logical calls on the common orchestrator-managed path with a tracking issue present.
+- **Proposed call count** — 2 logical calls, with the earlier child/tracking payloads persisted and the later reads converted to cache-miss fallback only.
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{ISSUE_NUMBER}`; `GET /repos/{repo}/issues/{TRACKING_NUM}`
+- **Evidence**
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+
+  ```sh
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  The later step re-reads the same child issue resource and the same tracking issue resource that the gate step already fetched from the API.
+- **Proposed fix** — Extend the `Check orchestrator metadata` step to persist both the child issue JSON and (when `TRACKING_NUM` is present) the tracking issue JSON to a temp file under `${RUNNER_TEMP}` or a `GITHUB_ENV`-advertised path. Update `Fetch issue and tracking context` to hydrate `ISSUE_BODY`, `ISSUE_TITLE`, and `TRACKING_BODY` from those cached payloads first, preserving the current `gh_retry gh api` calls only as cache-miss fallback.
+- **Safety rationale** — This crosses workflow-step boundaries and would replace an early plain `gh api` read with later `gh_retry gh api` consumers, so identical freshness and failure semantics cannot be proven from static reading alone.
+- **Downstream signal** — Verify that no workflow step between `Check orchestrator metadata` and `Fetch issue and tracking context` depends on fresher issue/tracking text than the gate-step snapshot; if verified, persist the first-step JSON payloads and retain the current later API calls only as cache-miss fallback.
+
+#### REUSE-002
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/implement.yml:64-64`; `.github/workflows/implement.yml:552-552`; supporting reuse contract at `.github/workflows/implement.yml:649-655`
+- **Current call count** — 2 logical `GET /issues/{ISSUE_NUMBER}` calls on the non-skipped implement path.
+- **Proposed call count** — 1 logical call, with the precheck snapshot carried forward into `ISSUE_META_FILE` and the later fetch retained only as cache-miss fallback.
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{ISSUE_NUMBER}`
+- **Evidence**
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ```
+
+  ```sh
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  ```
+
+  ```sh
+  if [ -s "${ISSUE_META_FILE:-}" ]; then
+    ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+  fi
+  if [ -z "${ISSUE_LABELS_JSON}" ]; then
+    ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+  fi
+  ```
+  The workflow already treats `ISSUE_META_FILE` as the reusable issue snapshot later in the job, but the earlier precheck discards its first API result instead of seeding that cache.
+- **Proposed fix** — In `Precheck approval phase label`, fetch the full issue JSON once into a temp file under `${RUNNER_TEMP}` (or persist a path via `GITHUB_ENV`), derive `ISSUE_STATE` / `ISSUE_LABELS_JSON` from that snapshot, and have `Fetch issue metadata` populate `ISSUE_META_FILE` from the carried snapshot before falling back to `gh_retry gh api`.
+- **Safety rationale** — This also crosses steps and changes a non-retry early guard into the source of truth for later prompt assembly, so freshness and failure-handling equivalence are not statically provable.
+- **Downstream signal** — Verify that using the precheck-time issue snapshot for later prompt/context assembly is acceptable on long setup runs, and that carrying it via file path (not large env payload) preserves the current skip-fast behavior before collapsing the second fetch.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001
+- **Safety tag** — `SAFE_TO_MERGE`
+- **File path and line ranges** — `scripts/review_rb_judge.sh:159-170`; downstream consumption at `scripts/review_rb_judge.sh:241-244`
+- **Current call count** — `K` logical calls to `GET /issues/{n}` per invocation, where `K` is the number of linked issues.
+- **Proposed call count** — `1`
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```sh
+  FIRST_ISSUE=""
+  FIRST_ISSUE_BODY=""
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    if [ -z "${FIRST_ISSUE}" ]; then
+      FIRST_ISSUE="${issue_number}"
+    fi
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if [ -z "${FIRST_ISSUE_BODY}" ]; then
+      FIRST_ISSUE_BODY="${BODY}"
+    fi
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+
+  ```sh
+  if [ -n "${FIRST_ISSUE}" ]; then
+    echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
+    echo
+    echo "${FIRST_ISSUE_BODY}"
+  fi
+  ```
+  Only `FIRST_ISSUE_BODY` is read later. Once the first linked issue body is populated, every later `_safe_gh_jq .../issues/${issue_number}` result is discarded.
+- **Proposed fix** — In `scripts/review_rb_judge.sh`, fetch `.body` only for the first linked issue: once `FIRST_ISSUE` is set and `FIRST_ISSUE_BODY` is captured, skip further per-issue body lookups while leaving `ISSUE_NUMBERS` unchanged for the later label/close loops.
+- **Safety rationale** — The dead lookups occur in the same script block, have no pagination or retry semantics, and the only downstream body consumer is `FIRST_ISSUE_BODY`, so removing the extra `K-1` calls does not change observable behavior.
+- **Downstream signal** — In `scripts/review_rb_judge.sh`, fetch `issue.body` only for the first linked issue and remove the per-issue body lookup for later linked issues.
+
+#### DEAD-API-002
+- **Safety tag** — `RISKY_SKIP`
+- **File path and line ranges** — `scripts/orchestrate_poll_process.sh:11405-11405`; surrounding tail block `scripts/orchestrate_poll_process.sh:11407-11478`
+- **Current call count** — `1` per standalone-conflict-sweep pass.
+- **Proposed call count** — `0`
+- **Endpoint(s)** — `GET /repos/{repo}`
+- **Evidence**
+  ```sh
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  ```
+
+  ```sh
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+    S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
+    S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+    S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
+    ...
+  done
+
+  echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
+  ```
+  Within the tail sweep block, `DEFAULT_BRANCH` is assigned once and never read before the file ends at line 11478.
+- **Proposed fix** — If manual review confirms the standalone conflict sweep no longer needs the repo default branch, remove the eager `DEFAULT_BRANCH` fetch from this tail block; otherwise defer the fetch until the first real consumer is reintroduced.
+- **Safety rationale** — This call sits inside `scripts/orchestrate_poll_process.sh`, which the audit contract explicitly marks as a race-defensive hot path that must not receive unattended merge/elimination changes.
+- **Downstream signal** — Do not auto-implement this; a human must confirm the standalone sweep has no hidden trap/tail consumer for `DEFAULT_BRANCH` and then validate at least one full `orchestrate_poll` cycle after any edit.
+
+### Cross-References to Deep Audit Section
+- API-001: `NEEDS_VERIFICATION` — Agreed; the later Telegram alert should reuse the earlier orchestrator classification, but the implement stage must preserve cross-step export/fail-open behavior before deleting the per-issue body lookups.
+- API-002: `NEEDS_VERIFICATION` — Agreed; batching commit attribution is directionally correct, but the review hot path needs a manual check that GraphQL aliasing preserves the current `author.login` / `committer.login` null-handling and fail-open logging.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | DEAD-API-002 |
+
+### Implement-Stage Handoff
+- DEAD-API-001
