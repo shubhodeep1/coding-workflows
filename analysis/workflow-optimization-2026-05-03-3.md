@@ -702,3 +702,117 @@ Ordered by end-to-end impact.
 | `cancel_on_pr_close` / `25273362771` | queued + in-progress workflow-run scans per branch |
 | `issue_pr_status` / `25273362769` | GraphQL batch with per-issue REST fallback |
 | `review_autofix` / `25273362778` | GraphQL linked-issue lookup plus workflow dispatch attempts |
+
+## Deep Audit — Workflows & Scripts (2026-05-03)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — **BUG-001**  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:2722-2769,2792-2832,2850-2897,2915-2950,3021-3058`  
+  **Severity** — High  
+  **Category tag** — `bug`  
+  **Description** — Every “dispatch & watch” block identifies the spawned run by taking the latest run with `.id > PRE` after a `gh workflow run`. That is not a stable correlation to *this* dispatch; it will bind to any newer run of the same workflow that appears first in the indexing window. The pattern is repeated for `workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-memory-maintenance`, and `internal-orchestrate`. In a busy repo, a scheduled/manual/concurrent smoke-triggered run can satisfy the same predicate and make the gate watch the wrong run, producing false pass/fail outcomes.  
+  **Recommended fix** — Extract a shared watcher helper that records `dispatch_started_at` and matches on a unique dispatch marker, not “latest id after PRE”. Preferred signature: `dispatch_and_wait_workflow_run <repo> <workflow_file> <timeout_secs> <poll_secs> <fields_json> <match_mode>`. For workflows that lack a unique input today, add a no-op `smoke_nonce` / `caller_run_id` input and filter by that marker plus `event=workflow_dispatch`, `created_at >= dispatch_started_at`, and actor. Reuse the helper across all five blocks.
+
+- **ID** — **BUG-002**  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:924-933,954-1033`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The PR-head “stability” guard never fails closed. The loop samples `HEAD_A` and `HEAD_B` five times, but if the SHA is still moving on attempt 5, execution just falls through into bait injection anyway. That defeats the protection the comment describes: the subsequent `gh api -X PUT repos/.../contents/...` still runs against a moving PR head, so the step can skip or misattribute failures that are really branch-motion races.  
+  **Recommended fix** — Track an explicit `head_stable=false/true` flag and abort with a dedicated status (for example `head_still_moving`) if the SHA never stabilizes. Reuse the stable SHA for the later PR metadata check instead of re-fetching the PR independently.
+
+- **ID** — **BUG-003**  
+  **File path** — `.github/workflows/review_autofix.yml:478-530`  
+  **Severity** — High  
+  **Category tag** — `bug`  
+  **Description** — The post-merge validate-dispatch fallback reintroduces the broad issue-link regex that the same workflow’s deterministic-skip path explicitly avoids. At line 488 it matches plain `issues/123` and `issue #123` mentions, not just closing references. If `closingIssuesReferences` is empty, a merged PR body/title that merely documents another issue can still populate `issue_numbers`; the loop at lines 503-527 then calls `gh issue view`, dispatches validation, and removes `ai:orchestrator-validate-required` from those unrelated issues.  
+  **Recommended fix** — Make this path GraphQL-only like the deterministic skip path, or narrow fallback parsing to true closing references only (the stricter pattern already used in `.github/workflows/issue_pr_status.yml:196-210`). If fallback must remain, batch-fetch labels for all candidate issues before any mutation and refuse to mutate on ambiguous prose-only matches.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — **API-001**  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:68-100`  
+  **Severity** — Medium  
+  **Category tag** — `api-batching`  
+  **Description** — The workflow performs two separate paginated `GET /repos/{repo}/actions/runs` scans for the same branch/event scope: one with `status=queued` and one with `status=in_progress`, then merges them locally. Current retrieval call count per PR-close event: **2 list-runs calls** before any cancel POSTs.  
+  **Recommended fix** — Collapse this to a single list-runs request for `event=pull_request`, `branch=${PR_HEAD_REF}`, `per_page=100`, then filter `queued|in_progress` client-side. Proposed retrieval call count: **1 list-runs call** before cancel POSTs. Extend the single-call filtering pattern already used in `scripts/gh_helpers.sh:1183-1229` (`autofix_retrigger_has_inflight_peer`).
+
+- **ID** — **API-002**  
+  **File path** — `.github/workflows/review_autofix.yml:478-530`  
+  **Severity** — Medium  
+  **Category tag** — `api-batching`  
+  **Description** — In the fallback branch, the step first fetches PR text once (`repos/{repo}/pulls/{PR_NUMBER}`) and then performs a `gh issue view ... --json labels` call inside the per-issue loop for every inferred issue whose labels were not already present. Current retrieval call count in the fallback path: **1 PR fetch + N issue fetches**. This is both an N+1 pattern and a tight per-iteration API call inside a loop.  
+  **Recommended fix** — Batch the candidate issue-label lookup before the loop. Proposed retrieval call count: **1 batched GraphQL query** (or **2** if you retry only missing aliases) instead of `1+N`. Reuse the alias-batching pattern from `.github/workflows/issue_pr_status.yml:291-320` or the richer batched helper in `scripts/orchestrate_poll_process.sh:5850-5969` (`_fetch_candidate_issue_details_graphql`). Keep the per-issue label-removal mutations, but eliminate the per-issue reads.
+
+- **ID** — **API-003**  
+  **File path** — `.github/workflows/issue_pr_status.yml:295-330`  
+  **Severity** — Medium  
+  **Category tag** — `api-batching`  
+  **Description** — The workflow already does one aliased GraphQL batch to classify linked issues, but if that batch fails it falls back to a per-issue REST fetch inside the loop (`repos/{REPOSITORY}/issues/{_orch_num}`). Current retrieval call count in the degraded path: **1 GraphQL batch + up to N REST issue fetches**. That violates the repo’s own “cycle-local caches / batched GraphQL over per-item REST” rule for the error path.  
+  **Recommended fix** — Retry missing/failed issue metadata in another batched GraphQL query rather than dropping to REST-per-issue. Proposed retrieval call count: **2 batched GraphQL calls max** (initial batch + missing-alias retry), falling back to REST only for the specific unresolved IDs if both batches fail. Extend the batching contract from `scripts/orchestrate_poll_process.sh:5850-5969`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — **DUP-001**  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:2722-2769,2792-2832,2850-2897,2915-2950,3021-3058`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The workflow contains at least five near-identical “dispatch workflow, discover new run id, poll until completion” shell blocks. They differ mostly by workflow filename, timeout, and success conclusion handling. This duplication already drifted: some blocks accept `skipped`, some do not; some pass distinguishing inputs, some do not.  
+  **Recommended fix** — Move the pattern into a shared helper, preferably `scripts/gh_helpers.sh` or a new `scripts/watch_workflow_dispatch.sh`. Suggested signature: `dispatch_and_wait_workflow_run <repo> <workflow_file> <timeout_secs> <poll_secs> <accept_csv> <fields_json> [match_marker]`. Update all `dispatch_*` callers in `test-and-mark-stable.yml` to use the helper, and reuse it in `comprehensive-test-and-release.yml` where the same watch logic exists.
+
+- **ID** — **DUP-002**  
+  **File path** — `scripts/gh_helpers.sh:76-121,391-557; scripts/label_helpers.sh:110-144; .github/workflows/cancel_on_pr_close.yml:27-53; .github/workflows/mark-stable.yml:308-347,457-496; .github/workflows/orchestrate_poll.yml:66-95; .github/workflows/review_autofix.yml:566-580,1293-1341; .github/workflows/implement.yml:3098-3110; scripts/implement_diagnose_post_codex_failure.sh:42-49`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Core GitHub helper behavior is duplicated in many places: custom `_rl_wait/_gh_retry` wrappers, inline `gh_retry() { "$@"; }` shims, duplicated `_safe_gh_jq`, and inline `ensure_label_exists`. The repo already has canonical implementations in `scripts/gh_helpers.sh` and `scripts/label_helpers.sh`, so these copies create drift risk in retry semantics, rate-limit handling, permanent-failure detection, and label metadata.  
+  **Recommended fix** — Centralize on the existing helper modules. If some jobs intentionally avoid the full support checkout, add a tiny bootstrap helper module (for example `scripts/gh_helpers_min.sh`) with the exact subset needed: `gh_retry`, `_safe_gh_jq`, and `ensure_label_exists`. Update the listed callers to source that module instead of reimplementing local variants.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No new expression-length findings met the reporting threshold.
+
+- Largest interpolated `run:` blocks observed in this audit were far below the 15,000-character medium-risk floor:  
+  - `.github/workflows/test-and-mark-stable.yml:3801-3871` ≈ **2,999 chars**  
+  - `.github/workflows/plan.yml:1278-1321` ≈ **2,962 chars**  
+  - `.github/workflows/mark-stable.yml:301-366` ≈ **2,743 chars**
+- Largest `if:` expression observed was in `.github/workflows/review_autofix.yml:3746` at ≈ **444 chars**.
+- No workflow file exceeded the 800 KB early-warning threshold. The largest audited workflow was `.github/workflows/review_autofix.yml` at **271,416 chars**, leaving **777,160 chars** of headroom under GitHub’s 1 MB workflow file limit.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — **DEAD-001**  
+  **File path** — `scripts/orchestrate_poll_process.sh:4770-4776`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `read_standalone_state_json()` is defined, but repository-wide symbol/text search found no callers; only `write_standalone_state_json()` is used from the standalone stall-recovery flow. That leaves an untested dead helper in the hottest script in the repo.  
+  **Recommended fix** — Remove `read_standalone_state_json()` if it is obsolete, or switch an existing caller to it so the read-path is exercised. If kept, document why it remains intentionally unused.
+
+- **ID** — **DEBT-001**  
+  **File path** — `.github/workflows/memory_maintenance.yml:37-55`  
+  **Severity** — Low  
+  **Category tag** — `tech-debt`  
+  **Description** — The reusable memory-maintenance workflow still threads `BATCH_API_DISABLED`, `BATCH_API_PROVIDER`, and `BATCH_API_POLL_TIMEOUT_HOURS` through its env and emits them in a `batch_noop` log line, while the same block explicitly states there is “no_llm_path” and “no_codex_execution_path”. This preserves a dead configuration surface that operators can still set even though it changes nothing.  
+  **Recommended fix** — Remove the deprecated variables from the reusable workflow interface and keep any compatibility telemetry in a dedicated wrapper or migration shim. At minimum, add a sunset date and stop exporting the vars into runtime env once downstream scrapers are updated.
+
+No TODO/FIXME/HACK markers were found in the audited `.github/workflows/*.yml`, `scripts/*.sh`, or `scripts/*.py` files.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, BUG-003 |
+| Medium | 6 | BUG-002, API-001, API-002, API-003, DUP-001, DUP-002 |
+| Low | 2 | DEAD-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 6 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 2 | Small |
