@@ -1123,13 +1123,19 @@ jobs:
 
           Concretely on this attempt:
           - Use `apply_patch` (or the equivalent Serena edit tool) to make
-            edits, NOT `sed`/`grep` shell-out workarounds. `sed` and `rg`
-            with literal special characters routinely fail shell quoting
-            and waste the entire attempt.
-          - Do NOT read additional files until your first `apply_patch`
-            call has succeeded. Pick the file you understand best from
-            the plan, edit it first, verify the patch landed, and only
-            then expand scope.
+            edits. For plain-text files (.txt, .csv, canary files, data
+            files) with fully-specified content, a direct shell write is
+            equally valid and avoids apply_patch diff-format issues:
+              printf 'line1\nline2\nline3\n' > path/to/file.txt
+            Avoid `sed`/`rg` for content replacements — quoting is fragile.
+          - Do NOT read additional files until your first write tool call
+            has succeeded. Pick the file you understand best from
+            the plan, edit it first, verify the change landed on disk, and
+            only then expand scope.
+          - WARNING: describing or quoting the file's new content in your
+            response does NOT write it to disk. You MUST call a write tool
+            (apply_patch, printf shell exec, or Serena write) — the
+            file is unchanged until a tool call is actually executed.
 
           RETRY_EOF
                 if [ -n "${prior_exec_history}" ]; then
@@ -1138,7 +1144,8 @@ jobs:
                     "${prior_exec_history}" \
                     "" \
                     "Based on the above, you have already inspected the relevant files. Skip" \
-                    "re-exploration. Make the edits now using apply_patch / Serena edit tools." \
+                    "re-exploration. Make the edits now using apply_patch, printf, or Serena write tools." \
+                    "Do NOT narrate — call a write tool." \
                     ""
                 fi
                 cat "${CODEX_PROMPT_FILE}"
