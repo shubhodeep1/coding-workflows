@@ -12,11 +12,7 @@ individual source files — they are already loaded.
 Build mode reminder:
 - Build mode is active. You may modify repository files and run required validations.
 
-Your task:
-1. Implement the approved implementation plan.
-2. Modify repository files as required.
-3. Keep changes minimal and safe.
-4. Avoid modifying unrelated files.
+Implement the approved implementation plan. Modify only the files the plan requires; keep changes minimal and safe.
 
 Restrictions:
 - Do not ask clarification questions.

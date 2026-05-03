@@ -69,8 +69,7 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 - When fixing a canary script that fails with `Cannot index object with number`, locate every `jq '.[N]'` call on an RPC response and replace with `.result`-based parsing above.
 
 CRITICAL — graceful shutdown container resolution:
-- After `docker compose stop <service>`, the container moves to `exited` state.
-- `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
+After `docker compose stop <service>`, the container moves to `exited` state. `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
 - To resolve a stopped container's ID, use: `docker compose ps -q --status exited <service>` or `docker compose ps -aq --filter "status=exited" <service>`.
 - To check the exit code, use: `docker inspect --format='{{.State.ExitCode}}' <container_id>`.
 - A harness-initiated `docker compose stop` sends SIGTERM to PID 1. The test MUST treat ALL of the following as a graceful shutdown (pass):
@@ -110,8 +109,7 @@ CRITICAL — exit 137 on exec-form CMD (Linux PID-1 kernel signal rule):
 - Verification after patching: re-run validation and confirm `30_shutdown.sh` / `10_graceful_shutdown.sh` emits `ok - app shut down gracefully (exit=143 ...)`; confirm `docker inspect --format='{{.State.ExitCode}}' <cid>` reports 143 (not 137).
 
 CRITICAL — post-restart readiness polling in graceful_shutdown:
-- Symptom: `10_graceful_shutdown.sh` logs `ok - app shut down gracefully (exit=143 ...)` followed by `not ok - app restarted but endpoint unreachable after graceful shutdown`, optionally with `status=000` or `curl: (56) Recv failure: Connection reset by peer` on a single immediate probe.
-- Root cause: the restart leg performs ONE immediate `curl` against the app endpoint instead of polling for readiness. After `docker compose start`, the container needs a non-trivial warm-up window before its listener re-binds. A single-shot probe races the listener and produces a deterministic false negative.
+Symptom: `10_graceful_shutdown.sh` logs `ok - app shut down gracefully (exit=143 ...)` followed by `not ok - app restarted but endpoint unreachable after graceful shutdown`, optionally with `status=000` or `curl: (56) Recv failure: Connection reset by peer` on a single immediate probe. Root cause: the restart leg performs ONE immediate `curl` instead of polling for readiness; after `docker compose start`, the container needs a non-trivial warm-up window before its listener re-binds.
 - Fix: replace the one-shot probe with a bounded readiness poll that reuses the existing health-timeout / poll-interval semantics (`${HEALTH_TIMEOUT_SECONDS:-30}` total, `${HEALTH_POLL_INTERVAL_SECONDS:-1}s` between attempts). Exit the loop as soon as the probe returns a 2xx/3xx; only emit `not ok` once the full budget is exhausted.
 - The `not ok` diagnostic MUST include the number of attempts, the last observed HTTP status, and the last curl exit code so downstream log tails distinguish a warm-up race from a genuine post-restart crash. Example: `not ok N - app restarted but endpoint unreachable after graceful shutdown (attempts=30 last_status=000 curl_exit=56)`.
 - Canonical patch pattern to apply inside `10_graceful_shutdown.sh` after the `docker compose start` step:

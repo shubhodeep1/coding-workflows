@@ -2686,7 +2686,7 @@ invoke_judge_for_integration_conflict() {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR:-openai/gpt-5.3-codex}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-high}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
     if [ -f "${catalog_path}" ]; then
       echo "model_catalog_json = \"${catalog_path}\""
     fi
@@ -5640,7 +5640,7 @@ invoke_stall_judge() {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi
@@ -8938,7 +8938,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       echo 'web_search = "live"'
       echo 'model_provider = "openrouter"'
       echo "model = \"${MODEL_EDITOR}\""
-      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
+      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
       if [ -f "${CATALOG_PATH}" ]; then
         echo "model_catalog_json = \"${CATALOG_PATH}\""
       fi
@@ -10635,13 +10635,13 @@ Manual intervention required." >/dev/null
   # Setup Codex config for judge
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
-  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-medium}"
   CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi

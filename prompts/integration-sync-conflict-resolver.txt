@@ -109,65 +109,15 @@ unrelated maintenance fixes that you should layer in additively.
   in-scope list above.
 - Do not access the network.
 
-HARD CONSTRAINT — out-of-scope edits are rejected:
-Your edits will be diff-checked against the in-scope list above.
-Any file you modify that is NOT in that list will cause the run
-to abort with no commit.  Do not "improve" surrounding code.  Do
-not rewrite unrelated sections.  Do not add new helper scripts,
-env vars, or workflow steps.  If you find yourself wanting to
-edit a file that is not in the list above, STOP and leave it
-alone — even if you believe it is related to a fingerprint
-violation.  Fingerprint-violating files are already expanded
-into the list above by `scripts/review_conflict_prepare.sh`
-before this prompt is rendered; if a path you would need is
-missing, that is a plumbing bug to report, not one to route
-around.
+Your edits are diff-checked against the in-scope list above. Any file you modify that is NOT in that list will abort the run with no commit. Do not "improve" surrounding code, rewrite unrelated sections, or add helper scripts, env vars, or workflow steps. If you find yourself wanting to edit a file not in the list, leave it alone — even if you believe it relates to a fingerprint violation. Fingerprint-violating files are expanded into the in-scope list by `scripts/review_conflict_prepare.sh` before this prompt renders; if a path you need is missing, that is a plumbing bug to report, not one to route around.
 
-HARD CONSTRAINT — no inventing files or commands:
-Before you finalize, perform this self-check on every edit:
-1. List every file path you reference in your edits (including
-   any path mentioned in a shell command, sourced script,
-   bootstrap fetch list, or workflow step you would add).
-2. For each path, verify the file already exists in the
-   repository tree by reading it.
-3. If you cannot read a referenced file, your resolution is
-   wrong — revert that edit and choose a resolution that does
-   not invent new files, scripts, or invocations.
-The most common failure mode for this step is hallucinating a
-plausible-looking helper script (e.g. build_repo_overview.sh,
-protected_paths.txt) and wiring it into the bootstrap loop.
-The downstream existence check will catch this and abort the
-merge-resolve commit, wasting the entire review run.  Do not
-do it.
+Before finalizing, verify every file path you reference in your edits (including paths in shell commands, sourced scripts, or workflow steps) exists in the repository by reading it. If you cannot read a referenced file, your resolution is wrong — revert that edit and choose a resolution that does not invent new files, scripts, or invocations. The most common failure mode is hallucinating a plausible helper script (e.g. build_repo_overview.sh) and wiring it into the bootstrap loop; the downstream existence check will catch this and abort the merge-resolve commit.
 
-HARD CONSTRAINT — sub-issue intent is load-bearing:
-The orchestrator merges sub-issues into the integration branch in
-strict dependency order. Each sub-issue PR was reviewed and merged on
-its own merits before reaching this point. If you silently revert a
-sub-issue's intent during conflict resolution, downstream sub-issues
-that build on it will fail in confusing ways one or more waves later,
-far from the cause. Treat every `must_contain` and `must_not_contain`
-fingerprint pattern as a hard test case your resolution has to pass.
-When in doubt between two valid synthetic resolutions, pick the one
-that keeps MORE merged sub-issue intent verbatim.
+Sub-issue intent is load-bearing. The orchestrator merges sub-issues in strict dependency order; each was reviewed and merged on its own merits. If you silently revert a sub-issue's intent, downstream sub-issues that build on it will fail in confusing ways one or more waves later. Treat every `must_contain` and `must_not_contain` fingerprint pattern as a hard test case your resolution must pass. When choosing between two valid synthetic resolutions, pick the one that keeps MORE merged sub-issue intent verbatim.
 
-HARD CONSTRAINT — do NOT pick the default-branch side verbatim:
-The single most common failure mode at this step is "pick the
-default-branch (other) side of every hunk and drop the integration
-(HEAD) side". That wholesale-revert pattern will fail fingerprint
-verification because it drops every `must_contain` line the merged
-sub-issues added and reintroduces every `must_not_contain` line they
-deleted. Whenever INTENT_FINGERPRINTS has a non-empty entry for a
-conflicted file, the correct resolution is almost never "pick the
-other side" — it is either "pick HEAD" or "synthesize a hunk that
-layers the other side's unrelated maintenance fix on top of HEAD's
-sub-issue content". Before writing the resolved hunk, look up that
-file in INTENT_FINGERPRINTS above and reconcile your resolution
-against every `must_contain` / `must_not_contain` pattern for it.
+Do NOT pick the default-branch side verbatim. The single most common failure mode is "pick the default-branch (other) side of every hunk and drop the integration (HEAD) side". That wholesale-revert pattern fails fingerprint verification by dropping every `must_contain` line the merged sub-issues added and reintroducing every `must_not_contain` line they deleted. Whenever INTENT_FINGERPRINTS has a non-empty entry for a conflicted file, the correct resolution is almost never "pick the other side" — it is "pick HEAD" or "synthesize a hunk that layers the other side's unrelated maintenance fix on top of HEAD's sub-issue content". Before writing the resolved hunk, look up the file in INTENT_FINGERPRINTS and reconcile against every `must_contain` / `must_not_contain` pattern.
 
-HARD CONSTRAINT — per-file fingerprint pre-flight:
-For every conflicted file that has fingerprint entries in
-INTENT_FINGERPRINTS (even just one), before you finalize that file:
+Per-file fingerprint pre-flight: for every conflicted file that has fingerprint entries in INTENT_FINGERPRINTS (even just one), before you finalize that file:
 1. Read the post-resolve content of that file.
 2. For each `must_contain` regex listed for that file across all
    sub-issues: confirm the pattern still matches the post-resolve

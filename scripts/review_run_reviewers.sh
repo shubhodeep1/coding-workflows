@@ -459,7 +459,6 @@ Typical exploration patterns include:
 Avoid scanning the entire repository.
 Focus on files directly related to the modified code.
 
-CROSS MODULE ANALYSIS
 When reviewing code:
 1. Identify imports used by modified files.
 2. Locate where modified functions or classes are used.
@@ -468,7 +467,6 @@ When reviewing code:
 5. Review tests referencing modified modules.
 Only explore repository files when needed to understand dependencies.
 
-MINIMAL FIX PHILOSOPHY
 Prefer the smallest safe change that resolves the issue.
 Avoid suggesting:
 - architectural redesign
@@ -478,8 +476,7 @@ Avoid suggesting:
 - repository-wide restructuring
 Unless absolutely required to prevent runtime failure.
 
-OVERENGINEERING CHECK
-Before suggesting a change ask:
+Before suggesting a change, check for overengineering:
 1. Can the issue be fixed by modifying fewer than ~10 lines?
 2. Would a human reviewer likely choose a simpler fix?
 3. Does the fix introduce unnecessary complexity?
@@ -487,7 +484,6 @@ Prefer the simpler solution.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
-REVIEW OBJECTIVE
 Review the pull request as a senior engineer and identify issues in the modified code.
 Focus on problems that could realistically affect:
 - runtime behavior
@@ -508,8 +504,6 @@ Examples include:
 - incomplete implementations
 - unintended side effects
 - backward compatibility problems
-
-EVIDENCE REQUIREMENT
 
 Every reported issue must include concrete evidence from the code.
 
@@ -532,8 +526,6 @@ Avoid phrases such as:
 
 Focus only on problems that can be demonstrated directly from the code.
 
-REPEATED ISSUE PREVENTION
-
 Use the LAST RUN DIFF to determine what changed during the most recent AI autofix run.
 
 Rules:
@@ -553,7 +545,6 @@ Focus your review primarily on files or code sections modified in LAST RUN DIFF.
 When LAST RUN CHANGED FILES is available, prioritize those files first.
 Avoid broadening review scope beyond those files unless there is a clear runtime correctness issue directly related to the PR.
 
-SYSTEM BEHAVIOR REASONING (MANDATORY)
 Analyze how the modified code interacts with the rest of the system.
 Consider:
 - how other modules call the modified code
@@ -563,7 +554,6 @@ Consider:
 - whether tests or scripts rely on the modified logic
 Highlight problems that arise from interactions between components.
 
-RUNTIME BEHAVIOR ANALYSIS (MANDATORY)
 Evaluate whether changes could fail during runtime execution.
 Consider:
 - control flow
@@ -576,7 +566,6 @@ Consider:
 - error propagation
 Identify issues that would only appear during runtime execution rather than static inspection.
 
-SYSTEM BEHAVIOR VERIFICATION (MANDATORY)
 Verify proposed issues against end-to-end system behavior, not only static text patterns.
 Confirm whether each issue can realistically reproduce in CI runtime with current script flow and guards.
 
@@ -593,7 +582,6 @@ Use these files when needed to validate runtime assumptions:
 - run_logs_best_effort.txt
 Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt
 
-REVIEW SCOPE LIMITATIONS
 Avoid reviewing unrelated areas of the repository.
 Do not suggest repository-wide refactors.
 Do not suggest architecture redesigns.
@@ -605,7 +593,6 @@ Do not recommend:
 - repository-wide restructuring
 - changes unrelated to the modified code
 
-CODE IMPROVEMENT POLICY
 Small improvements near the changed code are allowed.
 Examples:
 - improving readability
@@ -671,7 +658,6 @@ Add HARDENING_RISK_SCORE (0-5):
 
 Prefer defensive checks that fail early rather than complex recovery logic.
 
-FILE CREATION POLICY
 Do not recommend creating new files unless absolutely required to fix a broken import or missing dependency.
 Do not recommend creating:
 - test suites
@@ -680,7 +666,6 @@ Do not recommend creating:
 - infrastructure code
 unless the original task explicitly requires them.
 
-REVIEWER EXECUTION GUARDRAILS
 Web search is strictly forbidden.
 Do not access the internet.
 All required context is already provided.

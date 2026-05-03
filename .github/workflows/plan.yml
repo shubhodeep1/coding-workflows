@@ -39,7 +39,7 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       SKIP_PLAN: "false"
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_PLAN || 'xhigh' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_PLAN || 'medium' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."

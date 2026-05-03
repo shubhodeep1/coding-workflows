@@ -43,53 +43,18 @@ Output requirements:
   - ## Metrics Appendix
 
 Section requirements:
-- ## Executive Summary
-  - Provide 3-7 bullets covering the highest-impact findings across all dimensions.
-  - Include estimated impact and confidence level per bullet (high/medium/low).
-- ## Speed Optimizations
-  - Rank recommendations by expected end-to-end latency reduction.
-  - For each item include: evidence, root cause, exact change, estimated time savings, and implementation risk.
-  - Distinguish critical-path wins from local micro-optimizations.
-- ## Cost Optimizations
-  - Rank recommendations by expected token and/or dollar savings.
-  - For each item include: evidence, root cause, exact change, estimated savings, and quality-risk notes.
-  - Explicitly evaluate model selection, reasoning/thinking level, repeated prompt/context expansion, and avoidable reruns.
-- ## Reliability Improvements
-  - Rank recommendations by expected failure-rate or rerun-rate reduction.
-  - For each item include: failure evidence, root cause category, exact fix, expected reliability impact, and rollback/fail-open considerations.
-- ## AI Memory Health
-  - Look for `AI_MEMORY_TELEMETRY:` lines in deep-dive log excerpts. Each line is a JSON object with `op` (operation name) and operation-specific fields.
-  - Key telemetry operations: `retrieve` (memory context fetch), `record-candidate` (learning), `record-run-event` (ledger), `finalize-task` (lineage), `promote` (candidate elevation), `compact` (archival), `processed-command-claim`/`processed-command-complete` (idempotency).
-  - For `retrieve` operations, report: hit rate (% with `records_selected > 0`), average `estimated_tokens` vs budget, `keyword_method` distribution (`llm` vs `plain` vs `none`).
-  - Flag: retrieves returning 0 records, `fail_open: true` entries (silent failures), `enabled: false` entries (memory disabled), high push retry counts.
-  - If no `AI_MEMORY_TELEMETRY` lines are found in the log excerpts, state that memory telemetry was not observed and recommend verifying telemetry emission in the sampled runs.
-- ## GH API Call Audit
-  - Identify high-volume and high-redundancy API call patterns by workflow/job/step.
-  - Flag unbatched per-item calls, repeated lookups in loops, and missed cache/prefetch opportunities.
-  - Recommend concrete batching/reuse changes with estimated call-count reduction and rate-limit risk reduction.
-  - Cross-reference findings against repository-specific API hygiene rules (mandatory batching, cycle-local caches, and fail-open behavior).
-- ## MCP & Serena Efficiency
-  - Audit tool-use efficiency: broad reads vs targeted symbol lookups, repeated reads of same regions, and avoidable tool churn.
-  - Recommend concrete changes that improve token efficiency and turnaround time while preserving correctness.
-  - Call out opportunities to increase parallelizable read operations safely.
-- ## Prompt Cache & Memory System
-  - Evaluate prompt-cache behavior (creation/read usage, hit/miss patterns, fail-open behavior) and memory retrieval effectiveness.
-  - Identify cache-fragmentation causes (unstable prompt prefixes, dynamic noise placement, avoidable prompt variance).
-  - Recommend concrete cache/memory improvements and estimate impact on tokens, latency, and reliability.
-- ## Orchestrator Health
-  - Assess orchestrator flow health (clarification loops, wave progression, deferrals, conflict-heal retries, stuck/terminal states).
-  - Highlight recurring operational pain points and the smallest safe mitigations.
-  - Include observable indicators that teams can track to verify improvement.
-- ## Pipeline Flow Bottlenecks
-  - Map the dominant bottlenecks across clarify -> plan -> implement -> review/autofix -> validate/orchestrate loops.
-  - Separate queueing, compute, retry, and merge/conflict overhead.
-  - Recommend bottleneck fixes ordered by end-to-end impact.
-- ## Per-Repo Breakdown
-  - Add one `###` subsection per repository.
-  - For each repo, summarize top bottlenecks, top failure modes, highest-cost drivers, and top 3 prioritized actions.
-- ## Metrics Appendix
-  - Include concise markdown tables for the metrics used in analysis.
-  - At minimum include run counts, success/failure rates, p50/p95 durations, token totals, cache metrics (if available), and GH API call summaries.
+- ## Executive Summary: 3-7 bullets covering the highest-impact findings; include estimated impact and confidence level (high/medium/low) per bullet.
+- ## Speed Optimizations: rank by expected latency reduction; for each item include evidence, root cause, exact change, estimated time savings, and implementation risk; distinguish critical-path wins from micro-optimizations.
+- ## Cost Optimizations: rank by expected token/dollar savings; for each item include evidence, root cause, exact change, estimated savings, and quality-risk notes; evaluate model selection, reasoning level, repeated prompt/context expansion, and avoidable reruns.
+- ## Reliability Improvements: rank by expected failure-rate or rerun-rate reduction; for each item include failure evidence, root cause category, exact fix, expected reliability impact, and rollback/fail-open considerations.
+- ## AI Memory Health: look for `AI_MEMORY_TELEMETRY:` lines in deep-dive log excerpts (each is a JSON object with `op` and operation-specific fields); for `retrieve` operations report hit rate (% with `records_selected > 0`), average `estimated_tokens` vs budget, and `keyword_method` distribution; flag retrieves returning 0 records, `fail_open: true` entries, `enabled: false` entries, and high push retry counts; if no telemetry is found, state so and recommend verifying emission.
+- ## GH API Call Audit: identify high-volume and high-redundancy API call patterns by workflow/job/step; flag unbatched per-item calls, repeated lookups in loops, and missed cache/prefetch opportunities; recommend concrete batching/reuse changes with estimated call-count reduction and rate-limit risk reduction; cross-reference against repository-specific API hygiene rules.
+- ## MCP & Serena Efficiency: audit tool-use efficiency (broad reads vs targeted symbol lookups, repeated reads, avoidable tool churn); recommend changes that improve token efficiency and turnaround while preserving correctness; call out opportunities to increase parallelizable read operations safely.
+- ## Prompt Cache & Memory System: evaluate prompt-cache behavior (creation/read usage, hit/miss patterns, fail-open behavior) and memory retrieval effectiveness; identify cache-fragmentation causes (unstable prefixes, dynamic noise placement, avoidable prompt variance); recommend concrete improvements and estimate impact on tokens, latency, and reliability.
+- ## Orchestrator Health: assess orchestrator flow health (clarification loops, wave progression, deferrals, conflict-heal retries, stuck/terminal states); highlight recurring operational pain points and smallest safe mitigations; include observable indicators teams can track.
+- ## Pipeline Flow Bottlenecks: map dominant bottlenecks across clarify → plan → implement → review/autofix → validate/orchestrate loops; separate queueing, compute, retry, and merge/conflict overhead; recommend fixes ordered by end-to-end impact.
+- ## Per-Repo Breakdown: one `###` subsection per repository summarizing top bottlenecks, top failure modes, highest-cost drivers, and top 3 prioritized actions.
+- ## Metrics Appendix: concise markdown tables for metrics used in analysis; at minimum include run counts, success/failure rates, p50/p95 durations, token totals, cache metrics (if available), and GH API call summaries.
 
 Rules:
 - Be specific and evidence-based: cite repo names, run IDs, workflow/job/step names, and measured values.

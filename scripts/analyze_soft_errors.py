@@ -348,7 +348,7 @@ def main() -> int:
 	)
 	parser.add_argument(
 		"--reasoning",
-		default=os.environ.get("LOG_ANALYZER_REASONING", "medium"),
+		default=os.environ.get("LOG_ANALYZER_REASONING", "none"),
 	)
 	parser.add_argument(
 		"--output",

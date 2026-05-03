@@ -36,31 +36,9 @@ Rules:
 - Do not modify GitHub workflow files except when resolving merge conflicts.
 - Do not access the network.
 
-HARD CONSTRAINT — out-of-conflict edits are rejected:
-Your edits will be diff-checked against the set of files that
-actually had merge conflicts.  Any file you modify that did NOT
-contain conflict markers will cause the run to abort with no
-commit.  Do not "improve" surrounding code.  Do not rewrite
-unrelated sections.  Do not add new helper scripts, env vars,
-or workflow steps.  If you find yourself wanting to edit a
-file that has no conflict markers, STOP and leave it alone.
+Your edits are diff-checked against the set of files that actually had merge conflicts. Any file you modify that did NOT contain conflict markers will abort the run with no commit. Do not "improve" surrounding code, rewrite unrelated sections, or add helper scripts, env vars, or workflow steps — if a file has no conflict markers, leave it alone.
 
-HARD CONSTRAINT — no inventing files or commands:
-Before you finalize, perform this self-check on every edit:
-1. List every file path you reference in your edits (including
-   any path mentioned in a shell command, sourced script,
-   bootstrap fetch list, or workflow step you would add).
-2. For each path, verify the file already exists in the
-   repository tree by reading it.
-3. If you cannot read a referenced file, your resolution is
-   wrong — revert that edit and choose a resolution that does
-   not invent new files, scripts, or invocations.
-The most common failure mode for this step is hallucinating a
-plausible-looking helper script (e.g. build_repo_overview.sh,
-protected_paths.txt) and wiring it into the bootstrap loop.
-The downstream existence check will catch this and abort the
-merge-resolve commit, wasting the entire review run.  Do not
-do it.
+Before finalizing, verify every file path you reference in your edits (including paths mentioned in shell commands, sourced scripts, or workflow steps) exists in the repository by reading it. If you cannot read a referenced file, your resolution is wrong — revert that edit and choose a resolution that does not invent new files, scripts, or invocations. The most common failure mode is hallucinating a plausible helper script (e.g. build_repo_overview.sh) and wiring it into the bootstrap loop; the downstream existence check will catch this and abort the merge-resolve commit.
 
 Final output must be plain text.
 
