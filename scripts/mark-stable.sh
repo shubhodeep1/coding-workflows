@@ -7,6 +7,10 @@
 set -euo pipefail
 
 VERSION_TAG="${1:?Usage: $0 <version-tag>  (e.g. v1.1.0)}"
+if [[ ! "${VERSION_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "error: VERSION_TAG '${VERSION_TAG}' is not a valid version tag (expected vMAJOR.MINOR.PATCH, e.g. v1.1.0)" >&2
+	exit 2
+fi
 MAJOR="$(echo "${VERSION_TAG}" | cut -d. -f1)"
 
 echo "Tagging origin/stable as ${VERSION_TAG} and updating stable + ${MAJOR} pointers..."

@@ -55,6 +55,9 @@ def test_workflows_push_immutable_version_via_refs_tags() -> None:
 		assert 'git push origin "refs/tags/$VERSION"' in text, (
 			f"{wf.name}: immutable version tag push must use fully qualified refs/tags/$VERSION"
 		)
+		assert not re.search(r'^\s*git push origin "\$VERSION"\s*$', text, re.MULTILINE), (
+			f"{wf.name}: bare 'git push origin \"$VERSION\"' would re-introduce the regression"
+		)
 
 
 def test_script_pushes_all_three_tags_via_refs_tags() -> None:
