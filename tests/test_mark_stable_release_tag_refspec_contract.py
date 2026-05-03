@@ -118,17 +118,18 @@ def test_script_releases_from_stable_branch_for_workflow_parity() -> None:
 		"scripts/mark-stable.sh: VERSION_TAG must be created from origin/stable, "
 		"matching the workflow release path"
 	)
-	# Strip shell comments so harmless docstring mentions of `origin/main`
-	# (e.g. a future "# was previously origin/main" comment) don't trip the guard;
-	# we only care about executable lines actually referencing main.
-	code_lines = "\n".join(
-		line for line in text.splitlines() if not line.lstrip().startswith("#")
+	# Two precise regression patterns to forbid:
+	#   1. `git tag ... origin/main`    — re-introduces tagging from main
+	#   2. `git fetch origin main`      — re-introduces fetching main
+	# Use targeted regexes (not a broad substring match) so harmless future
+	# strings or comments mentioning `origin/main` don't trip the guard.
+	assert not re.search(r"^\s*git\s+tag\b[^\n]*\borigin/main\b", text, re.MULTILINE), (
+		"scripts/mark-stable.sh: must not tag from origin/main — that would tag a "
+		"main commit that hasn't been validated on the stable branch"
 	)
-	# `origin/main` catches `git tag -f X origin/main` (local remote-tracking ref);
-	# `git fetch origin main` catches the fetch-side regression (different syntax).
-	assert "origin/main" not in code_lines and "git fetch origin main" not in code_lines, (
-		"scripts/mark-stable.sh: must not fetch or tag from origin/main — that "
-		"would tag a main commit that hasn't been validated on the stable branch"
+	assert not re.search(r"^\s*git\s+fetch\s+origin\s+main\b", text, re.MULTILINE), (
+		"scripts/mark-stable.sh: must not fetch origin/main — manual releases "
+		"must match the workflow path which fetches and releases from stable"
 	)
 
 
@@ -158,13 +159,14 @@ def test_script_refuses_to_retarget_existing_origin_release_tag() -> None:
 	)
 
 
-def main() -> int:
+def main() -> None:
+	# Failures surface via uncaught AssertionError → Python's default non-zero
+	# exit; on full success we just print and return None.
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:
 		test()
 	print(f"{len(tests)} passed")
-	return 0
 
 
 if __name__ == "__main__":
-	raise SystemExit(main())
+	main()

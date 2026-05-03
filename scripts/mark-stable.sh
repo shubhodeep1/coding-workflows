@@ -39,13 +39,24 @@ fi
 # create the tag without -f so an attempt to re-release a published version
 # fails before any push; mirror that safety here so a rerun against an
 # already-released VERSION_TAG doesn't silently retarget the local tag before
-# the push fails.
-if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
+# the push fails. Distinguish rc=2 (truly absent → safe to proceed) from any
+# other non-zero (auth/transport/network → must NOT fail open, otherwise a
+# real error would silently bypass the immutable-tag guard).
+set +e
+TAG_LSREMOTE_OUT="$(git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" 2>&1)"
+TAG_LSREMOTE_RC=$?
+set -e
+if [ "${TAG_LSREMOTE_RC}" -eq 0 ]; then
 	echo "error: refs/tags/${VERSION_TAG} already exists on origin." >&2
 	echo "       Immutable release tags must not be retargeted. If you need to" >&2
 	echo "       re-release, choose a new VERSION_TAG (or delete the remote tag" >&2
 	echo "       deliberately and rerun)." >&2
 	exit 4
+elif [ "${TAG_LSREMOTE_RC}" -ne 2 ]; then
+	echo "error: 'git ls-remote --tags origin refs/tags/${VERSION_TAG}' failed (rc=${TAG_LSREMOTE_RC}); this is not a tag-not-found result." >&2
+	echo "       Output: ${TAG_LSREMOTE_OUT}" >&2
+	echo "       Refusing to proceed — a transient auth/network failure here would otherwise bypass the immutable-tag safety check." >&2
+	exit "${TAG_LSREMOTE_RC}"
 fi
 
 git fetch origin stable
