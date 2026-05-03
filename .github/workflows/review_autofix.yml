@@ -2273,10 +2273,15 @@ jobs:
           # editor produced empty output across 6 attempts (3 + 3 retry) at
           # reasoning=low → Phase 4b bait-removed verification failed.
           # Walk back recent commits and only use the diff of the most recent
-          # `[ai-autofix]`/`[judge-fix]` commit, matching the existing prefix
-          # convention used by review_apply_fixes.sh:2838 and the iteration
-          # counter at line 2096-2105.
-          LAST_AUTOFIX_SHA="$(git log --format='%H%x09%s' -n 50 2>/dev/null \
+          # `[ai-autofix]`/`[judge-fix]` commit on the PR head's first-parent
+          # chain, matching the iteration counter at line 2096-2105 and the
+          # in-step retry gate further down in this file (see the
+          # `_prior_autofix_count` block in the `Apply fixes with editor model`
+          # step). `--first-parent` is load-bearing: without it, `git log`
+          # walks merged-in history and could pick up an unrelated autofix
+          # commit from base (e.g. a `[ai-autofix]` commit on `main` pulled
+          # in by a merge), polluting LAST_RUN_DIFF on a first-iteration PR.
+          LAST_AUTOFIX_SHA="$(git log --first-parent --format='%H%x09%s' -n 50 2>/dev/null \
             | awk -F'\t' '$2 ~ /^\[(ai-autofix|judge-fix)\]/ { print $1; exit }' \
             || true)"
           if [ -n "${LAST_AUTOFIX_SHA}" ] && git rev-parse "${LAST_AUTOFIX_SHA}^" >/dev/null 2>&1; then

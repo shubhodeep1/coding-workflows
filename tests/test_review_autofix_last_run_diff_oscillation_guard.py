@@ -15,19 +15,23 @@ of release v1.1.0): the bait commit was at HEAD, the unconditional
 the editor at `reasoning=low` produced empty output across 6 attempts
 (3 + 3 retry), and Phase 4b's `bait_remained` verification correctly
 failed the smoke gate. The fix narrows the diff source to the most recent
-`[ai-autofix]`/`[judge-fix]` commit, matching the existing prefix
-convention used by `scripts/review_apply_fixes.sh:2838` and the
-`Count autofix iterations` step at line 2096-2105.
+`[ai-autofix]`/`[judge-fix]` commit on the PR head's first-parent chain,
+matching the existing prefix convention used by the
+`Count autofix iterations` step (`.github/workflows/review_autofix.yml`
+~line 2096-2105) and the in-step retry gate
+(`_prior_autofix_count` in the `Apply fixes with editor model` step).
 
-Three invariants must hold for the OSCILLATION GUARD not to false-trip:
+Four invariants must hold for the OSCILLATION GUARD not to false-trip:
 
 1. The diff source must be a walk-back to the most recent
    `[ai-autofix]`/`[judge-fix]` commit (awk regex on `git log`), NOT an
    unconditional `git diff HEAD~1...HEAD`.
-2. The fall-through placeholder must start with "No previous AI autofix"
+2. The walk must use `--first-parent` so merged-in autofix commits from
+   the base branch don't pollute LAST_RUN_DIFF on a first-iteration PR.
+3. The fall-through placeholder must start with "No previous AI autofix"
    so `scripts/review_run_reviewers.sh:249`'s sentinel-detection regex
    correctly classifies the run as the first iteration.
-3. The diff range must use `${SHA}^...${SHA}` so the autofix commit's own
+4. The diff range must use `${SHA}^...${SHA}` so the autofix commit's own
    diff is shown (not whatever HEAD~1 happens to be).
 """
 
@@ -69,8 +73,17 @@ def test_last_run_diff_walks_back_to_autofix_commit() -> None:
 	assert r"$2 ~ /^\[(ai-autofix|judge-fix)\]/" in block, (
 		"LAST_AUTOFIX_SHA walk must filter on the "
 		"`[ai-autofix]`/`[judge-fix]` commit-subject prefix. The same "
-		"regex is used by scripts/review_apply_fixes.sh:2838 — keep them "
-		"in lockstep."
+		"regex is used by the `_prior_autofix_count` block in the "
+		"`Apply fixes with editor model` step of this workflow — keep "
+		"them in lockstep so the OSCILLATION GUARD's diff source and "
+		"the in-step retry gate agree on what counts as a prior run."
+	)
+	assert "git log --first-parent" in block, (
+		"LAST_AUTOFIX_SHA walk is missing `--first-parent`. Without it, "
+		"`git log` walks merged-in history and could pick up an autofix "
+		"commit from the base branch (e.g. a `[ai-autofix]` on `main` "
+		"pulled in via merge), polluting LAST_RUN_DIFF on a "
+		"first-iteration PR."
 	)
 
 
