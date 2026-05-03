@@ -903,3 +903,137 @@ If you want, I can turn this into a prioritized implementation checklist mapped 
 | Code modularization | 4 | Large |
 | Expression size reduction | 1 | Small |
 | Medium/Low fixes | 5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-03)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means this pass found a mechanically actionable consolidation/elimination with no visible contract risk from static reading. `NEEDS_VERIFICATION` means the overlap looks real, but a human or follow-up analysis must confirm cache/input contracts or error-handling equivalence before changing it. `RISKY_SKIP` means the overlap is real but sits in a retry/pagination/race-defense path where this pass does **not** authorize auto-implementation.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/internal-review.yml:98-101`  
+  **Current call count** — 2  
+  **Proposed call count** — 1  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls?state=open&head={owner}:{branch}` and `GET /repos/{repo}`  
+  **Evidence** — The step already makes one PR-discovery call, then makes a second repo-metadata call only to obtain the default branch, even though this job runs only on `push` and already has event context available.
+  ```bash
+  existing_pr="$(gh api \
+    "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+    --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+  base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  ```
+  **Proposed fix** — In `resolve-claude-branch-pr`, replace the repo-metadata API read with `${{ github.event.repository.default_branch }}` (falling back to `main` exactly as today). Keep the PR lookup call unchanged.  
+  **Safety rationale** — This is a pure re-fetch elimination, but it depends on the `push` event payload always carrying `repository.default_branch`, so it does not meet this pass’s strict SAFE criteria without verification.  
+  **Downstream signal** — Verify from a sampled `push` run of `internal-review.yml` that `github.event.repository.default_branch` is always populated for the `claude/**` path; then remove only the `gh api "repos/${REPOSITORY}"` call.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:372-377`  
+  **Current call count** — 2  
+  **Proposed call count** — 1  
+  **Endpoint(s)** — `POST /repos/{repo}/issues` and `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The workflow creates the issue, extracts only `.number`, then immediately re-fetches the same issue just to read `.html_url`.
+  ```bash
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+  **Proposed fix** — In the `Create test issue` step, capture the full create-response JSON once (for example into `ISSUE_CREATE_JSON` or a temp file), parse both `.number` and `.html_url` from that response, and drop the follow-up GET.  
+  **Safety rationale** — The second call is a same-step re-fetch of data that should already be in the create response, but this pass did not independently verify the exact response-shape dependency under the current GH CLI path.  
+  **Downstream signal** — Verify on one sample run that `gh api POST repos/.../issues` returns `html_url` in the response body under the current runner/CLI version; then collapse the pair into a single create-response parse.
+
+- **ID** — `REUSE-003`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:61-76`, `.github/workflows/orchestrate_clarify_respond.yml:418-429`  
+  **Current call count** — 4  
+  **Proposed call count** — 2  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{ISSUE_NUMBER}` and `GET /repos/{repo}/issues/{TRACKING_NUM}`  
+  **Evidence** — The job fetches the child issue and tracking issue once in `Check orchestrator metadata`, then re-fetches both later in `Fetch issue and tracking context`.
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  **Proposed fix** — Extend `Check orchestrator metadata` to persist the full child-issue JSON and full tracking-issue JSON into temp files or exported env-backed files; have `Fetch issue and tracking context` consume those cached payloads first and fall back to the existing `gh_retry` fetches only on cache miss/parse failure.  
+  **Safety rationale** — The endpoints are identical and there is no obvious in-job mutation between the two steps, but the reuse crosses step boundaries and changes which call provides retry semantics, so verification is required.  
+  **Downstream signal** — Verify there is no intervening step that edits either issue between lines 61-76 and 418-429, and require a cache-miss fallback to the current `gh_retry` calls before removing the re-fetches.
+
+- **ID** — `REUSE-004`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `scripts/review_rb_judge.sh:146-166`, `scripts/review_rb_judge.sh:193-214`  
+  **Current call count** — 1 extra PR fetch on the “no linked issues from GraphQL” fallback path  
+  **Proposed call count** — 0 extra PR fetches on that path when `PR_META_FILE` is present and parseable  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr_number}`  
+  **Evidence** — When GraphQL returns no linked issues, the script re-fetches PR title/body from the API, even though later in the same script it already reads `PR_META_FILE` as its PR metadata source.
+  ```bash
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    ...
+  fi
+  ```
+  ```bash
+  PRELOADED_PR_META="$(jq -c '{
+    title: (.title // ""),
+    body: (.body // ""),
+    head_ref: (.head_ref // .head.ref // .headRefName // ""),
+    base_ref: (.base_ref // .base.ref // .baseRefName // ""),
+    head_sha: (.head_sha // .head.sha // .headSha // "")
+  }' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+  ...
+  if [ "${PR_META_JSON}" = "{}" ]; then
+    PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
+  fi
+  ```
+  **Proposed fix** — In `review_rb_judge.sh`, derive `PR_DATA` from `PR_META_FILE` first (`[.title // "", .body // ""] | join(" ")`), and keep the existing `_safe_gh_jq pulls/{PR_NUMBER}` call only as a cache-miss / parse-failure fallback.  
+  **Safety rationale** — The data is already file-cached locally in the same script invocation, but this pass cannot prove from static reading alone that every judge entrypoint always provides a valid `PR_META_FILE`.  
+  **Downstream signal** — Verify every `review_rb_judge.sh` caller populates `PR_META_FILE` before execution; then switch the no-linked-issues fallback to file-first, API-second behavior.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:1508-1511`  
+  **Current call count** — 1  
+  **Proposed call count** — 0  
+  **Endpoint(s)** — `GET /repos/{repo}/commits?sha={branch}&per_page=20`  
+  **Evidence** — `COMMITS_AFTER` is assigned from a GitHub API call and never read afterward; the actual gate uses only `PR_HEAD` vs `BAIT_SHA`.
+  ```bash
+  COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
+    --jq "[.[] | select(.sha != \"${BAIT_SHA}\") | .sha] | length" 2>/dev/null || echo "0")
+  # The PR head SHA should differ from the bait SHA.
+  PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
+  ```
+  A repository-wide search in this audit found no later `COMMITS_AFTER` read in the file.  
+  **Proposed fix** — Delete the `COMMITS_AFTER` assignment and leave the existing `PR_HEAD` check as the sole “editor pushed past bait” assertion.  
+  **Safety rationale** — Static reading shows the fetched value is never consumed, the call is outside retry/auth/race-defense paths, and removing it does not alter any downstream branch condition or log key.  
+  **Downstream signal** — Remove the unused `COMMITS_AFTER` API call at `.github/workflows/test-and-mark-stable.yml:1508-1509` and keep the `PR_HEAD`-based validation unchanged.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `RISKY_SKIP` — strong batching candidate, but the current path includes multiple `--paginate` calls, so this pass does not authorize auto-merging page-sensitive hydration logic.
+- `API-002`: `NEEDS_VERIFICATION` — batching linked issue title/body into the existing GraphQL lookup is directionally correct, but the current per-issue REST loop fail-opens item-by-item and that failure behavior must be preserved deliberately.
+- `API-003`: `RISKY_SKIP` — it lives inside `scripts/orchestrate_poll_process.sh` on a race-defense merge path, which this pass must not auto-consolidate.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 4 | REUSE-001, REUSE-002, REUSE-003, REUSE-004 |
+| RISKY_SKIP | 0 | — |
+
+### Implement-Stage Handoff
+- `DEAD-API-001`
