@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repository should be improved?**\nChoices:\n- **A** \u2014 Clarify / planning / implementation workflows (`ai-clarify`, `plan`, `implement`) (RECOMMENDED)\n- **B** \u2014 Review / autofix / merge flow (`review_autofix`, PR handling, merge readiness)\n- **C** \u2014 Orchestrator / polling / validation / recovery workflows\n- **D** \u2014 Documentation only (`README.md`, `agents.md`, runbooks)\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a specific bug or broken behavior (RECOMMENDED)\n- **B** \u2014 Improve reliability / safety without changing intended behavior\n- **C** \u2014 Reduce cost / API usage / runtime\n- **D** \u2014 Improve developer/operator clarity (logs, comments, docs, observability)\nReply: `Q2: A`\n**Q3: What evidence should define success for this task?**\nChoices:\n- **A** \u2014 A specific failing issue / PR / workflow run should work correctly after the change (RECOMMENDED)\n- **B** \u2014 A specific annoying behavior should stop happening, even if no single failing run is provided\n- **C** \u2014 A measurable metric should improve (for example fewer API calls, fewer retries, faster completion)\nReply: `Q3: A`\n**Q4: If this is a bug, where is the concrete failing example?**\nChoices:\n- **A** \u2014 I will provide an issue number\n- **B** \u2014 I will provide a PR number or workflow run link\n- **C** \u2014 This is not a bug; it is a hardening / cost / clarity improvement (RECOMMENDED only if Q2 is B, C, or D)\nReply: `Q4: A`",
+  "fingerprint": "2359c48a5b069191ad548a5d2f75386a18f4f261089b7d5da43d56c16c3789d1",
+  "lineage": {
+    "issue_number": 2032,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25281891655",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25281891655",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260503143419_de6650b5d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2032,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25281891655"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2032 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-03T14:34:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
