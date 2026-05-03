@@ -784,3 +784,122 @@ The workflows are not consistently following that rule yet.
 | reviewer retrieve telemetry | 25254574828 / 25267058904 / 25268065004 / 25280032638 | reviewer memory retrieves estimated 0 tokens with 0 selected records |
 
 If you want, I can turn this into a prioritized implementation checklist mapped to specific workflow files and likely edit locations.
+
+## Deep Audit — Workflows & Scripts (2026-05-03)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — `BUG-001`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:2726-2775,2798-2833,2861-2898,2920-2957,3217-3259`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The repeated “dispatch & watch” blocks treat any `gh api` failure as empty output via `2>/dev/null || echo ""`, then continue polling until the outer deadline. That turns transport/auth/404/secondary-limit failures into misleading timeout symptoms such as “dispatch did not register” or “run timed out”, and it keeps burning API calls after the real failure is already known. The pattern is repeated for `workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-memory-maintenance`, and `internal-validate`.  
+  **Recommended fix** — Extract a shared watcher that returns explicit states (`registered`, `completed`, `api_error`) instead of empty-string fallbacks. Reuse the earlier `gh_api_safe` style already present in the same workflow (`test-and-mark-stable.yml:396-410`) or move the watcher into a shared script such as `scripts/watch_workflow_run.sh` so failures short-circuit immediately and consistently.
+
+- **ID** — `SHELL-001`  
+  **File path** — `scripts/review_commit_changes.sh:448-455; scripts/review_conflict_resolve.sh:852-853`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — Both scripts set the authenticated remote URL with unquoted expansions: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. ShellCheck flags this as `SC2086`. Even if current token/repo formats are usually safe, this is still a word-splitting/globbing footgun on a credential-bearing command line.  
+  **Recommended fix** — Build the URL in a variable and quote the full argument, e.g. `remote_url="https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"` then `git remote set-url origin "${remote_url}"`. Better yet, reuse the repository’s existing authenticated-CLI path and avoid embedding the token in argv at all.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — `API-001`  
+  **File path** — `.github/workflows/review_autofix.yml:1371-1406`  
+  **Severity** — High  
+  **Category tag** — `api-batching`  
+  **Description** — The PR hydration step makes five logical API calls on the same execution path: 1x `pulls/{pr}`, 1x `issues/{pr}/comments`, 1x `pulls/{pr}/reviews`, 1x `pulls/{pr}/comments`, then 1x GraphQL `closingIssuesReferences`. The repo already has a GraphQL-first batching helper for most of this shape in `scripts/gh_helpers.sh:735-860` (`gh_pr_with_all_comments`), but `review_autofix` still does the legacy REST fan-out inline.  
+  **Recommended fix** — Extend `scripts/gh_helpers.sh::gh_pr_with_all_comments()` (or add `gh_pr_with_full_context()`) so one GraphQL call returns PR meta, issue comments, review comments, review summaries, and linked issues. Then replace the inline hydration block in `review_autofix.yml` with that helper.  
+  **Current call count** — 5 logical calls.  
+  **Proposed call count after fix** — 1 logical call.  
+  **Existing batching pattern to extend** — `scripts/gh_helpers.sh::gh_pr_with_all_comments`.
+
+- **ID** — `API-002`  
+  **File path** — `scripts/review_rb_judge.sh:146-208`  
+  **Severity** — High  
+  **Category tag** — `api-batching`  
+  **Description** — `review_rb_judge.sh` first fetches linked issue numbers with GraphQL, then loops over each linked issue and calls `repos/{repo}/issues/{issue_number}` individually to get the body. That is a classic per-item API loop in a judge path. For a PR with `N` linked issues, this path costs `1 + N` issue-context calls before the script even finishes collecting prompt inputs.  
+  **Recommended fix** — Batch linked issue number/title/body in the initial GraphQL query, matching the richer shape already used in `review_autofix.yml:1401-1423`, and stop the per-issue REST loop entirely. Keep `FIRST_ISSUE` selection local from the returned array.  
+  **Current call count** — `1 + N` calls for linked-issue context (e.g. 11 calls for 10 linked issues).  
+  **Proposed call count after fix** — 1 call.  
+  **Existing batching pattern to extend** — the `closingIssuesReferences(first: 50) { nodes { number title body } }` pattern already used in `review_autofix.yml`, or a shared helper in `scripts/gh_helpers.sh`.
+
+- **ID** — `API-003`  
+  **File path** — `scripts/orchestrate_poll_process.sh:3412-3418,3432-3439,3471-3473,3522-3524`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The final-merge path repeatedly re-fetches the same PR payload field-by-field. In the common path it calls `repos/{repo}/pulls/{final_pr}` seven times just to read `state`, `merged_at`, and `mergeable`, even though the file already defines `_fetch_pr_json()` and `_jq_field()` at `scripts/orchestrate_poll_process.sh:691-720` specifically to collapse that pattern.  
+  **Recommended fix** — Replace the repeated `_safe_gh_jq` field fetches with three snapshot reads at most: one pre-create/pre-check snapshot, one pre-mergeability snapshot, and one post-merge-attempt snapshot, all via `_fetch_pr_json` + `_jq_field`.  
+  **Current call count** — 7 pull-lookups on the common path.  
+  **Proposed call count after fix** — 3 pull-lookups.  
+  **Existing batching pattern to extend** — `scripts/orchestrate_poll_process.sh::_fetch_pr_json` and `_jq_field`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — `DUP-001`  
+  **File path** — `.github/workflows/issue_pr_status.yml:41-140; .github/workflows/validate.yml:185-280; .github/workflows/validation-improvements-intake.yml:63-129`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Three workflows carry near-identical support-bootstrap logic: `checkout_support_ref`, `support_primary_root` / `support_main_root` selection, and `fetch_from_ref_or_local` / `copy_from_ref_or_local`. The blocks have already drifted in naming and options, which raises the chance of future asset-resolution bugs landing in only one caller.  
+  **Recommended fix** — Move this into a shared module, preferably `scripts/fetch_workflow_support.sh`, with a signature like `fetch_workflow_support --workflow <name> --script-ref <ref> --dest-root <dir> [--script <path>] [--prompt <path>] [--allow-main-fallback] [--require-remote <path>]`. Update `issue_pr_status.yml`, `validate.yml`, and `validation-improvements-intake.yml` to call it instead of maintaining separate bootstrap copies.
+
+- **ID** — `DUP-002`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:2721-2957,3003-3065,3212-3259`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — `test-and-mark-stable.yml` repeats the same “snapshot previous run ID → dispatch workflow → poll for new run ID → poll status/conclusion until deadline” block for multiple workflows (`workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-memory-maintenance`, `internal-orchestrate`, `internal-validate`). The structure is >70% identical and already has small behavior drifts (`success|skipped` handling, timeout lengths, poll intervals, log messages).  
+  **Recommended fix** — Extract a shared watcher script, e.g. `scripts/watch_workflow_run.sh`, with a signature like `watch_workflow_run --repo <repo> --workflow <file> --timeout-secs <n> [--field key=value ...] [--accept-conclusion success,skipped]`. Update all repeated dispatch/watch callers in `test-and-mark-stable.yml` to use it so timeout/error handling and API backoff stay synchronized.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — `EXPR-001`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Phase 4: Wait for review/autofix to finish` `run:` block contains one `${{ }}`-interpolated body estimated at **16,626 characters**. That is below the hard 21,000-character runner limit, but already above the 15,000-character medium-risk threshold, leaving only **4,374 characters of headroom**. This block keeps growing with new polling heuristics, live-log shortcuts, and diagnostics, so it is a realistic candidate to become the next expression-limit regression.  
+  **Recommended fix** — Extract the entire wait loop to an external script such as `scripts/e2e_wait_review.sh` and pass the current inputs via environment variables. If that is too invasive, split live-log probing and activity detection into separate steps so no single `${{ }}`-compiled `run:` body keeps accumulating logic.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — `DEAD-001`  
+  **File path** — `scripts/review_issue_ledger.sh:10-15,866-917`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — Two pieces of ledger scaffolding are currently write-only / unused: the shell-level `trim()` helper at lines 10-15 is not referenced by the shell flow, and the `CURRENT_FLOOR` associative array is declared and populated but never read before exit. Parsing work is handled by embedded `awk`-side `trim()` functions instead.  
+  **Recommended fix** — Remove the unused shell `trim()` helper and delete `CURRENT_FLOOR` unless a follow-on feature is about to consume it. If floor persistence is intended, thread it into emitted ledger state so the variable is no longer dead.
+
+- **ID** — `DEAD-002`  
+  **File path** — `scripts/orchestrate_poll_process.sh:9754-9785,10003-10057`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `RB_FOLLOWUP_REFUSED` and `IF_BLOCKERS_SOURCE` are assigned but never read later in the script. That means the code pays state-management complexity without any behavioral effect, and the intended provenance/refusal signal is lost.  
+  **Recommended fix** — Either remove these variables entirely or promote them into a real output/log/telemetry field that downstream logic consumes. If the intent was diagnostics, emit a structured log line next to the assignment.
+
+- **ID** — `CONSIST-001`  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/mark-stable.yml:308-335,457-484; .github/workflows/orchestrate_poll.yml:63-97; scripts/gh_helpers.sh:122-171,391-650`  
+  **Severity** — Medium  
+  **Category tag** — `consistency`  
+  **Description** — Multiple workflows still carry bespoke inline GitHub retry wrappers even though the repo’s canonical behavior now lives in `scripts/gh_helpers.sh` (`gh_retry`, breaker trip, admin alert throttle, JSON validation, curl parity). The inline versions have already drifted: they do not share the breaker/alert behavior, classify errors differently, and duplicate the `/rate_limit` reset parsing logic.  
+  **Recommended fix** — Introduce a minimal bootstrap helper that can be sourced before the main support checkout, or move the common pre-checkout retry logic into a dedicated script/composite action. Then migrate `cancel_on_pr_close.yml`, `mark-stable.yml`, and `orchestrate_poll.yml` to that shared implementation so rate-limit handling is uniform.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | API-001, API-002 |
+| Medium | 6 | BUG-001, API-003, DUP-001, DUP-002, EXPR-001, CONSIST-001 |
+| Low | 3 | SHELL-001, DEAD-001, DEAD-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 4 | Large |
+| Expression size reduction | 1 | Small |
+| Medium/Low fixes | 5 | Small |
