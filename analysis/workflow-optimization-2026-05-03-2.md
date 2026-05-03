@@ -934,3 +934,150 @@ _No new `TODO` / `FIXME` / `HACK` markers were found in the audited workflow and
 | Code modularization | 9 | Large |
 | Expression size reduction | 1 | Small |
 | Medium/Low fixes | 5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-03)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap/deadness is proven within one local execution context and can be implemented directly without changing retry/concurrency semantics. `NEEDS_VERIFICATION` means the overlap looks real, but static reading does not fully prove semantic equivalence or freshness across steps/jobs. `RISKY_SKIP` means the call lives in a retry/race/polling-sensitive path where auto-consolidation must not be applied without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — `internal-review` can collapse branch-PR detection and default-branch lookup into one metadata read
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/internal-review.yml:98-101`
+- **Current call count** — 2
+- **Proposed call count** — 1
+- **Endpoint(s)** — REST `GET /repos/{repo}/pulls?state=open&head={owner}:{branch}` and REST `GET /repos/{repo}`; proposed single GraphQL repository query for open PR + default branch.
+- **Evidence**
+```bash
+existing_pr="$(gh api \
+  "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+  --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+```
+  Both values are only used to decide whether to proceed and which `base_ref_override` to pass to `review_autofix.yml`.
+- **Proposed fix** — In the `Resolve PR for head branch` step, replace the two `gh api` calls with one `gh api graphql` query that returns `repository.defaultBranchRef.name` and the first open pull request matching `headRefName=$HEAD_REF`; keep the current REST pair as a fail-open fallback if GraphQL returns null/empty.
+- **Safety rationale** — `NEEDS_VERIFICATION` because this changes API surface and filter semantics, so the implement stage must prove GraphQL `pullRequests(... states: OPEN ...)` matches the current REST `head=` behavior for `claude/**` pushes.
+- **Downstream signal** — Verify on one `claude/**` push with an open PR and one without that the GraphQL result produces the same `existing_pr`, `base_ref`, and `RESOLVE_CLAUDE_BRANCH_PR_*` branch decision before replacing the REST calls.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — `issue_pr_status` re-reads issue bodies after it already classified managed issues
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/issue_pr_status.yml:295-320`, `.github/workflows/issue_pr_status.yml:327-348`, `.github/workflows/issue_pr_status.yml:503-512`
+- **Current call count** — successful batch path: 1 GraphQL batch + up to N later REST issue reads; fallback path: up to N REST classification reads + up to N later REST issue reads
+- **Proposed call count** — successful batch path: 1 GraphQL batch only; fallback path: up to N REST classification reads only
+- **Endpoint(s)** — GraphQL repository issue alias batch; REST `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+```bash
+ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+...
+MANAGED_ISSUES="${_managed_issues}"
+```
+
+```bash
+while IFS= read -r issue_number; do
+  [ -n "${issue_number}" ] || continue
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+    IS_ORCHESTRATED="true"
+    break
+  fi
+done <<< "${LINKED_ISSUE_NUMBERS}"
+```
+  The later alert step recomputes a boolean that the earlier classification step already derived as `MANAGED_ISSUES`.
+- **Proposed fix** — In the linked-issue classification step, export either `MANAGED_ISSUES` or a simpler `HAS_ORCHESTRATED_LINKED_ISSUE=true|false` flag to `GITHUB_ENV`; update the later alert step to consume that exported classification instead of re-fetching every linked issue body.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the reuse crosses workflow steps rather than staying inside one step, so a human must confirm no intermediate step relies on recomputing orchestration status from live issue bodies.
+- **Downstream signal** — Verify that the merged-alert step always runs after the classification step in the same job and that no intervening step mutates the managed-vs-standalone classification before replacing the body-read loop.
+
+#### REUSE-002 — `review_rb_judge.sh` refetches PR title/body even though `PR_META_FILE` is already the script’s local PR snapshot
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `scripts/review_rb_judge.sh:153-156`, `scripts/review_rb_judge.sh:193-199`, `scripts/review_rb_judge.sh:213-214`
+- **Current call count** — 1 extra PR REST read on the fallback path
+- **Proposed call count** — 0 extra PR REST reads on the fallback path
+- **Endpoint(s)** — REST `GET /repos/{repo}/pulls/{pr_number}`
+- **Evidence**
+```bash
+if [ -z "${ISSUE_NUMBERS}" ]; then
+  PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+```
+
+```bash
+PRELOADED_PR_META="$(jq -c '{
+  title: (.title // ""),
+  body: (.body // ""),
+  head_ref: (.head_ref // .head.ref // .headRefName // ""),
+  base_ref: (.base_ref // .base.ref // .baseRefName // ""),
+  head_sha: (.head_sha // .head.sha // .headSha // "")
+}' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+```
+
+```bash
+if [ "${PR_META_JSON}" = "{}" ]; then
+  PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
+fi
+```
+  The script already trusts `PR_META_FILE` as its PR metadata source later in the same run.
+- **Proposed fix** — In `scripts/review_rb_judge.sh`, derive fallback `PR_DATA` from `PR_META_FILE` first (`jq -r '[.title // "", .body // ""] | join(" ")'`), and only fall back to `_safe_gh_jq pulls/{pr}` if the file is absent or empty.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the reusable data is produced by an upstream workflow step, so the implement stage must confirm `PR_META_FILE` is always present and acceptable on every judge entry path.
+- **Downstream signal** — Verify all invocations of `review_rb_judge.sh` populate `PR_META_FILE` before script start, including retry/recovery dispatches, then switch the fallback to file-first.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — `COMMITS_AFTER` in the E2E bait-removal check is fetched and never consumed
+- **Safety tag** — `SAFE_TO_MERGE`
+- **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:1508-1509`
+- **Current call count** — 1
+- **Proposed call count** — 0
+- **Endpoint(s)** — REST `GET /repos/{repo}/commits?sha={branch}&per_page=20`
+- **Evidence**
+```bash
+COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
+  --jq "[.[] | select(.sha != \"${BAIT_SHA}\") | .sha] | length" 2>/dev/null || echo "0")
+# The PR head SHA should differ from the bait SHA.
+PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
+```
+  `COMMITS_AFTER` is assigned but never referenced afterward; the actual gate uses `PR_HEAD`.
+- **Proposed fix** — Delete the `COMMITS_AFTER=$(...)` assignment from the `Verify editor removed bait line` step and keep the existing `PR_HEAD != BAIT_SHA` check as the sole commit-presence test.
+- **Safety rationale** — `SAFE_TO_MERGE` because the API result is provably unused in the same step and removing it does not alter control flow, retry handling, or log keys.
+- **Downstream signal** — Remove `.github/workflows/test-and-mark-stable.yml:1508-1509` directly; no replacement call is needed.
+
+#### DEAD-API-002 — `review_rb_judge.sh` fetches every linked issue body even though only the first body is ever used
+- **Safety tag** — `SAFE_TO_MERGE`
+- **File path and line ranges** — `scripts/review_rb_judge.sh:161-170`
+- **Current call count** — N `GET /issues/{issue_number}` calls for N linked issues
+- **Proposed call count** — 1 `GET /issues/{first_issue}` call
+- **Endpoint(s)** — REST `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+```bash
+while IFS= read -r issue_number; do
+  [ -n "${issue_number}" ] || continue
+  if [ -z "${FIRST_ISSUE}" ]; then
+    FIRST_ISSUE="${issue_number}"
+  fi
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if [ -z "${FIRST_ISSUE_BODY}" ]; then
+    FIRST_ISSUE_BODY="${BODY}"
+  fi
+done <<< "${ISSUE_NUMBERS}"
+```
+  Downstream consumers only reference `FIRST_ISSUE` / `FIRST_ISSUE_BODY`; there is no later use of `BODY` from the second and subsequent iterations.
+- **Proposed fix** — In `scripts/review_rb_judge.sh`, select the first non-empty issue number once, fetch that issue’s body once, and remove the per-issue body fetch inside the loop; keep the later `ISSUE_NUMBERS` looping logic for label/close actions unchanged.
+- **Safety rationale** — `SAFE_TO_MERGE` because only the first issue body is consumed downstream, the change stays inside one function, and it preserves auth/retry behavior while deleting unused calls.
+- **Downstream signal** — Refactor `scripts/review_rb_judge.sh:161-170` so only the first linked issue triggers `_safe_gh_jq "repos/.../issues/{n}"`.
+
+### Cross-References to Deep Audit Section
+- API-001: `RISKY_SKIP` — sits in `scripts/orchestrate_poll_process.sh` final-merge/race-handling logic, so auto-consolidation must not bypass its stall-defense semantics.
+- BATCH-001: `RISKY_SKIP` — also lives in `scripts/orchestrate_poll_process.sh` and changes an update-branch sweep path that explicitly guards against upstream races and per-PR drift.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 2 | DEAD-API-001, DEAD-API-002 |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-001, REUSE-002 |
+| RISKY_SKIP | 0 | — |
+
+### Implement-Stage Handoff
+- DEAD-API-002
+- DEAD-API-001
