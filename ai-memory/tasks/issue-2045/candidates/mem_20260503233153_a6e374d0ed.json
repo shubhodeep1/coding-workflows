@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan ref: `orchestrator/project-2042` at `d2e081ad077195c8ceae76545d025259e5dc6d97`\n\nClarification interpretation: no blocking questions were asked; `/answer [auto-answered-by-orchestrator]` means proceed with the stated scope as-is.\n\nFactual conflicts to account for before implementation:\n- The loaded repo docs do not define the exact \u201cPhase 0 grep triplet\u201d. The implementer should use the acceptance-criteria token set as the triplet baseline and note that this is the operational interpretation unless a stricter runbook-local triplet exists.\n- The current review path still depends on a shared Serena prompt contract outside the named review files: `scripts/render_prompt.sh` hard-fails if `prompts/serena-efficiency-block.txt` is missing and expands `{{SERENA_EFFICIENCY_BLOCK_*}}`. That conflicts with the requested removal of review-path staging/validation of `serena-efficiency-block.txt`. If `scripts/render_prompt.sh` is not in `files_touched`, the review scripts will need to stop relying on that placeholder/render path; if it is in scope, it is the cleanest place to remove the shared dependency.\n\nFiles likely to change:\n- `.github/workflows/review_autofix.yml`\n- `scripts/review_run_reviewers.sh`\n- `scripts/review_apply_fixes.sh`\n- `scripts/review_rb_judge.sh`\n- `prompts/mode-review-blocked-judge.txt`\n- `prompts/mode-judge-review-blocked.txt`\n- `scripts/render_prompt.sh` only if `files_touched` allows the shared prompt-contract cleanup that the current review path now depends on\n\nImplementation plan:\n1. Phase 0 scope confirmation\n- Run the required grep triplet first, scoped to the review path files above.\n- Use it to build the exact edit set and confirm every remaining reference to `setup_serena.sh`, `serena-efficiency-block.txt`, `SERENA_*`, `CONTEXT7_*`, `GIT_MCP_*`, `mcp_servers.git`, `.serena`, and Serena/MCP prose before editing.\n- Preserve the grep output as the pre-change checklist so post-change verification can prove the review path is clean.\n\n2. Remove MCP bootstrap/setup from `review_autofix.yml`\n- Delete the review-only bootstrap references to `setup_serena.sh`, `serena_efficiency_report.py`, `SUPPORT_SERENA_DIR`, and `serena-efficiency-block.txt` staging/validation.\n- Remove the Serena/Context7/Git MCP env wiring and the \u201cSetup Serena MCP server\u201d job step.\n- Remove the pre-assembled static-context extraction that injects the Serena tooling section from `codex_system_instructions.md`; keep only the still-needed instruction sections.\n- Remove Serena stats/report steps and `.serena` cleanup references, while preserving the rest of the review/autofix control flow, bootstrapped non-MCP helpers, and existing log contracts not tied to MCP.\n- Review the required bootstrap list and cleanup list carefully so only active MCP call sites disappear; do not delete shared helper files from the repo.\n\n3. Purge MCP-specific behavior from review helper scripts\n- `scripts/review_run_reviewers.sh`: remove the fatal dependency on `serena-efficiency-block.txt`, remove MCP-incompatible-model stripping logic and comments, and replace prompt guidance with generic repository inspection guidance centered on shell reads and `apply_patch`.\n- `scripts/review_apply_fixes.sh`: replace Serena-specific editor instructions/placeholders with explicit `apply_patch`/shell-write guidance; rename any \u201cSerena tool calls failed to persist\u201d messaging to generic editor-write/persistence language without changing the retry behavior.\n- `scripts/review_rb_judge.sh`: remove cleanup references to `setup_serena.sh`, `serena_efficiency_report.py`, and `.serena`; keep the judge prompt assembly and output contract unchanged otherwise.\n\n4. Clean the review-blocked prompt text\n- Update both prompt files to remove claims about Serena/Git MCP availability.\n- Replace \u201cuse Serena tools\u201d wording with direct `apply_patch`, targeted shell reads, and normal file-write instructions.\n- Keep the judge decision schema and behavioral expectations intact so downstream JSON parsing and orchestration do not change.\n\n5. Resolve the shared prompt-rendering dependency if allowed\n- Current review prompts still contain `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` / `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}`, and `scripts/render_prompt.sh` requires `prompts/serena-efficiency-block.txt`.\n- Preferred path if allowed: remove those placeholders from the review/judge prompts and update `scripts/render_prompt.sh` so it no longer hard-requires the Serena block for review-path prompt rendering.\n- If `scripts/render_prompt.sh` is out of scope, the fallback is to stop routing these review prompts through the Serena-placeholder path in the review scripts and render them directly.\n\nData structures and interfaces affected:\n- Workflow bootstrap arrays and `GITHUB_ENV` exports in `review_autofix.yml`\n- Review prompt-rendering contract for reviewer/editor/judge prompts\n- Per-reviewer `CODEX_HOME` setup logic in `scripts/review_run_reviewers.sh`\n- Retry/diagnostic messages that currently mention Serena persistence failures\n- No external API, PR label, or review/autofix state-machine changes should be introduced\n\nRisks and edge cases:\n- Removing MCP setup without also removing the placeholder/render dependency will hard-fail prompt generation early.\n- Genericizing persistence-failure messages must not break the existing retry path that treats \u201cclaimed changes but no git diff\u201d as a failed editor attempt.\n- The workflow currently uses some Serena language in comments around stale-base and continuation behavior; wording can change, but control-flow guards and log prefixes should stay stable.\n- If any contract tests assert the old bootstrap strings, they will need coordinated updates only if those tests are inside `files_touched`.\n\nTesting considerations:\n- Re-run the Phase 0 grep triplet after edits and confirm zero matches in the scoped review-path files.\n- Validate YAML syntax for `.github/workflows/review_autofix.yml`.\n- Smoke-test prompt rendering for the reviewer/editor/judge paths so no unresolved `{{SERENA_EFFICIENCY_BLOCK_*}}` placeholders or missing-file errors remain.\n- Run targeted tests that cover review workflow contracts if they are in scope, especially any tests that assert bootstrap content or prompt-file staging for `review_autofix.yml`.\n- Verify the review path still boots the required non-MCP helpers and that the judge path still renders `mode-judge-review-blocked.txt` successfully.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "19b9674d6470ad7fdce16f1b6fa786307d33acd96dafdfe58abca9dff88cdc08",
+  "lineage": {
+    "issue_number": 2045,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25293861200",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25293861200",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2045"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260503233153_a6e374d0ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2045,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25293861200"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2045",
+  "timestamps": {
+    "created_at": "2026-05-03T23:31:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
