@@ -177,11 +177,6 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-      - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ vars.UV_VERSION || 'latest' }}
-
       - name: Fetch workflow support files
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -282,7 +277,7 @@ jobs:
           }
 
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh ai_labels.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh ai_labels.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             copy_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -559,12 +554,6 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
         run: |
           set -euo pipefail
           bash scripts/validate_process.sh
