@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2042` at `d2e081ad077195c8ceae76545d025259e5dc6d97` (integration branch metadata matches checkout; no mismatch).\n\nPhase 0 first:\n- Run the required MCP grep triplet against the allowed poll-path files before editing and record the hits. Current repo inspection confirms hits in the target path: `.github/workflows/orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`, poll judge prompt templates, and orchestrate-poll tests.\n\nFiles likely to change:\n- `.github/workflows/orchestrate_poll.yml`\n- `scripts/orchestrate_poll_process.sh`\n- `prompts/mode-judge.txt`\n- `prompts/mode-judge-review-blocked.txt`\n- `prompts/mode-judge-stall-recovery.txt`\n- `tests/test_orchestrate_poll_workflow_contract.py`\n- `tests/test_orchestrate_poll_process.py`\n\nImplementation plan:\n1. Clean the workflow bootstrap in `.github/workflows/orchestrate_poll.yml`.\n- Remove `setup_serena.sh` from the support-script staging loop.\n- Remove `serena-efficiency-block.txt` from the prompt bootstrap loop if the poll prompts no longer reference it.\n- Remove poll-job env passthrough for MCP-only vars: `SERENA_VERSION`, `SERENA_LANGUAGES`, `SERENA_DISABLED`, `CONTEXT7_DISABLED`, `GIT_MCP_DISABLED`, `SERENA_IGNORED_DIRS`.\n- Keep all orchestration, validation, judge, and recovery env wiring unchanged.\n\n2. Remove MCP setup/wiring from `scripts/orchestrate_poll_process.sh`.\n- Update the header \u201cenv vars\u201d comment so it no longer documents MCP vars.\n- In each judge/runtime Codex config block, keep the existing OpenRouter/model/sandbox config, but delete the `bash scripts/setup_serena.sh ...` call.\n- The affected runtime paths are the final-merge integration judge, stall-recovery judge, review-blocked judge, and the main tracking judge.\n- Remove `.serena` cleanup and nearby Serena-specific comments while preserving the existing cleanup/add semantics for `.github/prompts` and `.github/scripts`.\n\n3. Clean poll judge prompt text.\n- Replace prompt wording that claims Serena/full MCP access with wording that matches the remaining tool surface.\n- Remove the Serena-efficiency placeholder from the poll judge prompts if it is only there to document MCP tooling.\n- Keep the JSON/output contracts and task instructions otherwise unchanged.\n\n4. Update targeted tests.\n- In `tests/test_orchestrate_poll_workflow_contract.py`, change assertions so they expect the reduced bootstrap list and no MCP env mapping.\n- In `tests/test_orchestrate_poll_process.py`, remove MCP env fixture setup that only existed to satisfy the old poll path, and update any assertions tied to Serena-era prompt/bootstrap behavior.\n- Keep the tests focused on unchanged poll semantics: configured reasoning effort stays intact, integration-branch context handling stays intact, and no judge/recovery behavior regresses.\n\nData structures / interfaces affected:\n- Workflow job environment map for `orchestrate_poll.yml`.\n- Shell-script Codex runtime bootstrap blocks in `orchestrate_poll_process.sh`.\n- Prompt template text and placeholders for the poll judge paths.\n- Test fixture env dictionaries and contract assertions.\n- No MongoDB contracts, collection behavior, or external API interfaces should change.\n\nPotential risks / edge cases:\n- The prompt bootstrap list and prompt placeholders must stay in sync; removing one without the other will break prompt rendering.\n- The `.serena` cleanup removal sits next to `git add` exclusions/comments; edits there must not accidentally change final commit staging behavior.\n- There are duplicate prompt files with stale MCP wording (`prompts/mode-orchestrate-poll-judge.txt` and `prompts/mode-review-blocked-judge.txt`) even though the poller currently renders `mode-judge.txt` and `mode-judge-review-blocked.txt`. If those duplicates are inside the allowed touched set, clean them too; otherwise note the duplication for reviewers because it is a factual repo inconsistency.\n- Removing env vars from the workflow requires matching test updates so contract tests do not keep asserting the old mapping.\n\nTesting considerations:\n- Run the targeted orchestrate poll contract test module: `tests/test_orchestrate_poll_workflow_contract.py`.\n- Run the targeted orchestrate poll process tests that cover the judge/runtime paths in `tests/test_orchestrate_poll_process.py`.\n- Parse-check `.github/workflows/orchestrate_poll.yml` after the edit.\n- Re-run a repo grep over the touched poll-path files to confirm no MCP/Serena/Context7/Git-MCP references remain there.\n\nConflict note:\n- The issue scope says to clean the orchestrator judge prompts, but the repo currently contains both active poll prompts and duplicate prompt variants with the same stale MCP wording. The implementation should either clean both within the allowed file set or explicitly leave the unused duplicates untouched only if `files_touched` forbids them.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5045af1ca41d7f2ddfdd0c02fb8bc7594a5974e99142f37fea64238261157e18",
+  "lineage": {
+    "issue_number": 2046,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25293863390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25293863390",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2046"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260503233008_7a2fdd8575",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2046,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25293863390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2046",
+  "timestamps": {
+    "created_at": "2026-05-03T23:30:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
