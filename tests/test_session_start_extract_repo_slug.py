@@ -44,6 +44,24 @@ CASES: list[tuple[str, str]] = [
     ("git@github.com:owner/repo.git", "owner/repo"),
     # HTTPS with embedded credentials (e.g. x-access-token).
     ("https://x-access-token:abc@github.com/o/r.git", "o/r"),
+    # URLs with extra path segments after owner/repo must NOT yield a
+    # slug. A greedy suffix regex would otherwise return the wrong
+    # tail (e.g. "bar/pulls" or "tree/main") and send `gh -R` to a
+    # bogus repo.
+    ("https://github.com/foo/bar/pulls", ""),
+    ("https://github.com/foo/bar/issues/123", ""),
+    ("https://github.com/foo/bar/tree/main", ""),
+    ("https://github.com/foo/bar/actions/runs/123", ""),
+    ("https://github.com/foo/bar/pull/42", ""),
+    ("https://github.com/foo/bar/blob/main/README.md", ""),
+    # Proxy-shaped URLs on non-localhost hosts must NOT yield a slug —
+    # only the Claude Code Web local proxy (127.0.0.1 / localhost) is
+    # whitelisted. Otherwise an arbitrary forge with a `/git/owner/repo`
+    # path would feed `gh -R` and probe the wrong github.com repo.
+    ("https://gitlab.com/git/foo/bar", ""),
+    ("http://attacker.com/git/foo/bar", ""),
+    # Localhost proxy form (alternate to 127.0.0.1) should still work.
+    ("http://localhost:46539/git/owner/repo", "owner/repo"),
     # Edge cases — should produce empty output.
     ("https://github.com/", ""),
     ("https://github.com/foo", ""),  # one path segment — must NOT capture host as owner

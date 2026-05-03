@@ -39,29 +39,43 @@ install_gh() {
 # Trailing <owner>/<repo> from the remote URL, with trailing slash and
 # `.git` suffix stripped (in that order — `repo.git/` would otherwise
 # leave the suffix attached). Restricted to GitHub remotes (github.com
-# host) and Claude Code Web's local proxy form (host:PORT/git/<owner>/<repo>)
-# so non-GitHub remotes (gitlab.com, bitbucket.org, …) don't yield a
-# plausible-looking slug that `gh -R` would then probe against the wrong
-# github.com repo. Empty output → caller logs a NOTE and skips the probe.
+# host) and Claude Code Web's local proxy on 127.0.0.1/localhost so
+# non-GitHub remotes (gitlab.com, bitbucket.org, …) and arbitrary
+# `/git/owner/repo`-shaped URLs don't yield a plausible-looking slug
+# that `gh -R` would then probe against the wrong github.com repo.
+# Empty output → caller logs a NOTE and skips the probe.
 extract_repo_slug() {
   local url="$1"
   url="${url%/}"
   url="${url%.git}"
   url="${url%/}"
 
+  local path=""
   case "${url}" in
-    *github.com[/:]*) ;;        # https://github.com/o/r, git@github.com:o/r
-    *://*/git/*/*) ;;           # http://...@127.0.0.1:PORT/git/o/r (Claude Code Web proxy)
+    *github.com:*)            path="${url##*github.com:}" ;;       # SSH: git@github.com:o/r
+    *github.com/*)            path="${url##*github.com/}" ;;       # HTTPS: https://github.com/o/r
+    *://*127.0.0.1*/git/*)    path="${url##*/git/}" ;;             # Claude Code Web proxy (IP form)
+    *://*localhost*/git/*)    path="${url##*/git/}" ;;             # Claude Code Web proxy (hostname form)
     *) return 0 ;;
   esac
 
-  # Trailing <owner>/<repo>, restricted to characters GitHub allows in
-  # owner / repo names. Owner excludes `.` (GitHub usernames disallow it)
-  # so a one-segment URL like `github.com/foo` doesn't capture
-  # `github.com/foo` via the host-then-segment pair. Anchored at end so
-  # URLs with extra path segments (e.g. .../o/r/pulls) don't match the
-  # intermediate pair.
-  printf '%s\n' "${url}" | sed -nE 's|.*[/:]([A-Za-z0-9_-]+/[A-Za-z0-9._-]+)$|\1|p'
+  # Require exactly two non-empty path segments. URLs with extra segments
+  # (e.g. .../pulls, .../tree/main, .../actions/runs/123) would otherwise
+  # be returned as bogus slugs like "bar/pulls" via suffix matching.
+  case "${path}" in
+    */*/*) return 0 ;;     # more than two segments
+    /*)    return 0 ;;     # leading slash (no owner)
+    */)    return 0 ;;     # trailing slash with no repo (defensive)
+    */*) ;;                # exactly two segments — proceed
+    *)     return 0 ;;     # zero or one segment
+  esac
+
+  # Validate character set: owner is GitHub-username-shaped (alphanumeric +
+  # `_-`, no `.`); repo additionally allows `.`. No match → no output, and
+  # the caller treats that as "couldn't derive — skip the actions:read probe".
+  if printf '%s\n' "${path}" | grep -qE '^[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$'; then
+    printf '%s\n' "${path}"
+  fi
 }
 
 verify_token() {
