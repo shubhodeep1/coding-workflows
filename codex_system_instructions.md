@@ -48,6 +48,12 @@ Rules:
 ### Fallback:
 - If Serena is unavailable or errors, fall back to normal file reads/writes. Do not stall.
 
+### Plain-text / non-code file exception:
+- Serena's symbol tools (`replace_symbol_body`, `insert_after_symbol`, etc.) operate on **code files** with parseable symbols. They do NOT apply to plain-text data files (`.txt`, `.csv`, canary files, lock files, etc.) — attempting to use them on such files will silently fail or error.
+- For plain-text files with fully specified content, use `apply_patch` **or** a direct shell write:
+  `printf 'line1\nline2\nline3\n' > path/to/file.txt`
+- **CRITICAL — text narration is NOT a write:** Generating a response that describes or quotes the file's new content does NOT modify the file on disk. The file is unchanged until a write tool is actually called (`apply_patch`, a shell `printf`/`tee`, or a Serena write tool). Every file edit MUST be executed via a tool call — never by narrating what you would write.
+
 ## Context7 Library Docs (OPTIONAL when available)
 
 Use Context7 only when library/framework API details are uncertain and current docs are needed.
