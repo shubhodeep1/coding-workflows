@@ -36,17 +36,32 @@ install_gh() {
   log "gh installed: $(gh --version | head -n1)"
 }
 
-# Last two path segments of the remote URL, with trailing slash and
+# Trailing <owner>/<repo> from the remote URL, with trailing slash and
 # `.git` suffix stripped (in that order — `repo.git/` would otherwise
-# leave the suffix attached). Handles github.com URLs and Claude Code
-# Web's local proxy form (http://...@127.0.0.1:PORT/git/<owner>/<repo>)
-# the same way.
+# leave the suffix attached). Restricted to GitHub remotes (github.com
+# host) and Claude Code Web's local proxy form (host:PORT/git/<owner>/<repo>)
+# so non-GitHub remotes (gitlab.com, bitbucket.org, …) don't yield a
+# plausible-looking slug that `gh -R` would then probe against the wrong
+# github.com repo. Empty output → caller logs a NOTE and skips the probe.
 extract_repo_slug() {
   local url="$1"
   url="${url%/}"
   url="${url%.git}"
   url="${url%/}"
-  printf '%s\n' "${url}" | awk -F'[/:]' '{ if (NF >= 2 && $NF != "" && $(NF-1) != "") print $(NF-1) "/" $NF }'
+
+  case "${url}" in
+    *github.com[/:]*) ;;        # https://github.com/o/r, git@github.com:o/r
+    *://*/git/*/*) ;;           # http://...@127.0.0.1:PORT/git/o/r (Claude Code Web proxy)
+    *) return 0 ;;
+  esac
+
+  # Trailing <owner>/<repo>, restricted to characters GitHub allows in
+  # owner / repo names. Owner excludes `.` (GitHub usernames disallow it)
+  # so a one-segment URL like `github.com/foo` doesn't capture
+  # `github.com/foo` via the host-then-segment pair. Anchored at end so
+  # URLs with extra path segments (e.g. .../o/r/pulls) don't match the
+  # intermediate pair.
+  printf '%s\n' "${url}" | sed -nE 's|.*[/:]([A-Za-z0-9_-]+/[A-Za-z0-9._-]+)$|\1|p'
 }
 
 verify_token() {

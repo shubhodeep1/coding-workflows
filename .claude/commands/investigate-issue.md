@@ -57,7 +57,8 @@ Repo scope: `shubhodeep1/coding-workflows`. If `gh auth status` succeeds, `gh` i
 
 - **Always emit the full Output Format — even when the fix has been applied, committed, and pushed.** The PR/commit alone is not the user-facing report. The chat reply MUST include `Summary` (with the root cause), `Evidence-based` cites, and `Fix:` describing what changed and why. A bare "Done — see PR #X" is not acceptable; the user wants the diagnosis and a description of the generated fix without leaving the chat.
 - Download / read every referenced artifact in full; never truncate. When multiple URLs are present, this rule applies to each.
-- Prefer `mcp__github__*` for GitHub reads; fall back to `gh` CLI when `GH_TOKEN` is set and the MCP surface is awkward (see [Tool Access](#tool-access)). Repo scope: `shubhodeep1/coding-workflows`. On `gh` calls that need repo context, pass `-R <owner>/<repo>` explicitly (Claude Code Web's git remote is a local proxy that `gh` cannot auto-resolve).
+- Prefer `mcp__github__*` for GitHub reads; fall back to `gh` CLI when `GH_TOKEN` is set and the MCP surface is awkward (see [Tool Access](#tool-access)). Repo scope: `shubhodeep1/coding-workflows`.
+- **`gh` calls that need repo context MUST pass `-R <owner>/<repo>` explicitly.** Claude Code Web's git remote is a local proxy that `gh` cannot auto-resolve — bare `gh run view --log <id>` fails with `failed to determine base repo`. The SessionStart hook prints the resolved slug; use that value (`shubhodeep1/coding-workflows` for this repo).
 - No citation → no claim. No claim → no fix.
 - Forbidden silent moves: editing tests to pass without evidence the test is wrong, broadening `except`/`catch`, suppressing warnings, version-bumping without verified compatibility, adding retries to mask deterministic failures.
 - Address the root cause (first meaningful error), not cascading failures. Multiple independent failures → handle each separately.

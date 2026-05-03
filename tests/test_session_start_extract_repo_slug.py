@@ -44,7 +44,16 @@ CASES: list[tuple[str, str]] = [
     ("https://x-access-token:abc@github.com/o/r.git", "o/r"),
     # Edge cases — should produce empty output.
     ("https://github.com/", ""),
+    ("https://github.com/foo", ""),  # one path segment — must NOT capture host as owner
     ("", ""),
+    # Non-GitHub remotes must not yield a slug, otherwise `gh -R` would
+    # probe the wrong github.com repo and revive the misleading
+    # actions:read NOTE this PR was opened to eliminate.
+    ("https://gitlab.com/foo/bar", ""),
+    ("https://gitlab.com/foo/bar.git", ""),
+    ("git@bitbucket.org:foo/bar.git", ""),
+    ("https://example.com/some/repo", ""),
+    ("ssh://git@codeberg.org/owner/repo.git", ""),
 ]
 
 

@@ -293,7 +293,7 @@ jobs:
       - name: Shell script syntax check
         run: |
           set -euo pipefail
-          for f in scripts/*.sh; do
+          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
             bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
@@ -307,7 +307,7 @@ jobs:
       - name: ShellCheck static analysis
         run: |
           set -euo pipefail
-          for f in scripts/*.sh; do
+          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
             shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
