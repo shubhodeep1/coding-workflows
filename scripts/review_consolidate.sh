@@ -22,10 +22,10 @@ CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
 case "${REVIEW_CONSOLIDATOR_REASONING}" in
-	xhigh|high|medium|low|none) ;;
+	xhigh|high|medium|none) ;;
 	*)
-		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=medium"
-		REVIEW_CONSOLIDATOR_REASONING="medium"
+		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=none"
+		REVIEW_CONSOLIDATOR_REASONING="none"
 		;;
 esac
 

@@ -85,7 +85,7 @@ Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable iss
   must not require creating commits, opening PRs, publishing releases, or
   making any other direct changes in other repositories to be considered
   complete.
-- Do not generate sub-issues that require creating new external repositories, committing files into or opening PRs against other repos, running CI in other repos, or making any direct changes in other repositories. Read-only fetches/clones of explicitly identified `<owner>/<repo>` targets at explicit refs are allowed only when the implementation and acceptance criteria remain entirely in this repo and behavior can be validated with deterministic in-tree/offline coverage.
+- Do not generate sub-issues that require creating new external repositories, committing files into or opening PRs against other repos, running CI in other repos, or making any direct changes in other repositories. Do not depend on unspecified, implicitly discovered, or nonexistent external repos. Read-only fetches/clones of explicitly identified `<owner>/<repo>` targets at explicit refs are allowed only when the implementation and acceptance criteria remain entirely in this repo and behavior can be validated with deterministic in-tree/offline coverage.
 - Mentions of other repositories for context are fine when the WORK happens
   in this repo. Examples that ARE in scope: editing
   `.github/ai/consumer_repos.json` (which lists external dispatch targets),
