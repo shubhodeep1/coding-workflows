@@ -177,6 +177,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_template_atomicity.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_identity.py
 
+      - name: SessionStart hook repo-slug contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
+
       - name: AI label precreation contract test
         run: |
           set -euo pipefail

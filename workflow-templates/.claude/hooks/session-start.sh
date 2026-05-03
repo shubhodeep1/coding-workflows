@@ -1,11 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Only run in Claude Code on the web. Local sessions are unaffected.
-if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
-  exit 0
-fi
-
 log() { printf '[session-start] %s\n' "$*"; }
 
 install_gh() {
@@ -41,11 +36,14 @@ install_gh() {
   log "gh installed: $(gh --version | head -n1)"
 }
 
-# Last two path segments of the remote URL, with `.git` and trailing
-# slashes stripped. Handles github.com URLs and Claude Code Web's local
-# proxy form (http://...@127.0.0.1:PORT/git/<owner>/<repo>) the same way.
+# Last two path segments of the remote URL, with trailing slash and
+# `.git` suffix stripped (in that order — `repo.git/` would otherwise
+# leave the suffix attached). Handles github.com URLs and Claude Code
+# Web's local proxy form (http://...@127.0.0.1:PORT/git/<owner>/<repo>)
+# the same way.
 extract_repo_slug() {
   local url="$1"
+  url="${url%/}"
   url="${url%.git}"
   url="${url%/}"
   printf '%s\n' "${url}" | awk -F'[/:]' '{ if (NF >= 2 && $NF != "" && $(NF-1) != "") print $(NF-1) "/" $NF }'
@@ -98,5 +96,17 @@ verify_token() {
   fi
 }
 
-install_gh || log "gh install failed (non-fatal)"
-verify_token || true
+# Entrypoint. Gated on Claude Code Web so local sessions are unaffected.
+# Skipped when this file is sourced (so tests can call extract_repo_slug
+# directly without running install_gh / verify_token).
+main() {
+  if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
+    return 0
+  fi
+  install_gh || log "gh install failed (non-fatal)"
+  verify_token || true
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
