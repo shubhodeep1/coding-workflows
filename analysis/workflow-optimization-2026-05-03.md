@@ -436,3 +436,128 @@ Treat Serena as a **conditional accelerator**, not mandatory baseline overhead. 
 | `copilot_pull_request_reviewer` / `25265632302` | duplicated PR/artifact metadata calls | `github.rest.pulls.get`, paginated file listing, artifact API lookup |
 
 If you want, I can turn this into a shorter exec-ready action plan with owners, priority, and “change first / measure next” sequencing.
+
+## Deep Audit — Workflows & Scripts (2026-05-03)
+
+### Section 1: Bug & Correctness Sweep
+
+Audited scope: 34 workflow files under `.github/workflows/` and 61 repository scripts under `scripts/`. Findings below are the material defects and high-value correctness/security risks.
+
+#### BUG-001
+- **File path** — `.github/workflows/review_autofix.yml:848-915,3237-3244`
+- **Severity** — High
+- **Category tag** — `bug`
+- **Description** — The `EDITOR_CHANGES_LOST` false-positive downgrade path is wired to a helper that is never bootstrapped for consumer-repo runs. The workflow stages support scripts into `${SUPPORT_SCRIPTS_DIR}` and explicitly enumerates `REQUIRED_BOOTSTRAP_SCRIPTS`, but that list does **not** include `detect_editor_changes_lost.sh`. Later, the guard hardcodes `recheck_script="${GITHUB_WORKSPACE}/scripts/detect_editor_changes_lost.sh"` and silently skips the downgrade when the file is not executable. In this repo the script exists locally, but in the consumer-repo execution path the bootstrap destination is the temp support dir, not `GITHUB_WORKSPACE/scripts`, so the guard is effectively disabled and false-positive “editor claimed changes but no commit was produced” failures can reappear.
+- **Recommended fix** — Add `detect_editor_changes_lost.sh` to the bootstrapped support-script set and resolve it through the existing support-root convention (`${SUPPORT_SCRIPTS_DIR}/detect_editor_changes_lost.sh`), not `GITHUB_WORKSPACE`. That matches how `post_review_comment.sh`, `review_apply_fixes.sh`, and other review helpers are already sourced.
+
+#### SEC-001
+- **File path** — `scripts/memory_helpers.sh:47-95`; representative authenticated-origin setup sites include `.github/workflows/clarify.yml:145-148`, `.github/workflows/plan.yml:180-182`, `.github/workflows/orchestrate.yml:71-73`, `.github/workflows/review_autofix.yml:790-796`, `.github/workflows/validate.yml:160-169`
+- **Severity** — High
+- **Category tag** — `security`
+- **Description** — `memory_ensure_branch` reads `origin` with `git remote get-url origin`, then reuses that URL in a temp repo and runs `git push origin "${branch}" 2>&1`. Multiple workflows first rewrite `origin` to an authenticated URL of the form `https://x-access-token:${GH_TOKEN}@...`. If ai-memory branch bootstrap fails, git stderr can include the authenticated remote, which risks credential exposure in Actions logs. The helper is fail-open, so this path is specifically exercised under failure conditions rather than being impossible. [NEEDS VERIFICATION]
+- **Recommended fix** — Strip credentials from `origin_url` before reusing it, and pass auth separately via the existing workflow credential state or an explicit `http.extraheader`/credential helper. Also avoid emitting raw `git push` stderr when the remote may contain embedded credentials. Centralizing remote construction behind the existing `SERVER_HOST="${GITHUB_SERVER_URL#https://}"` pattern would keep auth handling consistent.
+
+#### BATCH-001
+- **File path** — `scripts/orchestrate_poll_process.sh:6327-6411`
+- **Severity** — High
+- **Category tag** — `api-batching`
+- **Description** — The standalone stall scan still performs per-tracking-issue and per-label API walks inside the main poll tick. Specifically, it fetches tracking-issue comments one issue at a time at lines 6329-6344, then issues seven separate `gh issue list --label ...` calls at lines 6356-6359 before iterating candidates. That is exactly the kind of per-iteration API fan-out CLAUDE.md §15 forbids, and it sits next to existing GraphQL batching helpers (`_fetch_standalone_marker_issues_graphql`, `_fetch_candidate_issue_details_graphql`) that already solve the same shape elsewhere.
+- **Recommended fix** — Batch both prefetches. Extend `_fetch_candidate_issue_details_graphql` with a tracking-issue mode (or add `_fetch_tracking_issue_state_graphql`) so tracking comments/state are fetched in aliased GraphQL batches, and replace the seven label-specific `gh issue list` calls with one batched GraphQL/search helper that returns all open candidate issue numbers by phase label.
+  - **Current call count** — `T + 7 + M` logical calls per poll tick, where `T` = tracking issues and `M` = fallback cache misses.
+  - **Proposed call count** — `ceil(T / 25) + 1 + M`.
+  - **Existing batching pattern to extend** — `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql` and `::_fetch_standalone_marker_issues_graphql`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path** — `.github/workflows/issue_pr_status.yml:322-349,503-512`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The workflow classifies linked issues into `TRACKING_ISSUES` / `MANAGED_ISSUES` earlier in the same execution path, but the later Telegram-alert gate re-fetches each linked issue body one-by-one via `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""'` just to detect orchestrator ownership. That is a straight cache miss: the workflow already had the data needed to know whether the issue is orchestrator-managed.
+- **Recommended fix** — Persist the earlier classification result and reuse it in the alert step instead of re-downloading issue bodies. The simplest fix is to consult `MANAGED_ISSUES`/`TRACKING_ISSUES`; the more general fix is to persist the earlier `_orch_meta` JSON into a temp file for downstream consumers.
+  - **Current call count** — `N` extra `GET /issues/{n}` calls per merged-PR execution path.
+  - **Proposed call count** — `0`.
+  - **Existing batching pattern to extend** — Reuse the existing `ORCH_RESP` GraphQL batch in this workflow, following the same cache-first shape used by `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`.
+
+#### API-002
+- **File path** — `scripts/check_external_branch_advance.sh:175-185`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The branch-advance detector makes one `gh api repos/.../commits/{sha}` call per advancing commit in `self_subject_shas`. The script comments that the set is “usually tiny,” but this is still an API call inside a loop in a review hot path, and the result shape is narrow: only `author.login` and `committer.login` are needed.
+- **Recommended fix** — Batch commit attribution lookups when more than one SHA is present. A small GraphQL alias query over the advancing SHAs would preserve the current fail-open semantics while removing the per-SHA looped REST pattern.
+  - **Current call count** — `K` commit API calls, where `K` = number of advancing SHAs.
+  - **Proposed call count** — `1` when `K > 1`, otherwise keep the single-call fast path.
+  - **Existing batching pattern to extend** — The aliased-GraphQL batching style already used in `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`. [NEEDS VERIFICATION]
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/clarify.yml:161-235`; `.github/workflows/plan.yml:189-255`; `.github/workflows/orchestrate.yml:132-205,262-325`; `.github/workflows/orchestrate_clarify_respond.yml:204-275`; `.github/workflows/orchestrate_poll.yml:213-285`; `.github/workflows/review_autofix.yml:798-915`; `.github/workflows/validate.yml:185-282`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — The repo has at least three near-identical implementations of “resolve support ref → checkout `.codex-workflow-src` → fallback to `main` → stage scripts/prompts into runtime locations.” The same bootstrap logic is duplicated across most primary workflows, with only the required file lists changing. This is now large enough that any support-fetch bug, auth change, or path-resolution fix must be patched in many places, and the repo has already drifted into checkout-based, `git clone`-based, and `copy_from_ref_or_local` variants.
+- **Recommended fix** — Move the bootstrap into one owner module, preferably a new composite action (e.g. `.github/actions/stage-workflow-support`) or a new shell helper (e.g. `scripts/fetch_workflow_support.sh`).
+  - **Suggested signature** — `fetch_workflow_support <required_scripts_csv> <optional_scripts_csv> <required_prompts_csv> <dest_root> [script_ref]`
+  - **Callers to update** — `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml`, `review_autofix.yml`, `validate.yml`, and any remaining support-staging jobs in `issue_pr_status.yml` / `validation-improvements-intake.yml`.
+
+#### DUP-002
+- **File path** — `.github/workflows/mark-stable.yml:456-483`; `.github/workflows/review_autofix.yml:1289-1327`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — Two workflows re-implement local rate-limit-aware `gh` retry wrappers even though the repo already maintains `scripts/gh_helpers.sh` as the canonical implementation. The inline versions have already drifted: they do not share the helper’s permanent-failure short-circuiting, Telegram cooldown handling, breaker-file semantics, or temp-file hygiene.
+- **Recommended fix** — Remove the inline wrappers and source the canonical helper instead.
+  - **Suggested owner** — `scripts/gh_helpers.sh`
+  - **Suggested function signature** — existing `gh_retry "$@"` and `gh_retry_to_file <outfile> "$@"`
+  - **Callers to update** — `mark-stable.yml` “Dispatch stable release event” and `review_autofix.yml` “Collect PR metadata”.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1448`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — The `Phase 4: Wait for review & autofix to complete` `run:` block is already large enough to be expression-limit sensitive. The interpolated block is about **16,626 characters**, leaving only about **4,374 characters** of headroom before GitHub’s hard **21,000-character** template-expression limit. This block is a known growth magnet: it contains the rate-limit wrapper, run polling, live-log probing, reviewer-count shortcut, editor-noop shortcut, and inactivity diagnostics in one interpolated shell body.
+- **Recommended fix** — Extract the wait loop into an external script (preferred: `scripts/wait_for_review_run.sh`) and pass the few dynamic values through `env:`. If keeping it inline, split the live-log shortcut logic and the activity-probe logic into separate steps so future diagnostics do not push the block over the limit.
+  - **Estimated current size** — ~16,626 chars
+  - **Headroom remaining** — ~4,374 chars
+
+No workflow file exceeded the 800 KB early-warning threshold; the largest audited workflow was `review_autofix.yml` at 271,414 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001
+- **File path** — `.github/workflows/implement.yml:2514-2524`; `.github/workflows/review_autofix.yml:4090-4098`; `scripts/review_commit_changes.sh:448-456`; `scripts/review_conflict_resolve.sh:852-854`; `scripts/review_rb_judge.sh:584-592`; `scripts/orchestrate_poll_process.sh:9739-9748`
+- **Severity** — Medium
+- **Category tag** — `consistency`
+- **Description** — Several push/update paths hardcode authenticated remotes against `github.com`, while other workflows correctly derive the host from `GITHUB_SERVER_URL` and `SERVER_HOST`. That makes the repo internally inconsistent and breaks portability for GitHub Enterprise / non-`github.com` deployments in exactly the write paths that matter most: implement push, autofix push, conflict resolution, judge fixes, and orchestrator follow-up fixes.
+- **Recommended fix** — Centralize authenticated-origin setup behind one shared helper (for example `set_authenticated_origin <token> <repo> [server_host]` in `scripts/gh_helpers.sh`) and replace the hardcoded `github.com` literals with the existing `SERVER_HOST="${GITHUB_SERVER_URL#https://}"` pattern already used in `clarify.yml`, `plan.yml`, `orchestrate.yml`, and `validate.yml`.
+
+#### DEAD-001
+- **File path** — `scripts/review_issue_ledger.sh:866-918`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `CURRENT_FLOOR` is declared and populated for every parsed current issue, but there is no read of that associative array later in the file. A full-text scan only finds the declaration and assignment, and ShellCheck surfaces this as unused state. In an already-complex ledger script, dead per-issue state makes the control flow harder to reason about and suggests abandoned classification logic.
+- **Recommended fix** — Either remove `CURRENT_FLOOR` entirely or thread it into the final ledger/rendering logic if floor-category output is still intended.
+
+No in-scope `TODO` / `FIXME` / `HACK` markers were found in the audited workflow/script set.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, SEC-001, BATCH-001 |
+| Medium | 5 | API-001, API-002, DUP-001, DUP-002, EXPR-001, CONSIST-001 |
+| Low | 1 | DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 8 | Large |
+| Expression size reduction | 2 | Small |
+| Medium/Low fixes | 4 | Small |
