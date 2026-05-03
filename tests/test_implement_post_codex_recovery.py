@@ -1222,8 +1222,11 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	assert "DO NOT redo these — go straight to editing" in codex_block, (
 		"Recap header must instruct the model to skip re-exploration and edit"
 	)
-	assert "apply_patch / Serena edit tools" in codex_block, (
+	assert "apply_patch, printf, or Serena write tools" in codex_block, (
 		"Recap must point the model at the actual editing tools to use"
+	)
+	assert "Do NOT narrate — call a write tool" in codex_block, (
+		"Recap must reinforce that narrating is not the same as a tool call"
 	)
 
 	# (b) The awk parser must match the Codex CLI stderr format we

@@ -1144,8 +1144,8 @@ jobs:
                     "${prior_exec_history}" \
                     "" \
                     "Based on the above, you have already inspected the relevant files. Skip" \
-                    "re-exploration. Make the edits now using apply_patch, printf shell exec," \
-                    "or Serena write tools. Do NOT narrate — call a write tool." \
+                    "re-exploration. Make the edits now using apply_patch, printf, or Serena write tools." \
+                    "Do NOT narrate — call a write tool." \
                     ""
                 fi
                 cat "${CODEX_PROMPT_FILE}"
