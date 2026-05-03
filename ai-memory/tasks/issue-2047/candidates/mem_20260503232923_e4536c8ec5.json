@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `d2e081ad077195c8ceae76545d025259e5dc6d97` on `orchestrator/project-2042` (matches integration metadata). Clarification input was auto-answered by the orchestrator; no open questions remain.\n\nPhase 0 grep triplet confirmed validation-path hits in the expected targets: `.github/workflows/validate.yml`, `scripts/validate_process.sh`, and validation prompt files under `prompts/`. One factual note: the issue text references a `files_touched` list, but no explicit list was present in the planning context; based on the stated scope, the plan keeps changes confined to the validation workflow, validation process script, and validation prompt files only.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/validate.yml`\n- `scripts/validate_process.sh`\n- `prompts/mode-validate-discover.txt`\n- `prompts/mode-validate-diagnose.txt`\n- `prompts/mode-validate-generate.txt`\n- `prompts/mode-validate-fix-harness.txt`\n- `prompts/mode-validate-self-heal.txt`\n\n2. Functions or modules to update\n- `.github/workflows/validate.yml`\n  Remove the Serena-only bootstrap pieces:\n  - the `Install uv for Serena` step\n  - `setup_serena.sh` from the fetched support-file list\n  - all validation job env exports for `SERENA_*`, `CONTEXT7_DISABLED`, and `GIT_MCP_DISABLED`\n  Keep the rest of the validation workflow intact so runtime validation behavior stays unchanged apart from MCP removal.\n- `scripts/validate_process.sh`\n  Use this as the representative implementation path for validation runtime setup.\n  - remove Serena/Context7/Git MCP variables from the header documentation block\n  - remove the `# Setup Codex + Serena` wording\n  - remove the `bash scripts/setup_serena.sh --mode editing --context codex || true` call\n  - preserve the existing Codex config generation and downstream prompt assembly/execution flow\n- Validation prompts\n  Remove rendered Serena placeholder blocks and any Serena/MCP wording from the validation-only prompts:\n  - `mode-validate-discover.txt`\n  - `mode-validate-diagnose.txt`\n  - `mode-validate-generate.txt`\n  - `mode-validate-fix-harness.txt`\n  - `mode-validate-self-heal.txt`\n  In `mode-validate-self-heal.txt`, also remove the explicit guard that forbids deleting the Serena placeholder.\n  `mode-validate-fix-harness.txt` currently still ends with the placeholder block, even though it does not appear to have the extra guard text; that placeholder still needs removal.\n\n3. Data structures affected\n- GitHub Actions job step list in `.github/workflows/validate.yml`\n- GitHub Actions env map passed into `scripts/validate_process.sh`\n- The `.codex/config.toml` bootstrap path in `scripts/validate_process.sh` only indirectly; the file still exists, but no longer depends on Serena setup\n- Prompt template contents rendered by `scripts/render_prompt.sh`; no renderer changes are needed, only removal of validation-path placeholder invocations from prompt sources\n\n4. API or interface changes\n- No public API changes\n- No DB contract changes\n- No new env vars\n- Effective interface cleanup only:\n  - validation workflow stops passing `SERENA_VERSION`, `SERENA_LANGUAGES`, `SERENA_DISABLED`, `SERENA_IGNORED_DIRS`, `CONTEXT7_DISABLED`, `GIT_MCP_DISABLED`\n  - validation process script no longer expects or documents those env vars\n- Shared prompt rendering remains unchanged; do not modify `scripts/render_prompt.sh` or shared prompt assets in this issue\n\n5. Potential risks and edge cases\n- Validation prompts still rely on `scripts/render_prompt.sh`; removing placeholder lines from the validation prompts must not remove any nearby hard constraints or schema instructions\n- `scripts/validate_process.sh` still writes `~/.codex/config.toml`; ensure Serena removal does not accidentally remove required Codex/OpenRouter config\n- `.github/workflows/validate.yml` currently fetches `setup_serena.sh`; removing it must not break the support-file fetch loop or any later script expectations\n- Acceptance requires \u201cno Serena/Context7/Git MCP references remain\u201d in the targeted validation files, so the cleanup should be verified case-insensitively for both explicit names and placeholder tokens\n- Shared files such as `scripts/render_prompt.sh` and `prompts/serena-efficiency-block.txt` still contain Serena logic for other phases; touching them here would violate scope\n\n6. Testing considerations\n- Re-run the Phase 0 grep triplet against the touched validation files and prompts to confirm no `Serena`, `Context7`, `Git MCP`, `setup_serena`, `SERENA_`, `CONTEXT7_`, `GIT_MCP_`, or `{{SERENA_EFFICIENCY_BLOCK_*}}` tokens remain in the validation path\n- Parse `.github/workflows/validate.yml` with a YAML parser to satisfy the acceptance criterion that edited YAML remains valid\n- Run a targeted shell syntax check on `scripts/validate_process.sh`\n- Sanity-check prompt rendering for the edited validation prompts through `scripts/render_prompt.sh` to confirm they still render cleanly without unresolved placeholder tokens\n- No broader behavior change testing is required beyond confirming validation prompt assembly and workflow/script parsing still work, because the requested behavior change is limited to MCP removal only\n\nChange boundary\n- Stay within the files listed above\n- Do not remove shared renderer/helper support for Serena placeholders in this issue\n- No README or `agents.md` updates appear necessary because this is validation-path cleanup only, not a user-facing behavior or env-var contract addition\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7e69ffaebb5ccab04cbd66c02884e634aabe8858aff2e69b760cfe2d152323ce",
+  "lineage": {
+    "issue_number": 2047,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25293862229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25293862229",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2047"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260503232923_e4536c8ec5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2047,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25293862229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2047",
+  "timestamps": {
+    "created_at": "2026-05-03T23:29:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
