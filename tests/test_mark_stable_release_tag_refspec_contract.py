@@ -146,16 +146,48 @@ def test_script_distinguishes_missing_branch_from_other_lsremote_failures() -> N
 	)
 
 
-def test_script_refuses_to_retarget_existing_origin_release_tag() -> None:
+def test_script_handles_already_published_version_tag() -> None:
 	text = _read(SCRIPT)
-	# The workflows create the immutable version tag without -f, so a rerun
-	# against an already-released VERSION_TAG fails before any push. Mirror
-	# that safety in the script with an explicit origin-side check; otherwise
-	# a rerun silently retargets the local immutable tag before the push fails.
+	# 1. Existence check: must run before any tag creation.
 	assert 'git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}"' in text, (
 		"scripts/mark-stable.sh: must check that refs/tags/${VERSION_TAG} is "
 		"unused on origin before creating any tags, mirroring the workflow's "
 		"non-forced `git tag -a` safety semantic"
+	)
+	# 2. Recovery vs conflict: when the tag already exists, the script must
+	#    compare its commit against origin/stable HEAD instead of
+	#    unconditionally hard-failing. A rerun after a partial publish (tag
+	#    pushed, moving pointers failed) is a legitimate recovery and must
+	#    finish the moving-tag pushes against the existing immutable tag.
+	assert '${VERSION_TAG}^{commit}' in text, (
+		"scripts/mark-stable.sh: must resolve the existing tag's commit via "
+		"`git rev-parse \"${VERSION_TAG}^{commit}\"` so partial-publish recovery "
+		"can be distinguished from a real retarget conflict"
+	)
+	assert "refs/remotes/origin/stable" in text, (
+		"scripts/mark-stable.sh: must compare against `refs/remotes/origin/stable` "
+		"to detect the partial-publish recovery case"
+	)
+	assert "SKIP_VERSION_TAG_CREATE" in text, (
+		"scripts/mark-stable.sh: must guard the tag-create + tag-push steps with a "
+		"recovery flag (e.g. SKIP_VERSION_TAG_CREATE) so a partial-publish rerun "
+		"finishes the moving-tag pushes without recreating or re-pushing the "
+		"immutable VERSION_TAG"
+	)
+
+
+def test_script_validates_git_identity_for_annotated_tag() -> None:
+	text = _read(SCRIPT)
+	# `git tag -a` requires committer identity; the script must pre-check it
+	# instead of failing mid-run with "Committer identity unknown".
+	assert "git config --get user.email" in text, (
+		"scripts/mark-stable.sh: must pre-check `git config --get user.email` "
+		"so a missing identity fails fast with actionable guidance instead of "
+		"mid-run with 'Committer identity unknown'"
+	)
+	assert "git config --get user.name" in text, (
+		"scripts/mark-stable.sh: must pre-check `git config --get user.name` "
+		"alongside user.email — both are required for annotated tags"
 	)
 
 
