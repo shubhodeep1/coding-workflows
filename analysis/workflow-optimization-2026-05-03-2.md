@@ -792,3 +792,145 @@ Ranked by expected failure-rate / rerun-rate reduction.
 | `copilot_pull_request_reviewer` / `Cleanup artifacts` | List + serial delete loop | Cleanup dominates 131–289s sampled runs | N+1 → 1–2 calls for small runs |
 | `review_autofix` short control paths | Duplicate PR/repo metadata lookups | separate PR existence + repo default branch calls | small per run |
 | `issue_pr_status` fallback path | GraphQL-to-REST fallback loops | safe fallback on orchestrator issue detection | mostly risk reduction, not baseline reduction |
+
+## Deep Audit — Workflows & Scripts (2026-05-03)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001 — `review_autofix` fallback phase-label helper can leave contradictory phase labels behind
+- **File path** — `.github/workflows/review_autofix.yml:3774-3792, 3894-3913`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — When `label_helpers.sh` is unavailable, the workflow defines `set_issue_phase_label_resilient()` as a one-way `POST /labels` helper that only adds the target label. It does **not** remove any existing phase labels. The canonical implementation in `scripts/label_helpers.sh:160-196` does a GET → compute phase swap → PUT/POST fallback, which preserves the single-phase-label contract from `.github/ai/label_contract.v1.json`. In the fallback path here, an issue can retain `ai:done`/`ai:planning`/`ai:clarification` while also gaining `ai:ready-to-merge` or `ai:review-blocked`, which is a correctness bug for any automation that expects one active phase label.
+- **Recommended fix** — Remove the ad-hoc fallback and either:
+  1. re-fetch/source `scripts/label_helpers.sh` before label mutation, as `scripts/review_rb_judge.sh` already does, or  
+  2. inline the same GET/PUT/POST phase-swap logic from `scripts/label_helpers.sh:set_issue_phase_label_resilient` so the fallback is behaviorally identical to the shared helper.
+
+#### BUG-002 — review-blocked judge reports `merge` as handled even when no merge is actually confirmed
+- **File path** — `scripts/review_rb_judge.sh:416-478, 491-499; .github/workflows/review_autofix.yml:3860-3861`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — In the `merge` path, the script relabels linked issues to `ai:ready-to-merge`, then runs `gh pr merge ... || gh pr merge ... || true`, and finally unconditionally writes `judge_handled=true` / `judge_action=merge`. There is no post-merge verification that the PR actually closed or that auto-merge was successfully armed. Because `review_autofix.yml` only enters the `ai:review-blocked` fallback when `judge_handled != 'true'`, a failed merge attempt can suppress the recovery path and leave an open PR advertised as already resolved. `[NEEDS VERIFICATION]`
+- **Recommended fix** — After the merge attempt, re-query the PR state with the existing `_safe_gh_jq` path and only set `judge_handled=true` when:
+  - the PR is already merged/closed, or
+  - auto-merge was positively enabled.  
+  Otherwise emit a distinct non-handled result so the downstream `ai:review-blocked` fallback still runs.
+
+#### SEC-001 — multiple workflows/scripts inject GitHub tokens directly into Git URLs
+- **File path** — `.github/workflows/validate.yml:204-219; .github/workflows/issue_pr_status.yml:59-78, 478-490, 567-579; .github/workflows/validation-improvements-intake.yml:66-77; scripts/review_commit_changes.sh:448-455; scripts/review_conflict_resolve.sh:852-853`
+- **Severity** — High
+- **Category tag** — `security`
+- **Description** — Several paths construct authenticated URLs like `https://x-access-token:${GH_TOKEN}@...` or rewrite `origin` with `https://x-access-token:${GH_PAT}@...`. That exposes credentials in process arguments and, for the `git remote set-url` cases, persists them into `.git/config` for the working copy. This repo already has a safer pattern in `.github/workflows/validation-refresh.yml:69-75`, which uses `gh auth setup-git` instead of embedding tokens in URLs.
+- **Recommended fix** — Standardize on the `validation-refresh.yml` pattern:
+  - call `gh auth setup-git` before `git clone` / `git fetch` / `git push`, or
+  - use a non-persistent credential helper / temporary `http.extraheader` for single commands.  
+  Remove all `x-access-token:${...}` URL construction from both workflow YAML and shell scripts.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — final-merge polling re-reads the same PR snapshot up to 8 times per tick
+- **File path** — `scripts/orchestrate_poll_process.sh:3412-3524`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — Once `final_pr` is known, the poller reads the same PR through separate `pulls/{pr}` calls for `.state`, `.merged_at`, and `.mergeable`:
+  - lines 3416-3417: 2 calls
+  - lines 3471-3473: 3 calls
+  - lines 3522-3524: 3 calls  
+  That is **8 REST reads** on the same endpoint in one execution path before counting `gh pr list` / `gh pr create`. The values are all part of the same PR snapshot and can drift between calls.
+- **Recommended fix** — Add a single helper such as `fetch_final_pr_snapshot <pr_number>` that returns `{state, mergeable, merged_at, head_sha}` in one call, then reuse that object before and after merge attempts. Extend the existing batched-snapshot style already used by `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`.
+- **Current call count** — 8 PR-read calls per tick after `final_pr` is known.
+- **Proposed call count after fix** — 2 PR-read calls per tick (one pre-merge snapshot, one post-merge snapshot).
+
+#### BATCH-001 — feature sweep makes one extra PR API read per PR just to fetch `head.sha`
+- **File path** — `scripts/orchestrate_poll_process.sh:8885-8917`
+- **Severity** — High
+- **Category tag** — `api-batching`
+- **Description** — The sweep already batches up to 100 open PRs with one `gh pr list --json number,headRefName,baseRefName,mergeable,mergeStateStatus`, but then immediately performs an extra `GET /pulls/{n}` inside the loop for every behind PR to read `.head.sha`. That makes the path **1 batched list call + N per-PR reads + up to N update-branch writes**. Since `gh pr list --json` supports `headRefOid`, the loop can avoid the extra read entirely.
+- **Recommended fix** — Add `headRefOid` to the existing `gh pr list --json ...` call and use that as `expected_head_sha` for `update-branch`. If richer batching is needed later, extend the same snapshot/batch approach used elsewhere in `orchestrate_poll_process.sh` rather than adding per-PR REST reads.
+- **Current call count** — 1 batched list call + **N** `pulls/{pr}` reads + up to **N** `update-branch` writes.
+- **Proposed call count after fix** — 1 batched list call + up to **N** `update-branch` writes.
+- **Existing batching pattern to extend** — the current `gh pr list` batch at lines 8885-8889, or the GraphQL alias batching style used by `_fetch_linked_pr_status_graphql`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — six workflows carry near-identical inline GitHub retry/rate-limit wrappers
+- **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/mark-stable.yml:307-334, 456-483; .github/workflows/orchestrate_poll.yml:66-97; .github/workflows/review_autofix.yml:1289-1327; .github/workflows/comprehensive-test-and-release.yml:72-98; .github/workflows/test-and-mark-stable.yml:1133-1155`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — `_rl_wait`, `_gh_retry`, and `gh_api_safe` variants are copied inline across multiple workflows. They already drift:
+  - some paths inspect `/rate_limit`,
+  - some only retry `gh api`,
+  - some return empty-string fail-open,
+  - some log hard errors,
+  - backoff caps differ.  
+  This duplication is why fixes like the `/rate_limit` preflight removal have to be repeated by hand.
+- **Recommended fix** — Consolidate into a shared helper module, preferably `scripts/gh_helpers.sh`, with a minimal API such as:
+  - `gh_retry <cmd...>`
+  - `gh_retry_to_file <outfile> <cmd...>`
+  - `gh_api_safe_json <endpoint> <jq_expr>`  
+  Update callers in `cancel_on_pr_close.yml`, `mark-stable.yml`, `orchestrate_poll.yml`, `review_autofix.yml`, `comprehensive-test-and-release.yml`, and `test-and-mark-stable.yml` to source the shared helper instead of carrying local copies.
+
+#### DUP-002 — support-repo bootstrap logic is duplicated and already diverging across workflows
+- **File path** — `.github/workflows/validate.yml:214-282; .github/workflows/issue_pr_status.yml:69-131, 484-499, 573-593; .github/workflows/validation-improvements-intake.yml:72-140`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — `checkout_support_ref`, staged `primary/main` clones, `copy_from_ref_or_local` / `fetch_from_ref_or_local`, and local fallback handling are reimplemented in several workflows. `issue_pr_status.yml` duplicates the pattern three times in one file alone (main support fetch, alert helper fetch, cleanup helper fetch). This creates drift risk in auth handling, fallback semantics, and token hygiene.
+- **Recommended fix** — Extract a shared bootstrap helper, e.g. `scripts/support_checkout_helpers.sh`, with a narrow interface such as:
+  - `bootstrap_support_checkout <wf_source> <preferred_ref> <stage_root>`
+  - `copy_from_support <repo_path> <target_path> [allow_main_fallback=true]`  
+  Then update `validate.yml`, `issue_pr_status.yml`, and `validation-improvements-intake.yml` to call the shared functions instead of carrying local clones of the logic.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — `test-and-mark-stable` review-wait block is already inside the medium-risk zone
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — This interpolated `run:` block measures **16,626 characters**, leaving only **4,374 characters** of headroom before the 21,000-character GitHub expression hard limit. It already mixes multiple `${{ }}` insertions with a large inline shell program, live-log shortcuts, and timeout diagnostics. Given this repo’s prior history of hitting the limit, this block is a realistic regression candidate.
+- **Recommended fix** — Extract the wait-loop into an external script such as `scripts/wait_for_review_run.sh`, and pass only small environment variables from YAML. If extraction is not possible immediately, split the step into:
+  1. run discovery / status polling, and
+  2. live-log shortcut logic.  
+  Externalizing the shell body is the safer long-term fix.
+- **Estimated current character count** — 16,626
+- **Headroom remaining** — 4,374
+
+_No workflow file in scope exceeded the 800 KB file-size warning threshold._
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — deprecated `caller_workflow` input is still wired internally even though runtime ignores it
+- **File path** — `.github/workflows/orchestrate_poll.yml:5-20; .github/workflows/internal-orchestrate-poll.yml:16-18`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `orchestrate_poll.yml` explicitly marks `caller_workflow` as a deprecated no-op whose value is ignored, but the internal wrapper still passes `caller_workflow: internal-orchestrate-poll.yml`. That keeps dead interface surface alive inside this repo and makes future readers think the value still affects poller behavior.
+- **Recommended fix** — Stop passing `caller_workflow` from `internal-orchestrate-poll.yml` and keep the input only for external backward compatibility. Add a short inline comment in the wrapper noting that the runtime no longer consumes it.
+
+#### SHELL-001 — `review_apply_fixes.sh` uses `ls` for control flow to pick retry artifacts
+- **File path** — `scripts/review_apply_fixes.sh:986-1018`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — The script uses `ls -1 ... | sort -V | tail -n 1` to find the latest `editor_attempt_*` artifacts. `shellcheck` flags this as SC2012, and it is a brittle pattern for control flow under `set -euo pipefail`. The filenames are currently workflow-generated, so the practical risk is low, but this still violates the repo’s shell hygiene bar and makes the selection logic harder to reason about than a direct tracked-path approach.
+- **Recommended fix** — Record the latest artifact path in a variable when each attempt finishes, or replace the `ls` pipeline with a `find`/glob-safe approach that does not parse `ls` output.
+
+_No new `TODO` / `FIXME` / `HACK` markers were found in the audited workflow and script files._
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | SEC-001, BATCH-001 |
+| Medium | 5 | BUG-001, BUG-002, API-001, DUP-002, EXPR-001 |
+| Low | 3 | DUP-001, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 6 | Medium |
+| API call optimization | 1 | Medium |
+| Code modularization | 9 | Large |
+| Expression size reduction | 1 | Small |
+| Medium/Low fixes | 5 | Small |
