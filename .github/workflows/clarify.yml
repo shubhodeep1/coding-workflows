@@ -364,8 +364,8 @@ jobs:
         run: |
           set -euo pipefail
           if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
-            echo "🔬 Smoke test detected — switching to low reasoning effort"
-            echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            echo "🔬 Smoke test detected — switching to none reasoning effort"
+            echo "MODEL_REASONING_EFFORT=none" >> "$GITHUB_ENV"
             # Suppress per-phase Telegram alerts from this clarify run; the
             # test-and-mark-stable gate emits a single combined pass/fail
             # notification at the end. SILENT > CRITICAL so all levels filter.

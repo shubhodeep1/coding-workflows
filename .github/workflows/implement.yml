@@ -600,7 +600,7 @@ jobs:
             # manifestations of the same upstream gpt-5.3-codex/OpenRouter
             # flakiness (low → unprefixed MCP calls; xhigh → "I'll
             # apply_patch" announce-without-invoke). The workflow-level
-            # default is xhigh and matches what the regular path uses, so
+            # default is none and matches what the regular path uses, so
             # any breakage on the smoke fixture is also visible to real
             # implements rather than masked by a smoke-only override.
           fi

@@ -208,7 +208,7 @@ run_cache_probe || true
 
 # ── Cross-reviewer consensus summariser ──────────────────────────────────
 # After each review pass (pass-1 and pass-2) completes, all reviewer outputs
-# are fed as a single prompt to codex-cli (openai/gpt-5.4-mini, xhigh
+# are fed as a single prompt to codex-cli (openai/gpt-5.4-mini, none
 # reasoning) which emits ONE consolidated findings ledger (CONSENSUS block +
 # per-reviewer sections). The pass-1 ledger feeds pass-2 reviewers; the
 # pass-2 ledger (written to REVIEWER_CONSENSUS_FILE) feeds the editor and
@@ -604,34 +604,13 @@ However:
 Do not recommend large refactors.
 Do not expand changes beyond the scope of the PR unless necessary for correctness.
 
-ADDITIONAL REVIEW DIMENSION — HARDENING & SECURITY (ADVISORY ONLY)
+Additional review dimension — hardening & security (advisory only)
 
 In addition to correctness and functionality, evaluate whether the proposed changes introduce opportunities for small-scale hardening improvements.
 
-These recommendations MUST follow strict limits:
+These recommendations must follow strict limits. Allowed: input validation improvements, additional error handling, safer defaults, defensive checks, logging improvements, edge case handling, security hygiene (escaping, sanitization, bounds checks), safer environment variable handling, safer file/path handling, timeout/retry protections, avoiding silent failures.
 
-ALLOWED:
-• Input validation improvements
-• Additional error handling
-• Safer defaults
-• Defensive checks
-• Logging improvements
-• Edge case handling
-• Security hygiene (escaping, sanitization, bounds checks)
-• Safer environment variable handling
-• Safer file/path handling
-• Timeout / retry protections
-• Avoiding silent failures
-
-NOT ALLOWED:
-• Refactoring large blocks of code
-• Rewriting functions
-• Renaming variables or functions
-• Changing architecture
-• Introducing new dependencies
-• Reorganizing modules
-• Modifying unrelated files
-• Performance micro-optimizations unrelated to safety
+Not allowed: refactoring large blocks of code, rewriting functions, renaming variables or functions, changing architecture, introducing new dependencies, reorganizing modules, modifying unrelated files, performance micro-optimizations unrelated to safety.
 
 Scope constraint:
 Hardening recommendations must be implementable in ≤10 lines of code per suggestion.
@@ -1176,7 +1155,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   fi
 
   # ── Consolidate all pass-1 reviewer outputs into one ledger ──
-  # One codex-cli call (gpt-5.4-mini, xhigh reasoning) produces a consensus
+  # One codex-cli call (gpt-5.4-mini, none reasoning) produces a consensus
   # ledger + per-reviewer sections. Retries 3×; hard-fails the workflow on
   # final failure (triggers job-level Telegram failure alert).
   PASS1_LEDGER_FILE="${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt"
@@ -1188,7 +1167,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "Cross-pollination summary: $(wc -c < "${CROSS_POLLINATION_FILE}") bytes"
 
   # ── PASS 2: deep review at full thinking, with cross-pollination ──
-  echo "=== PASS 2: Deep review (${REVIEWER_REASONING_EFFORT:-xhigh} reasoning) ==="
+  echo "=== PASS 2: Deep review (${REVIEWER_REASONING_EFFORT:-medium} reasoning) ==="
   PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
   assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"
 

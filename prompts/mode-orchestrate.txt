@@ -77,7 +77,7 @@ Rules:
 - Do not propose issues that duplicate existing functionality.
 - Do not write code. Only produce the decomposition JSON.
 
-Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable issues):
+Single-repo invariant (violations produce unimplementable issues):
 
 - All orchestrator-generated sub-issues MUST complete entirely within this
   repository. The downstream planner checks out only this repo's working
@@ -102,7 +102,7 @@ Single-repo invariant (NON-NEGOTIABLE — violations produce unimplementable iss
   a note in `project_summary`, rather than filing an unimplementable
   sub-issue.
 
-File partitioning rules (MANDATORY — prevents merge conflicts between parallel
+File partitioning rules (prevents merge conflicts between parallel
 sibling issues within the same wave):
 
 - For EVERY issue, populate the optional `files_touched` array with every

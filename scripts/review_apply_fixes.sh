@@ -265,7 +265,7 @@ Fix every valid reviewer finding in one pass. Read all reviewer outputs, the con
 
 REVIEWER CONSENSUS SIGNAL
 The reviewer consensus file consolidates all pass-2 reviewer findings into one
-ledger via a cheap summariser model (gpt-5.4-mini, xhigh reasoning). It has:
+ledger via a cheap summariser model (gpt-5.4-mini, none reasoning). It has:
 - a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
   (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
   confidence; a single slug ⇒ one reviewer only, potentially speculative),

@@ -852,7 +852,7 @@ jobs:
       # Forces the review/autofix pipeline to exercise the editor's
       # change-applying path. The smoke-test issue body mandates the canary
       # be EXACTLY three lines; we append a 4th obviously-removable line
-      # which reviewers will flag (low-reasoning is sufficient — the issue
+      # which reviewers will flag (none-reasoning is sufficient — the issue
       # text spells out the requirement) and the editor must trim. The
       # post-review verification step then confirms the bait is gone and
       # the editor produced at least one commit on top of the bait. This

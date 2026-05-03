@@ -38,7 +38,7 @@ orchestrator issues that may be editing adjacent code):
 - When your change intersects an anchor, make the minimal edit required and
   leave untouched prose intact byte-for-byte.
 
-Dependency / lockfile discipline (MANDATORY when touching dependency manifests):
+Dependency / lockfile discipline (when touching dependency manifests):
 
 If your patch edits a dependency manifest — adding, removing, bumping, or
 changing the specifier of any dependency — you MUST update the corresponding
@@ -73,7 +73,7 @@ Rules:
   lockfiles as an unrelated side effect — that violates the minimal-change
   rule.
 
-Data-file output discipline (MANDATORY when writing YAML or JSON):
+Data-file output discipline (when writing YAML or JSON):
 
 - When writing files under `db/contracts/` or any other YAML/JSON path,
   emit raw YAML or raw JSON only. Never wrap the file body in markdown
@@ -83,7 +83,7 @@ Data-file output discipline (MANDATORY when writing YAML or JSON):
   valid YAML/JSON — anything else is a syntax error that breaks the
   post-Codex validation step.
 
-- **YAML reserved-indicator quoting (MANDATORY).** When writing or editing
+- YAML reserved-indicator quoting. When writing or editing
   `*.yml` / `*.yaml` files, any scalar (list item or mapping value) whose
   first non-whitespace character is one of `` ` ``, `@`, `*`, `&`, `|`,
   `>`, `!`, `%`, `#`, `?`, `,`, `[`, `]`, `{`, or `}` MUST be wrapped in

@@ -17,15 +17,9 @@ Generate a structured implementation plan covering:
 4. API/interface changes
 5. Risks and edge cases
 6. Testing considerations
-7. Implementation-time estimate (in minutes) for the downstream editor.
-   The implement watchdog kills attempts at 130 minutes wall-clock and
-   the 3-hour job budget typically allows only one full-length attempt;
-   retries are only possible when earlier attempts finish well under
-   the wall cap / remaining budget. Issues that the editor cannot
-   finish inside ONE 60-minute attempt risk wasting a full run, so the
-   planner MUST surface this estimate explicitly. State the
-   estimate on its own line as: `Implementation-time estimate: <N> minutes`
-   where `<N>` is an integer.
+7. Implementation-time estimate (in minutes). State on its own line as:
+   `Implementation-time estimate: <N> minutes` where `<N>` is an integer.
+   Must be ≤ 60; see scope-too-large gate in the rules below.
 
 Rules:
 - Read and interpret clarification answers from the provided planning context first.

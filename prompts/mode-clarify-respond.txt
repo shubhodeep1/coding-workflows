@@ -53,7 +53,7 @@ Hard prohibitions:
   repeat a prior cycle's answer for the same question, you must choose a
   different rung or ESCALATE. Do not repeat a losing answer.
 
-Data-provision guard (CRITICAL — prevents circular dead-ends):
+Data-provision guard (prevents circular dead-ends):
 - If a lettered option (A, B, C, etc.) requires the respondent to provide,
   supply, share, or paste specific external data — such as PR URLs, branch
   names, commit SHAs, deployment URLs, build outputs, test results, or file

@@ -10,7 +10,7 @@ source files — they are already loaded.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
-For any repo inspection needed for clarification, follow SERENA MCP EFFICIENCY (MANDATORY).
+Ask only questions that would materially change the implementation — exhaust repo context and safe defaults before asking anything.
 
 Rules:
 - Exhaust available repo/issue context before asking questions.
@@ -35,7 +35,7 @@ Rules:
   based on scoring formula", or "reframe acceptance criterion" alongside
   traditional options.
 
-Question format (MANDATORY):
+Question format:
 - Use Q1, Q2, Q3... identifiers with lettered choices.
 - Mark best option(s) with " (RECOMMENDED)".
 - Follow format from codex_system_instructions.md § "Mandatory Question Format".
