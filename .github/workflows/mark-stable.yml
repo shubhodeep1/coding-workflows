@@ -402,9 +402,9 @@ jobs:
           VERSION="${{ needs.resolve-version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
 
-          # Immutable version tag
+          # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
           git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "$VERSION"
+          git push origin "refs/tags/$VERSION"
 
           # Moving stable pointer (use refs/tags/ to disambiguate from refs/heads/stable)
           git tag -f stable "$VERSION"

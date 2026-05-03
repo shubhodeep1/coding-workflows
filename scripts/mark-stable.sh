@@ -9,7 +9,7 @@ echo "Tagging origin/main as ${VERSION_TAG} and updating stable pointer..."
 git fetch origin main
 git tag -f "${VERSION_TAG}" origin/main
 git tag -f stable "${VERSION_TAG}"
-git push origin "${VERSION_TAG}"
-# Use refs/tags/ to disambiguate from a refs/heads/stable branch when both exist.
+# Use refs/tags/ explicitly to disambiguate from any same-named branch refs.
+git push origin "refs/tags/${VERSION_TAG}"
 git push -f origin refs/tags/stable
 echo "Done. ${VERSION_TAG} is now the stable release."
