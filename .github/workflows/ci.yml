@@ -177,6 +177,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_template_atomicity.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_identity.py
 
+      - name: SessionStart hook repo-slug contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
+
       - name: AI label precreation contract test
         run: |
           set -euo pipefail
@@ -288,7 +293,7 @@ jobs:
       - name: Shell script syntax check
         run: |
           set -euo pipefail
-          for f in scripts/*.sh; do
+          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
             bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
@@ -302,7 +307,7 @@ jobs:
       - name: ShellCheck static analysis
         run: |
           set -euo pipefail
-          for f in scripts/*.sh; do
+          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
             shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
