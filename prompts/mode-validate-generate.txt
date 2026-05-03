@@ -85,7 +85,7 @@ Docker Compose variable interpolation rules:
 - After generating the compose file, mentally render every string field and confirm that no unescaped `$` references a shell variable that should be evaluated in the container.
 - The same rule applies to any Compose `${VAR}` you want passed through literally (e.g. `$${VAR}`), but prefer rewriting to avoid this whenever possible.
 
-Test script contract:
+Test script contract (MANDATORY):
 - `validation/tests/00_canary.sh` must be the first script, followed by zero-padded `NN_*.sh` scripts in execution order.
 - Every script must include `#!/usr/bin/env bash`, use `set -euo pipefail`, and be executable.
 - Every script must emit TAP-style assertions: `ok N - <description>` / `not ok N - <description>`.
