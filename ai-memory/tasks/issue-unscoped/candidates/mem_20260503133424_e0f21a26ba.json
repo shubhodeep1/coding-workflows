@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mark-stable.sh:line 6-8 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The VERSION_TAG regex rejects valid SemVer 2.0 tags with pre-release identifiers or build metadata.\n  WHY: Both reviewers identified that `^v[0-9]+\\.[0-9]+\\.[0-9]+$` only accepts strict `vMAJOR.MINOR.PATCH` tags, and one noted this blocks pre-release/recovery tagging.\n- scripts/mark-stable.sh:lines 17,23,28,30,44,67,89 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: Every git remote operation hardcodes the \"origin\" remote name.\n  WHY: Both reviewers observed the script assumes `origin` for all remote interactions, which breaks on clones where the canonical remote has a different name.\n- scripts/mark-stable.sh:line 35 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The error path for `git ls-remote` may not include enough diagnostic detail for auth or network failures.\n  WHY: The reviewer reported that stderr is not captured separately, so failure messages can be less actionable.\n- scripts/mark-stable.sh:line 76-78 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The partial-publish recovery fetch can leave local refs updated inconsistently if the second ref fetch fails.\n  WHY: The reviewer warned that fetching the tag and `stable` in one command may update one ref before the other fails.\n- scripts/mark-stable.sh:line 87 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Exiting with `${TAG_LSREMOTE_RC}` in the non-0/non-2 path may not propagate the failure cleanly in all shell contexts.\n  WHY: The reviewer flagged the exit-code handling as potentially unreliable for some network-failure cases.\n- tests/test_mark_stable_release_tag_refspec_contract.py:line 1-204 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The custom test runner stops at the first failure instead of aggregating multiple failures.\n  WHY: The reviewer noted the file uses a `main()`-driven runner rather than pytest, so later failures are not reported in the same run.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mark-stable.sh:10 | severity=medium | confidence=3\n  PROBLEM: The VERSION_TAG regex only matches strict SemVer format without pre-release or build metadata.\n  WHY: Tags like `v1.2.3-rc.1` or `v1.0.0+build.42` are rejected by the pattern.\n- scripts/mark-stable.sh:All git fetch/push/ls-remote calls | severity=medium | confidence=4\n  PROBLEM: The script hardcodes `origin` for every remote operation.\n  WHY: Clones that use a different remote name, such as `upstream`, will fail when the script tries to use `origin`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/mark-stable.sh:Line 35 \u2014 LSREMOTE_OUT variable and error message construction | severity=low | confidence=2\n  PROBLEM: The `git ls-remote` failure path may produce less actionable diagnostics because stderr is not captured separately.\n  WHY: Auth or network errors can be harder to debug when the script only includes captured stdout in its error message.\n- scripts/mark-stable.sh:Line 76\u201378 \u2014 partial-publish recovery fetch | severity=low | confidence=2\n  PROBLEM: Fetching the tag and `stable` together can leave local refs partially updated if the second ref fetch fails.\n  WHY: A partial fetch could create an inconsistent local state before conflict detection runs.\n- scripts/mark-stable.sh:Line 87 \u2014 exit code in elif branch | severity=low | confidence=2\n  PROBLEM: Exiting with `${TAG_LSREMOTE_RC}` may not propagate failure cleanly in all shell contexts.\n  WHY: Non-zero network-failure codes could be handled inconsistently despite `set -e`.\n- tests/test_mark_stable_release_tag_refspec_contract.py:Line 1\u2013204 \u2014 Entire test file | severity=medium | confidence=3\n  PROBLEM: The custom `main()` test runner stops at the first exception instead of aggregating failures.\n  WHY: Multiple test failures would surface sequentially, increasing debugging time.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mark-stable.sh:Code: All git remote operations (lines 17,23,28,30,44,67,89): git ls-remote origin ..., git fetch origin ..., git push origin ... | severity=high | confidence=5\n  PROBLEM: Every git remote operation hardcodes the \"origin\" remote name.\n  WHY: The script aborts on clones where the default remote is renamed or absent, even if the repository otherwise has the expected refs.\n- scripts/mark-stable.sh:Code: Line 6-8: if [[ ! \"${VERSION_TAG}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then ... exit 2 | severity=medium | confidence=4\n  PROBLEM: The regex rejects valid SemVer tags with pre-release identifiers or build metadata.\n  WHY: Operators cannot use the script for pre-release tagging, which forces workarounds outside the script.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2094532ae68935713e8cfd942cca61cb133b5487aeaa2fc4c432e7d869537157",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2031,
+    "run_id": "25280032638",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25280032638",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503133424_e0f21a26ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2031,
+    "run_id": "25280032638"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T13:34:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
