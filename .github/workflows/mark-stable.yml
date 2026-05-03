@@ -214,6 +214,7 @@ jobs:
           set -euo pipefail
           python3 tests/test_orchestrate_lib.py
           python3 tests/test_orchestrate_poll_process.py
+          python3 tests/test_mark_stable_release_tag_refspec_contract.py
 
       - name: Prompt files integrity
         run: |
@@ -402,17 +403,17 @@ jobs:
           VERSION="${{ needs.resolve-version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
 
-          # Immutable version tag
+          # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
           git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "$VERSION"
+          git push origin "refs/tags/$VERSION"
 
-          # Moving stable pointer
+          # Moving stable pointer (use refs/tags/ to disambiguate from refs/heads/stable)
           git tag -f stable "$VERSION"
-          git push -f origin stable
+          git push -f origin refs/tags/stable
 
           # Moving major-version pointer (e.g. v1)
           git tag -f "$MAJOR" "$VERSION"
-          git push -f origin "$MAJOR"
+          git push -f origin "refs/tags/$MAJOR"
 
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 

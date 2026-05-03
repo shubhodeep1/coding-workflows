@@ -199,6 +199,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
 
+      - name: Mark-stable release-tag refspec contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+
       - name: Soft-error report consolidator unit tests
         run: |
           set -euo pipefail
