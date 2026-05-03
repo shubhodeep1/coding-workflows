@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_mark_stable_release_tag_refspec_contract.py:51-56 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The VERSION-tag test checks only the positive `refs/tags/$VERSION` case and lacks the negative guard that the stable and MAJOR tests include.\n  WHY: Multiple reviewers identified the same regression-gap; the test would not catch a future reintroduction of the bare `git push origin \"$VERSION\"` form.\n- scripts/mark-stable.sh:8 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `VERSION_TAG` is only validated for presence and not for a well-formed version-tag format before being used to create/push git tags.\n  WHY: All reviewers raised the same hardening issue; the highest reported severity is low and the suggested validation is a minor robustness improvement.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_mark_stable_release_tag_refspec_contract.py:51-56 | severity=medium | confidence=2\n  PROBLEM: This test asserts only that `git push origin \"refs/tags/$VERSION\"` is present.\n  WHY: Unlike the stable-tag test and the major-tag test, the VERSION-tag test has no negative guard checking that the bare `git push origin \"$VERSION\"` form is absent.\n- scripts/mark-stable.sh:9 | severity=low | confidence=1\n  PROBLEM: `VERSION_TAG` is only checked for non-empty via `\"${1:?}\"`.\n  WHY: No format validation prevents nonsensical inputs; an early format check would give a clearer error message and prevent partial state.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_mark_stable_release_tag_refspec_contract.py:147-151 | severity=medium | confidence=3\n  PROBLEM: The VERSION-tag test only checks the positive case and does not include a negative guard.\n  WHY: A future regression to bare `git push origin \"$VERSION\"` would not be caught.\n- scripts/mark-stable.sh:8 | severity=medium | confidence=3\n  PROBLEM: The script validates that an argument is provided but does not validate the version-tag format.\n  WHY: An invalid tag string could be passed to `git tag -a \"$VERSION_TAG\"`, causing unexpected behavior or malformed git references.\n- tests/test_mark_stable_release_tag_refspec_contract.py:190-193 | severity=low | confidence=2\n  PROBLEM: The cross-pollination finding that `main()` always exits 0 is incorrect.\n  WHY: When a test fails, the exception propagates through `raise SystemExit(main())`, so the script exits non-zero; the behavior is correct but noisy.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_mark_stable_release_tag_refspec_contract.py:51-56 | severity=medium | confidence=3\n  PROBLEM: The VERSION_TAG contract test only checks the positive case and lacks the negative guard checking for bare `git push origin \"$VERSION\"`.\n  WHY: The stable and MAJOR tests include both positive assertions and negative assertions, but the VERSION test does not.\n- tests/test_mark_stable_release_tag_refspec_contract.py:88-93 | severity=high | confidence=4\n  PROBLEM: The test runner's `main()` function always returns 0, even if tests fail.\n  WHY: While uncaught assertion exceptions would cause a non-zero exit via traceback, the function design is flawed because it explicitly returns 0 regardless of test outcomes.\n- scripts/mark-stable.sh:8 | severity=low | confidence=2\n  PROBLEM: `VERSION_TAG` is not validated before being used to create git tags.\n  WHY: An invalid tag string could be propagated into git refs.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_mark_stable_release_tag_refspec_contract.py:~50-60 | severity=medium | confidence=4\n  PROBLEM: Asserts presence of qualified `refs/tags/$VERSION` push but lacks a negative regex check for bare `git push origin \"$VERSION\"`.\n  WHY: A future regression adding the bare refspec alongside the qualified one would pass this test and reintroduce release-job ambiguity.\n- tests/test_mark_stable_release_tag_refspec_contract.py:~75-85 | severity=medium | confidence=4\n  PROBLEM: Asserts presence of the three qualified pushes but lacks negative regex checks for any bare forms.\n  WHY: A future edit reintroducing any bare push would pass the positive checks and let the manual script regress on ambiguity.\n- scripts/mark-stable.sh:4-5 | severity=medium | confidence=3\n  PROBLEM: `VERSION_TAG` has no format validation beyond presence checking.\n  WHY: Invalid input like `invalid-v1` would be accepted and could create malformed refs/tags.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_mark_stable_release_tag_refspec_contract.py:51-56 | severity=medium | confidence=3\n  PROBLEM: The VERSION-tag test checks only the positive case and lacks the negative guard that the stable and major-tag tests include.\n  WHY: If someone reverts the workflow back to bare `git push origin \"$VERSION\"`, this test would not catch the regression.\n- scripts/mark-stable.sh:8 | severity=low | confidence=2\n  PROBLEM: `VERSION_TAG` is only checked for non-empty, not validated as a well-formed version tag.\n  WHY: An invalid string would be passed to git, which may fail with a confusing error or produce unexpected behavior.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ea66738799817da0f5036924ca1fc0a08dfd942cf618deb375c4bbdf0e5fd1be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2031,
+    "run_id": "25276795302",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25276795302",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503110315_94954ecfdf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2031,
+    "run_id": "25276795302"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T11:03:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
