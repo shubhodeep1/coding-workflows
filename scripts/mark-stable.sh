@@ -14,6 +14,14 @@ fi
 MAJOR="$(echo "${VERSION_TAG}" | cut -d. -f1)"
 
 echo "Tagging origin/stable as ${VERSION_TAG} and updating stable + ${MAJOR} pointers..."
+# Verify refs/heads/stable exists on the remote so a missing branch fails fast
+# with actionable guidance instead of a generic 'couldn't find remote ref stable'.
+if ! git ls-remote --exit-code --heads origin stable >/dev/null 2>&1; then
+	echo "error: refs/heads/stable does not exist on origin." >&2
+	echo "       Create it first (e.g. via .github/workflows/promote-main-to-stable.yml" >&2
+	echo "       or 'git push origin <commit>:refs/heads/stable') before running this script." >&2
+	exit 3
+fi
 git fetch origin stable
 # Annotated tag (matches the workflow release path's `git tag -a "$VERSION" -m "Release $VERSION"`).
 git tag -fa "${VERSION_TAG}" -m "Release ${VERSION_TAG}" origin/stable
