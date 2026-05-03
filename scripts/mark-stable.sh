@@ -10,5 +10,6 @@ git fetch origin main
 git tag -f "${VERSION_TAG}" origin/main
 git tag -f stable "${VERSION_TAG}"
 git push origin "${VERSION_TAG}"
-git push -f origin stable
+# Use refs/tags/ to disambiguate from a refs/heads/stable branch when both exist.
+git push -f origin refs/tags/stable
 echo "Done. ${VERSION_TAG} is now the stable release."
