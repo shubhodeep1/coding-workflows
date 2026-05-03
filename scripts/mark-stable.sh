@@ -15,7 +15,8 @@ MAJOR="$(echo "${VERSION_TAG}" | cut -d. -f1)"
 
 echo "Tagging origin/stable as ${VERSION_TAG} and updating stable + ${MAJOR} pointers..."
 git fetch origin stable
-git tag -f "${VERSION_TAG}" origin/stable
+# Annotated tag (matches the workflow release path's `git tag -a "$VERSION" -m "Release $VERSION"`).
+git tag -fa "${VERSION_TAG}" -m "Release ${VERSION_TAG}" origin/stable
 git tag -f stable "${VERSION_TAG}"
 git tag -f "${MAJOR}" "${VERSION_TAG}"
 # Use refs/tags/ explicitly to disambiguate from any same-named branch refs.
