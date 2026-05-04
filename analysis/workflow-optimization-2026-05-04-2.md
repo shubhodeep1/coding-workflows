@@ -518,3 +518,153 @@ Ordered by end-to-end impact across the pipeline.
 - Include fixture names in nightly self-test failure summaries.
 - Add per-step queue time to run summaries for review and poll workflows.
 - Log first-AI-output timestamp for `review_autofix` and `implement` to separate queue/setup vs model time.
+
+## Deep Audit — Workflows & Scripts (2026-05-04)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID**: BUG-001  
+  **File path**: `.github/workflows/review_autofix.yml:478-528`  
+  **Severity**: High  
+  **Category tag**: `bug`  
+  **Description**: The post-merge standalone-validate path dispatches validation only once (`validation_dispatched` flips to `true` at lines 517-521), but it removes `ai:orchestrator-validate-required` from every later linked issue in the loop at lines 527-528. On a PR linked to multiple validation-required issues, only the first issue actually causes a `gh workflow run`, while the remaining issues lose their retry signal without ever being validated.  
+  **Recommended fix**: Either dispatch once per linked issue and pass the concrete issue number into the validate workflow, or only remove `ai:orchestrator-validate-required` from the issue that actually triggered the dispatch. The safer pattern is “consume label only after successful per-issue dispatch,” mirroring the repo’s other label-transition gates in `scripts/orchestrate_poll_process.sh`.
+
+- **ID**: BUG-002  
+  **File path**: `.github/workflows/implement.yml:116-130,2665-2673`  
+  **Severity**: Medium  
+  **Category tag**: `bug`  
+  **Description**: Implement still uses `gh pr list --search "issue:${ISSUE_NUMBER}"` to decide whether a PR already exists. That search is text-based and can match unrelated PRs that merely mention the issue number. The repo already documents this exact failure mode and replaced it in plan with timeline cross-reference logic at `.github/workflows/plan.yml:404-418`; implement has not been updated to match. A false positive here can skip implementation entirely or bind later steps to the wrong PR URL.  
+  **Recommended fix**: Replace both search-based checks with the same timeline/cross-reference approach used in `plan.yml`, ideally extracted into a shared helper in `scripts/gh_helpers.sh` so plan and implement cannot drift again.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID**: API-001  
+  **File path**: `.github/workflows/review_autofix.yml:1336-1342`  
+  **Severity**: Medium  
+  **Category tag**: `api-redundancy`  
+  **Description**: The “Collect PR metadata” step fetches the same PR context as four separate logical API calls in one straight-line path: PR payload, issue comments, reviews, and review comments. This duplicates functionality already provided by the consolidated `gh_pr_with_all_comments` helper in `scripts/gh_helpers.sh`, which was built specifically to return this bundle in one GraphQL-first call with REST parity fallback.  
+  **Current call count**: `4` logical calls per run path, plus pagination/retry overhead.  
+  **Proposed call count**: `1` logical call on the primary path, with helper-managed fallback only when pagination or GraphQL limits require it.  
+  **Batching pattern to extend**: `scripts/gh_helpers.sh` consolidated PR-context pattern (`gh_pr_with_all_comments`).  
+  **Recommended fix**: Replace the four inline fetches with a single helper call that writes `meta/comments/review_comments` once and reuses that JSON for `PR_PAYLOAD_FILE`, `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, and `PR_REVIEW_COMMENTS_FILE`.
+
+- **ID**: API-002  
+  **File path**: `scripts/orchestrate_poll_process.sh:3407-3519`  
+  **Severity**: Medium  
+  **Category tag**: `api-redundancy`  
+  **Description**: `finalize_integration_merge_if_needed()` re-fetches `repos/${GITHUB_REPOSITORY}/pulls/${final_pr}` eight times on the hot path when a final PR already exists and the function reaches merge evaluation: two calls at lines 3411-3412, three more at 3466-3468, and three more at 3517-3519. All are reading fields from the same resource (`state`, `mergeable`, `merged_at`) within one function invocation.  
+  **Current call count**: `8` PR-fetch calls on the hot path.  
+  **Proposed call count**: `3` snapshots max: one early-state read, one pre-merge read, one post-merge read.  
+  **Batching pattern to extend**: The cycle-local cache pattern already used in `scripts/orchestrate_poll_process.sh` (`_fetch_linked_pr_status_graphql`, `ACTIVE_WORKFLOW_ISSUES`).  
+  **Recommended fix**: Fetch the full PR JSON once per decision phase into a temp file or shell variable, derive all three fields from that cached object, and only refresh after a state-changing operation such as `gh pr merge`.
+
+- **ID**: BATCH-001  
+  **File path**: `.github/workflows/review_autofix.yml:478-528`  
+  **Severity**: Medium  
+  **Category tag**: `api-batching`  
+  **Description**: When `closingIssuesReferences` does not yield label data, the fallback path parses issue numbers from PR text and then performs `gh issue view ... --json labels` inside the loop for each issue at lines 503-505. This is the per-item REST pattern that CLAUDE.md §15 calls out as a review-blocker in loops.  
+  **Current call count**: `2 + N` logical calls on the fallback path (`1` GraphQL call, `1` PR-body fetch, then `N` issue-label calls).  
+  **Proposed call count**: `2` logical calls total on the fallback path (`1` PR-body fetch, `1` batched GraphQL issue-label query for all parsed issue numbers).  
+  **Batching pattern to extend**: `scripts/orchestrate_poll_process.sh` aliased GraphQL issue batching (`_fetch_candidate_issue_details_graphql`).  
+  **Recommended fix**: After parsing fallback issue numbers, batch their labels with one aliased GraphQL query and feed the loop from that local map instead of calling `gh issue view` per issue.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID**: DUP-001  
+  **File path**: `.github/workflows/clarify.yml:51-120; .github/workflows/plan.yml:80-152; .github/workflows/implement.yml:224-293; .github/workflows/orchestrate_clarify_respond.yml:88-157; .github/workflows/orchestrate_poll.yml:167-200; .github/workflows/validate.yml:183-476`  
+  **Severity**: Low  
+  **Category tag**: `duplication`  
+  **Description**: The repository repeatedly inlines large “support source checkout / copy scripts / copy prompts / fallback to main” shell blocks across multiple workflows. The validate variant is the largest, but the same control flow and failure semantics recur across clarify, plan, implement, orchestrate-clarify-respond, orchestrate-poll, and validate. This duplication is already causing drift: some workflows source central helpers, others reimplement retry/bootstrap logic inline.  
+  **Recommended fix**: Extract a shared module such as `scripts/bootstrap_support_source.sh` with a signature like `bootstrap_support_source <workflow_source_repo> <resolved_ref> <mode> <path...>`. Update the caller workflows to pass only their required file lists and receive normalized outputs (`SUPPORT_ROOT`, `SCRIPT_REF`, copied-path manifest).
+
+- **ID**: DUP-002  
+  **File path**: `.github/workflows/implement.yml:2344-2362; scripts/orchestrate_poll_process.sh:4666-4690`  
+  **Severity**: Low  
+  **Category tag**: `duplication`  
+  **Description**: The “ancestor no-op chain” walk is implemented twice: once inline in implement’s no-op handler and once as `count_noop_ancestors()` in the poller. Both traverse `Re-issued from #N` markers and query ancestor comments for the same `produced no repository changes` marker. The logic is already behaviorally coupled by comments and thresholds, but the code paths can now diverge independently.  
+  **Recommended fix**: Move the shared traversal into one shell helper, e.g. `count_noop_ancestors <repo> <issue_number> <max_depth>`, and call it from both implement and the poller. `scripts/gh_helpers.sh` is the best existing shared home because both callers already depend on GitHub API helpers there.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID**: EXPR-001  
+  **File path**: `.github/workflows/test-and-mark-stable.yml:1118-1449`  
+  **Severity**: High  
+  **Category tag**: `expression-limit`  
+  **Description**: The inline “wait for review workflow” shell block is already close to the 21,000-character expression ceiling for interpolated `run:` bodies. It contains polling logic, live-log heuristics, timeout handling, and multiple `${{ }}` substitutions in one step. This file has already hit expression-length failures historically, so this block is a high-risk regrowth point.  
+  **Estimated expression size**: `~19,696 chars`  
+  **Headroom remaining**: `~1,304 chars`  
+  **Recommended fix**: Extract the full wait/poll logic into `scripts/wait_for_review_run.sh` and pass only a small set of environment variables from YAML. If extraction is deferred, split live-log shortcuts and inactivity detection into separate steps.
+
+- **ID**: EXPR-002  
+  **File path**: `.github/workflows/validate.yml:183-476`  
+  **Severity**: Medium  
+  **Category tag**: `expression-limit`  
+  **Description**: The validate support-bootstrap step inlines repo/ref resolution, remote checkout, selective copying, template staging, schema staging, and fallback logic in a single interpolated `run:` block. The block is below the hard limit today but already well into the medium-risk range.  
+  **Estimated expression size**: `~16,485 chars`  
+  **Headroom remaining**: `~4,515 chars`  
+  **Recommended fix**: Move the bootstrap logic into an external script under `scripts/` (ideally the same shared bootstrap module from DUP-001), leaving YAML to set inputs only.
+
+- **ID**: EXPR-003  
+  **File path**: `.github/workflows/review_autofix.yml:1251-1573`  
+  **Severity**: Medium  
+  **Category tag**: `expression-limit`  
+  **Description**: The “Collect PR metadata” step combines an inline rate-limit wrapper, no-PR synthetic metadata path, four REST fetches, and linked-issue caching logic in one interpolated block. Review-autofix has already hit expression-limit failures before, so keeping large helper logic inline here is a recurring risk.  
+  **Estimated expression size**: `~16,437 chars`  
+  **Headroom remaining**: `~4,563 chars`  
+  **Recommended fix**: Extract this step to a dedicated helper script, e.g. `scripts/review_fetch_pr_context.sh`, and call central GitHub helpers from there instead of embedding the retry wrapper in YAML.
+
+- **ID**: EXPR-004  
+  **File path**: `.github/workflows/orchestrate_clarify_respond.yml:813-1096`  
+  **Severity**: Medium  
+  **Category tag**: `expression-limit`  
+  **Description**: The auto-answer posting step embeds memory-claim checks, loop-guard logic, escalation comment construction, Telegram notification, and processed-command completion in one interpolated `run:` block. It is above the 15,000-character threshold already, so small future additions can push it into the same failure mode the repo has previously seen.  
+  **Estimated expression size**: `~15,140 chars`  
+  **Headroom remaining**: `~5,860 chars`  
+  **Recommended fix**: Split this into an external script or at minimum separate the memory/loop-guard phase from the comment-posting/escalation phase.
+
+- No workflow file exceeded the 800 KB warning threshold; the largest workflow reviewed was `review_autofix.yml` at `268,059` bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID**: SHELL-001  
+  **File path**: `scripts/orchestrate_poll_process.sh:10675-10676`  
+  **Severity**: Medium  
+  **Category tag**: `shellcheck`  
+  **Description**: ShellCheck flags SC2086 here: `_sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"`. The unquoted expansion allows word-splitting and glob expansion before sorting. In a poller that intentionally builds composite issue lists, that can silently change the iteration set or order.  
+  **Recommended fix**: Normalize `ISSUE_NUMS` to one issue number per line before sorting, e.g. build it as a newline-delimited string or array and iterate with `while IFS= read -r inum; do ...; done`. Do not rely on implicit shell splitting.
+
+- **ID**: SHELL-002  
+  **File path**: `scripts/review_commit_changes.sh:455-455; scripts/review_conflict_resolve.sh:936-936`  
+  **Severity**: Medium  
+  **Category tag**: `shellcheck`  
+  **Description**: Both scripts set the remote URL with unquoted credential-bearing expansions: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. ShellCheck flags SC2086 in both locations. Even if the current token format is usually safe, this is fragile shell and risks malformed commands if either component ever contains shell-significant characters.  
+  **Recommended fix**: Build the URL in a quoted variable and pass it as one argument, e.g. `remote_url="https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"` then `git remote set-url origin "${remote_url}"`.
+
+- **ID**: DEAD-001  
+  **File path**: `scripts/validate_changed_files_syntax.sh:71-73`  
+  **Severity**: Low  
+  **Category tag**: `dead-code`  
+  **Description**: The redaction case list contains unreachable patterns. `*.env*` on line 71 already matches the later `*.envrc`/`.env` cases on line 73, which ShellCheck reports as SC2221/SC2222. That makes the later arms dead and obscures the intended redaction policy.  
+  **Recommended fix**: Remove the unreachable arms or reorder the patterns from most specific to least specific, then keep a single comment describing the unified over-redaction policy.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, EXPR-001 |
+| Medium | 9 | BUG-002, API-001, API-002, BATCH-001, EXPR-002, EXPR-003, EXPR-004, SHELL-001, SHELL-002 |
+| Low | 3 | DUP-001, DUP-002, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 7 | Large |
+| Expression size reduction | 4 | Large |
+| Medium/Low fixes | 4 | Small |
