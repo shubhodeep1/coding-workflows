@@ -1825,10 +1825,10 @@ jobs:
           fi
 
           if [ "$IS_SMOKE" = "true" ]; then
-            # Reasoning overrides for smoke runs: both reviewers and editor
-            # are pinned to low.
+            # Reasoning overrides for smoke runs.
+            # Reviewers are pinned to low; editor is pinned to medium.
             #
-            # History of reasoning levels on smoke runs (editor + reviewer):
+            # History of reasoning levels on smoke runs (editor):
             #   low  → run 25254574828: OSCILLATION GUARD activated because the
             #           bait commit appeared in LAST_RUN_DIFF (since fixed at
             #           L2249-2260 to only walk [ai-autofix] commits — bait
@@ -1843,22 +1843,28 @@ jobs:
             #           documented at the "Resolve merge conflicts" step below).
             #           Reviewer manifest validation then fails because the editor
             #           lists aggregate files instead of individual reviewer files.
-            # low is safe because LAST_RUN_DIFF excludes bait commits (so the
-            # oscillation guard cannot activate on a smoke run), and low is
-            # sufficient for both spotting and removing a single bait line.
+            #   low   → run 25308327160 (gate run 25308071039): gpt-5.3-codex at
+            #           reasoning=low also exits rc=0 with empty stdout on all
+            #           3 attempts per round (same failure mode as none — pattern
+            #           extends across both none and low for this model+task).
+            #           "low is sufficient" assumption was wrong.
+            # medium is the only untried level; reviewers stay at low (all 6
+            # succeeded on attempt 1 at low in run 25308327160). LAST_RUN_DIFF
+            # already excludes bait commits so the oscillation guard cannot
+            # fire regardless of editor reasoning level.
             # Non-smoke PRs continue to use the workflow defaults
             # (THINKING_LEVEL_REVIEWER / THINKING_LEVEL_EDITOR).
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-            echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            echo "EDITOR_REASONING_EFFORT=medium" >> "$GITHUB_ENV"
             # Patch the already-written Codex config so the reviewer phase
             # (which copies ~/.codex/config.toml into each reviewer's
             # isolated CODEX_HOME) picks up the low override. Without this
             # sed the reviewer codex config would still hold the medium value
             # baked in by the "Create Codex config" step that ran earlier.
             # The editor phase re-patches the config in "Switch reasoning effort
-            # for editor" using EDITOR_REASONING_EFFORT=low (set above).
+            # for editor" using EDITOR_REASONING_EFFORT=medium (set above).
             sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
-            echo "🔬 Smoke test PR detected — overriding reviewer + editor reasoning to low (Phase 4b fix)"
+            echo "🔬 Smoke test PR detected — reviewer reasoning=low, editor reasoning=medium (Phase 4b fix)"
             # Suppress per-phase Telegram alerts; the test-and-mark-stable
             # gate emits a single combined pass/fail notification at the
             # end via raw curl. SILENT > CRITICAL so all levels filter.

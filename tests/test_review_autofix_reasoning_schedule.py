@@ -4,7 +4,9 @@
 The cycle-based schedule machinery (REVIEW_REASONING_SCHEDULE,
 REVIEW_AUTODOWNGRADE_DISABLED) has been removed. Non-smoke-test runs use
 the configured THINKING_LEVEL_* for every cycle. Smoke test runs override
-reasoning to ``low`` for both reviewer and editor phases.
+reviewer reasoning to ``low`` and editor reasoning to ``medium`` (split
+introduced after run 25308327160 showed gpt-5.3-codex at reasoning=low
+produces empty output — same failure mode as reasoning=none).
 """
 
 from __future__ import annotations
@@ -32,11 +34,15 @@ def test_no_cycle_selector_step() -> None:
 	assert "schedule_source" not in wf
 
 
-def test_smoke_test_forces_none_reasoning() -> None:
+def test_smoke_test_reasoning_split() -> None:
+	"""Smoke runs pin reviewer to low and editor to medium (split since run 25308327160)."""
 	wf = _workflow()
 	assert 'REVIEWER_REASONING_EFFORT=low' in wf
-	assert 'EDITOR_REASONING_EFFORT=low' in wf
+	assert 'EDITOR_REASONING_EFFORT=medium' in wf
+	# The reviewer-config sed still patches to low; editor re-patches separately.
 	assert 'model_reasoning_effort = "low"' in wf
+	# Ensure the old all-low assignment is gone.
+	assert 'EDITOR_REASONING_EFFORT=low' not in wf
 
 
 def test_editor_switch_replaces_any_reasoning_value() -> None:
