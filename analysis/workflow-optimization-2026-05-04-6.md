@@ -1,0 +1,727 @@
+## Executive Summary
+
+- **Fix the `test_and_mark_stable` smoke-test / auto-merge race first.** All 5 sampled `Test & Mark Stable Release` runs failed (`run_ids: 25300046587, 25305535590, 25308071039, 25310399716, 25324103531`), and the deep-dive log for `25324103531` shows the PR was already closed before bait injection, so Phase 4b could never pass. **Estimated impact:** recover ~40–55 minutes per failed release attempt and move release success from 0/5 toward normal. **Confidence:** high.
+
+- **`review_autofix` is the biggest AI-cost and latency hotspot.** Comment-only / claude-branch-review runs still consumed ~1,665s in `review / codex-agent` (`25327045933`, `25328431960`) while reporting `Reviewers_successful=6` and skipping editor/commit/judge paths. **Estimated impact:** 15–25 minutes faster and ~50–70% reviewer-token savings on low-risk review paths if the reviewer panel is trimmed and bootstrap duplication is removed. **Confidence:** medium-high.
+
+- **CI is consistently dominated by a ~10 minute `lint` phase, even when review logic classified the PR as docs-only.** Example: docs-only review run `25324380473` skipped deterministically, but companion CI run `25324380459` still took 606s. **Estimated impact:** ~9–10 minutes saved on docs-only / non-code PRs with path-aware CI gating. **Confidence:** high.
+
+- **The poller is doing real work when there is no work.** Recent `orchestrate_poll` runs repeatedly finished with `has_work=false` yet still performed repository checkout; run `25347221704` took 51s, and recent deep-dive evidence shows `fetch-depth: 0` plus full branch/tag fetch in no-work polls. **Estimated impact:** 8–12s saved per poll cycle and lower runner occupancy. **Confidence:** high.
+
+- **AI memory is helping implement flows but not review flows.** Deep-audit telemetry reports `retrieve` hit rate `11/16 = 68.8%`, but every sampled `review_autofix` retrieve returned `records_selected: 0` with `keyword_method:"none"`; implement retrieves were lightweight and useful (`records_selected:1`, `estimated_tokens:28`). **Estimated impact:** small latency win and moderate quality/reliability win if reviewer retrieval is fixed or skipped when nonproductive. **Confidence:** high.
+
+- **Prompt cache is enabled but effectively un-auditable.** `OPENROUTER_PROMPT_CACHE_DISABLED=false` appears in implement/review paths, but cache probe lines in failed `review_autofix` runs (`25300219172`, `25324565713`) emit `prompt_tokens=na`, `total_tokens=na`, `cache_creation_input_tokens=na`, `cache_read_input_tokens=na`. **Estimated impact:** no immediate runtime gain, but unlocking accurate cache tuning is prerequisite to safe model/cost optimization. **Confidence:** high.
+
+## Speed Optimizations
+
+Ranked by expected end-to-end latency reduction.
+
+### 1. Block auto-merge until the smoke gate finishes in `test_and_mark_stable`
+**Critical-path win**
+
+- **Evidence**
+  - Workflow family `test_and_mark_stable`: `total_runs=5`, `success_count=0`, `failure_count=5`, `avg_duration_seconds=2865.2`, `p50=2921`, `p95=3283.2`.
+  - All 5 failures ended at `e2e-smoke-test / Phase 4b: Verify editor removed bait line`.
+  - In deep-dive run `25324103531`, the smoke log states: `PR #... is already ... closed before bait could be injected`, and explicitly attributes it to `review_autofix.yml` auto-merging before the smoke/e2e labels took effect.
+
+- **Root cause**
+  - Release smoke validation races against deterministic skip / auto-merge behavior in `review_autofix`.
+
+- **Exact change**
+  - When the smoke gate labels or force-review labels are present, suppress deterministic auto-merge until smoke verification clears.
+  - Alternatively, inject the bait before any merge-eligible review path starts, then allow merge only after the bait-removal check passes.
+
+- **Estimated time savings**
+  - Saves the full failed run: **~2,424–3,303s per failed release attempt**.
+
+- **Implementation risk**
+  - **Low-medium.** Behavior is narrow and label-gated; easy to fail closed by only delaying merge on smoke-tagged PRs.
+
+---
+
+### 2. Skip poller checkout/fetch when `has_work=false`
+**Critical-path win for orchestrator cadence and runner occupancy**
+
+- **Evidence**
+  - `orchestrate_poll` family: `avg_duration_seconds=48.87`, `p50=46.5`, `p95=69.7`, `30/30` success.
+  - Recent run `25347221704`: `Found 0 active tracking issue(s)` / `No active orchestrator projects`, yet the job still performed:
+    - `actions/checkout@v5`
+    - `fetch-depth: 0`
+    - `git fetch ... +refs/heads/* ... +refs/tags/*`
+  - Similar no-work completions appear across recent poll runs (`25342258010`, `25344912795`, `25346106032`), each ~41–51s.
+
+- **Root cause**
+  - The workflow determines “no work” early, but later checkout/setup steps are not fully gated on that result.
+
+- **Exact change**
+  - Make repository checkout, support checkout, and downstream setup conditional on `has_tracking == true` or `has_work == true`.
+  - If checkout is still required, change the main repo checkout from `fetch-depth: 0` to `fetch-depth: 1` and keep `fetch-tags: false`.
+
+- **Estimated time savings**
+  - **~8–12s per poll run** in the no-work case; cumulative savings become material because polling is frequent.
+
+- **Implementation risk**
+  - **Low.** No behavioral change for active-work polls.
+
+---
+
+### 3. Remove repeated support-source/bootstrap work inside long `review_autofix` runs
+**Critical-path win**
+
+- **Evidence**
+  - `review_autofix` family: `avg_duration_seconds=443.6`, `p95=1682.6`.
+  - Runs `25327045933` and `25328431960` both took ~1,686s / ~1,682s, dominated by `review / codex-agent (claude-branch-review)`.
+  - The API-redundancy deep audit (`workflow_log_analysis` run `25324145530`) explicitly calls out that long review runs show **multiple `actions/checkout@v5` sequences** and repeated support-source checkout/bootstrap before main work.
+
+- **Root cause**
+  - Support repo hydration and bootstrap checks are repeated inside the same review path.
+
+- **Exact change**
+  - Perform support checkout/bootstrap once per job and reuse the staged support directory.
+  - Reuse already-fetched PR diff/comment artifacts across reviewer/editor phases instead of rehydrating them.
+
+- **Estimated time savings**
+  - **~60–180s per long `review_autofix` run** conservatively; potentially more on claude-branch-review paths.
+
+- **Implementation risk**
+  - **Medium.** Requires careful preservation of existing support-file contracts.
+
+---
+
+### 4. Add path-aware CI gating so docs-only PRs do not pay the 10-minute lint cost
+**Critical-path win for low-risk PRs**
+
+- **Evidence**
+  - `ci` family: `avg_duration_seconds=611.8`, `p50=611`, `p95=647.8`.
+  - Across many runs, `lint` dominates runtime: `25327045947` (~603s), `25328431755` (~593s), `25324380459` (~10m).
+  - On PR `2093`, `review_autofix` run `25324380473` classified the change as `skip=true reason=docs_only`, but the same PR’s CI run `25324380459` still took 606s.
+
+- **Root cause**
+  - CI does not exploit already-available diff classification for docs-only / non-code changes.
+
+- **Exact change**
+  - Add path filters so docs-only / metadata-only PRs run a reduced CI subset:
+    - workflow/script reference validation
+    - yaml/static checks
+    - skip full coverage-heavy test/lint path when Python/workflow logic is untouched
+
+- **Estimated time savings**
+  - **~570–610s per docs-only or non-code PR**.
+
+- **Implementation risk**
+  - **Low-medium.** Safe if limited to clearly non-runtime paths.
+
+---
+
+### 5. Stop running full free-disk cleanup on review paths that do not need it
+**Micro-optimization with good aggregate payoff**
+
+- **Evidence**
+  - Failed `review_autofix` runs `25324565713` and `25300219172` both spend early time in `jlumbroso/free-disk-space@v1.3.1`, including large `apt-get remove` sweeps.
+  - These same runs later failed for missing support files, not disk exhaustion.
+
+- **Root cause**
+  - Expensive disk cleanup runs unconditionally before verifying the path really needs it.
+
+- **Exact change**
+  - Gate free-disk-space to large-diff/editor paths or when available disk is below a threshold.
+  - Skip it for comment-only/claude-branch-review jobs.
+
+- **Estimated time savings**
+  - **~30–90s per review run**, depending on runner state.
+
+- **Implementation risk**
+  - **Low.** Fail-open by re-enabling only on low-disk detection.
+
+## Cost Optimizations
+
+Ranked by expected token/dollar savings.
+
+### 1. Shrink the reviewer panel on comment-only / claude-branch-review paths
+- **Evidence**
+  - `review_autofix` runs `25327045933` and `25328431960` each spent ~1,665s in `review / codex-agent`.
+  - Both logs show `AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW ... running reviewer panel + comment-only path; editor/commit/judge/auto-merge skipped.`
+  - `Reviewers_successful=6` was emitted.
+
+- **Root cause**
+  - Six external reviewer models are being used even when the workflow will not edit code or merge.
+
+- **Exact change**
+  - For comment-only / claude-branch-review runs, reduce to 2–3 reviewers or use a smaller fallback panel.
+  - Keep the full six-model panel only for merge-blocking or autofix-capable paths.
+
+- **Estimated savings**
+  - **~50–70% reviewer-token savings** on those runs, plus major wall-clock reduction.
+
+- **Quality-risk notes**
+  - **Medium.** Keep full panel available behind a risk trigger:
+    - large diff
+    - workflow file touched
+    - merge-conflict path
+    - prior reviewer disagreement
+
+---
+
+### 2. Cut off deterministic implement retry loops earlier
+- **Evidence**
+  - Failed `implement` run `25294005792` shows:
+    - `request_user_input is not supported in exec mode`
+    - `Codex produced no actionable output ... attempts in a row`
+    - terminal diagnostic after repeated attempts
+  - The deep audit explicitly notes repeated implement failures wasting time and tokens on stale/mismatched context.
+
+- **Root cause**
+  - The loop retries even after high-signal failure modes that are unlikely to recover inside the same run.
+
+- **Exact change**
+  - For:
+    - `request_user_input` in exec mode
+    - repeated empty/no-actionable-output
+    - repeated identical failure fingerprint
+  - stop after 1–2 attempts and route directly back to clarify or failure diagnostics.
+
+- **Estimated savings**
+  - **Tens of thousands of tokens** and **~150–300s per failed implement run**.
+
+- **Quality-risk notes**
+  - **Low.** This removes retries only where the workflow already proves the run is nonrecoverable.
+
+---
+
+### 3. Stop paying full CI cost on docs-only PRs
+- **Evidence**
+  - Same evidence as Speed item #4: docs-only PR `2093` still incurred a 606s CI run (`25324380459`).
+
+- **Root cause**
+  - No cost-aware path classification in CI.
+
+- **Exact change**
+  - Reuse docs-only classification from review gating, or re-compute with path filters at CI entry.
+
+- **Estimated savings**
+  - Mostly compute cost rather than model cost, but high-frequency and safe.
+
+- **Quality-risk notes**
+  - **Low-medium.** Restrict to clearly non-executable file classes.
+
+---
+
+### 4. Make `workflow_log_analysis` summarization budget adaptive
+- **Evidence**
+  - In sampled `workflow_log_analysis` runs:
+    - `25300062692`: `tokens_used=170,953`
+    - `25310429821`: `tokens_used=221,799`
+    - `25324145530`: `tokens_used=189,772`
+  - These runs summarized `76–98` unselected runs each.
+
+- **Root cause**
+  - The summarizer targets up to 100 unselected runs regardless of whether recent deep dives already cover the important failures/slows.
+
+- **Exact change**
+  - Reduce the summarization target dynamically when:
+    - one repo dominates
+    - failures are already deeply sampled
+    - the window is low-variance
+  - Preserve the current deep-dive folders as primary evidence.
+
+- **Estimated savings**
+  - **~15–25% analysis-token reduction** on quieter windows.
+
+- **Quality-risk notes**
+  - **Low.** Keep minimum coverage floor for failures and newly slow families.
+
+---
+
+### 5. Defer model-selection tuning until prompt-cache telemetry is complete
+- **Evidence**
+  - In failed `review_autofix` runs `25300219172` and `25324565713`, cache-probe lines show `cache_enabled=true` but all token/cache counters are `na`.
+  - `OPENROUTER_PROMPT_CACHE_DISABLED=false` is present, so caching is intended.
+
+- **Root cause**
+  - Missing counters make it impossible to determine whether expensive prompts are already being cached effectively.
+
+- **Exact change**
+  - Do **not** broadly downgrade models yet.
+  - First emit real `prompt_tokens`, `completion_tokens`, `total_tokens`, `cache_creation_input_tokens`, and `cache_read_input_tokens`.
+
+- **Estimated savings**
+  - Not directly quantifiable today; this is a prerequisite to safe cost tuning.
+
+- **Quality-risk notes**
+  - **Low.** This avoids premature quality regressions from blind model downgrades.
+
+## Reliability Improvements
+
+Ranked by expected failure-rate / rerun-rate reduction.
+
+### 1. Fix the smoke-gate / auto-merge race in release validation
+- **Failure evidence**
+  - `test_and_mark_stable` failed 5/5 times.
+  - All failed at `e2e-smoke-test / Phase 4b: Verify editor removed bait line`.
+  - Deep-dive run `25324103531` logs that the PR was already closed before bait injection.
+
+- **Root cause category**
+  - Workflow ordering / race condition.
+
+- **Exact fix**
+  - Make deterministic skip/merge logic aware of the smoke-gate labels or explicit smoke mode.
+  - Refuse merge while smoke validation is outstanding.
+
+- **Expected reliability impact**
+  - **Highest-impact fix in the dataset.** Likely restores release pipeline from 0% success in sampled window.
+
+- **Rollback / fail-open**
+  - Fail closed on smoke-tagged PRs only; normal merge behavior unchanged elsewhere.
+
+---
+
+### 2. Add preflight validation that support scripts/prompts exist before entering `review / codex-agent`
+- **Failure evidence**
+  - Failed `review_autofix` runs `25324565713` and `25300219172` both show:
+    - `Required bootstrap script ... is missing`
+    - `Missing required support file prompts/mode-judge-review-blocked.txt`
+  - Both failed at `Run Codex resolver, validate, stage, commit`.
+
+- **Root cause category**
+  - Packaging/version skew between workflow references and support files.
+
+- **Exact fix**
+  - Validate `REQUIRED_BOOTSTRAP_SCRIPTS` and required prompt files in a very early gate job.
+  - Reuse the same “all workflow script references resolve” validation concept already present in CI.
+
+- **Expected reliability impact**
+  - Should materially reduce the current `review_autofix` failure rate (`2/78 = 2.56%`) and prevent late expensive failures.
+
+- **Rollback / fail-open**
+  - If preflight fails, exit early with a specific annotation and skip the costly reviewer/editor path.
+
+---
+
+### 3. Promote implement failure fingerprints to first-class terminal states
+- **Failure evidence**
+  - Failed implement run `25294005792` hit:
+    - `request_user_input ... not supported in exec mode`
+    - repeated no-actionable-output
+    - stuck-in-exploration bailout
+  - The deep audit also cites multiple implement failures with stale or mismatched context.
+
+- **Root cause category**
+  - Retry policy / orchestrator-state handling.
+
+- **Exact fix**
+  - Record and act on terminal fingerprints:
+    - ambiguity → route to clarify
+    - repeated empty output → stop and fail
+    - unchanged failure fingerprint → no more retries
+  - Surface the terminal reason in the issue label/comment so orchestrator doesn’t immediately recycle it.
+
+- **Expected reliability impact**
+  - Lower rerun loops and fewer repeated implement failures on the same issue.
+
+- **Rollback / fail-open**
+  - Keep current behavior as fallback if fingerprinting cannot classify the error.
+
+---
+
+### 4. Surface failing fixture names directly in nightly self-test logs
+- **Failure evidence**
+  - `nightly_validation_selftest` run `25299383150` failed with `fixtures=3 passed=1 failed=2`.
+  - The deep-dive logs preserve summary counts but not the failing fixture names in the visible excerpt.
+
+- **Root cause category**
+  - Observability gap.
+
+- **Exact fix**
+  - Print the failed fixture names/stages directly before exiting non-zero.
+  - Keep artifact upload, but don’t force incident responders to fetch artifacts for first diagnosis.
+
+- **Expected reliability impact**
+  - Faster diagnosis, lower mean time to repair.
+
+- **Rollback / fail-open**
+  - None needed; additive logging only.
+
+## AI Memory Health
+
+- **Telemetry present:** yes.
+- **Sample basis:** deep-dive logs summarized by `workflow_log_analysis` run `25324145530`, plus direct telemetry in:
+  - `review_autofix` failures `25300219172`, `25324565713`
+  - `implement` failure `25294005792`
+  - `orchestrate_poll` recent runs
+  - `memory_maintenance` recent run `25326850014`
+
+### Retrieve effectiveness
+- **Retrieve hit rate:** **68.8%** (`11/16` retrieves had `records_selected > 0`).
+- **Average `estimated_tokens` on retrieve:** **19.2**; **max 28**.
+- **`keyword_method` distribution:** `plain=11`, `none=5`, `llm=0`.
+- **Budget comparison:** **not assessable from current telemetry**; retrieve logs expose `estimated_tokens` but no retrieval budget field.
+
+### Healthy patterns
+- **Implement retrieval is productive and cheap.**
+  - `implement` run `25294005792` logged `records_selected:1`, `keyword_method:"plain"`, `estimated_tokens:28`.
+- **Poll ledger writes look healthy.**
+  - Recent `orchestrate_poll` runs show `poll_completed` with `push_attempts:1`, `has_work:"false"`.
+
+### Problems
+- **Reviewer retrieval is ineffective.**
+  - `review_autofix` failures `25300219172` and `25324565713` both logged `retrieve` with:
+    - `enabled:true`
+    - `records_selected:0`
+    - `estimated_tokens:0`
+    - `keyword_method:"none"`
+- **0-record retrieves should be treated as a signal.**
+  - Current review path still pays retrieval/setup overhead without receiving usable context.
+- **High push retry counts exist, but are rare.**
+  - Deep audit flagged **2** entries with `push_attempts:2`, including implement run `25293966619` and `workflow_log_analysis` run `25300062692`.
+- **No sampled `fail_open:true` retrieves were observed.**
+- **No sampled `enabled:false` retrieves were observed.**
+
+### Recommendations
+1. **Disable reviewer retrieval when keyword extraction returns `none`**, or fall back to a simpler `plain` method tied to linked issue/PR metadata.
+2. **Emit retrieval budget fields** so “estimated_tokens vs budget” can be monitored directly.
+3. **Alert on repeated `records_selected:0` for a role** over N runs; review is the obvious first candidate.
+4. **Track `push_attempts > 1` as an SLO metric** for memory durability.
+
+## GH API Call Audit
+
+### Observed high-volume patterns
+From the deep API audit in `workflow_log_analysis` run `25324145530`:
+
+| API pattern | Count | Files | Note |
+|---|---:|---:|---|
+| `gh workflow run` | 138 | 11 | heavy in release/post-merge flows |
+| `gh api graphql` | 44 | 7 | linked issue / PR graph lookups |
+| `gh pr diff` | 33 | 3 | review diff fallback / hot path |
+| `gh api /repos` | 19 | 4 | artifact + repo metadata lookups |
+| `github.rest.pulls.get` | 3 | 2 | Copilot review / post-merge |
+| `github.paginate pulls.listFiles` | 1 | 1 | Copilot review prepare |
+
+### Findings and recommendations
+
+#### 1. `cancel_on_pr_close` uses redundant run-list calls and per-run cancel POSTs
+- **Evidence**
+  - Recent run `25347708400`:
+    - one `_gh_retry gh api ... /actions/runs` for queued
+    - one for in-progress
+    - then looped `_gh_retry gh api -X POST ... /cancel` per `run_id`
+  - `_rl_wait()` calls `/rate_limit`.
+
+- **Issue**
+  - Redundant GETs; meta-call to `/rate_limit` inflates call count on slow paths.
+
+- **Exact change**
+  - Fetch runs once, filter both queued and in-progress client-side.
+  - Only call `/rate_limit` after an actual 403/429, not preemptively inside helper logic.
+
+- **Estimated reduction**
+  - **1–3 calls per cancel run**, plus lower amplification under retries.
+
+---
+
+#### 2. `issue_pr_status` has a good batch path, but fallback can degenerate to per-issue REST
+- **Evidence**
+  - Run `25347708374` uses GraphQL for issue discovery.
+  - The script contains:
+    - batched GraphQL lookup
+    - fallback per-issue REST `gh api "repos/.../issues/${_orch_num}"`
+
+- **Issue**
+  - When batch detection fails, the workflow can revert to N REST calls.
+
+- **Exact change**
+  - Harden the GraphQL batch query and schema handling so fallback is rare.
+  - Reuse PR title/body from event payload whenever present to avoid extra `pulls/{PR}` fetches.
+
+- **Estimated reduction**
+  - **5–20 calls** on linked-issue-heavy PRs.
+
+---
+
+#### 3. Post-merge validate dispatch refetches PR/issue linkage data that is partially available already
+- **Evidence**
+  - Recent run `25347708390`:
+    - `gh api graphql` for `closingIssuesReferences`
+    - fallback `gh api repos/.../pulls/...`
+    - warning `No standalone validation workflow could be dispatched`
+
+- **Issue**
+  - Multiple lookups are used just to determine target issues and dispatch validation.
+
+- **Exact change**
+  - Cache linked-issue resolution from the gate phase or merged PR event context.
+  - Dispatch once with the final issue list rather than rediscovering it late.
+
+- **Estimated reduction**
+  - **2–6 calls per merged PR** and fewer false “no standalone validation” warnings.
+
+---
+
+#### 4. Copilot review still performs per-run artifact cleanup lookups
+- **Evidence**
+  - Deep audit cites repeated `gh api /repos/.../actions/runs/.../artifacts` in Copilot review runs.
+  - Recent/sampled runs also show `github.rest.pulls.get` plus `github.paginate pulls.listFiles`.
+
+- **Issue**
+  - Cleanup and file enumeration are re-fetched each run.
+
+- **Exact change**
+  - Reuse artifact IDs and changed-file lists from prior job outputs where possible.
+  - Skip artifact enumeration when no cleanup artifact was produced.
+
+- **Estimated reduction**
+  - **1–2 calls per Copilot review run**.
+
+---
+
+#### 5. E2E smoke test is polling and re-querying aggressively
+- **Evidence**
+  - `25324103531` e2e-smoke log repeatedly polls issue comments, labels, review-run state, and review jobs.
+  - The deep audit identifies smoke/release polling as an API hotspot.
+
+- **Issue**
+  - The loop keeps querying even after it has enough evidence to know the path failed.
+
+- **Exact change**
+  - Fail immediately on:
+    - PR already closed
+    - review run has failed steps
+    - missing expected labels after workflow completion
+  - Back off polling once a run enters a terminal state.
+
+- **Estimated reduction**
+  - **~10–20 calls per release/smoke attempt**.
+
+### Repository-specific API hygiene note
+This repository already contains several thoughtful API-hygiene patterns:
+- bounded retries
+- GraphQL batching attempts
+- rate-limit backoff helper
+
+The main opportunity is **eliminating redundant fetches**, not emergency rate-limit mitigation. No `HTTP 429` or secondary-rate-limit event was visible in sampled deep dives.
+
+## Prompt Cache & Memory System
+
+### Prompt cache status
+- **Configured on:** yes. `OPENROUTER_PROMPT_CACHE_DISABLED=false` appears in implement/review flows.
+- **Observable hit/miss quality:** **no**.
+- **Concrete evidence**
+  - `review_autofix` failures `25300219172` and `25324565713` both emitted cache probes like:
+    - `cache_enabled=true`
+    - `prompt_tokens=na`
+    - `completion_tokens=na`
+    - `total_tokens=na`
+    - `cache_creation_input_tokens=na`
+    - `cache_read_input_tokens=na`
+
+### Assessment
+- Prompt caching may be active, but current telemetry is too incomplete to tell:
+  - whether cache entries are being created
+  - whether reads are happening
+  - whether cache prefixes are stable
+  - whether any token savings are being realized
+
+### Likely fragmentation causes
+Evidence is incomplete, so this is bounded:
+- `review_autofix` appears to rebuild support state, diffs, and runtime context repeatedly inside the same run.
+- The review path carries many run-specific temp paths and per-run context artifacts.
+- If any of that unstable material is incorporated early in the prompt prefix, cache reuse will fragment.
+
+### Recommendations
+1. **Emit real cache counters per model call.**
+   - Required fields: prompt, completion, total, cache-create input, cache-read input, cache hit boolean.
+2. **Add a stable prompt-prefix hash metric.**
+   - This will show whether repeated review runs are actually sharing prefixes.
+3. **Move volatile run-specific noise later in prompt assembly** where possible.
+4. **Fix reviewer memory retrieval first.**
+   - A zero-record memory path feeding a large reviewer prompt is all downside.
+
+### Estimated impact
+- **Tokens:** cannot quantify safely today due missing counters.
+- **Latency:** likely moderate once repeated prefixes are stabilized.
+- **Reliability:** improved observability alone is high value because it prevents blind cache tuning.
+
+## Orchestrator Health
+
+### What looks healthy
+- `orchestrate_poll` success rate is currently **100%** in sampled aggregate (`30/30`).
+- Poll ledger entries are consistent:
+  - `poll_completed`
+  - `status:"ok"`
+  - `push_attempts:1`
+  - `has_work:"false"` in recent no-work runs
+
+### Pain points
+#### 1. Poll cycles consume runners even when idle
+- **Evidence**
+  - Recent runs `25336849484`, `25338465666`, `25342258010`, `25347221704` all finished successfully with no work, but still spent ~45–51s and included runner wait + checkout/setup.
+
+- **Smallest safe mitigation**
+  - Gate checkout/setup on `has_work`.
+  - Track `% poll cycles with has_work=false` and average duration of no-work polls.
+
+#### 2. Implement/review flows still bounce through expensive loops before reaching terminal states
+- **Evidence**
+  - `implement` failure `25294005792` only terminated after repeated no-action attempts.
+  - `review_autofix` failures `25300219172` / `25324565713` died late after setup, bootstrap, reviewers, and conflict-handling state.
+
+- **Smallest safe mitigation**
+  - Promote terminal fingerprints earlier.
+  - Abort sooner on missing support files, ambiguity, or merge-conflict states that are already known to be unrecoverable in-run.
+
+#### 3. Conflict resolution remains a weak point in review
+- **Evidence**
+  - Failed review runs end with `MERGE_CONFLICT: true` and `CONFLICT_RESOLVED: false`.
+  - Both long failed reviews also show missing support assets around review-blocked/conflict infrastructure.
+
+- **Smallest safe mitigation**
+  - Separate “review produced findings” from “autofix/merge-conflict resolution failed” in status reporting.
+  - If conflict-resolver prompt/support is absent, fail into comment-only mode instead of hard failing the whole job.
+
+### Indicators to track
+- `% orchestrate_poll runs with has_work=false`
+- average no-work poll duration
+- `% implement runs terminated by terminal fingerprint`
+- `% review_autofix runs failing before editor vs during conflict resolution`
+- memory `retrieve` 0-hit rate by role
+- `push_attempts > 1` rate in memory telemetry
+
+## Pipeline Flow Bottlenecks
+
+### 1. Clarify → Plan → Implement
+- **Queueing overhead**
+  - Many runs are skipped quickly, but some “no-op/closed issue” runs still wait for runners. Example: `implement` run `25324345509` spent most of its 247s waiting, then skipped because the issue was not in the right phase.
+- **Retry overhead**
+  - Implement failures can still spend multiple attempts before conceding ambiguity or no-action output.
+- **Recommendation**
+  - Strengthen prechecks before acquiring expensive context and before entering Codex loops.
+
+### 2. Implement → Review/Autofix
+- **Dominant compute overhead**
+  - `review_autofix` is the biggest compute + AI cost center.
+  - Comment-only review paths still run six reviewers and repeated bootstrap/checkouts.
+- **Merge/conflict overhead**
+  - Failed runs show merge conflict unresolved after significant setup spend.
+- **Recommendation**
+  - Split comment-only review from autofix-capable review more aggressively.
+
+### 3. Review/Autofix → Validate
+- **Flow fragility**
+  - Missing support files in review cause late failures after expensive work.
+- **Recommendation**
+  - Add hard preflight for support assets before reviewer/editor phases.
+
+### 4. Release / Stable-marking loop
+- **Largest end-to-end bottleneck**
+  - `test_and_mark_stable` is entirely blocked by the smoke/merge race, causing full-run failures after ~40–55 minutes.
+- **Recommendation**
+  - Prioritize this before any micro-optimization elsewhere.
+
+### 5. Poll / Orchestrate background loop
+- **Runner occupancy bottleneck**
+  - Frequent no-work polls still consume ~45–51s and full checkout steps.
+- **Recommendation**
+  - Make idle polls almost free.
+
+## Per-Repo Breakdown
+
+### shubhodeep1/coding-workflows
+
+**Top bottlenecks**
+- `test_and_mark_stable` failures at Phase 4b after ~2,424–3,303s.
+- `review_autofix` long-tail p95 of **1682.6s** with heavy reviewer/bootstrap overhead.
+- `ci` consistently around **572–642s**, dominated by `lint`.
+- `orchestrate_poll` spends ~45–51s even when no work exists.
+
+**Top failure modes**
+- Release smoke gate loses race with deterministic auto-merge.
+- `review_autofix` fails on missing bootstrap/support assets.
+- `implement` can get stuck in empty-output / ambiguity loops.
+- Nightly validation self-test had `2/3` fixtures fail in the sampled run.
+
+**Highest-cost drivers**
+- Six-reviewer comment-only review paths.
+- Analysis summarization (`workflow_log_analysis`) using ~171k–222k tokens per sampled run.
+- Repeated CI on low-risk/docs-only changes.
+- Idle poll cycles doing full checkout/fetch.
+
+**Top 3 prioritized actions**
+1. **Fix release smoke/auto-merge ordering** so `test_and_mark_stable` can succeed.
+2. **Split cheap review paths from expensive autofix paths** and reduce reviewer fan-out on comment-only runs.
+3. **Add path-aware CI gating and no-work poll short-circuiting** to reduce constant background spend.
+
+## Metrics Appendix
+
+### Repository summary
+
+| Repository | Total runs | Success | Failure | Cancelled | Other | Failure rate | Avg duration (s) | p50 (s) | p95 (s) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `shubhodeep1/coding-workflows` | 1000 | 294 | 9 | 43 | 654 | 0.9% | 119.9 | 1.0 | 632.0 |
+
+### Key workflow families
+
+| Workflow family | Runs | Success | Failure | Cancelled | Other | Failure rate | Avg (s) | p50 (s) | p95 (s) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `test_and_mark_stable` | 5 | 0 | 5 | 0 | 0 | 100.0% | 2865.2 | 2921.0 | 3283.2 |
+| `review_autofix` | 78 | 37 | 2 | 38 | 1 | 2.56% | 443.6 | 49.0 | 1682.6 |
+| `ci` | 65 | 65 | 0 | 0 | 0 | 0.0% | 611.8 | 611.0 | 647.8 |
+| `orchestrate_poll` | 30 | 30 | 0 | 0 | 0 | 0.0% | 48.9 | 46.5 | 69.7 |
+| `implement` | 174 | 20 | 1 | 5 | 148 | 0.57% | 23.4 | 1.0 | 177.4 |
+| `plan` | 173 | 20 | 0 | 0 | 153 | 0.0% | 10.1 | 1.0 | 110.8 |
+| `clarify` | 204 | 25 | 0 | 0 | 179 | 0.0% | 12.8 | 1.0 | 100.9 |
+| `workflow_log_analysis` | 5 | 5 | 0 | 0 | 0 | 0.0% | 2489.4 | 2556.0 | 2904.0 |
+| `nightly_validation_selftest` | 1 | 0 | 1 | 0 | 0 | 100.0% | 95.0 | 95.0 | 95.0 |
+
+### Notable run-level timings
+
+| Run ID | Workflow | Conclusion | Duration (s) | Dominant issue |
+|---|---|---|---:|---|
+| `25324103531` | `test_and_mark_stable` | failure | 3303 | smoke gate failed after PR auto-closed |
+| `25310399716` | `test_and_mark_stable` | failure | 3204 | same failure mode |
+| `25328431960` | `review_autofix` | success | 1682 | six-reviewer comment-only path |
+| `25327045933` | `review_autofix` | success | 1686 | six-reviewer comment-only path |
+| `25324565713` | `review_autofix` | failure | 925 | missing support assets / unresolved merge path |
+| `25327045947` | `ci` | success | 611 | `lint` dominated runtime |
+| `25347221704` | `orchestrate_poll` | success | 51 | no-work poll still checked out repo |
+
+### AI memory telemetry summary
+
+| Metric | Value |
+|---|---:|
+| Retrieve count | 16 |
+| Retrieve hit rate | 68.8% |
+| Avg retrieve `estimated_tokens` | 19.2 |
+| Max retrieve `estimated_tokens` | 28 |
+| `keyword_method=plain` | 11 |
+| `keyword_method=none` | 5 |
+| `keyword_method=llm` | 0 |
+| Retrieves with `fail_open:true` | 0 observed |
+| Retrieves with `enabled:false` | 0 observed |
+| Telemetry entries with `push_attempts > 1` | 2 observed |
+
+### Workflow-log-analysis token usage observed
+
+| Run ID | Operation | Model | Targeted runs | Summarized | Tokens used |
+|---|---|---|---:|---:|---:|
+| `25300062692` | `summarize_unselected_runs` | `openai/gpt-5.4-mini` | 100 | 76 | 170,953 |
+| `25310429821` | `summarize_unselected_runs` | `openai/gpt-5.4-mini` | 100 | 98 | 221,799 |
+| `25324145530` | `summarize_unselected_runs` | `openai/gpt-5.4-mini` | 100 | 95 | 189,772 |
+
+### Prompt cache observability
+
+| Workflow / Run | Cache enabled | Prompt tokens | Total tokens | Cache create tokens | Cache read tokens | Assessment |
+|---|---|---|---|---|---|---|
+| `review_autofix / 25300219172` | true | `na` | `na` | `na` | `na` | unusable for tuning |
+| `review_autofix / 25324565713` | true | `na` | `na` | `na` | `na` | unusable for tuning |
+
+### GH API summary from deep audit
+
+| Pattern | Count | Files |
+|---|---:|---:|
+| `gh workflow run` | 138 | 11 |
+| `gh api graphql` | 44 | 7 |
+| `gh pr diff` | 33 | 3 |
+| `gh api /repos` | 19 | 4 |
+| `github.rest.pulls.get` | 3 | 2 |
+| `github.paginate pulls.listFiles` | 1 | 1 |
+
+If you want, I can turn this into a **prioritized implementation checklist** with owner, effort, and validation criteria.
