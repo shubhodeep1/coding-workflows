@@ -11,6 +11,11 @@
 #   RUNTIME_DIR                     Ephemeral per-run directory.
 #   CONFLICT_RESOLVER_PROMPT_FILE   Rendered resolver prompt.
 #   CONFLICT_RESOLVER_SUMMARY_FILE  Path resolver summary is written to.
+#   CONFLICT_RESOLVER_REASONING_EFFORT  Reasoning level applied to ~/.codex/config.toml
+#                                   before the retry loop. One of xhigh|high|medium|none;
+#                                   defaults to medium. Decoupled from EDITOR_REASONING_EFFORT
+#                                   so the smoke-test override (which sets editor reasoning
+#                                   to "none") doesn't starve the resolver.
 #   MODEL_EDITOR                    Codex model id used for resolution.
 #   IS_WORKFLOW_SOURCE_REPO         "true" on the coding-workflows repo itself.
 #   SUPPORT_SCRIPTS_DIR             Path to check_resolver_diff.sh / verify_integration_fingerprints.py.
