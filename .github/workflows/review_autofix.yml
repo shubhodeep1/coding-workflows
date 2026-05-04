@@ -4783,10 +4783,14 @@ jobs:
                      reviewer_prompt.txt reviewer_prompt_body.txt \
                      reviewer_prompt_pass1.txt reviewer_prompt_pass2.txt \
                      cross_pollination_summary.txt \
+                     reviewer_bundle.txt reviewer_manifest.txt \
                      conflict_resolver_summary.txt conflict_resolver_prompt.txt \
                      committed_files.txt pr_check_runs_context.txt \
                      linked_issue_context.txt memory_context.txt \
                      pr_diff.patch original_pr_diff.patch \
+                     last_run_diff.patch last_run_changed_files.txt \
+                     pr_changed_files.txt last_commit_stat.txt \
+                     last_run_diff_stat.txt \
                      symbol_diff_summary.txt \
                      floor_tags.txt review_issues.txt ledger_status.txt \
                      consolidator_raw.txt parser_stats.txt; do

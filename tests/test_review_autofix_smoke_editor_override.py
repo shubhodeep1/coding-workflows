@@ -122,6 +122,57 @@ def test_editor_script_contains_smoke_only_block() -> None:
 		"unset) do not render the override."
 	)
 
+	# Bait-presence guard — the override must additionally check that
+	# the canary file actually contains an injected bait line before
+	# rendering. internal-review.yml triggers review_autofix on
+	# pull_request:opened, which fires the FIRST review_autofix run
+	# the moment the smoke PR is created — BEFORE
+	# test-and-mark-stable.yml's Phase 3c appends the bait commit. On
+	# that first round the canary is the legitimate 3-line file and
+	# the override would force a guaranteed-false apply_patch (Copilot
+	# review on PR #2086). The grep must match the marker prefix
+	# emitted by Phase 3c at L1007 and must scope to the canary path.
+	assert "EDITOR_BODY_RENDER_SMOKE=false" in script, (
+		"Smoke override must default to render=false and only flip "
+		"true on a positive bait check — otherwise the pull_request:"
+		"opened first round renders the override against a legitimate "
+		"3-line canary."
+	)
+	assert (
+		"grep -qE '^# E2E_EDITOR_BAIT_[0-9]+:' \"${CANARY_PATH}\""
+	) in script, (
+		"Smoke override must check for the bait marker prefix on "
+		"tests/e2e_smoke_canary.txt before rendering. The marker "
+		"shape (`# E2E_EDITOR_BAIT_<digits>:`) is fixed by "
+		"test-and-mark-stable.yml's Phase 3c — drift between the "
+		"two would either render the override on every smoke run "
+		"(re-introducing the false-task bug) or never render it "
+		"(re-introducing the empty-output failure)."
+	)
+	assert 'CANARY_PATH="tests/e2e_smoke_canary.txt"' in script, (
+		"Smoke override must scope the bait check to the canary "
+		"path so a stray match in a different file cannot trigger "
+		"the override."
+	)
+
+	# Byte-identical-on-production guarantee — when the override does
+	# not render, the editor prompt body must be byte-for-byte the
+	# same as the pre-#2086 implementation. The structural way to
+	# guarantee this is to assemble the body as
+	#   { conditional smoke block; cat <<__EDITOR_PROMPT__ … }
+	#     > "${EDITOR_PROMPT_BODY_FILE}"
+	# rather than embedding $(if ...) inside the heredoc — the latter
+	# expands to an empty string but leaves a trailing newline that
+	# shifts every production prompt's bytes/sha (Copilot review on
+	# PR #2086).
+	assert '} > "${EDITOR_PROMPT_BODY_FILE}"' in script, (
+		"Editor prompt body must be assembled via a brace group "
+		"redirected to EDITOR_PROMPT_BODY_FILE, not via a heredoc "
+		"with embedded $(if ...) — the latter leaks a leading blank "
+		"line into production prompts and breaks the prompt-cache "
+		"key stability."
+	)
+
 	# Section markers — give us a sanity anchor and let downstream
 	# log-analysis tools grep for whether the override fired.
 	assert "=== E2E SMOKE TEST OVERRIDE — READ FIRST ===" in script, (
@@ -199,10 +250,175 @@ def test_smoke_block_position_before_input_files() -> None:
 	)
 
 
+def _render_editor_prompt_body_in(
+	tmp_p: Path,
+	*,
+	is_smoke: str | None,
+	canary_contents: str,
+) -> tuple[str, str]:
+	"""Execute the prompt-body assembly block from review_apply_fixes.sh.
+
+	Sets up minimal stub env vars that the heredoc references by name
+	(the heredoc embeds `${VAR}` paths via the unquoted `<<__EDITOR_PROMPT__`
+	form), runs the assembly block in `tmp_p`, and returns the
+	resulting body text and its SHA-256.
+
+	Caller-supplied `tmp_p` is load-bearing: the byte-identical
+	assertions across multiple calls require RUNTIME_DIR (and every
+	derived path embedded in the body) to be stable across calls,
+	otherwise hash divergence reflects path differences rather than
+	the override structure under test.
+	"""
+	import hashlib
+	import os
+	import subprocess
+
+	runtime = tmp_p / "runtime"
+	runtime.mkdir(exist_ok=True)
+	(runtime / "previous_reviews").mkdir(exist_ok=True)
+	(tmp_p / "tests").mkdir(exist_ok=True)
+	(tmp_p / "tests" / "e2e_smoke_canary.txt").write_text(
+		canary_contents, encoding="utf-8"
+	)
+	for name in ("floor_tags.txt", "review_issues.txt", "ledger_status.txt"):
+		(runtime / name).touch()
+	body_file = runtime / "editor_prompt_body.txt"
+	env = os.environ.copy()
+	env.update({
+		"RUNTIME_DIR": str(runtime),
+		"PREVIOUS_REVIEWS_DIR": str(runtime / "previous_reviews"),
+		"PR_META_FILE": str(runtime / "pr_meta.json"),
+		"PR_DIFF_FILE": str(runtime / "pr_diff.patch"),
+		"LAST_RUN_DIFF_FILE": str(runtime / "last_run_diff.patch"),
+		"LAST_RUN_CHANGED_FILES_FILE": str(runtime / "last_run_changed_files.txt"),
+		"PR_CHANGED_FILES_FILE": str(runtime / "pr_changed_files.txt"),
+		"LAST_COMMIT_STAT_FILE": str(runtime / "last_commit_stat.txt"),
+		"REVIEWER_CONSENSUS_FILE": str(runtime / "reviewer_consensus.txt"),
+		"PR_ALL_COMMENTS_CONTEXT_FILE": str(runtime / "pr_all_comments_context.txt"),
+		"PR_CHECK_RUNS_CONTEXT_FILE": str(runtime / "pr_check_runs_context.txt"),
+		"SYMBOL_DIFF_SUMMARY_FILE": str(runtime / "symbol_diff_summary.txt"),
+		"LINKED_ISSUE_CONTEXT_FILE": str(runtime / "linked_issue_context.txt"),
+		"FLOOR_TAGS_FILE": str(runtime / "floor_tags.txt"),
+		"REVIEW_ISSUES_FILE": str(runtime / "review_issues.txt"),
+		"LEDGER_STATUS_FILE": str(runtime / "ledger_status.txt"),
+		"EDITOR_PROMPT_BODY_FILE": str(body_file),
+		"HAS_PR_DIFF": "true",
+		"PR_DIFF_SOURCE": "gh_pr_diff",
+	})
+	if is_smoke is None:
+		env.pop("IS_SMOKE_TEST", None)
+	else:
+		env["IS_SMOKE_TEST"] = is_smoke
+	script_text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(
+		encoding="utf-8"
+	)
+	lines = script_text.splitlines(keepends=True)
+	start = next(
+		i for i, ln in enumerate(lines)
+		if ln.startswith('echo "Artifacts: floor_tags=$')
+	)
+	end = next(
+		i for i, ln in enumerate(lines)
+		if ln.startswith('} > "${EDITOR_PROMPT_BODY_FILE}"')
+	) + 1
+	block = "".join(lines[start:end])
+	subprocess.run(
+		["bash", "-c", block],
+		cwd=str(tmp_p),
+		env=env,
+		check=True,
+		capture_output=True,
+	)
+	body_text = body_file.read_text(encoding="utf-8")
+	return body_text, hashlib.sha256(body_text.encode("utf-8")).hexdigest()
+
+
+def test_production_prompt_body_byte_identical_when_smoke_unset_or_no_bait() -> None:
+	"""Production runs MUST produce byte-identical editor prompt bodies.
+
+	Two cases must yield the same SHA-256 because neither should
+	render the smoke override:
+	  1. IS_SMOKE_TEST unset (real PR autofix).
+	  2. IS_SMOKE_TEST=true but canary has no bait line (the
+	     pull_request:opened first round on a smoke PR — bait is
+	     injected by Phase 3c only AFTER this round runs).
+
+	Shared tempdir (and therefore identical RUNTIME_DIR / PR_META_FILE
+	/ … paths embedded in the heredoc) is load-bearing: if each call
+	got its own tempdir, hash divergence would reflect path
+	differences, not the structural drift under test.
+
+	If the cases diverge despite identical paths, OpenRouter prompt-
+	cache keys will miss on the next production PR and "Editor prompt
+	sha256" log lines stop being usable as drift detectors.
+	"""
+	import tempfile
+
+	clean_canary = "status: ok\nrun_id: 12345\nupdated-by: ai-pipeline\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_p = Path(tmp)
+		body_prod, sha_prod = _render_editor_prompt_body_in(
+			tmp_p, is_smoke=None, canary_contents=clean_canary
+		)
+		_, sha_smoke_no_bait = _render_editor_prompt_body_in(
+			tmp_p, is_smoke="true", canary_contents=clean_canary
+		)
+
+		assert sha_prod == sha_smoke_no_bait, (
+			f"Editor prompt body must be byte-identical between "
+			f"production (IS_SMOKE_TEST unset) and the smoke-without-bait "
+			f"first-round case. Got {sha_prod} vs {sha_smoke_no_bait}. "
+			f"This means either the smoke override is leaking into the "
+			f"first round (Comment 1) or the heredoc structure has the "
+			f"$(if ...)-leaves-blank-line drift (Comment 2)."
+		)
+		assert body_prod.startswith("INPUT FILES\nRead the following files:"), (
+			f"Production editor prompt body must start with 'INPUT FILES' "
+			f"on line 1. Got first line: {body_prod.splitlines()[0]!r}. "
+			f"A leading blank line indicates the $(if …) heredoc drift "
+			f"is back."
+		)
+
+
+def test_smoke_override_renders_only_when_bait_present() -> None:
+	"""Smoke override must render iff IS_SMOKE_TEST=true AND canary has bait."""
+	import tempfile
+
+	clean_canary = "status: ok\nrun_id: 12345\nupdated-by: ai-pipeline\n"
+	bait_canary = (
+		clean_canary
+		+ "# E2E_EDITOR_BAIT_99999: this line should be removed by the editor (smoke gate)\n"
+	)
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_p = Path(tmp)
+		body_with_bait, sha_with_bait = _render_editor_prompt_body_in(
+			tmp_p, is_smoke="true", canary_contents=bait_canary
+		)
+		_, sha_no_bait = _render_editor_prompt_body_in(
+			tmp_p, is_smoke="true", canary_contents=clean_canary
+		)
+
+		assert sha_with_bait != sha_no_bait, (
+			"With IS_SMOKE_TEST=true and bait present, the body must "
+			"differ from the no-bait body — the override should be "
+			"prepended."
+		)
+		assert "=== E2E SMOKE TEST OVERRIDE — READ FIRST ===" in body_with_bait, (
+			"Smoke run with bait present must include the override "
+			"section marker in the rendered body."
+		)
+		assert body_with_bait.startswith("=== E2E SMOKE TEST OVERRIDE"), (
+			"Override must be the very first content of the body when "
+			"rendered — late-prompt placement weakens the directive."
+		)
+
+
 def main() -> int:
 	test_smoke_detect_exports_is_smoke_test_env()
 	test_editor_script_contains_smoke_only_block()
 	test_smoke_block_position_before_input_files()
+	test_production_prompt_body_byte_identical_when_smoke_unset_or_no_bait()
+	test_smoke_override_renders_only_when_bait_present()
 	print("OK: review_autofix smoke editor override contract assertions hold")
 	return 0
 
