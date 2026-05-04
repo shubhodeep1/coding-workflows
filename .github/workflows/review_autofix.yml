@@ -4786,6 +4786,7 @@ jobs:
                      reviewer_bundle.txt reviewer_manifest.txt \
                      conflict_resolver_summary.txt conflict_resolver_prompt.txt \
                      committed_files.txt pr_check_runs_context.txt \
+                     pr_meta.json pr_all_comments_context.txt \
                      linked_issue_context.txt memory_context.txt \
                      pr_diff.patch original_pr_diff.patch \
                      last_run_diff.patch last_run_changed_files.txt \

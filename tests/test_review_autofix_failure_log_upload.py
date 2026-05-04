@@ -162,6 +162,8 @@ def test_review_autofix_failure_log_artifact_upload_contract() -> None:
 		"conflict_resolver_prompt.txt",
 		"committed_files.txt",
 		"pr_check_runs_context.txt",
+		"pr_meta.json",
+		"pr_all_comments_context.txt",
 		"linked_issue_context.txt",
 		"memory_context.txt",
 		"pr_diff.patch",
