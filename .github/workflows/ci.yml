@@ -163,6 +163,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_smoke_editor_override.py
 
+      - name: Review autofix smoke conflict-resolver override contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_smoke_conflict_resolver_override.py
+
       - name: Clarify loop guard unit tests
         run: |
           set -euo pipefail
