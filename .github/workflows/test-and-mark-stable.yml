@@ -4015,7 +4015,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
-          gh workflow run forward-merge-stable-to-main.yml --ref stable
+          # --repo "${GITHUB_REPOSITORY}" is required: this job has no
+          # checkout step, so without it `gh workflow run` falls back to
+          # `git remote` detection and aborts with
+          # `fatal: not a git repository (or any of the parent directories): .git`.
+          gh workflow run forward-merge-stable-to-main.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref stable
           echo "Dispatched forward-merge-stable-to-main.yml on stable branch."
           echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/forward-merge-stable-to-main.yml"
 
