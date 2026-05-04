@@ -286,7 +286,7 @@ This file is a deterministic snapshot of failed and incomplete GitHub check-runs
 
 For each failed entry:
 1. Read failed[i].name, failed[i].title, failed[i].summary, and failed[i].conclusion to identify the failing job and the kind of failure (lint, type-check, unit test, etc.).
-2. Map the failure back to specific files and lines in the diff or repository — use the failure summary plus your existing exploration tools (repository reads, shell rg).
+2. Map the failure back to specific files and lines in the diff or repository — use the failure summary plus your existing exploration tools (repository reads, shell grep/rg).
 3. Apply the smallest correct fix that resolves the failure without breaking other modules. Lint/format fixes should match the project style without unrelated reformatting.
 4. If a failure cannot be mapped to a concrete fix from the snapshot alone (e.g. the summary is empty or refers to an external artifact), state explicitly in the editor summary which check-run could not be fixed and why, so the next iteration can re-check it.
 
