@@ -229,12 +229,21 @@ if [ -f "${_codex_config}" ]; then
 
   if [ "${_rewrite_ok}" -eq 0 ]; then
     echo "::warning::Codex config rewrite failed for ${_codex_config}; resolver will run with whatever reasoning the editor step left in place."
-  elif ! grep -qE "^model_reasoning_effort = \"${_resolver_reasoning_effort}\"$" "${_codex_config}"; then
-    echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${_resolver_reasoning_effort}\" line; resolver may run with stale reasoning."
-  elif ! grep -qE '^model_reasoning_summary = "auto"$' "${_codex_config}"; then
-    echo "::warning::Codex config rewrite did not produce the expected model_reasoning_summary = \"auto\" line; the anti-empty-stdout safeguard may be unset."
   else
-    echo "Conflict resolver reasoning effort set to ${_resolver_reasoning_effort} (model_reasoning_summary=auto)."
+    # Independent checks (not elif) so both mismatches surface together
+    # if the rewrite somehow produced neither expected line.
+    _verify_ok=1
+    if ! grep -qE "^model_reasoning_effort = \"${_resolver_reasoning_effort}\"$" "${_codex_config}"; then
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${_resolver_reasoning_effort}\" line; resolver may run with stale reasoning."
+      _verify_ok=0
+    fi
+    if ! grep -qE '^model_reasoning_summary = "auto"$' "${_codex_config}"; then
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_summary = \"auto\" line; the anti-empty-stdout safeguard may be unset."
+      _verify_ok=0
+    fi
+    if [ "${_verify_ok}" -eq 1 ]; then
+      echo "Conflict resolver reasoning effort set to ${_resolver_reasoning_effort} (model_reasoning_summary=auto)."
+    fi
   fi
 else
   echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override skipped."
