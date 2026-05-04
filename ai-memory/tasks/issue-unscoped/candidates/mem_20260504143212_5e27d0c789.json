@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extra 4th line (`# E2E_EDITOR_BAIT_25324103531: this line should be removed by the editor (smoke gate)`) instead of exactly the three lines required.\n  WHY: The task explicitly requires \"exactly these three lines (no more, no less)\" and forbids any extra content, so the E2E smoke validation will reject the file because of the added line.\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The implementation added an unauthorized fourth line to `tests/e2e_smoke_canary.txt`, violating the exact three-line specification.\n  WHY: The reviewer separately reported the full-file-content issue as a distinct finding; it points to the same extra comment line causing the exact-match failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains a 4th line (`# E2E_EDITOR_BAIT_25324103531: this line should be removed by the editor (smoke gate)`) that violates the exact-content specification from the linked issue #2089.\n  WHY: The issue explicitly requires \"exactly these three lines (no more, no less)\" and states \"Do not add comments, headers, or any extra content.\" The file currently has 4 lines and 141 bytes instead of the required 3 lines.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:Line: 4 (the added line) | severity=high | confidence=5\n  PROBLEM: The file contains a 4th line (`# E2E_EDITOR_BAIT_25324103531: this line should be removed by the editor (smoke gate)`) instead of exactly the three lines specified in issue #2089.\n  WHY: The issue explicitly requires \"exactly these three lines (no more, no less)\" and states \"Do **not** add comments, headers, or any extra content.\" The E2E smoke validation will reject this file due to the extra content violating the exact-match constraint.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:Line 4: # E2E_EDITOR_BAIT_25324103531: this line should be removed by the editor (smoke gate) | severity=high | confidence=5\n  PROBLEM: The file contains a 4th line (a bait comment) that violates the exact-content requirement specified in issue #2089.\n  WHY: The task explicitly requires the file to contain \"exactly these three lines (no more, no less)\": `status: ok`, `run_id: 25324103531`, and `updated-by: ai-pipeline`. The added 4th line is a comment that was meant to be removed by the editor but was instead added to the file.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:Line or code reference: Line 4 (`# E2E_EDITOR_BAIT_25324103531: this line should be removed by the editor (smoke gate)`) | severity=high | confidence=5\n  PROBLEM: The PR introduced an extra 4th comment line instead of leaving the file with exactly the three required lines.\n  WHY: The original task (issue #2089) explicitly states the file must contain \"exactly these three lines (no more, no less)\" and \"Do not add comments, headers, or any extra content.\"\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: File contains four lines including an extra bait comment \"# E2E_EDITOR_BAIT_25324103531: this line should be removed by the editor (smoke gate)\"\n  WHY: Task requires exactly three lines with no extra content, comments, headers, or additions; E2E smoke validation will reject due to line count mismatch and presence of comment\n- tests/e2e_smoke_canary.txt:Code: Full file content after change | severity=high | confidence=5\n  PROBLEM: Implementation added unauthorized fourth line violating \"exactly these three lines (no more, no less)\" and \"Do not add comments, headers, or any extra content\"\n  WHY: Canary check fails validation as content does not match exact specification\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:Line: 4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the exactly 3 lines required by issue #2089\n  WHY: The task specification explicitly states \"Update its content so it is **exactly** these three lines (no more, no less)\" and \"Do **not** add comments, headers, or any extra content.\" The added 4th line `# E2E_EDITOR_BAIT_25324103531: this line should be removed by the editor (smoke gate)` violates this constraint.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6d693909498c3c6825f9857a7f3eb68bacac69c362b2cb2ca681668ee7e70e9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2094,
+    "run_id": "25324565713",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25324565713",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504143212_5e27d0c789",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2094,
+    "run_id": "25324565713"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T14:32:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
