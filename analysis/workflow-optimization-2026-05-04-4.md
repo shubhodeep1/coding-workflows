@@ -684,3 +684,120 @@ Ranked by expected failure-rate or rerun-rate reduction.
 | `orchestrate_poll` / cancel helpers | `/rate_limit` helper on healthy path | avoidable probe calls | 1–2 |
 | `copilot_pull_request_reviewer / Cleanup artifacts` | list artifacts then delete in loop | per-item cleanup without reuse | 2–4 |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-04)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — `BUG-001`
+  **File path** — `.github/workflows/plan.yml:341-347,430-695`
+  **Severity** — High
+  **Category tag** — `bug`
+  **Description** — The `Fetch issue comments` step writes `gh api --paginate` output straight into `ISSUE_COMMENTS_FILE` without collapsing pages into one JSON array. Every downstream consumer then treats that file as a single array (`jq` at lines 430-435, 561-568, 594-632, and 695). For issues with more than one comments page, the file becomes multiple top-level JSON documents, so these later `jq` reads can fail under `set -euo pipefail` or silently mis-read stale/partial data.
+  **Recommended fix** — Merge paginated pages before storing them, using the same pattern already used elsewhere in-repo: `gh api --paginate ... | jq -s 'add // []' > "${ISSUE_COMMENTS_FILE}"`, or switch to `gh_retry_to_file`/JSON-validation helpers from `scripts/gh_helpers.sh`.
+
+- **ID** — `BUG-002`
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1136-1143,1258-1349`
+  **Severity** — Medium
+  **Category tag** — `bug`
+  **Description** — `gh_api_safe()` captures all `gh api` stdout with command substitution (`output=$(gh api "$@" ...)`). Bash command substitution strips NUL bytes, but the later log-scanning code explicitly relies on preserving raw job-log bytes and claims the tempfile path is “byte-exact.” For `/actions/jobs/{id}/logs`, that claim is false: the bytes have already been normalized before they are redirected to `LOG_FILE`, so the noop-marker and reviewer-progress shortcuts can miss matches or merge lines incorrectly.
+  **Recommended fix** — Split `gh_api_safe` into text and raw-stream variants. For raw log endpoints, write `gh api ...` directly to a tempfile/stdout and inspect only exit status/stderr; keep command substitution only for JSON/text endpoints.
+
+- **ID** — `CONSIST-001`
+  **File path** — `.github/workflows/review_autofix.yml:3696-3735,3810-3855; .github/workflows/issue_pr_status.yml:239-249; scripts/label_helpers.sh:146-189`
+  **Severity** — Medium
+  **Category tag** — `consistency`
+  **Description** — When `label_helpers.sh` is unavailable, both workflows fall back to inline `set_issue_phase_label_resilient()` implementations that only `POST` the target label. The canonical helper in `scripts/label_helpers.sh` does a phase-replacement flow (read labels, remove conflicting phase labels, then `PUT` the final set). In the exact missing-support-script scenarios already seen in repo logs, these fallbacks can leave contradictory phase labels like `ai:done` + `ai:review-blocked` or `ai:ready-to-merge` + `ai:closed`, which undermines later phase inference.
+  **Recommended fix** — Stop using POST-only fallbacks for phase labels. Stage `scripts/label_helpers.sh` once into `SUPPORT_SCRIPTS_DIR`, or inline one shared copy of the canonical GET/PUT algorithm and have all fallback callers source that single implementation.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — `API-001`
+  **File path** — `.github/workflows/issue_pr_status.yml:288-344,499-509`
+  **Severity** — Medium
+  **Category tag** — `api-redundancy`
+  **Description** — `Update linked issue labels when PR closes` already batches linked-issue metadata into `ORCH_RESP` with labels and body for every linked issue, but `Send PR merged Telegram alert` later re-fetches each linked issue body one-by-one with `_safe_gh_jq` just to test for the orchestrator marker. Current call count is **1 batched GraphQL call + up to N REST issue reads**; proposed call count is **1 total** by persisting `body`/managed-state from the first batch into an env/file cache and reusing it.
+  **Recommended fix** — Export a `LINKED_ISSUE_META_JSON` cache from the first step and consume it in the alert step. Follow the cycle-local cache pattern already used in `scripts/orchestrate_poll_process.sh` (`ACTIVE_WORKFLOW_ISSUES`, `_candidate_details_json`) instead of re-fetching per issue.
+
+- **ID** — `API-002`
+  **File path** — `scripts/orchestrate_poll_process.sh:1927-1948,6320-6334`
+  **Severity** — Medium
+  **Category tag** — `api-redundancy`
+  **Description** — The poller fetches each tracking issue’s comments once while extracting orchestrator state (`issues/{tracking}/comments` at 1927-1948), then fetches the same comments again later to rebuild `orchestrator_managed_set` (6320-6334). For `T` active tracking issues, current cost is **2T comment-list calls per poll cycle**; proposed cost is **T** by caching the parsed tracking state / managed issue numbers from the first pass.
+  **Recommended fix** — Persist extracted tracking-state JSON or a derived managed-issue cache in `${RUNTIME_DIR}` during the first pass, then reuse it later. Extend the same cycle-local cache contract used elsewhere in this script rather than re-reading issue comments.
+
+- **ID** — `BATCH-001`
+  **File path** — `scripts/orchestrate_poll_process.sh:6346-6353`
+  **Severity** — Medium
+  **Category tag** — `api-batching`
+  **Description** — The standalone stall sweep enumerates seven pipeline labels with seven separate `gh issue list` calls, then unions the results before the batched candidate-details fetch. Current call count is **7 label-list calls + 1 candidate-details batch call**; proposed call count is **1 aliased GraphQL/search batch call + 1 candidate-details batch call**.
+  **Recommended fix** — Add a batched helper alongside `_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql` that takes the fixed label set and returns the union in one request. This is exactly the “prefer batched GraphQL over per-item REST/per-label loops” contract from `CLAUDE.md §15`.
+
+- **ID** — `BATCH-002`
+  **File path** — `.github/workflows/review_autofix.yml:478-530`
+  **Severity** — Low
+  **Category tag** — `api-batching`
+  **Description** — In `post-merge-validate-dispatch`, the regex fallback path synthesizes `issue_numbers`, then loops and calls `gh issue view` per issue when labels were not present in the initial GraphQL response. Current call count on that path is **1 PR fetch + N issue-label reads**; proposed call count is **1 PR fetch + 1 batched issue-label lookup**.
+  **Recommended fix** — When the fallback regex path is used, batch-fetch labels for the synthesized issue numbers with a GraphQL alias helper before entering the loop. Reuse the same batching shape used by `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — `DUP-001`
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/orchestrate_poll.yml:63-97; .github/workflows/review_autofix.yml:1254-1292`
+  **Severity** — Low
+  **Category tag** — `duplication`
+  **Description** — The repo carries multiple bespoke `_rl_wait`/`gh_retry` implementations even though `scripts/gh_helpers.sh` already provides `gh_retry`, `gh_retry_to_file`, `_safe_gh_jq`, permanent-failure detection, rate-limit breaker support, and Telegram alerts. This duplication has already drifted: inline copies always probe `/rate_limit`, lack `_is_gh_permanent_failure`, and diverge in backoff behavior.
+  **Recommended fix** — Consolidate retry logic into `scripts/gh_helpers.sh` (or a bootstrap-safe shim sourced before checkout). Target signatures should remain `gh_retry <cmd...>`, `gh_retry_to_file <outfile> <cmd...>`, `_safe_gh_jq <endpoint> --jq ...`. Update `cancel_on_pr_close.yml`, `orchestrate_poll.yml`, `review_autofix.yml`, `mark-stable.yml`, and similar callers to source the shared helper instead of redefining it.
+
+- **ID** — `DUP-002`
+  **File path** — `.github/workflows/review_autofix.yml:3701-3735,3824-3855,4571-4585; .github/workflows/issue_pr_status.yml:239-249`
+  **Severity** — Low
+  **Category tag** — `duplication`
+  **Description** — `ensure_label_exists` / `set_issue_phase_label_resilient` are reimplemented inline at least four times outside `scripts/label_helpers.sh`. These copies duplicate label descriptions/colors and phase-mutation behavior, and they have already drifted from the canonical helper’s phase-replacement semantics.
+  **Recommended fix** — Make `scripts/label_helpers.sh` the sole owner of `ensure_label_exists <label_name> <repo>` and `set_issue_phase_label_resilient <issue_number> <target_label> <repo>`. Stage that helper once per job into `SUPPORT_SCRIPTS_DIR`, then have `review_autofix.yml` and `issue_pr_status.yml` source it rather than carrying inline variants.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — `EXPR-001`
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1118-1449`
+  **Severity** — Medium
+  **Category tag** — `expression-limit`
+  **Description** — The `Phase 4: Wait for review & autofix to complete` `run:` block contains `${{ }}` interpolations and is already about **16,626 characters**, leaving only about **4,374 characters** of headroom before GitHub’s **21,000-character** expression hard limit. This block already embeds polling, rate-limit handling, live-log shortcuts, and timeout diagnostics in one interpolated body, so routine edits could push it over the threshold that this repo has already hit elsewhere.
+  **Recommended fix** — Extract the entire wait loop to an external script under `scripts/` (preferred), or split log-shortcut logic into a second step fed by env vars. This is the same mitigation pattern already used elsewhere in the repo when large expressions were externalized.
+  
+Additional assessment:
+- No workflow file exceeded the **800 KB** early-warning threshold. Largest observed files were `review_autofix.yml` (**269,146 bytes**) and `test-and-mark-stable.yml` (**227,918 bytes**).
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — `DEAD-001`
+  **File path** — `scripts/memory_helpers.sh:56-57`
+  **Severity** — Low
+  **Category tag** — `dead-code`
+  **Description** — `memory_ensure_branch()` assigns `local token="${GH_TOKEN:-}"` and never uses it. That dead assignment is misleading in an auth-sensitive helper because it suggests token-based remote rewriting exists here when the function actually relies on the existing `origin` remote configuration.
+  **Recommended fix** — Remove the unused variable, or wire it into authenticated remote construction if that was the intended design.
+
+Cross-cutting notes:
+- I did **not** find additional `TODO` / `FIXME` / `HACK` markers in `.github/workflows/*.yml` or `scripts/*.sh`.
+- The most actionable shellcheck-style gap in scope is the unused assignment above; the larger maintainability risk is helper drift, not lint volume.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 6 | BUG-002, CONSIST-001, API-001, API-002, BATCH-001, EXPR-001 |
+| Low | 4 | BATCH-002, DUP-001, DUP-002, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 5 | Medium |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 3 | Small |
