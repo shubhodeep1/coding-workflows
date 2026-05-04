@@ -11,6 +11,11 @@
 #   RUNTIME_DIR                     Ephemeral per-run directory.
 #   CONFLICT_RESOLVER_PROMPT_FILE   Rendered resolver prompt.
 #   CONFLICT_RESOLVER_SUMMARY_FILE  Path resolver summary is written to.
+#   CONFLICT_RESOLVER_REASONING_EFFORT  Reasoning level applied to ~/.codex/config.toml
+#                                   before the retry loop. One of xhigh|high|medium|none;
+#                                   defaults to medium. Decoupled from EDITOR_REASONING_EFFORT
+#                                   so the smoke-test override (which sets editor reasoning
+#                                   to "none") doesn't starve the resolver.
 #   MODEL_EDITOR                    Codex model id used for resolution.
 #   IS_WORKFLOW_SOURCE_REPO         "true" on the coding-workflows repo itself.
 #   SUPPORT_SCRIPTS_DIR             Path to check_resolver_diff.sh / verify_integration_fingerprints.py.
@@ -166,6 +171,84 @@ trap _resolver_exit_trap EXIT
 # ----------------------------------------------------------------------
 INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS=3
 RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
+
+# Pin the resolver's Codex reasoning effort independent of the editor's.
+# review_autofix.yml's "Detect smoke test PR" step rewrites
+# ~/.codex/config.toml's model_reasoning_effort to "none" (so the
+# single-line smoke-canary edit completes deterministically). The
+# conflict resolver runs against the same config and inherits that
+# value, which reliably trips the empty-stdout failure mode of
+# gpt-5.3-codex (documented on the editor step's
+# "Switch reasoning effort" block): one tool call, rc=0, zero output,
+# no final assistant message — the retry loop then exhausts and aborts
+# the [ai-merge-resolve] commit. PR #2058 / run 25300219172 hit this on
+# a 1-line canary conflict.
+#
+# Override config.toml here using CONFLICT_RESOLVER_REASONING_EFFORT
+# (set by the workflow step's env, defaults to "medium"). Also ensure
+# model_reasoning_summary = "auto" is present — same diagnostic +
+# anti-empty-stdout rationale as the editor step.
+_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-medium}"
+# Validate against known reasoning levels before interpolating into sed —
+# CONFLICT_RESOLVER_REASONING_EFFORT comes from a repo var
+# (vars.THINKING_LEVEL_CONFLICT_RESOLVER) so an unexpected value would
+# corrupt the TOML or break sed under set -e. Mirrors the pattern used
+# in scripts/review_consolidate.sh for REVIEW_CONSOLIDATOR_REASONING.
+# Allowed levels match README.md ("Thinking levels"): xhigh|high|medium|none.
+case "${_resolver_reasoning_effort}" in
+  xhigh|high|medium|none) ;;
+  *)
+    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to medium."
+    _resolver_reasoning_effort="medium"
+    ;;
+esac
+_codex_config="${HOME}/.codex/config.toml"
+# Fail-open guard around the rewrite: a sed/grep failure (permissions,
+# unexpected file shape, missing GNU sed) should fall through to a
+# ::warning:: rather than abort the resolver step under set -e — same
+# spirit as the missing-config branch below. Robust grep/sed patterns
+# tolerate whitespace and quoting variants so a non-canonical config
+# (e.g. unquoted value, extra spaces) is still updated rather than
+# silently no-op'd, which would re-introduce the empty-stdout failure
+# this fix is meant to prevent. Post-edit verification reads the file
+# back and emits a warning if the resolver value is missing.
+if [ -f "${_codex_config}" ]; then
+  _rewrite_ok=1
+  {
+    if grep -qE '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${_codex_config}"; then
+      sed -i "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*|model_reasoning_effort = \"${_resolver_reasoning_effort}\"|" "${_codex_config}"
+    else
+      printf '\nmodel_reasoning_effort = "%s"\n' "${_resolver_reasoning_effort}" >> "${_codex_config}"
+    fi
+    if grep -qE '^[[:space:]]*model_reasoning_summary[[:space:]]*=' "${_codex_config}"; then
+      sed -i 's|^[[:space:]]*model_reasoning_summary[[:space:]]*=.*|model_reasoning_summary = "auto"|' "${_codex_config}"
+    else
+      sed -i '/^[[:space:]]*model_reasoning_effort[[:space:]]*=/a model_reasoning_summary = "auto"' "${_codex_config}"
+    fi
+  } || _rewrite_ok=0
+
+  if [ "${_rewrite_ok}" -eq 0 ]; then
+    echo "::warning::Codex config rewrite failed for ${_codex_config}; resolver will run with whatever reasoning the editor step left in place."
+  else
+    # Independent checks (not elif) so both mismatches surface together
+    # if the rewrite somehow produced neither expected line.
+    _verify_ok=1
+    if ! grep -qE "^model_reasoning_effort = \"${_resolver_reasoning_effort}\"$" "${_codex_config}"; then
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${_resolver_reasoning_effort}\" line; resolver may run with stale reasoning."
+      _verify_ok=0
+    fi
+    if ! grep -qE '^model_reasoning_summary = "auto"$' "${_codex_config}"; then
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_summary = \"auto\" line; the anti-empty-stdout safeguard may be unset."
+      _verify_ok=0
+    fi
+    if [ "${_verify_ok}" -eq 1 ]; then
+      echo "Conflict resolver reasoning effort set to ${_resolver_reasoning_effort} (model_reasoning_summary=auto)."
+    fi
+  fi
+else
+  echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override skipped."
+fi
+
 RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing.txt"
 RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
 RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
