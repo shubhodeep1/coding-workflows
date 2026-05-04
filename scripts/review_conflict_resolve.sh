@@ -189,26 +189,46 @@ _resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-medium}"
 # (vars.THINKING_LEVEL_CONFLICT_RESOLVER) so an unexpected value would
 # corrupt the TOML or break sed under set -e. Mirrors the pattern used
 # in scripts/review_consolidate.sh for REVIEW_CONSOLIDATOR_REASONING.
+# Allowed levels match README.md ("Thinking levels"): xhigh|high|medium|none.
 case "${_resolver_reasoning_effort}" in
-  xhigh|high|medium|low|none) ;;
+  xhigh|high|medium|none) ;;
   *)
     echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to medium."
     _resolver_reasoning_effort="medium"
     ;;
 esac
 _codex_config="${HOME}/.codex/config.toml"
+# Fail-open guard around the rewrite: a sed/grep failure (permissions,
+# unexpected file shape, missing GNU sed) should fall through to a
+# ::warning:: rather than abort the resolver step under set -e — same
+# spirit as the missing-config branch below. Robust grep/sed patterns
+# tolerate whitespace and quoting variants so a non-canonical config
+# (e.g. unquoted value, extra spaces) is still updated rather than
+# silently no-op'd, which would re-introduce the empty-stdout failure
+# this fix is meant to prevent. Post-edit verification reads the file
+# back and emits a warning if the resolver value is missing.
 if [ -f "${_codex_config}" ]; then
-  if grep -q '^model_reasoning_effort = ' "${_codex_config}"; then
-    sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${_resolver_reasoning_effort}\"/" "${_codex_config}"
+  _rewrite_ok=1
+  {
+    if grep -qE '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${_codex_config}"; then
+      sed -i "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*|model_reasoning_effort = \"${_resolver_reasoning_effort}\"|" "${_codex_config}"
+    else
+      printf '\nmodel_reasoning_effort = "%s"\n' "${_resolver_reasoning_effort}" >> "${_codex_config}"
+    fi
+    if grep -qE '^[[:space:]]*model_reasoning_summary[[:space:]]*=' "${_codex_config}"; then
+      sed -i 's|^[[:space:]]*model_reasoning_summary[[:space:]]*=.*|model_reasoning_summary = "auto"|' "${_codex_config}"
+    else
+      sed -i '/^[[:space:]]*model_reasoning_effort[[:space:]]*=/a model_reasoning_summary = "auto"' "${_codex_config}"
+    fi
+  } || _rewrite_ok=0
+
+  if [ "${_rewrite_ok}" -eq 0 ]; then
+    echo "::warning::Codex config rewrite failed for ${_codex_config}; resolver will run with whatever reasoning the editor step left in place."
+  elif ! grep -qE "^model_reasoning_effort = \"${_resolver_reasoning_effort}\"$" "${_codex_config}"; then
+    echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${_resolver_reasoning_effort}\" line; resolver may run with stale reasoning."
   else
-    printf '\nmodel_reasoning_effort = "%s"\n' "${_resolver_reasoning_effort}" >> "${_codex_config}"
+    echo "Conflict resolver reasoning effort set to ${_resolver_reasoning_effort} (model_reasoning_summary=auto)."
   fi
-  if grep -q '^model_reasoning_summary = ' "${_codex_config}"; then
-    sed -i 's/^model_reasoning_summary = ".*"/model_reasoning_summary = "auto"/' "${_codex_config}"
-  else
-    sed -i '/^model_reasoning_effort = /a model_reasoning_summary = "auto"' "${_codex_config}"
-  fi
-  echo "Conflict resolver reasoning effort set to ${_resolver_reasoning_effort} (model_reasoning_summary=auto)."
 else
   echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override skipped."
 fi
