@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `main` at `2dc364641da72049c50333b479dc1ecd18380479`.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n2. Functions or modules to implement\n- No code modules or functions need changes.\n- Update the existing canary file content in place so it matches the issue exactly.\n\n3. Data structures affected\n- Plain text file payload only.\n- Final file content must be exactly:\n  - `status: ok`\n  - `run_id: alt-25324103531`\n  - `updated-by: ai-pipeline`\n\n4. API or interface changes\n- None.\n- No workflow, CLI, schema, or contract changes are required.\n\n5. Potential risks or edge cases\n- The task constraint is strict: only `tests/e2e_smoke_canary.txt` may be modified.\n- The file must match exactly, including line order and no extra lines or trailing content.\n- Current repo state conflicts slightly with the requested value: the file already exists but currently contains `run_id: alt-25310399716`, so implementation must replace only that value.\n\n6. Testing considerations\n- Verify the file content after edit with an exact readback/diff.\n- Confirm no other files changed in the working tree as part of this task.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ed004ece7f3d05a62526d3565cc93f240b7fd0e5114ef964e90a86c30109cb9c",
+  "lineage": {
+    "issue_number": 2088,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25324212997",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25324212997",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2088"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260504141903_1219f90e19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2088,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25324212997"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2088",
+  "timestamps": {
+    "created_at": "2026-05-04T14:19:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
