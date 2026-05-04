@@ -806,3 +806,158 @@ If you want, I can turn this into a **prioritized implementation checklist** map
 | Code modularization | 2 | Medium |
 | Expression size reduction | 4 | Medium |
 | Medium/Low fixes | 5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-04)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven equivalent enough for direct implementation without changing retry/pagination/filter semantics. `NEEDS_VERIFICATION` means the overlap looks real, but a human or follow-on pass must confirm cache freshness, event-shape guarantees, or downstream behavior before changing it. `RISKY_SKIP` means the overlap is visible but sits in a retry/race/polling-sensitive path where this pass does **not** authorize automatic consolidation.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — `RISKY_SKIP`
+- **File path and line ranges** — `scripts/orchestrate_poll_process.sh:3411-3412`, `scripts/orchestrate_poll_process.sh:3466-3468`, `scripts/orchestrate_poll_process.sh:3517-3519`
+- **Current call count** — up to **8** `GET /repos/{repo}/pulls/{final_pr}` calls in one `ensure_final_merge_pr` invocation when `final_pr` already exists and the merge attempt fails.
+- **Proposed call count** — up to **3** calls by fetching the PR JSON once per decision point and extracting `state`, `mergeable`, and `merged_at` together.
+- **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence**
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+- **Proposed fix** — Add a local helper in `ensure_final_merge_pr()` that fetches the final PR JSON once and returns the three fields together; update the three call sites above to consume that single payload instead of separate `_safe_gh_jq` invocations.
+- **Safety rationale** — `RISKY_SKIP` because these calls are inside `scripts/orchestrate_poll_process.sh`, which the repo treats as a race-defensive orchestrator path; changing read timing here could alter mergeability-observation behavior.
+- **Downstream signal** — Do **not** auto-implement; manual review must confirm that a single cached fetch per decision point does not change mergeability recomputation timing, self-healing branch selection, or any grep-consumed log lines.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:1366-1371`, `.github/workflows/review_autofix.yml:1394-1416`, `scripts/review_rb_judge.sh:146-166`
+- **Current call count** — judge path does **1 GraphQL** linked-issue lookup plus **up to N** `GET /issues/{n}` body fetches, even though the same workflow already fetched linked issue `number/title/body`.
+- **Proposed call count** — **0** judge-local API calls on cache hit; keep the existing GraphQL/REST path only as a fail-open fallback when the earlier cache artifact is missing.
+- **Endpoint(s)** — GraphQL `pullRequest.closingIssuesReferences`; REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```bash
+  # early in review_autofix.yml
+  if gh_retry "${_linked_tmp}" api graphql \
+    ... \
+    -f query='query(...){...closingIssuesReferences(first:50){nodes{number title body}}}' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+  ...
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
+  ...
+      title = iss.get("title", "")
+      body = iss.get("body", "")
+  ```
+
+  ```bash
+  # later in scripts/review_rb_judge.sh
+  ISSUE_NUMBERS="$(gh_retry gh api graphql ... closingIssuesReferences(first: 50) { nodes { number } } ...)"
+  ...
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  ```
+- **Proposed fix** — Extend the review metadata collector to persist the already-fetched linked-issue JSON as a runtime artifact (JSON, not just the rendered text file), then update `scripts/review_rb_judge.sh` to read first-issue number/body from that artifact before any API call; retain the current GraphQL + REST path as the cache-miss fallback.
+- **Safety rationale** — `NEEDS_VERIFICATION` because this crosses workflow-step boundaries and the judge runs much later; confirm no step intentionally relies on fresher linked-issue bodies than the metadata snapshot.
+- **Downstream signal** — Verify that `review_rb_judge.sh` always inherits a stable linked-issue cache artifact from `review_autofix.yml`, and that no in-job step mutates linked-issue membership/body in a way the judge must observe live, before removing the judge-local fetches.
+
+#### REUSE-002 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/issue_pr_status.yml:284-349`, `.github/workflows/issue_pr_status.yml:503-512`
+- **Current call count** — after earlier orchestrator classification already spends **1 GraphQL** batch call (plus **up to N** REST fallback calls), the merged-alert step adds **up to N** more `GET /issues/{n}` calls just to rediscover whether any linked issue is orchestrator-managed.
+- **Proposed call count** — **0** additional calls in the merged-alert step by exporting a boolean or list from the earlier classifier.
+- **Endpoint(s)** — GraphQL `repository.issue(number: ...)`; REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```bash
+  # earlier classifier
+  ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+  ...
+  select(
+    ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+    or
+    ((.body // "") | contains("Managed by: AI Orchestrator"))
+  ) | .number
+  ```
+
+  ```bash
+  # later merged alert
+  while IFS= read -r issue_number; do
+    ...
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+      IS_ORCHESTRATED="true"
+      break
+    fi
+  done <<< "${LINKED_ISSUE_NUMBERS}"
+  ```
+- **Proposed fix** — In the main sync step, export `IS_ORCHESTRATED=true|false` (or export `MANAGED_ISSUES`) to `GITHUB_ENV` alongside `LINKED_ISSUE_NUMBERS`; update `Send PR merged Telegram alert` to consume that cached classification instead of refetching issue bodies.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the reuse crosses step boundaries and changes whether the alert step observes live issue-body edits made after the sync step.
+- **Downstream signal** — Verify that the merged-alert step always runs after the classifier in the same job and that using a cached orchestrator-classification flag is acceptable even if an issue body/label changes between the two steps.
+
+#### REUSE-003 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:478-486`
+- **Current call count** — **1** fallback `GET /repos/{repo}/pulls/{PR_NUMBER}` call when `closingIssuesReferences` is empty.
+- **Proposed call count** — **0** on the `pull_request.closed` event path by using event payload title/body first; keep the API fallback only for manual/non-PR dispatch paths.
+- **Endpoint(s)** — GraphQL `pullRequest.closingIssuesReferences`; REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence**
+  ```bash
+  issue_nodes_json="$(gh api graphql \
+    ... \
+    -f query='query(...){ ... closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } ... }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+
+  if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
+    pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  ```
+- **Proposed fix** — Thread `github.event.pull_request.title` / `github.event.pull_request.body` into the job env and use that payload before calling `gh api repos/.../pulls/${PR_NUMBER}`; retain the current API call only when both values are empty.
+- **Safety rationale** — `NEEDS_VERIFICATION` because this job lives in a reusable workflow that can also be invoked outside a normal `pull_request` event shape.
+- **Downstream signal** — Confirm every path reaching `post-merge-validate-dispatch` has populated `github.event.pull_request.title/body`; if any `workflow_dispatch` or wrapper path lacks them, keep the current API call as the explicit fallback.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `scripts/review_rb_judge.sh:159-170`
+- **Current call count** — **N** `GET /repos/{repo}/issues/{issue_number}` calls for N linked issues.
+- **Proposed call count** — **1** call, because only the first linked issue body is ever consumed.
+- **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```bash
+  FIRST_ISSUE=""
+  FIRST_ISSUE_BODY=""
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    if [ -z "${FIRST_ISSUE}" ]; then
+      FIRST_ISSUE="${issue_number}"
+    fi
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if [ -z "${FIRST_ISSUE_BODY}" ]; then
+      FIRST_ISSUE_BODY="${BODY}"
+    fi
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+  Only `FIRST_ISSUE` / `FIRST_ISSUE_BODY` are used downstream; `BODY` is not read after assignment.
+- **Proposed fix** — Fetch the body only for `FIRST_ISSUE` (either immediately when `FIRST_ISSUE` is first set, or once after the loop), and stop issuing per-issue body lookups after that point.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the current loop has subtle first-issue/first-body coupling, so the implementer must verify the intended behavior is truly “use only the first linked issue” before trimming the extra calls.
+- **Downstream signal** — Confirm with a static trace that `BODY` is unused after line 168 and that the judge prompt is intentionally single-issue; then collapse the body lookup to the first linked issue only.
+
+### Cross-References to Deep Audit Section
+- `BATCH-001`: `NEEDS_VERIFICATION` — strong candidate, but the helper swap changes hydration shape and fallback behavior, so parity with current per-endpoint failure semantics should be checked before implementation.
+- `BATCH-002`: `NEEDS_VERIFICATION` — agreed; replacing the per-issue REST salvage loop with chunked GraphQL is directionally correct, but partial-batch failure handling still needs explicit validation.
+- `API-001`: `RISKY_SKIP` — agreed on visibility, but these calls sit in retry/rate-limit handling, which this pass must not auto-consolidate.
+- `API-002`: `NEEDS_VERIFICATION` — agreed; batching fallback issue-label hydration is the right cleanup, but the regex-derived fallback set still needs correctness checks before replacing the per-issue loop.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | REUSE-001, REUSE-002, REUSE-003, DEAD-API-001 |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
