@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:213-214 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Single quotes around the `printf` format string do not prevent Bash from interpreting `\\n`, so this is not a bug.\n  WHY: Multiple reviewers independently verified that `printf` interprets escape sequences in the format string regardless of shell quoting, so the claimed literal `\\n` corruption does not occur.\n- scripts/review_conflict_resolve.sh:216-236 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The rewrite verification checks `model_reasoning_effort` but does not explicitly verify that `model_reasoning_summary = \"auto\"` was written.\n  WHY: Reviewers agreed this is a minor robustness gap rather than a correctness bug; the existing `_rewrite_ok` guard catches command failures, but there is no dedicated post-write check for the summary line.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:229-236 | severity=medium | confidence=4\n  PROBLEM: The post-rewrite verification checks `model_reasoning_effort` but not `model_reasoning_summary`.\n  WHY: The `{} || _rewrite_ok=0` pattern already catches command-level failure from the summary `sed -i`, so the only gap is that the success path does not independently confirm `model_reasoning_summary = \"auto\"`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_conflict_resolve.sh:230-236 | severity=medium | confidence=4\n  PROBLEM: There is no post-rewrite verification that `model_reasoning_summary = \"auto\"` was successfully set.\n  WHY: The code verifies `model_reasoning_effort` but does not explicitly verify `model_reasoning_summary`; this is a minor asymmetry, not a blocking correctness issue.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_conflict_resolve.sh:213-214 | severity=low | confidence=1\n  PROBLEM: printf uses single quotes around the format string containing \\n escape sequences.\n  WHY: This concern is a false positive because bash's `printf` interprets escape sequences in the format string regardless of whether single or double quotes are used.\n- scripts/review_conflict_resolve.sh:213,222-223 | severity=low | confidence=2\n  PROBLEM: No post-write verification that model_reasoning_summary = \"auto\" was successfully set.\n  WHY: The script verifies `model_reasoning_effort` but has no equivalent check for `model_reasoning_summary`; the summary setting is secondary and the `_rewrite_ok` guard would catch failures.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:214 | severity=high | confidence=5\n  PROBLEM: Single quotes around the printf format string prevent Bash from interpreting \\n as a newline character.\n  WHY: When no prior `model_reasoning_effort` line exists, the script appends a literal string starting with the characters `\\nmodel_reasoning_effort = ...` to `~/.codex/config.toml`, corrupting the TOML format and causing downstream resolver failures.\n- scripts/review_conflict_resolve.sh:186-239 | severity=medium | confidence=4\n  PROBLEM: No post-rewrite verification that model_reasoning_summary = \"auto\" was successfully applied.\n  WHY: The summary replace/insert path lacks a grep check equivalent to the effort verification, so a silent failure could leave the anti-empty-stdout safeguard unset.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_conflict_resolve.sh:216-233 | severity=medium | confidence=4\n  PROBLEM: The code verifies `model_reasoning_effort` was set correctly but does NOT verify `model_reasoning_summary = \"auto\"` was set.\n  WHY: The success message claims `model_reasoning_summary=auto`, but there is no explicit check for it; this is a minor robustness gap mitigated by `_rewrite_ok`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8f29a4349ff5f050d1faaba8df5dac46d446ad22d34ab1f4394b2d955345aba8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2059,
+    "run_id": "25302038719",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25302038719",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504053235_44a936388a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2059,
+    "run_id": "25302038719"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T05:32:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
