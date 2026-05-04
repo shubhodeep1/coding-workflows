@@ -56,6 +56,36 @@ def _prepare_script_text() -> str:
 	return PREPARE_SCRIPT.read_text(encoding="utf-8")
 
 
+def _smoke_detect_step_text() -> str:
+	"""Return the text of the 'Detect smoke test and tune LLM settings' step.
+
+	Mirrors the same helper in test_review_autofix_smoke_editor_override.py
+	so the IS_SMOKE_TEST export assertion can be scoped to the relevant
+	step rather than passing on a raw substring match anywhere in the
+	workflow file (a relocation to an unconditional step would otherwise
+	silently false-pass).
+	"""
+	lines = _workflow_text().splitlines()
+	needle = "- name: Detect smoke test and tune LLM settings"
+	for idx, line in enumerate(lines):
+		if line.strip() != needle:
+			continue
+		step_indent = len(line) - len(line.lstrip(" "))
+		end = len(lines)
+		for j in range(idx + 1, len(lines)):
+			candidate = lines[j]
+			if candidate.strip().startswith("- name:"):
+				indent = len(candidate) - len(candidate.lstrip(" "))
+				if indent == step_indent:
+					end = j
+					break
+		return "\n".join(lines[idx:end])
+	raise AssertionError(
+		"'Detect smoke test and tune LLM settings' step missing from "
+		"review_autofix.yml"
+	)
+
+
 def test_smoke_detect_exports_is_smoke_test_env() -> None:
 	"""review_autofix.yml's smoke-detect step must export IS_SMOKE_TEST.
 
@@ -63,14 +93,30 @@ def test_smoke_detect_exports_is_smoke_test_env() -> None:
 	(the step's own env: block only sets GH_PAT and the reasoning-effort
 	pin). If the export ever moves out of the smoke branch, every smoke
 	run would re-introduce the empty-output failure mode in the resolver.
+
+	The assertion is scoped to the smoke-detect step text — not a global
+	substring match — so a relocation of the export into an
+	unconditional step would fail this test rather than silently
+	false-passing while breaking conditional scoping.
 	"""
-	text = _workflow_text()
-	assert 'echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"' in text, (
+	step_text = _smoke_detect_step_text()
+	assert 'echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"' in step_text, (
 		"review_autofix.yml's smoke-detect step must export IS_SMOKE_TEST=true "
 		"so scripts/review_conflict_prepare.sh can render the smoke-only "
 		"conflict-resolver prompt block. Without this export the resolver "
 		"keeps hitting gpt-5.3-codex's empty-output failure mode on canary "
 		"conflicts (run 25324565713)."
+	)
+	assert 'if [ "$IS_SMOKE" = "true" ]' in step_text, (
+		"Smoke-detect step must keep the IS_SMOKE conditional — the "
+		"IS_SMOKE_TEST export is meaningless if it fires on every PR."
+	)
+	# Production PRs must NOT receive the override. Verify the export
+	# does not appear in the else branch / outside the IS_SMOKE block.
+	assert step_text.count('IS_SMOKE_TEST=true') == 1, (
+		"IS_SMOKE_TEST=true must be exported exactly once and only "
+		"inside the IS_SMOKE branch — multiple occurrences risk "
+		"leaking the smoke override onto production PRs."
 	)
 
 
