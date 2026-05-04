@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which area of this repository should be changed?**\nChoices:\n- **A** \u2014 A specific workflow or script in the AI pipeline (please name it, e.g. `clarify`, `plan`, `implement`, `review_autofix`) (RECOMMENDED)\n- **B** \u2014 Repository documentation only (`README.md`, `agents.md`, or related docs)\n- **C** \u2014 A broader cross-workflow improvement affecting multiple pipeline phases\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a bug or broken behavior (please describe the current bad behavior) (RECOMMENDED)\n- **B** \u2014 Improve reliability/safety without changing intended behavior\n- **C** \u2014 Add or change user-visible behavior/features\nReply: `Q2: A`\n**Q3: What should count as \u201cbetter\u201d for this issue?**\nChoices:\n- **A** \u2014 There is a specific failing case, error, or incorrect output that should be fixed (RECOMMENDED)\n- **B** \u2014 There is a concrete workflow pain point to reduce (for example: fewer duplicate runs, fewer rate-limit failures, clearer issue comments)\n- **C** \u2014 There is a specific acceptance criterion or example outcome you want after the change\nReply: `Q3: A`",
+  "fingerprint": "1f3814c7f9a93d5fbecab6dcbab35332ff13d16a322c9e946b7d2b24273a464a",
+  "lineage": {
+    "issue_number": 2087,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25324138906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25324138906",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260504141708_32d72980a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2087,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25324138906"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2087 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-04T14:17:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
