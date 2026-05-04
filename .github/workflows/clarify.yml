@@ -147,11 +147,6 @@ jobs:
           SERVER_HOST="${SERVER_HOST%/}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
-      - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ vars.UV_VERSION || 'latest' }}
-
       - name: Install Codex CLI
         run: |
           set -euo pipefail
@@ -215,7 +210,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -260,19 +255,6 @@ jobs:
               install -m 0644 "${src}" "${f}"
             fi
           done
-
-          mkdir -p prompts
-          if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
-              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::error::Failed to stage required file prompts/serena-efficiency-block.txt"
-              exit 1
-            fi
-            install -m 0644 "${src}" prompts/serena-efficiency-block.txt
-          fi
 
           rm -rf .codex-workflow-src-main
 
@@ -514,20 +496,6 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-      - name: Setup Serena MCP server
-        if: steps.clarify_route.outputs.skip_codex != 'true'
-        env:
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          bash scripts/setup_serena.sh --mode planning --context codex
-
       - name: Pre-assemble static context (cacheable across runs)
         if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
@@ -645,43 +613,21 @@ jobs:
           The issue context (description and comments) is provided BELOW at the end of
           this prompt — do NOT read issue_context.txt separately.
 
-          Use Serena MCP tools or targeted file reads only for specific code
-          symbols/functions you need to inspect for clarification.
-
-          SERENA MCP EFFICIENCY (MANDATORY):
-          {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-          - LARGE FILES (>5000 lines): Skip get_symbols_overview entirely — it will
-            exceed character limits and waste a tool call. Use shell rg with | head -n N
-            first to locate relevant functions, then use find_symbol or targeted sed reads.
-          - Serena search responses are truncated at ~29,000 characters. If
-            get_symbols_overview is truncated, retry ONCE with max_answer_chars=29000
-            before falling back to shell. Do NOT retry search_for_pattern — narrow
-            scope instead. Never fall back to shell grep/rg with the same patterns.
-          - NARROW SEARCH SCOPE: When using search_for_pattern, target a specific
-            directory or file — never search the entire repo with a broad pattern.
-            Bad:  search_for_pattern("crash", "ft.games", "**/*.{py,html,js}")
-            Good: search_for_pattern("animateCrash|riseFrameId", "ft.games/static/crash.js")
-            If you need to locate files first, use find_file with a specific mask.
+          Use targeted file reads only for specific code symbols/functions you
+          need to inspect for clarification.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
-            request large ranges speculatively. Use Serena symbol tools or targeted line
-            ranges (e.g. sed -n '10,30p') instead of full-file reads.
+            request large ranges speculatively. Use targeted line ranges (e.g.
+            sed -n '10,30p') instead of full-file reads.
           - Never read the same file region twice. Plan your reads upfront. When reading
             multiple nearby ranges, merge them into ONE wider range instead of separate calls.
-          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
-            when available — they return only relevant symbols with far fewer tokens.
-          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
-            with the same patterns. Refine the Serena query or narrow the scope instead.
-          - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
+          - Aim to keep total tool calls (shell exec) under TOOL_CALL_BUDGET.
             The budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.
           - When searching for multiple terms (e.g., game names, route patterns), batch
             into ONE shell rg call with alternation (rg 'term1|term2|term3') rather than
-            making separate Serena MCP calls to find_file or
-            search_for_pattern for each term.
-          - After a Serena search returns empty results, do NOT retry with a slightly
-            different regex. Switch to shell rg with broader patterns instead.
+            making separate searches for each term.
           - Do NOT map the full implementation surface. Only inspect code to the extent
             needed to identify genuine ambiguities that would block implementation.
           - Do NOT emit progress/status messages (e.g. "I've parsed the issue…"). Output
@@ -693,23 +639,19 @@ jobs:
 
           EFFICIENT TOOL CALL EXAMPLES (study before starting):
           WASTEFUL (burns budget on broad, overlapping queries):
-            1. search_for_pattern("user", "src")  ← broad term on broad directory, huge result
-            2. search_for_pattern("@app.route('/foo')", "app.py")  ← too-literal regex, misses dynamic routes
-            3. Same search retried with a slightly different regex  ← overlapping retry wastes a call
-            4. list_dir on directories unrelated to the issue  ← unnecessary exploration
-            5. shell: sed -n '1,200p' some_file  ← reading 200 lines when 20-30 would suffice
-            6. Searching db/schema/contract files for a pure UI/frontend issue  ← wrong scope
-            7. sed -n '100,200p' f then sed -n '180,250p' f  ← overlapping ranges; use sed -n '100,250p' once
-            8. 4× find_file("*term1*"), find_file("*term2*")…  ← use one rg 'term1|term2|…' call instead
+            1. rg "user" src  ← broad term on broad directory, huge result
+            2. Same search retried with a slightly different regex  ← overlapping retry wastes a call
+            3. ls on directories unrelated to the issue  ← unnecessary exploration
+            4. shell: sed -n '1,200p' some_file  ← reading 200 lines when 20-30 would suffice
+            5. Searching db/schema/contract files for a pure UI/frontend issue  ← wrong scope
+            6. sed -n '100,200p' f then sed -n '180,250p' f  ← overlapping ranges; use sed -n '100,250p' once
           EFFICIENT (targeted, batched, minimal):
-            1. activate_project → get_symbols_overview("src/main_module.py")  ← see all functions at once
-            2. find_symbol("handle_request", "src/main_module.py")  ← jump to exact function
-            3. shell: sed -n '120,140p' src/main_module.py  ← read only the 20 lines you need
-            4. search_for_pattern("EDGE_CONFIG|rate_limit|payout", "src/main_module.py")  ← one query, specific terms
-            5. shell: rg -l 'ClassName' src/ && sed -n '50,70p' src/found_file.py  ← batched with &&
-          Rule of thumb: 1 activate_project + 1 get_symbols_overview + 2-3 find_symbol/search_for_pattern
-          calls should cover most clarification needs. If you're past 10 tool calls,
-          you are likely over-exploring.
+            1. shell: rg -n 'handle_request' src/main_module.py  ← jump to exact function
+            2. shell: sed -n '120,140p' src/main_module.py  ← read only the 20 lines you need
+            3. shell: rg -n 'EDGE_CONFIG|rate_limit|payout' src/main_module.py  ← one query, specific terms
+            4. shell: rg -l 'ClassName' src/ && sed -n '50,70p' src/found_file.py  ← batched with &&
+          Rule of thumb: a handful of targeted shell rg/sed calls should cover most
+          clarification needs. If you're past 10 tool calls, you are likely over-exploring.
 
           QUESTION BUDGET (MANDATORY):
           - HARD LIMIT: Never ask more than 5 questions. Fewer is better.
@@ -736,16 +678,13 @@ jobs:
           3. Ask only essential questions needed for implementation.
           4. Use repo documentation only; no external web searches.
           5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
-          6. Use Serena MCP tools (get_symbols_overview, find_symbol) when available to explore
-             the codebase efficiently. This helps you understand code structure with fewer tokens.
-             If Serena tools are unavailable, fall back to normal file reads.
-          7. Flag any factual conflicts between the issue description and the codebase
+          6. Flag any factual conflicts between the issue description and the codebase
              (e.g., a name in the issue doesn't match the name in the code).
-          8. Do NOT write code.
-          9. Do NOT propose implementation solutions.
-          10. If a required input is external and non-synthesizable by the auto-answerer
-              (for example branch name, commit SHA, credential, or external URL), do not
-              emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
+          7. Do NOT write code.
+          8. Do NOT propose implementation solutions.
+          9. If a required input is external and non-synthesizable by the auto-answerer
+             (for example branch name, commit SHA, credential, or external URL), do not
+             emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
           - When designing multiple-choice questions, check whether any combinations of

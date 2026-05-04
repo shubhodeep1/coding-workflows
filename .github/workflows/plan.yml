@@ -181,11 +181,6 @@ jobs:
           SERVER_HOST="${SERVER_HOST%/}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
-      - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ vars.UV_VERSION || 'latest' }}
-
       - name: Resolve workflow support ref
         run: |
           set -euo pipefail
@@ -242,7 +237,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh; do
+          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -287,19 +282,6 @@ jobs:
               install -m 0644 "${src}" "${f}"
             fi
           done
-
-          mkdir -p prompts
-          if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
-              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::error::Failed to stage required file prompts/serena-efficiency-block.txt"
-              exit 1
-            fi
-            install -m 0644 "${src}" prompts/serena-efficiency-block.txt
-          fi
 
           rm -rf .codex-workflow-src-main
 
@@ -738,20 +720,6 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-      - name: Setup Serena MCP server
-        if: env.SKIP_PLAN != 'true'
-        env:
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          bash scripts/setup_serena.sh --mode planning --context codex
-
       - name: Post progress signal (setup complete)
         if: env.SKIP_PLAN != 'true'
         env:
@@ -821,17 +789,8 @@ jobs:
           provided BELOW at the end of this prompt — do NOT read planning_context.txt
           separately.
 
-          Use Serena MCP tools or targeted file reads only for specific code
-          symbols/functions you need to inspect for the plan.
-
-          SERENA MCP EFFICIENCY (MANDATORY):
-          {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-          - For large files (>5000 lines), use get_symbols_overview with depth=0 first to
-            get a high-level map, then drill into specific symbols with find_symbol.
-            Do NOT use depth=1+ on very large files — it will exceed character limits.
-          - When search_for_pattern returns "answer is too long", NARROW the query (target
-            a single function/class name or a specific subdirectory). Do NOT retry the same
-            broad pattern or fall back to shell grep/rg with equivalent patterns.
+          Use targeted file reads only for specific code symbols/functions you
+          need to inspect for the plan.
 
           EXPLORATION STRATEGY (MANDATORY — prevents over-reading):
           - When adding a new feature/module/component that follows existing patterns, study
@@ -851,14 +810,10 @@ jobs:
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
-            request large ranges speculatively. Use Serena symbol tools or targeted line
-            ranges (e.g. sed -n '10,30p') instead of full-file reads.
+            request large ranges speculatively. Use targeted line ranges (e.g.
+            sed -n '10,30p') instead of full-file reads.
           - Never read the same file region twice. Plan your reads upfront.
-          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
-            when available — they return only relevant symbols with far fewer tokens.
-          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
-            with the same patterns. Refine the Serena query or narrow the scope instead.
-          - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
+          - Aim to keep total tool calls (shell exec) under TOOL_CALL_BUDGET.
             For large refactors that span many files/modules, exceeding the budget is
             acceptable — the budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.

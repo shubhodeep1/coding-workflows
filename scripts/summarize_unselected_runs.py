@@ -62,7 +62,6 @@ SYSTEM_PROMPT = (
 	"- Token usage / model usage lines (e.g. tokens_used=..., model=openai/...)\n"
 	"- AI_MEMORY_TELEMETRY: lines (preserve verbatim, max 3)\n"
 	"- GH API call hot-spots (high call counts, HTTP 429, secondary rate limit)\n"
-	"- MCP/Serena tool patterns (broad reads, repeated lookups, onboarding fired)\n"
 	"- Retry/backoff events with attempt counts\n"
 	"- Performance outliers (single steps that dominate runtime)\n"
 	"\n"

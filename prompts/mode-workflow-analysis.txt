@@ -4,7 +4,6 @@ You will receive telemetry assembled from workflow-log folders, including:
 - Cross-repo run, job, and step metrics (durations, outcomes, retries, queue/wait time)
 - Token and model usage data (prompt/completion/total, cache creation/read where available)
 - GitHub API usage signals (call counts, hotspots, rate-limit events, retry behavior)
-- MCP/Serena tool usage traces and execution patterns
 - Prompt/cache/memory and orchestrator-state indicators
 - Deep-dive log excerpts for notable failures, regressions, and outliers
 
@@ -17,14 +16,11 @@ Your task is to produce a concrete, evidence-first optimization report covering:
 - Cost Optimizations
 - Reliability Improvements
 - GH API Call Audit
-- MCP & Serena Efficiency
 - Prompt Cache & Memory System
 - Orchestrator Health
 - Pipeline Flow Bottlenecks
 
 Use run-specific evidence and prioritize high-impact, low-risk recommendations.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output requirements:
 - Use markdown.
@@ -35,7 +31,6 @@ Output requirements:
   - ## Reliability Improvements
   - ## AI Memory Health
   - ## GH API Call Audit
-  - ## MCP & Serena Efficiency
   - ## Prompt Cache & Memory System
   - ## Orchestrator Health
   - ## Pipeline Flow Bottlenecks
@@ -49,7 +44,6 @@ Section requirements:
 - ## Reliability Improvements: rank by expected failure-rate or rerun-rate reduction; for each item include failure evidence, root cause category, exact fix, expected reliability impact, and rollback/fail-open considerations.
 - ## AI Memory Health: look for `AI_MEMORY_TELEMETRY:` lines in deep-dive log excerpts (each is a JSON object with `op` and operation-specific fields); key operations include `retrieve`, `record-candidate`, `record-run-event`, `finalize-task`, `promote`, `compact`, and `processed-command-claim`/`processed-command-complete`; for `retrieve` operations report hit rate (% with `records_selected > 0`), average `estimated_tokens` vs budget, and `keyword_method` distribution (`llm` vs `plain` vs `none`); flag retrieves returning 0 records, `fail_open: true` entries, `enabled: false` entries, and high push retry counts; if no telemetry is found, state so and recommend verifying emission.
 - ## GH API Call Audit: identify high-volume and high-redundancy API call patterns by workflow/job/step; flag unbatched per-item calls, repeated lookups in loops, and missed cache/prefetch opportunities; recommend concrete batching/reuse changes with estimated call-count reduction and rate-limit risk reduction; cross-reference against repository-specific API hygiene rules.
-- ## MCP & Serena Efficiency: audit tool-use efficiency (broad reads vs targeted symbol lookups, repeated reads, avoidable tool churn); recommend changes that improve token efficiency and turnaround while preserving correctness; call out opportunities to increase parallelizable read operations safely.
 - ## Prompt Cache & Memory System: evaluate prompt-cache behavior (creation/read usage, hit/miss patterns, fail-open behavior) and memory retrieval effectiveness; identify cache-fragmentation causes (unstable prefixes, dynamic noise placement, avoidable prompt variance); recommend concrete improvements and estimate impact on tokens, latency, and reliability.
 - ## Orchestrator Health: assess orchestrator flow health (clarification loops, wave progression, deferrals, conflict-heal retries, stuck/terminal states); highlight recurring operational pain points and smallest safe mitigations; include observable indicators teams can track.
 - ## Pipeline Flow Bottlenecks: map dominant bottlenecks across clarify → plan → implement → review/autofix → validate/orchestrate loops; separate queueing, compute, retry, and merge/conflict overhead; recommend fixes ordered by end-to-end impact.

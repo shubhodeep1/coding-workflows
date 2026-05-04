@@ -16,64 +16,9 @@ Never assume undocumented behavior.
 
 ---
 
-## Serena (MCP) Semantic Tooling (MANDATORY when available)
+## File writes (MANDATORY)
 
-Reduce token usage by using Serena's LSP-backed semantic tools instead of full-file reads/writes.
-
-Rules:
-- ALWAYS use Serena semantic tools over full-file reads.
-- NEVER read an entire file if symbol tools suffice.
-- NEVER rewrite an entire file if `replace_symbol_body` or `insert_after_symbol` can do it.
-
-### Reading code (use INSTEAD of cat/read):
-- `get_symbols_overview` — file structure (classes, functions, exports)
-- `find_symbol` — jump to a symbol definition
-- `find_referencing_symbols` — find all callers/usages
-- `search_for_pattern` — regex search (replaces grep)
-
-### Editing code (use INSTEAD of full-file writes):
-- `replace_symbol_body` — replace a function/class body
-- `insert_after_symbol` / `insert_before_symbol` — add code around a symbol
-- `rename_symbol` — rename across codebase (LSP refactor)
-
-### Workflow:
-1. `get_symbols_overview` → understand file structure
-2. `find_symbol` → drill into specific functions
-3. `find_referencing_symbols` → understand change impact
-4. Edit with `replace_symbol_body` / `insert_after_symbol` — NOT full-file rewrites
-
-### Search result limits:
-- Serena results may truncate at ~29k chars. Do NOT re-run via shell grep. Instead narrow the query or split into targeted lookups.
-
-### Fallback:
-- If Serena is unavailable or errors, fall back to normal file reads/writes. Do not stall.
-
-### Plain-text / non-code file exception:
-- Serena's symbol tools (`replace_symbol_body`, `insert_after_symbol`, etc.) operate on **code files** with parseable symbols. They do NOT apply to plain-text data files (`.txt`, `.csv`, canary files, lock files, etc.) — attempting to use them on such files will silently fail or error.
-- For plain-text files with fully specified content, use `apply_patch` **or** a direct shell write:
-  `printf 'line1\nline2\nline3\n' > path/to/file.txt`
-- **CRITICAL — text narration is NOT a write:** Generating a response that describes or quotes the file's new content does NOT modify the file on disk. The file is unchanged until a write tool is actually called (`apply_patch`, a shell `printf`/`tee`, or a Serena write tool). Every file edit MUST be executed via a tool call — never by narrating what you would write.
-
-## Context7 Library Docs (OPTIONAL when available)
-
-Use Context7 only when library/framework API details are uncertain and current docs are needed.
-
-Rules:
-- Resolve the library first (`mcp__context7__resolve-library-id`).
-- Then fetch targeted docs (`mcp__context7__query-docs`) for the exact API surface being changed.
-- If naming differs across environments, use the exact Context7 doc-query tool name exposed in the current tool list.
-- Keep normal Serena-first code navigation/editing workflow for repository semantics.
-- If Context7 is unavailable or errors, continue without it. Do not block implementation.
-
-## Git MCP Docs (OPTIONAL when available)
-
-Use Git MCP in review/edit flows to fetch scoped, on-demand git context when available.
-
-Rules:
-- Prefer targeted Git MCP queries (`git_status`, `git_diff`, `git_show`, `git_log`, `git_branch`) over broad git context dumps.
-- Keep Git MCP usage read-oriented in review/edit flows.
-- Keep existing preloaded diff/context artifacts as fallback when Git MCP is unavailable or disabled.
-- If Git MCP is unavailable or errors, continue with the existing fallback artifacts.
+- **CRITICAL — text narration is NOT a write:** Generating a response that describes or quotes the file's new content does NOT modify the file on disk. The file is unchanged until a write tool is actually called (`apply_patch`, a shell `printf`/`tee`, or another write tool). Every file edit MUST be executed via a tool call — never by narrating what you would write.
 
 ---
 

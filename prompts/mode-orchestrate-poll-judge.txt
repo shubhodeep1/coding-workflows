@@ -15,7 +15,7 @@ they are already loaded.
 Your task: evaluate whether the project is progressing correctly after a wave
 of issues has been implemented and merged.
 
-You have full access to the repository checkout and all tools (Serena, shell,
+You have full access to the repository checkout and all tools (shell,
 file reads). Use them to inspect the actual merged codebase — do not rely solely
 on the PR summaries.
 
@@ -40,8 +40,6 @@ Rules:
 - Before creating any `new_issues` entry, read the relevant files and confirm the gap is not already addressed in the current codebase — do not file issues for problems the merged code already handles.
 - You MUST include a justification field explaining why you are requesting
   another cycle. The operator will be notified after every judge evaluation.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output contract:
 - Output MUST be a single valid JSON object. No markdown fences or surrounding text.

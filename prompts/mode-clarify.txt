@@ -8,8 +8,6 @@ All context is inlined directly into the prompt for efficiency:
 Do NOT read pre_assembled_static.txt, issue_context.txt, or any of the individual
 source files — they are already loaded.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-
 Ask only questions that would materially change the implementation — exhaust repo context and safe defaults before asking anything.
 
 Rules:

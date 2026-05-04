@@ -23,12 +23,6 @@ if [ ! -s "${LAST_RUN_CHANGED_FILES_FILE}" ]; then
   echo "No previous AI autofix changed files are available." > "${LAST_RUN_CHANGED_FILES_FILE}"
 fi
 
-SERENA_BLOCK_PATH="${SUPPORT_PROMPTS_DIR:-}/serena-efficiency-block.txt"
-if [ -z "${SUPPORT_PROMPTS_DIR:-}" ] || [ ! -s "${SERENA_BLOCK_PATH}" ]; then
-  echo "FATAL: serena-efficiency-block.txt missing at ${SERENA_BLOCK_PATH}" >&2
-  exit 1
-fi
-
 # Pre-flight PR state check — short-circuit if the PR is already closed/merged
 # before paying for the parallel reviewer fan-out. This catches the common case
 # where the PR was closed between workflow dispatch and reviewer invocation
@@ -156,23 +150,10 @@ EOF
 # per-reviewer codex-home has every `[mcp_servers.*]` table stripped so
 # no namespace tool gets sent.
 #
-# Currently empty by default. PR #1717 added deepseek/deepseek-v4-pro,
-# qwen/qwen3.6-plus, x-ai/grok-4.1-fast here because Codex CLI v0.125
-# was the pinned default and those three providers 422'd on its
-# namespace envelope. PR #1729 reverted Codex CLI to v0.114, which
-# emits flat MCP tools (no namespace envelope) that all three providers
-# accept. Stripping MCP for those three with v0.114 was the *cause* of
-# their continued failures — the reviewer prompt references
-# `mcp__serena__*` tools but the stripped config doesn't register them,
-# so the model produces empty output and codex-cli reports
-# `status='failed'` after the configured retries (observed on
-# PR #1742, run 25084895203).
-#
-# Re-populate this list when next bumping codex-cli to v0.125+ (and
-# only after a per-provider probe confirms which slugs still 422 on
-# the namespace envelope). Override at runtime via the
-# `MCP_INCOMPATIBLE_REVIEWER_MODELS` env var (newline-separated like
-# `REVIEWER_MODELS`).
+# Currently empty by default. Re-populate when next bumping codex-cli to a
+# version whose namespace-wrapped tool envelope causes specific provider
+# slugs to 422. Override at runtime via the `MCP_INCOMPATIBLE_REVIEWER_MODELS`
+# env var (newline-separated like `REVIEWER_MODELS`).
 MCP_INCOMPATIBLE_REVIEWER_MODELS="${MCP_INCOMPATIBLE_REVIEWER_MODELS-}"
 
 is_mcp_incompatible_model() {
@@ -188,10 +169,9 @@ is_mcp_incompatible_model() {
   return 1
 }
 
-# Strip every [mcp_servers.*] table (and sub-tables like [mcp_servers.git.env])
-# from the given codex config.toml. Mirrors the awk pattern in setup_serena.sh's
-# remove_mcp_server_blocks but matches all server names. Used to neuter MCP for
-# reviewer slugs that 422 on namespace-wrapped tool envelopes.
+# Strip every [mcp_servers.*] table (and sub-tables like [mcp_servers.foo.env])
+# from the given codex config.toml. Used to neuter MCP for reviewer slugs that
+# 422 on namespace-wrapped tool envelopes.
 strip_all_mcp_server_blocks() {
   local codex_cfg="$1"
   [ -f "${codex_cfg}" ] || return 0
@@ -481,8 +461,6 @@ Before suggesting a change, check for overengineering:
 2. Would a human reviewer likely choose a simpler fix?
 3. Does the fix introduce unnecessary complexity?
 Prefer the simpler solution.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Review the pull request as a senior engineer and identify issues in the modified code.
 Focus on problems that could realistically affect:
@@ -805,7 +783,7 @@ run_reviewer() {
   fi
 
   # Each reviewer gets its own CODEX_HOME to prevent MCP server
-  # conflicts (Serena, language servers) when running in parallel.
+  # conflicts when running in parallel.
   # Avoid /tmp for CODEX_HOME because codex refuses helper binary setup there.
   local reviewer_codex_root reviewer_codex_home
   reviewer_codex_root="${RUNNER_TEMP:-${HOME}/.cache}/codex_home_reviewers"
@@ -819,9 +797,8 @@ run_reviewer() {
 
   # Strip MCP server tables from this reviewer's isolated codex-home for slugs
   # whose upstream provider rejects the v0.125 namespace tool envelope on
-  # /v1/responses. The Serena prompt block already says "If Serena tools are
-  # unavailable or error, fall back to normal file operations" so the model
-  # naturally falls back to shell tools (rg/grep/cat) when MCP is absent.
+  # /v1/responses. The model naturally falls back to shell tools (rg/grep/cat)
+  # when MCP is absent.
   if [ "${strip_mcp}" = "1" ]; then
     for cfg_path in "${reviewer_codex_home}/config.toml" "${reviewer_codex_home}/.codex/config.toml"; do
       if [ -f "${cfg_path}" ]; then

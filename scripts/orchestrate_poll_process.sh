@@ -7,9 +7,7 @@
 #   RUNTIME_DIR, STATE_FILE, JUDGE_PROMPT_FILE, JUDGE_OUTPUT_FILE,
 #   GH_TOKEN, OPENROUTER_API_KEY, GITHUB_REPOSITORY,
 #   MODEL_EDITOR, MODEL_REASONING_EFFORT_JUDGE,
-#   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE,
-#   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS,
-#   CONTEXT7_DISABLED, GIT_MCP_DISABLED
+#   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE
 
 set -euo pipefail
 
@@ -2703,9 +2701,6 @@ invoke_judge_for_integration_conflict() {
     echo '[sandbox_workspace_write]'
     echo 'network_access = true'
   } > ~/.codex/config.toml
-
-  # Setup Serena (best-effort, same pattern as existing judge blocks).
-  bash scripts/setup_serena.sh --mode editing --context codex || true
 
   local prompt_file
   local output_file
@@ -5657,8 +5652,6 @@ invoke_stall_judge() {
     echo '[sandbox_workspace_write]'
     echo 'network_access = true'
   } > ~/.codex/config.toml
-
-  bash scripts/setup_serena.sh --mode editing --context codex || true
 
   local judge_success="false"
   local attempt
@@ -8956,9 +8949,6 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       echo 'network_access = true'
     } > ~/.codex/config.toml
 
-    # Setup Serena for judge
-    bash scripts/setup_serena.sh --mode editing --context codex || true
-
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
 
@@ -9695,10 +9685,10 @@ sys.exit(1)
                 *)
                   rm -f ./pre_assembled_static.txt
                   rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
-                  rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
+                  rm -f scripts/git_ref_health_check.sh \
                     scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
                     scripts/codex_model_catalog.json
-                  rm -rf .serena .github/prompts .github/scripts
+                  rm -rf .github/prompts .github/scripts
                   rm -f .github/ai/orchestrate_schema.v1.json
                   ;;
               esac
@@ -9711,14 +9701,14 @@ sys.exit(1)
                 if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
                   # Use a single add call so empty/minimal repos do not fail on
                   # exclude-only pathspecs.
-                  # NOTE: do not list .gitignored directories (node_modules, .serena)
+                  # NOTE: do not list .gitignored directories (node_modules)
                   # as `:!` exclude pathspecs here. `git add -A -- . ':!<dir>'`
                   # treats the exclude path as an explicit name and fails with
                   # "The following paths are ignored by one of your .gitignore
                   # files" + exit 1 when that dir exists on disk. .gitignore
                   # already excludes them; the pathspec exclude is redundant
-                  # and turns into a hard failure after Serena setup creates
-                  # .serena/ or any step creates node_modules/.
+                  # and turns into a hard failure once a step creates
+                  # node_modules/.
                   git add -A -- . ':!.github/prompts' ':!.github/scripts'
                 else
                   # Keep workflow-edit guard exclusions while avoiding brittle
@@ -10658,9 +10648,6 @@ Manual intervention required." >/dev/null
     echo '[sandbox_workspace_write]'
     echo 'network_access = true'
   } > ~/.codex/config.toml
-
-  # Setup Serena for judge
-  bash scripts/setup_serena.sh --mode planning --context codex || true
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
     continue

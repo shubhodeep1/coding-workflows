@@ -56,10 +56,9 @@ case "${phase}" in
 		{
 			echo "=== SYSTEM INSTRUCTIONS (clarification-trimmed) ==="
 			# Extract: header through end of section 2 (Ask-First Mode / question
-			# format). This includes Serena tooling, Prime Directive, Core
-			# Priorities, and the mandatory Q/A format — everything needed for
-			# clarification. Stop at section 3 ("## 3.") which begins
-			# execution-phase rules.
+			# format). This includes the Prime Directive, Core Priorities, and
+			# the mandatory Q/A format — everything needed for clarification.
+			# Stop at section 3 ("## 3.") which begins execution-phase rules.
 			awk '/^## 3\. /{exit} {print}' codex_system_instructions.md
 			# Append the FINAL REMINDER since it reinforces ask-first behavior
 			echo
@@ -102,7 +101,7 @@ case "${phase}" in
 	plan)
 		{
 			echo "=== SYSTEM INSTRUCTIONS (planning-trimmed) ==="
-			# Include Serena + sections 0-6 + FINAL REMINDER; skip section 7+.
+			# Include sections 0-6 + FINAL REMINDER; skip section 7+.
 			awk '/^## 7\./{exit} {print}' codex_system_instructions.md
 			echo
 			awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
@@ -134,7 +133,7 @@ case "${phase}" in
 	implement)
 		{
 			echo "=== SYSTEM INSTRUCTIONS (implementation-trimmed) ==="
-			# Include Serena + sections 0-6 + code style + FINAL REMINDER.
+			# Include sections 0-6 + code style + FINAL REMINDER.
 			awk '/^## 7\./{exit} {print}' codex_system_instructions.md
 			echo
 			awk '/^## 9\. Code Style/,/^## 10\./{if ($0 ~ /^## 10\./) exit; print}' codex_system_instructions.md

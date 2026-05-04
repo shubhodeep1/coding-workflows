@@ -77,8 +77,5 @@ Rules for `target_prompt` and `patch`:
 Guard rails:
 - Never propose a patch that changes a JSON schema field name or type in the output contract of a validation prompt.
 - Never propose a patch that removes or weakens the "Do not read pre_assembled_static.txt" line or any "Hard constraints" block.
-- Never propose a patch that removes the `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` or `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}` placeholders.
 - Never propose a patch that claims to fix a failure you cannot explain with concrete evidence from the inputs.
 - If the prior self-heal attempt targeted the same prompt with a similar-looking hunk and the failure persists, return an empty patch — iterating on the same spot is unlikely to help.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}

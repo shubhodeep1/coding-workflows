@@ -203,5 +203,3 @@ doubt" default for this narrow failure class):
   escalation path in `harness_fixes`.
 
 `depends_on` is optional and should be included only when applicable.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}

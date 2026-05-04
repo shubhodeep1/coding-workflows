@@ -720,10 +720,10 @@ jobs:
 
     steps:
 
-      # Reclaim ~25–28 GB on ubuntu-latest before any checkout/Serena/LLM
+      # Reclaim ~25–28 GB on ubuntu-latest before any checkout/LLM
       # work runs.  The codex-agent job has historically died mid-step on
-      # asset-heavy consumer repos when the parallel reviewer fan-out, the
-      # Serena indexer, and an in-flight git clone all competed for the
+      # asset-heavy consumer repos when the parallel reviewer fan-out
+      # and an in-flight git clone all competed for the
       # runner's default ~14 GB free disk.  Removing the unused
       # tool-cache + Android/.NET/Haskell SDKs + Docker images + swap
       # gives every downstream step a wide margin.
@@ -853,23 +853,20 @@ jobs:
             SUPPORT_ROOT_DIR="$(pwd)"
             SUPPORT_SCRIPTS_DIR="scripts"
             SUPPORT_PROMPTS_DIR="prompts"
-            SUPPORT_SERENA_DIR=".serena"
             SUPPORT_AI_MEMORY_DIR="ai-memory"
             IS_WORKFLOW_SOURCE_REPO="true"
           else
             SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
             SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
-            SUPPORT_SERENA_DIR="${SUPPORT_ROOT_DIR}/.serena"
             SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
             IS_WORKFLOW_SOURCE_REPO="false"
           fi
-          mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_SERENA_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
+          mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
           {
             echo "SUPPORT_ROOT_DIR=${SUPPORT_ROOT_DIR}"
             echo "SUPPORT_SCRIPTS_DIR=${SUPPORT_SCRIPTS_DIR}"
             echo "SUPPORT_PROMPTS_DIR=${SUPPORT_PROMPTS_DIR}"
-            echo "SUPPORT_SERENA_DIR=${SUPPORT_SERENA_DIR}"
             echo "SUPPORT_AI_MEMORY_DIR=${SUPPORT_AI_MEMORY_DIR}"
             echo "IS_WORKFLOW_SOURCE_REPO=${IS_WORKFLOW_SOURCE_REPO}"
             echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_llm_system_instructions.md"
@@ -877,7 +874,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -1010,17 +1007,6 @@ jobs:
             fi
             install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           fi
-          if [ ! -f "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" ]; then
-            src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
-              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::error::Missing required support file prompts/serena-efficiency-block.txt"
-              exit 1
-            fi
-            install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt"
-          fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
             src=".codex-workflow-src/prompts/conflict-resolver.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/conflict-resolver.txt" ]; then
@@ -1097,9 +1083,6 @@ jobs:
           npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
           sudo apt-get update
           sudo apt-get install -y jq curl python3
-
-      - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v7
 
       - name: Initialize runtime workspace
         run: |
@@ -1205,22 +1188,6 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-      - name: Setup Serena MCP server
-        env:
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh" --mode editing --context codex
-
-      - name: Show disk usage (post Serena setup)
-        run: df -h /
-
       - name: Pre-assemble static context (cacheable across runs)
         run: |
           set -euo pipefail
@@ -1239,9 +1206,7 @@ jobs:
             echo
             if [ -f "${SUPPORT_CODEX_INSTRUCTIONS_FILE}" ]; then
               echo "=== CODEX SYSTEM INSTRUCTIONS (editor-trimmed) ==="
-              # Keep only Serena tooling section and code style section.
-              awk '/^## Serena \(MCP\) Semantic Tooling/{flag=1} /^## 0\./{flag=0} flag{print}' "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
-              echo
+              # Keep only the code style section.
               awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}' "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
               echo
             fi
@@ -1868,7 +1833,7 @@ jobs:
             # and exits cleanly with rc=0/empty stdout, producing 0 file
             # changes — observed in run 25249170035 / PR #1982 (6 editor
             # attempts, all empty, ~81k tokens consumed on attempt 1 with only
-            # 3 Serena calls). Drop reasoning to none for both reviewers and
+            # 3 tool calls). Drop reasoning to none for both reviewers and
             # editor when the smoke marker is present; non-smoke PRs continue
             # to use the workflow default so production PRs aren't affected by
             # this knob. The smoke canary task is a single-line removal that
@@ -1947,7 +1912,7 @@ jobs:
 
       - name: "Preflight: Warn if protected paths are tracked in consumer repo"
         # Defensive check: in consumer repos, the workflow's runtime helpers
-        # (known scripts/<helper> files, prompts/, .serena/, .github/scripts/,
+        # (known scripts/<helper> files, prompts/, .github/scripts/,
         # .github/prompts/, ai-memory/) should never be tracked — they are
         # fetched at runtime from coding-workflows. Consumer-owned scripts/**
         # are allowed and intentionally excluded from this warning.
@@ -1963,15 +1928,15 @@ jobs:
           set -euo pipefail
 
           leaked_paths="$(git ls-files -- \
-            'scripts/gh_helpers.sh' 'scripts/setup_serena.sh' 'scripts/git_ref_health_check.sh' \
-            'scripts/render_prompt.sh' 'scripts/validate_changed_files_syntax.sh' 'scripts/serena_efficiency_report.py' \
+            'scripts/gh_helpers.sh' 'scripts/git_ref_health_check.sh' \
+            'scripts/render_prompt.sh' 'scripts/validate_changed_files_syntax.sh' \
             'scripts/tg_helpers.sh' 'scripts/label_helpers.sh' 'scripts/memory_helpers.sh' \
             'scripts/ai_memory.py' 'scripts/ai_memory_lib.py' 'scripts/openrouter_prompt_cache.py' \
             'scripts/codex_model_catalog.json' \
-            'prompts/' '.serena/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
+            'prompts/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
           if [ -n "${leaked_paths}" ]; then
             leaked_count="$(printf '%s\n' "${leaked_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) (scripts/<known helper>, prompts/, .serena/, .github/scripts/, .github/prompts/, or ai-memory/). Consumer-owned scripts under scripts/ are allowed; remove only leaked workflow artifacts (git rm -r --cached + commit) to prevent repeated merge friction on every merge with the base branch."
+            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) (scripts/<known helper>, prompts/, .github/scripts/, .github/prompts/, or ai-memory/). Consumer-owned scripts under scripts/ are allowed; remove only leaked workflow artifacts (git rm -r --cached + commit) to prevent repeated merge friction on every merge with the base branch."
             echo "Tracked protected paths found on ${TARGET_BRANCH:-HEAD}:"
             printf '%s\n' "${leaked_paths}" | sed '/^$/d; s/^/ - /'
           else
@@ -2465,7 +2430,6 @@ jobs:
 
           check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
-          check_required_nonempty_file "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt"
           check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
           check_required_file "./pre_assembled_static.txt"
           check_required_file "${PR_DIFF_FILE}"
@@ -2887,7 +2851,7 @@ jobs:
             ${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Log token usage and Serena stats
+      - name: Log token usage
         if: always()
         run: |
           set -euo pipefail
@@ -2896,55 +2860,6 @@ jobs:
             wc -c < "${EDITOR_SUMMARY_FILE}"
             echo "::endgroup::"
           fi
-          if [ -f "${SUPPORT_SERENA_DIR}/tool_usage_stats.json" ]; then
-            echo "::group::Serena tool usage stats"
-            cat "${SUPPORT_SERENA_DIR}/tool_usage_stats.json"
-            echo "::endgroup::"
-          else
-            echo "No Serena tool usage stats found."
-          fi
-
-      - name: Generate Serena efficiency report
-        if: always()
-        env:
-          SERENA_WARN_THRESHOLD: ${{ vars.SERENA_WARN_THRESHOLD_REVIEW || '50' }}
-        run: |
-          set -euo pipefail
-          # Early guard: if the Create runtime workspace step never ran,
-          # RUNTIME_DIR and PREVIOUS_REVIEWS_DIR are unset and expanding
-          # them under set -u would mask the real root-cause error.
-          if [ -z "${RUNTIME_DIR:-}" ] || [ -z "${PREVIOUS_REVIEWS_DIR:-}" ]; then
-            echo "::warning::RUNTIME_DIR/PREVIOUS_REVIEWS_DIR not set; runtime workspace step did not complete. Skipping Serena efficiency report."
-            exit 0
-          fi
-          SERENA_REPORT_FILE="${RUNTIME_DIR}/serena_efficiency_report.md"
-          echo "SERENA_REPORT_FILE=${SERENA_REPORT_FILE}" >> "$GITHUB_ENV"
-
-          # When the PR closed/merged mid-run the reviewers aborted before
-          # doing meaningful semantic work, so the Serena adoption counters
-          # are unrepresentative. Keep the report (it's still useful for
-          # post-mortem) but drop the warn threshold to 0 so we don't emit
-          # a misleading ::warning:: on a closed-PR short-circuit.
-          if [ "${PR_CLOSED:-}" = "true" ]; then
-            echo "PR_CLOSED=true — zeroing SERENA_WARN_THRESHOLD to suppress unrepresentative adoption warning."
-            SERENA_WARN_THRESHOLD=0
-          fi
-
-          # Collect editor stderr files for scanning
-          extra_files=()
-          for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err; do
-            [ -f "$f" ] && extra_files+=("--extra-files" "$f")
-          done
-
-          PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/serena_efficiency_report.py" \
-            --scan-dir "${PREVIOUS_REVIEWS_DIR}" \
-            "${extra_files[@]}" \
-            --warn-threshold "${SERENA_WARN_THRESHOLD}" \
-            --output "${SERENA_REPORT_FILE}" || {
-              echo "::warning::Serena efficiency report generation failed."
-              echo "### Serena MCP efficiency" > "${SERENA_REPORT_FILE}"
-              echo "Report generation failed for this run." >> "${SERENA_REPORT_FILE}"
-            }
 
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -3028,9 +2943,6 @@ jobs:
               echo "- none"
             fi
             echo
-            if [ -s "${SERENA_REPORT_FILE:-}" ]; then
-              cat "${SERENA_REPORT_FILE}"
-            fi
           } > "${PR_EDITOR_COMMENT_FILE}"
 
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
@@ -3059,7 +2971,7 @@ jobs:
         # EDITOR_SUMMARY_FILE ("Changes made:" section).  The commit step
         # independently checks `git diff --cached` to determine what actually
         # changed on disk.  When the editor claims changes but git has no
-        # diff, the Serena MCP tool calls likely failed to persist — this is
+        # diff, the tool calls likely failed to persist — this is
         # NOT a "clean review" signal and must block auto-merge.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
@@ -3248,7 +3160,7 @@ jobs:
               if [ "${CAN_PUSH:-}" = "true" ]; then
                 echo "::error::Editor claimed changes but no commit was produced. This indicates a mismatch between the editor summary and final git state (changes may have failed to persist, or may have been discarded during commit validation)."
               else
-                echo "::error::Editor claimed changes but no commit was produced. Push is disabled (CAN_PUSH=${CAN_PUSH:-false}), so this does not necessarily indicate a Serena persistence failure."
+                echo "::error::Editor claimed changes but no commit was produced. Push is disabled (CAN_PUSH=${CAN_PUSH:-false}), so this does not necessarily indicate a tool persistence failure."
               fi
               echo "Editor-claimed changes:"
               printf '%s\n' "${changes_section}" | head -20
@@ -3377,10 +3289,10 @@ jobs:
           echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
 
           # git merge requires a clean working tree.  Save untracked dirs
-          # (like .serena/, scripts/, prompts/) so they survive into the
+          # (like scripts/, prompts/) so they survive into the
           # conflict-resolver step instead of being destroyed by git clean.
           UNTRACKED_BACKUP="$(mktemp -d)"
-          for d in .serena scripts prompts; do
+          for d in scripts prompts; do
             if [ -d "${d}" ]; then
               cp -a "${d}" "${UNTRACKED_BACKUP}/${d}"
             fi
@@ -3395,7 +3307,7 @@ jobs:
           rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           git reset --hard HEAD
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
-          # removes files matching .gitignore (e.g. .serena/) so nothing
+          # removes files matching .gitignore so nothing
           # ignored can survive to block the upcoming merge simulation.
           git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main
 
@@ -3486,7 +3398,7 @@ jobs:
           # "Entry … not uptodate. Cannot merge." errors and prevents
           # git merge --abort from resetting cleanly afterward.
           MERGE_STASH="$(mktemp -d)"
-          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+          for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${d}" ]; then
               if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
                 # Directory contains tracked files — move only the untracked
@@ -3542,7 +3454,7 @@ jobs:
           fi
 
           # Restore the stashed dirs so later steps have them available.
-          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+          for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${MERGE_STASH}/${d}" ]; then
               # Use cp + rm instead of mv to handle the case where the merge
               # already created the directory (e.g. scripts/ from main).
@@ -3575,7 +3487,7 @@ jobs:
               rm -f "${MERGE_STDERR_FILE}"
               echo "Merge conflict detected (merge command failed)"
               echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
-              for d in .serena scripts prompts; do
+              for d in scripts prompts; do
                 if [ -d "${UNTRACKED_BACKUP}/${d}" ]; then
                   cp -a "${UNTRACKED_BACKUP}/${d}" .
                 fi
@@ -3611,8 +3523,8 @@ jobs:
               git merge --abort || true
             fi
             # Restore untracked dirs so the conflict resolver's codex exec
-            # has its full environment (.serena/, scripts/, prompts/).
-            for d in .serena scripts prompts; do
+            # has its full environment (scripts/, prompts/).
+            for d in scripts prompts; do
               if [ -d "${UNTRACKED_BACKUP}/${d}" ]; then
                 cp -a "${UNTRACKED_BACKUP}/${d}" .
               fi
@@ -4388,7 +4300,7 @@ jobs:
       - name: Re-dispatch review on editor-changes-lost
         # When the editor claims changes but nothing persisted on disk after
         # all retry attempts, automatically re-dispatch the review workflow
-        # so the next iteration gets a fresh Serena MCP instance.
+        # so the next iteration gets a fresh codex instance.
         # Guard against an endless re-dispatch loop when no commit is
         # produced by allowing this auto-redispatch only on runs that still
         # carry the original pull_request event payload.
@@ -4477,7 +4389,7 @@ jobs:
           if [ "${CHANGES_LOST_REDISPATCHED:-false}" = "true" ]; then
             MSG="⚠️ Editor changes lost (retrying): #${PR_NUMBER}"
             MSG+=$'\n'
-            MSG+="Serena MCP tool calls failed to persist. Fresh review dispatched."
+            MSG+="Editor tool calls failed to persist. Fresh review dispatched."
             MSG+=$'\n'
             MSG+="PR: ${PR_URL}"
             MSG+=$'\n'
@@ -4805,7 +4717,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh
-            rm -rf .serena prompts
+            rm -f scripts/gh_helpers.sh scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh
+            rm -rf prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi

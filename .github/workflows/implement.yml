@@ -82,10 +82,6 @@ jobs:
           CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
           npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
 
-      - name: Install uv for Serena
-        if: env.SKIP_IMPLEMENT != 'true'
-        uses: astral-sh/setup-uv@v7
-
       - name: Create runtime workspace
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -397,7 +393,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -465,25 +461,6 @@ jobs:
           done
 
           mkdir -p prompts
-          if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
-              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::error::Failed to stage required file prompts/serena-efficiency-block.txt"
-              exit 1
-            fi
-            install -m 0644 "${src}" prompts/serena-efficiency-block.txt
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
-            fi
-            # Intentionally NOT adding to FETCHED_MANIFEST — the
-            # `:!prompts` exclusion in the commit step keeps this file
-            # out of consumer commits, and the ensure_diagnose_asset()
-            # helper in the post-Codex diagnose step needs it to still
-            # be on disk after the manifest cleanup.
-          fi
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
             src=".codex-workflow-src/prompts/mode-implement-diagnose.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-implement-diagnose.txt" ]; then
@@ -497,8 +474,11 @@ jobs:
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
             fi
-            # Intentionally NOT adding to FETCHED_MANIFEST — same
-            # rationale as serena-efficiency-block.txt above.
+            # Intentionally NOT adding to FETCHED_MANIFEST — the
+            # `:!prompts` exclusion in the commit step keeps this file
+            # out of consumer commits, and the ensure_diagnose_asset()
+            # helper in the post-Codex diagnose step needs it to still
+            # be on disk after the manifest cleanup.
           fi
           if [ ! -f prompts/mode-implement-repair.txt ]; then
             src=".codex-workflow-src/prompts/mode-implement-repair.txt"
@@ -835,22 +815,7 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-          # MCP server configuration is managed in ~/.codex/config.toml;
-          # setup_serena.sh appends the relevant [mcp_servers.*] entries.
-
-      - name: Setup Serena MCP server
-        if: env.SKIP_IMPLEMENT != 'true'
-        env:
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          bash scripts/setup_serena.sh --mode editing --context codex
+          # MCP server configuration is managed in ~/.codex/config.toml.
 
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_IMPLEMENT != 'true'
@@ -907,18 +872,11 @@ jobs:
 
           Implement the approved implementation plan. Modify only the files the plan requires; keep changes minimal and safe.
 
-          SERENA MCP EFFICIENCY (MANDATORY):
-          {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
-
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
-            request large ranges speculatively. Use Serena symbol tools or targeted line
+            request large ranges speculatively. Use targeted line
             ranges (e.g. sed -n '10,30p') instead of full-file reads.
           - Never read the same file region twice. Plan your reads upfront.
-          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
-            when available — they return only relevant symbols with far fewer tokens.
-          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
-            with the same patterns. Refine the Serena query or narrow the scope instead.
           - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
             For large refactors that touch many files, exceeding the budget is acceptable —
             the budget is a guideline to prevent waste, not a hard cap.
@@ -988,7 +946,7 @@ jobs:
           # ────────────────────────────────────────────────────────────────
           # Pre-Codex worktree baseline.
           # The workflow's setup steps check out runtime support trees
-          # (.codex-workflow-src*, .serena, ai-memory/schemas, …) into the
+          # (.codex-workflow-src*, ai-memory/schemas, …) into the
           # job workspace BEFORE this step runs.  A raw `git status
           # --porcelain` therefore always reports those artifacts as
           # untracked, producing a false-positive "Codex changed files"
@@ -1122,7 +1080,7 @@ jobs:
           writing to disk. Proceed now.
 
           Concretely on this attempt:
-          - Use `apply_patch` (or the equivalent Serena edit tool) to make
+          - Use `apply_patch` or shell exec to make
             edits. For plain-text files (.txt, .csv, canary files, data
             files) with fully-specified content, a direct shell write is
             equally valid and avoids apply_patch diff-format issues:
@@ -1134,7 +1092,7 @@ jobs:
             only then expand scope.
           - WARNING: describing or quoting the file's new content in your
             response does NOT write it to disk. You MUST call a write tool
-            (apply_patch, printf shell exec, or Serena write) — the
+            (apply_patch or printf shell exec) — the
             file is unchanged until a tool call is actually executed.
 
           RETRY_EOF
@@ -1144,7 +1102,7 @@ jobs:
                     "${prior_exec_history}" \
                     "" \
                     "Based on the above, you have already inspected the relevant files. Skip" \
-                    "re-exploration. Make the edits now using apply_patch, printf, or Serena write tools." \
+                    "re-exploration. Make the edits now using apply_patch or printf shell exec." \
                     "Do NOT narrate — call a write tool." \
                     ""
                 fi
@@ -1586,7 +1544,7 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Log token usage and Serena stats
+      - name: Log token usage
         if: env.SKIP_IMPLEMENT != 'true' && always()
         run: |
           set -euo pipefail
@@ -1595,35 +1553,6 @@ jobs:
             wc -c < "${CODEX_OUTPUT_FILE}"
             echo "::endgroup::"
           fi
-          if [ -f .serena/tool_usage_stats.json ]; then
-            echo "::group::Serena tool usage stats"
-            cat .serena/tool_usage_stats.json
-            echo "::endgroup::"
-          else
-            echo "No Serena tool usage stats found (Serena may not have been used or stats not recorded)."
-          fi
-
-      - name: Generate Serena efficiency report
-        if: env.SKIP_IMPLEMENT != 'true' && always()
-        env:
-          SERENA_WARN_THRESHOLD: ${{ vars.SERENA_WARN_THRESHOLD_IMPLEMENT || '50' }}
-        run: |
-          set -euo pipefail
-          SERENA_REPORT_FILE="${RUNTIME_DIR}/serena_efficiency_report.md"
-          echo "SERENA_REPORT_FILE=${SERENA_REPORT_FILE}" >> "$GITHUB_ENV"
-
-          extra_files=()
-          [ -f "${CODEX_OUTPUT_FILE}" ] && extra_files+=("--extra-files" "${CODEX_OUTPUT_FILE}")
-
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_efficiency_report.py \
-            --scan-dir "${RUNTIME_DIR}" \
-            "${extra_files[@]}" \
-            --warn-threshold "${SERENA_WARN_THRESHOLD}" \
-            --output "${SERENA_REPORT_FILE}" || {
-              echo "::warning::Serena efficiency report generation failed."
-              echo "### Serena MCP efficiency" > "${SERENA_REPORT_FILE}"
-              echo "Report generation failed for this run." >> "${SERENA_REPORT_FILE}"
-            }
 
       - name: Create implementation branch
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1991,7 +1920,6 @@ jobs:
               [ -n "${fetched_file}" ] && rm -f "${fetched_file}"
             done < "${FETCHED_MANIFEST}"
           fi
-          rm -rf .serena
 
           porcelain_status="$(git status --porcelain)"
           if [ -z "${porcelain_status}" ]; then
@@ -2021,7 +1949,7 @@ jobs:
             is_self_repo="true"
           fi
           add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
-          add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+          add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           if [ "${is_self_repo}" = "false" ]; then
             # Build per-file exclusions from the runtime-generated scripts/.gitignore
             # instead of a blanket ':!scripts'.  The blanket exclusion previously
@@ -2043,7 +1971,7 @@ jobs:
             fi
             # Keep runtime artifact paths out of consumer-repo commits for
             # both tracked updates (-u) and untracked additions.
-            add_u_excludes+=(':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+            add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
             add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
           fi
           git add -u -- "${add_u_excludes[@]}"
@@ -3024,12 +2952,6 @@ jobs:
           if grep -q '```' "${ISSUE_SUMMARY_FILE}"; then
             echo "AI issue summary contains fenced code blocks."
             exit 1
-          fi
-
-          # Append Serena efficiency report if available
-          if [ -s "${SERENA_REPORT_FILE:-}" ]; then
-            echo "" >> "${ISSUE_SUMMARY_FILE}"
-            cat "${SERENA_REPORT_FILE}" >> "${ISSUE_SUMMARY_FILE}"
           fi
 
           gh_retry gh pr comment "${{ steps.create_pr.outputs.pr_url }}" \

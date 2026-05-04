@@ -100,7 +100,7 @@ def test_real_edit_with_uncommitted_worktree_is_changes_lost(tmp_path: Path) -> 
 
 def test_real_edit_narrative_with_clean_tree_is_changes_lost(tmp_path: Path) -> None:
 	"""Narrative claims concrete edits but the working tree is clean — the
-	classic Serena-persistence-failure case that the original detector
+	classic editor-tool-persistence-failure case that the original detector
 	exists to catch. Shim must still report 'true'."""
 	_init_clean_repo(tmp_path)
 	result = _run_shim(tmp_path, FIXTURES / "narrative_real_edit_status_edited.txt")

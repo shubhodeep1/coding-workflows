@@ -807,5 +807,3 @@ JSON schema:
   "safety_constraints": ["string"],
   "blockers": ["string"]
 }
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}

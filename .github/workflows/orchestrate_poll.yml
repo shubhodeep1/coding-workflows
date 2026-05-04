@@ -271,7 +271,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh ai_labels.py orchestrate_lib.py orchestrate_poll_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh ai_labels.py orchestrate_lib.py orchestrate_poll_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -294,7 +294,7 @@ jobs:
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
           done
-          for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt serena-efficiency-block.txt; do
+          for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt; do
             src=".codex-workflow-src/prompts/${pf}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${pf}" ]; then
               src=".codex-workflow-src-main/prompts/${pf}"
@@ -393,12 +393,6 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}

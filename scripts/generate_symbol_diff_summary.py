@@ -2,9 +2,9 @@
 """Generate a symbol-level diff summary from a unified diff and changed files list.
 
 This script parses a unified diff to extract changed file paths and line ranges,
-then uses Serena (if available) or a heuristic fallback to map changed lines to
-symbol names (functions, classes, methods). The output is a compact summary that
-can replace or supplement raw unified diffs for PR reviewers, reducing token usage.
+then uses a regex heuristic to map changed lines to symbol names (functions,
+classes, methods). The output is a compact summary that can replace or
+supplement raw unified diffs for PR reviewers, reducing token usage.
 
 Usage:
     python3 scripts/generate_symbol_diff_summary.py \
@@ -24,7 +24,6 @@ Output format:
 """
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -102,175 +101,6 @@ def parse_diff_hunks(diff_text):
                 })
 
     return dict(file_hunks)
-
-
-def try_serena_symbols(file_path, project_dir):
-    """Try to get symbol overview from Serena via uvx CLI.
-
-    Returns symbols in [{name, line, text}, ...] format or None on failure so
-    callers can safely fall back to heuristic parsing.
-    """
-    try:
-        project_root = os.path.abspath(project_dir)
-        normalized_path = os.path.normpath(file_path)
-        full_path = os.path.abspath(os.path.join(project_root, normalized_path))
-
-        # Reject paths that escape the project directory.
-        if os.path.commonpath([project_root, full_path]) != project_root:
-            return None
-
-        serena_version = os.environ.get("SERENA_VERSION", "main")
-
-        # First try the Python API (works if serena is importable)
-        try:
-            from serena.agent import SerenaAgent
-
-            agent = SerenaAgent(project=project_root)
-            try:
-                try:
-                    result = agent.execute_task(
-                        lambda: agent.get_tool_by_name("get_symbols_overview").apply(normalized_path)
-                    )
-                except (AttributeError, TypeError):
-                    result = agent.call_tool("get_symbols_overview", {"file_path": normalized_path})
-            finally:
-                if hasattr(agent, "shutdown"):
-                    agent.shutdown()
-
-            if result:
-                parsed_result = _parse_serena_result(result)
-                if parsed_result:
-                    return parsed_result
-        except ImportError:
-            pass
-        except Exception:
-            pass
-
-        # Fallback: invoke Serena CLI via uvx.
-        proc = subprocess.run(
-            [
-                "uvx", "--from", f"git+https://github.com/oraios/serena@{serena_version}",
-                "serena", "project", "index-file", "-v", full_path, project_root,
-            ],
-            capture_output=True, text=True, timeout=30,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            try:
-                return _parse_serena_result(json.loads(proc.stdout))
-            except json.JSONDecodeError:
-                pass
-            return _parse_serena_result(proc.stdout)
-        return None
-    except Exception:
-        return None
-
-
-def _parse_serena_result(result):
-    """Parse Serena symbol output into [{name, line, text}, ...].
-
-    Serena may return either:
-      - A list of dicts with keys like 'name', 'kind', 'range'/'line', 'detail'
-      - A string (rendered overview) — we parse lines matching symbol patterns
-      - A dict with a 'symbols' key containing a list
-    """
-    symbols = []
-
-    # Handle string output (rendered overview)
-    if isinstance(result, str):
-        for line in result.splitlines():
-            # `serena project index-file -v` emits symbols in this format.
-            m = re.match(r"\s*-\s+([^\s]+)\s+at\s+line\s+(\d+)\s+of\s+kind\s+(\d+)", line)
-            if m:
-                # Keep structural symbols, skip locals/variables for stability.
-                kind_num = int(m.group(3))
-                if kind_num in {5, 6, 9, 10, 11, 12, 23}:
-                    symbols.append({
-                        "name": m.group(1),
-                        # `index-file -v` emits 1-based line numbers.
-                        "line": int(m.group(2)),
-                        "text": line.strip(),
-                    })
-                continue
-
-            # Serena text overview lines typically look like:
-            #   "  function foo (line 42)"  or  "  class Bar [23-45]"
-            m = re.match(
-                r"\s*(?:function|def|class|struct|enum|trait|impl|fn|type|const|interface|method)\s+"
-                r"(\w+).*?(?:line\s+|:|\[)(\d+)",
-                line, re.IGNORECASE,
-            )
-            if m:
-                symbols.append({
-                    "name": m.group(1),
-                    "line": int(m.group(2)),
-                    "text": line.strip(),
-                })
-        return symbols if symbols else None
-
-    # Handle dict with 'symbols' key
-    if isinstance(result, dict):
-        if "symbols" in result:
-            result = result.get("symbols", [])
-        elif "children" in result:
-            result = result.get("children", [])
-        else:
-            grouped_symbols = []
-            for value in result.values():
-                if isinstance(value, list):
-                    grouped_symbols.extend(value)
-            result = grouped_symbols
-
-    # Handle list of symbol dicts
-    if isinstance(result, list):
-        for item in result:
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name") or item.get("symbol_name", "")
-            if not name:
-                continue
-            # Line number may be in 'line', 'range.start.line', or 'start_line'.
-            line_num = item.get("line")
-            zero_based = False
-
-            if line_num is None:
-                line_num = item.get("start_line")
-                zero_based = line_num is not None
-
-            if line_num is None and "range" in item:
-                rng = item["range"]
-                if isinstance(rng, dict):
-                    start = rng.get("start", {})
-                    line_num = start.get("line")
-                    zero_based = line_num is not None
-
-            if line_num is None:
-                continue
-
-            try:
-                line_num = int(line_num)
-            except (TypeError, ValueError):
-                continue
-
-            if zero_based:
-                line_num += 1
-            elif line_num == 0:
-                line_num = 1
-
-            symbols.append({
-                "name": name,
-                "line": line_num,
-                "text": item.get("detail", item.get("kind", "")),
-            })
-        # Also recurse into children if present
-        for item in result:
-            if isinstance(item, dict) and "children" in item:
-                child_symbols = _parse_serena_result(item["children"])
-                if child_symbols:
-                    symbols.extend(child_symbols)
-        return symbols if symbols else None
-
-    return None
 
 
 def get_symbols_heuristic(file_path, project_dir):
@@ -368,7 +198,6 @@ def find_callers(symbol_name, project_dir, exclude_file):
             "--exclude-dir=.git",
             "--exclude-dir=node_modules",
             "--exclude-dir=__pycache__",
-            "--exclude-dir=.serena",
         ]
         # For identifier-like symbols, require word boundaries to avoid
         # substring false positives (e.g. "run" matching "runner").
@@ -416,7 +245,6 @@ def generate_summary(diff_text, changed_files_text, project_dir, include_callers
                 file_hunks[fname] = []
 
     output_lines = []
-    serena_available = False
 
     for file_path in sorted(file_hunks.keys()):
         hunks = file_hunks[file_path]
@@ -427,15 +255,7 @@ def generate_summary(diff_text, changed_files_text, project_dir, include_callers
             output_lines.append("")
             continue
 
-        # Get symbols for this file
-        symbols = []
-        serena_symbols = try_serena_symbols(file_path, project_dir)
-        if serena_symbols is not None:
-            serena_available = True
-            symbols = serena_symbols
-
-        if not symbols:
-            symbols = get_symbols_heuristic(file_path, project_dir)
+        symbols = get_symbols_heuristic(file_path, project_dir)
 
         output_lines.append(f"FILE: {file_path}")
 
@@ -470,11 +290,10 @@ def generate_summary(diff_text, changed_files_text, project_dir, include_callers
     if not output_lines:
         output_lines.append("No changed files detected in diff.")
 
-    # Add metadata
     header = [
         "SYMBOL-LEVEL DIFF SUMMARY",
         f"Files changed: {len(file_hunks)}",
-        f"Symbol resolution: {'serena' if serena_available else 'heuristic'}",
+        "Symbol resolution: heuristic",
         "",
     ]
 

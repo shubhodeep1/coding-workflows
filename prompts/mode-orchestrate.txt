@@ -8,8 +8,6 @@ All context is inlined directly into the prompt for efficiency:
 Do NOT read pre_assembled_static.txt, project_context.txt, or any of the
 individual source files — they are already loaded.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-
 Your task: decompose a high-level project description into a set of
 well-scoped GitHub issues with an explicit dependency graph.
 
@@ -73,7 +71,6 @@ Rules:
 - Assign priority 1 (highest) to foundational/blocking work, higher numbers
   to less critical or polish work.
 - Use the repository's existing conventions, patterns, and technologies.
-  Inspect the repo structure following SERENA MCP EFFICIENCY (MANDATORY).
 - Do not propose issues that duplicate existing functionality.
 - Do not write code. Only produce the decomposition JSON.
 

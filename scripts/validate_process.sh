@@ -10,8 +10,6 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID,
 #   VALIDATION_COMPOSE_FILE, VALIDATION_USE_TEMPLATES,
 #   VALIDATION_TEST_USERNAME, VALIDATION_TEST_PASSWORD, VALIDATION_TEST_API_KEY,
-#   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS,
-#   CONTEXT7_DISABLED, GIT_MCP_DISABLED,
 #   VALIDATE_PREFLIGHT_PYFLAKES_ENABLED, VALIDATE_PREFLIGHT_PYFLAKES_RULES
 
 set -euo pipefail
@@ -1879,7 +1877,7 @@ trap cleanup_runtime_containers EXIT
 
 
 # ---------------------------------------------------------------
-# Setup Codex + Serena
+# Setup Codex
 # ---------------------------------------------------------------
 mkdir -p ~/.codex
 CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json"
@@ -1907,7 +1905,6 @@ CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.
   echo 'network_access = true'
 } > ~/.codex/config.toml
 
-bash scripts/setup_serena.sh --mode editing --context codex || true
 export PATH="${HOME}/.local/bin:${PATH}"
 
 

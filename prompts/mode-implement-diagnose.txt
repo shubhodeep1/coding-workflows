@@ -76,5 +76,3 @@ Status semantics:
 - `infeasible`: diagnosis cannot proceed safely with available local evidence.
 
 `depends_on` is optional and should be included only when applicable.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
