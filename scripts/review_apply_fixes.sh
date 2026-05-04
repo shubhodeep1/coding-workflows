@@ -147,6 +147,48 @@ fi
 echo "Artifacts: floor_tags=$(wc -c < "${FLOOR_TAGS_FILE}" 2>/dev/null || echo 0) review_issues=$(wc -c < "${REVIEW_ISSUES_FILE}" 2>/dev/null || echo 0) ledger_status=$(wc -c < "${LEDGER_STATUS_FILE}" 2>/dev/null || echo 0)"
 
 cat > "${EDITOR_PROMPT_BODY_FILE}" <<__EDITOR_PROMPT__
+$(if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
+cat <<'__SMOKE_OVERRIDE__'
+=== E2E SMOKE TEST OVERRIDE — READ FIRST ===
+
+This run is the repository's end-to-end smoke fixture. The PR title /
+linked issue carry the marker "[E2E Smoke Test]". The smoke gate has
+deliberately appended a single bait line of the form
+"# E2E_EDITOR_BAIT_<run_id>: ..." to the file
+tests/e2e_smoke_canary.txt; the file currently contains 4 lines and
+must end up as exactly these 3 lines (no comments, no headers, no
+trailing content beyond the final newline):
+
+  status: ok
+  run_id: <whatever value already appears on line 2 of the file>
+  updated-by: ai-pipeline
+
+MANDATORY ACTIONS for this run:
+1. You MUST invoke the apply_patch tool on tests/e2e_smoke_canary.txt
+   in this turn. Removing the bait line is a one-line patch — do not
+   wait for additional context, do not ask for clarification, do not
+   defer to a future iteration.
+2. Do NOT exit without calling apply_patch. Returning an empty
+   completion / a final assistant message that only describes the fix
+   ("I will apply_patch ..." / "the change is straightforward") is a
+   smoke-test FAILURE — the gate downstream greps the file via the
+   GitHub contents API after this run and fails the e2e job if the
+   bait line is still present.
+3. Do not modify any file other than tests/e2e_smoke_canary.txt.
+4. After the apply_patch succeeds, emit the standard editor summary
+   schema below as usual; under "Changes made:" list the single bullet
+   "modified tests/e2e_smoke_canary.txt: removed E2E_EDITOR_BAIT
+   line", and under "Change status:" emit "- edited".
+
+The remaining sections of this prompt (reviewer inputs, consolidator,
+hardening tasks, etc.) still apply, but for this fixture the only
+WILL_FIX item is the bait removal above. Proceed directly to
+apply_patch.
+
+=== END E2E SMOKE TEST OVERRIDE ===
+
+__SMOKE_OVERRIDE__
+fi)
 INPUT FILES
 Read the following files:
 - ${PR_META_FILE}
