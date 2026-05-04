@@ -184,6 +184,18 @@ RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
 # model_reasoning_summary = "auto" is present — same diagnostic +
 # anti-empty-stdout rationale as the editor step.
 _resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-medium}"
+# Validate against known reasoning levels before interpolating into sed —
+# CONFLICT_RESOLVER_REASONING_EFFORT comes from a repo var
+# (vars.THINKING_LEVEL_CONFLICT_RESOLVER) so an unexpected value would
+# corrupt the TOML or break sed under set -e. Mirrors the pattern used
+# in scripts/review_consolidate.sh for REVIEW_CONSOLIDATOR_REASONING.
+case "${_resolver_reasoning_effort}" in
+  xhigh|high|medium|low|none) ;;
+  *)
+    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to medium."
+    _resolver_reasoning_effort="medium"
+    ;;
+esac
 _codex_config="${HOME}/.codex/config.toml"
 if [ -f "${_codex_config}" ]; then
   if grep -q '^model_reasoning_effort = ' "${_codex_config}"; then

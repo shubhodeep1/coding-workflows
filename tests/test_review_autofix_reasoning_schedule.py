@@ -43,3 +43,15 @@ def test_editor_switch_replaces_any_reasoning_value() -> None:
 	wf = _workflow()
 	assert 'sed -i "s/^model_reasoning_effort = \\".*\\"/model_reasoning_effort = \\"${EDITOR_REASONING_EFFORT}\\"/" ~/.codex/config.toml' in wf
 	assert 'sed -i "s/model_reasoning_effort = \\"${REVIEWER_REASONING_EFFORT}\\"/model_reasoning_effort = \\"${EDITOR_REASONING_EFFORT}\\"/" ~/.codex/config.toml' not in wf
+
+
+def test_conflict_resolver_reasoning_env_wired() -> None:
+	"""Resolver step must pass CONFLICT_RESOLVER_REASONING_EFFORT to
+	review_conflict_resolve.sh so the smoke-test editor's reasoning=none
+	override doesn't starve the resolver (PR #2058 / run 25300219172).
+	"""
+	wf = _workflow()
+	assert "CONFLICT_RESOLVER_REASONING_EFFORT:" in wf
+	assert "vars.THINKING_LEVEL_CONFLICT_RESOLVER" in wf
+	resolver_script = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	assert "CONFLICT_RESOLVER_REASONING_EFFORT" in resolver_script
