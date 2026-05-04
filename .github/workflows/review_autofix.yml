@@ -1825,11 +1825,10 @@ jobs:
           fi
 
           if [ "$IS_SMOKE" = "true" ]; then
-            # Reasoning overrides for smoke runs: reviewers stay at none
-            # (they only need to spot a single bait line); editor is pinned
-            # to low so it can actually apply the removal.
+            # Reasoning overrides for smoke runs: both reviewers and editor
+            # are pinned to low.
             #
-            # History of editor reasoning on smoke runs:
+            # History of reasoning levels on smoke runs (editor + reviewer):
             #   low  → run 25254574828: OSCILLATION GUARD activated because the
             #           bait commit appeared in LAST_RUN_DIFF (since fixed at
             #           L2249-2260 to only walk [ai-autofix] commits — bait
@@ -1844,20 +1843,22 @@ jobs:
             #           documented at the "Resolve merge conflicts" step below).
             #           Reviewer manifest validation then fails because the editor
             #           lists aggregate files instead of individual reviewer files.
-            # low is now safe because LAST_RUN_DIFF excludes bait commits, so
-            # the oscillation guard cannot activate on a smoke run. Non-smoke PRs
-            # continue to use the workflow default (THINKING_LEVEL_EDITOR).
-            echo "REVIEWER_REASONING_EFFORT=none" >> "$GITHUB_ENV"
+            # low is safe because LAST_RUN_DIFF excludes bait commits (so the
+            # oscillation guard cannot activate on a smoke run), and low is
+            # sufficient for both spotting and removing a single bait line.
+            # Non-smoke PRs continue to use the workflow defaults
+            # (THINKING_LEVEL_REVIEWER / THINKING_LEVEL_EDITOR).
+            echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Patch the already-written Codex config so the reviewer phase
             # (which copies ~/.codex/config.toml into each reviewer's
-            # isolated CODEX_HOME) picks up the none override. Without this
+            # isolated CODEX_HOME) picks up the low override. Without this
             # sed the reviewer codex config would still hold the medium value
             # baked in by the "Create Codex config" step that ran earlier.
             # The editor phase re-patches the config in "Switch reasoning effort
             # for editor" using EDITOR_REASONING_EFFORT=low (set above).
-            sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "none"/' ~/.codex/config.toml
-            echo "🔬 Smoke test PR detected — overriding reviewer reasoning to none, editor to low (Phase 4b fix)"
+            sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
+            echo "🔬 Smoke test PR detected — overriding reviewer + editor reasoning to low (Phase 4b fix)"
             # Suppress per-phase Telegram alerts; the test-and-mark-stable
             # gate emits a single combined pass/fail notification at the
             # end via raw curl. SILENT > CRITICAL so all levels filter.

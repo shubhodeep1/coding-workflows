@@ -174,15 +174,15 @@ RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
 
 # Pin the resolver's Codex reasoning effort independent of the editor's.
 # review_autofix.yml's "Detect smoke test PR" step rewrites
-# ~/.codex/config.toml's model_reasoning_effort to "none" (so the
-# single-line smoke-canary edit completes deterministically). The
-# conflict resolver runs against the same config and inherits that
-# value, which reliably trips the empty-stdout failure mode of
-# gpt-5.3-codex (documented on the editor step's
-# "Switch reasoning effort" block): one tool call, rc=0, zero output,
-# no final assistant message — the retry loop then exhausts and aborts
-# the [ai-merge-resolve] commit. PR #2058 / run 25300219172 hit this on
-# a 1-line canary conflict.
+# ~/.codex/config.toml's model_reasoning_effort to "low" (smoke-run
+# override — both reviewers and editor use low for the bait-line task).
+# The conflict resolver runs against the same config and would inherit
+# that value; for smoke PRs that's fine since "low" doesn't trip the
+# empty-stdout failure mode. The pin here exists so that future changes
+# to the smoke override level don't accidentally starve the resolver:
+# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "medium")
+# overrides config.toml unconditionally before the resolver runs.
+# PR #2058 / run 25300219172 originally hit this with override=none.
 #
 # Override config.toml here using CONFLICT_RESOLVER_REASONING_EFFORT
 # (set by the workflow step's env, defaults to "medium"). Also ensure
