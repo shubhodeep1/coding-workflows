@@ -162,16 +162,16 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
 | `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `medium` | clarify | Reasoning effort used only when clarify runs Codex for `ai:orchestrator-managed` issues on forced human `/reclarify` |
 | `THINKING_LEVEL_PLAN` | `medium` | plan | Reasoning effort for the planning phase |
-| `THINKING_LEVEL_IMPLEMENT` | `none` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_IMPLEMENT` | `medium` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_ANALYSIS` | `high` | workflow-log-analysis | Reasoning effort for the API-redundancy Codex pass (passed via Codex `model_reasoning_effort`). The deep-audit pass no longer reads this var — its reasoning is hardcoded at `high` in the workflow YAML to keep it inside the per-job timeout budget; edit the hardcoded value in `workflow-log-analysis.yml` if you need to override it. |
 | `THINKING_LEVEL_REVIEWER` | `medium` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
-| `THINKING_LEVEL_EDITOR` | `none` | review_autofix | Reasoning effort for the editor model (applying fixes) |
+| `THINKING_LEVEL_EDITOR` | `medium` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `medium` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
 | `THINKING_LEVEL_ORCHESTRATE` | `medium` | orchestrate | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `medium` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
-| `THINKING_LEVEL_VALIDATE` | `none` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
-| `THINKING_LEVEL_CONFLICT_RESOLVER` | `none` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
+| `THINKING_LEVEL_VALIDATE` | `medium` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
 | Variable | Default | Used By | Description |
@@ -880,10 +880,10 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `none`) |
 | `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `medium` | Clarify-only override for forced human `/reclarify` on `ai:orchestrator-managed` issues (normal clarify path auto-posts `/answer [auto-answered-by-orchestrator]` without Codex) |
 | `THINKING_LEVEL_PLAN` | `medium` | Reasoning effort for planning |
-| `THINKING_LEVEL_IMPLEMENT` | `none` | Reasoning effort for implementation |
+| `THINKING_LEVEL_IMPLEMENT` | `medium` | Reasoning effort for implementation |
 | `THINKING_LEVEL_ANALYSIS` | `high` | Reasoning effort for the workflow-log-analysis API-redundancy pass (deep-audit is hardcoded at `high` in the workflow YAML; edit there to override) |
 | `THINKING_LEVEL_REVIEWER` | `medium` | Reasoning effort for reviewer models (bug detection) |
-| `THINKING_LEVEL_EDITOR` | `none` | Reasoning effort for editor model (applying fixes) |
+| `THINKING_LEVEL_EDITOR` | `medium` | Reasoning effort for editor model (applying fixes) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
@@ -908,8 +908,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | Reasoning effort for auto-answering clarification questions |
-| `THINKING_LEVEL_VALIDATE` | `none` | Reasoning effort for runtime validation harness generation and diagnosis |
-| `THINKING_LEVEL_CONFLICT_RESOLVER` | `none` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
+| `THINKING_LEVEL_VALIDATE` | `medium` | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 | `SEMANTIC_CACHE_BACKEND` | `none` | Semantic cache backend selector for clarification workloads: `none`, `redis`, `sqlite-vec` |
