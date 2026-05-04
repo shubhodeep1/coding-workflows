@@ -146,7 +146,88 @@ fi
 
 echo "Artifacts: floor_tags=$(wc -c < "${FLOOR_TAGS_FILE}" 2>/dev/null || echo 0) review_issues=$(wc -c < "${REVIEW_ISSUES_FILE}" 2>/dev/null || echo 0) ledger_status=$(wc -c < "${LEDGER_STATUS_FILE}" 2>/dev/null || echo 0)"
 
-cat > "${EDITOR_PROMPT_BODY_FILE}" <<__EDITOR_PROMPT__
+# ── Smoke-test override gate ──────────────────────────────────────
+# The smoke override prepends a "you MUST call apply_patch on
+# tests/e2e_smoke_canary.txt" directive to the editor prompt, but
+# only when (a) the workflow flagged this as a smoke run AND (b) the
+# canary file actually contains an injected bait line.
+#
+# (b) matters because review_autofix triggers on pull_request:opened
+# (internal-review.yml:4-5), which fires the FIRST review_autofix run
+# the moment the smoke PR is created — BEFORE
+# test-and-mark-stable.yml's Phase 3c appends the bait commit
+# (test-and-mark-stable.yml:904-1009). On that first round the canary
+# is still the legitimate 3-line file from the implement step; telling
+# the editor it "currently contains 4 lines" would force a
+# guaranteed-false apply_patch (Copilot review on PR #2086).
+#
+# The bait line shape is fixed by Phase 3c at line ~1007:
+#   "# E2E_EDITOR_BAIT_${GITHUB_RUN_ID}: this line should be removed
+#    by the editor (smoke gate)"
+# Match on the leading comment + marker prefix only — the run ID
+# changes per smoke run and we don't want to plumb it through here.
+EDITOR_BODY_RENDER_SMOKE=false
+if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
+  CANARY_PATH="tests/e2e_smoke_canary.txt"
+  if [ -f "${CANARY_PATH}" ] \
+     && grep -qE '^# E2E_EDITOR_BAIT_[0-9]+:' "${CANARY_PATH}"; then
+    EDITOR_BODY_RENDER_SMOKE=true
+    echo "Smoke override: bait line detected in ${CANARY_PATH} — prepending E2E SMOKE TEST OVERRIDE block to editor prompt."
+  else
+    echo "Smoke override: IS_SMOKE_TEST=true but ${CANARY_PATH} carries no bait line — skipping override (likely the pull_request:opened first round before Phase 3c)."
+  fi
+fi
+
+# Build the editor prompt body. The smoke override (when active) is
+# prepended OUTSIDE the main heredoc so non-smoke runs produce a
+# byte-identical body to the pre-#2086 implementation — keeps the
+# OpenRouter prompt-cache key stable for production PRs and keeps
+# the "Editor prompt sha256" log line meaningful as a drift detector
+# (Copilot review on PR #2086).
+{
+  if [ "${EDITOR_BODY_RENDER_SMOKE}" = "true" ]; then
+    cat <<'__SMOKE_OVERRIDE__'
+=== E2E SMOKE TEST OVERRIDE — READ FIRST ===
+
+This run is the repository's end-to-end smoke fixture. The PR title /
+linked issue carry the marker "[E2E Smoke Test]". The smoke gate has
+deliberately appended a single bait line of the form
+"# E2E_EDITOR_BAIT_<run_id>: ..." to the file
+tests/e2e_smoke_canary.txt; the file currently contains 4 lines and
+must end up as exactly these 3 lines (no comments, no headers, no
+trailing content beyond the final newline):
+
+  status: ok
+  run_id: <whatever value already appears on line 2 of the file>
+  updated-by: ai-pipeline
+
+MANDATORY ACTIONS for this run:
+1. You MUST invoke the apply_patch tool on tests/e2e_smoke_canary.txt
+   in this turn. Removing the bait line is a one-line patch — do not
+   wait for additional context, do not ask for clarification, do not
+   defer to a future iteration.
+2. Do NOT exit without calling apply_patch. Returning an empty
+   completion / a final assistant message that only describes the fix
+   ("I will apply_patch ..." / "the change is straightforward") is a
+   smoke-test FAILURE — the gate downstream greps the file via the
+   GitHub contents API after this run and fails the e2e job if the
+   bait line is still present.
+3. Do not modify any file other than tests/e2e_smoke_canary.txt.
+4. After the apply_patch succeeds, emit the standard editor summary
+   schema below as usual; under "Changes made:" list the single bullet
+   "modified tests/e2e_smoke_canary.txt: removed E2E_EDITOR_BAIT
+   line", and under "Change status:" emit "- edited".
+
+The remaining sections of this prompt (reviewer inputs, consolidator,
+hardening tasks, etc.) still apply, but for this fixture the only
+WILL_FIX item is the bait removal above. Proceed directly to
+apply_patch.
+
+=== END E2E SMOKE TEST OVERRIDE ===
+
+__SMOKE_OVERRIDE__
+  fi
+  cat <<__EDITOR_PROMPT__
 INPUT FILES
 Read the following files:
 - ${PR_META_FILE}
@@ -496,6 +577,7 @@ Each section must contain bullet points.
 If a section has no items, write:
 - none
 __EDITOR_PROMPT__
+} > "${EDITOR_PROMPT_BODY_FILE}"
 
 editor_prompt_rendered="$(mktemp)"
 (
