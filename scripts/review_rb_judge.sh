@@ -555,11 +555,10 @@ case "${RB_ACTION}" in
           *)
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
+            rm -f scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
             rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py
             rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
             rm -rf ai-memory
-            rm -rf .serena
             ;;
         esac
         unset _rb_origin_url
@@ -567,7 +566,7 @@ case "${RB_ACTION}" in
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
           git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
         else
-          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
         fi
         echo "Staged files before commit:"
         STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -576,7 +575,7 @@ case "${RB_ACTION}" in
           echo "Error: .github/prompts or .github/scripts is staged"
           exit 1
         fi
-        if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+        if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
           echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
           exit 1
         fi

@@ -46,8 +46,8 @@ fi
 # Pairs with the "checkpoint=editor_exit" group emitted at the
 # end of review_apply_fixes.sh.  If editor_exit shows edits but
 # commit_step_start shows a clean tree, the reversion happens
-# at the step boundary (Serena shutdown / runner transition)
-# and no logic inside this step can recover.  See PR #1255.
+# at the step boundary (runner transition) and no logic inside
+# this step can recover.  See PR #1255.
 echo "::group::Working tree state (checkpoint=commit_step_start)"
 printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 _cp_status="$(git status --porcelain 2>/dev/null || true)"
@@ -106,7 +106,7 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
       # They are cleaned up after conflict resolution (or are harmless
       # untracked files if no conflicts exist).
       case "${created_file}" in
-        .serena/*|scripts/*|prompts/*) continue ;;
+        scripts/*|prompts/*) continue ;;
       esac
       echo "- ${created_file}"
       if ! rm -rf -- "${created_file}"; then
@@ -128,9 +128,9 @@ fi
 # Remove workflow-generated/fetched artifacts so they are never
 # committed to caller repos.  Skip when running on coding-workflows
 # itself — these files are actual source code there, not artifacts.
-# NOTE: .serena/, scripts/, and prompts/ are preserved here for the
-# conflict resolver step (codex exec needs Serena MCP + model catalog)
-# and for later notification steps (Telegram, labeling).
+# NOTE: scripts/ and prompts/ are preserved here for the conflict
+# resolver step (codex exec needs the model catalog) and for later
+# notification steps (Telegram, labeling).
 # They are cleaned up in the final "Cleanup temporary artifacts" step.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   for _artifact in pre_assembled_static.txt codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md; do
@@ -278,8 +278,8 @@ else
       _ra_script_excludes+=(":!scripts/${_ign_entry}")
     done < scripts/.gitignore
   fi
-  git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+  git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
 fi
 
 echo "Staged files before commit:"
@@ -297,9 +297,9 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_
   git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
   PROTECTED_LEAKED=true
 fi
-if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
+if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
   echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-  git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+  git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
   PROTECTED_LEAKED=true
 fi
 if [ "${PROTECTED_LEAKED}" = "true" ]; then

@@ -188,12 +188,6 @@ jobs:
           SERVER_HOST="${SERVER_HOST%/}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
-      - name: Install uv for Serena
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ vars.UV_VERSION || 'latest' }}
-
       - name: Install Codex CLI
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
@@ -262,7 +256,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py; do
+          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -322,18 +316,6 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" "${PROMPT_SOURCE}"
-          fi
-
-          if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
-              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::error::Missing required support file prompts/serena-efficiency-block.txt"
-              exit 1
-            fi
-            install -m 0644 "${src}" prompts/serena-efficiency-block.txt
           fi
 
           # Keep canonical static instructions available in caller repos where
@@ -543,20 +525,6 @@ jobs:
             echo 'network_access = true'
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
-
-      - name: Setup Serena MCP server
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
-        env:
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
-          GIT_MCP_DISABLED: ${{ vars.GIT_MCP_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          bash scripts/setup_serena.sh --mode planning --context codex
 
       - name: Pre-assemble static context (cacheable across runs)
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'

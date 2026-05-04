@@ -80,7 +80,7 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh 2>/dev/null || true
 fi
 RESOLVE_STASH="$(mktemp -d)"
-for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
   if [ -d "${d}" ]; then
     if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
       # Directory contains tracked files — move only the untracked
@@ -176,7 +176,7 @@ if [ "${_resolver_allowlist_count}" -eq 0 ]; then
     if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
       git merge --abort 2>/dev/null || true
     fi
-    for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+    for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
       if [ -d "${RESOLVE_STASH}/${d}" ]; then
         cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
       fi
@@ -212,8 +212,8 @@ rm -f "${_merge_stderr_file}"
 
 # Defensive: `git merge --no-commit` auto-stages merged hunks (and
 # conflict-marked hunks) into the index for every path both sides
-# touched, including protected paths (prompts/, .serena/,
-# .github/scripts/, .github/prompts/, ai-memory/) when the consumer
+# touched, including protected paths (prompts/, .github/scripts/,
+# .github/prompts/, ai-memory/) when the consumer
 # repo has leaked tracked copies of workflow runtime helpers from an
 # older buggy run.  The downstream `git add -u -- ':!prompts' …`
 # exclusion does NOT unstage already-indexed paths, so without this
@@ -222,12 +222,12 @@ rm -f "${_merge_stderr_file}"
 # Skipped on the workflow source repo itself, where these paths are
 # real source code.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-  git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
-  git checkout -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+  git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+  git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
 fi
 
 # Restore stashed dirs so Codex has its full environment.
-for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
   if [ -d "${RESOLVE_STASH}/${d}" ]; then
     cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
   fi

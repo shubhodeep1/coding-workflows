@@ -286,7 +286,7 @@ This file is a deterministic snapshot of failed and incomplete GitHub check-runs
 
 For each failed entry:
 1. Read failed[i].name, failed[i].title, failed[i].summary, and failed[i].conclusion to identify the failing job and the kind of failure (lint, type-check, unit test, etc.).
-2. Map the failure back to specific files and lines in the diff or repository — use the failure summary plus your existing exploration tools (Serena, repository reads).
+2. Map the failure back to specific files and lines in the diff or repository — use the failure summary plus your existing exploration tools (repository reads, shell rg).
 3. Apply the smallest correct fix that resolves the failure without breaking other modules. Lint/format fixes should match the project style without unrelated reformatting.
 4. If a failure cannot be mapped to a concrete fix from the snapshot alone (e.g. the summary is empty or refers to an external artifact), state explicitly in the editor summary which check-run could not be fixed and why, so the next iteration can re-check it.
 
@@ -328,8 +328,6 @@ If additional context is required to understand the issue, you may read:
 - parsed consolidator issues at ${RUNTIME_DIR}/review_issues.txt (when present)
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
 The bug report may contain important context about the problem being fixed.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
 
 EDITOR ROLE
 You are the final decision maker.
@@ -759,9 +757,9 @@ while [ "${attempt}" -le 3 ]; do
       if [ "${reviewer_validation_ok}" = true ]; then
         # ── Verify claimed changes actually persisted on disk ──
         # The editor LLM may report "Changes made: [X]" in its text output
-        # while Serena MCP tool calls silently fail to write.  When the
-        # editor claims substantive changes but git sees no diff from HEAD,
-        # treat this attempt as failed so the retry loop can try again.
+        # while editor tool calls silently fail to write.  When the editor
+        # claims substantive changes but git sees no diff from HEAD, treat
+        # this attempt as failed so the retry loop can try again.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
         changes_section="$(awk '
@@ -825,7 +823,7 @@ while [ "${attempt}" -le 3 ]; do
           fi
 
           if [ "${_git_has_diff}" = false ]; then
-            echo "::warning::Editor claimed changes but git shows no diff from HEAD on attempt ${attempt}. Serena tool calls likely failed to persist."
+            echo "::warning::Editor claimed changes but git shows no diff from HEAD on attempt ${attempt}. Editor tool calls likely failed to persist."
             echo "Claimed changes (attempt ${attempt}):"
             printf '%s\n' "${_claimed_changes}" | head -10
             cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}_changes_lost.txt" || true
@@ -917,8 +915,7 @@ while [ "${attempt}" -le 3 ]; do
           # start of the Commit step and just before the touched-file
           # comparison loop, this pinpoints whether an observed "Editor
           # changes lost" is caused by reversion at the step boundary
-          # (Serena shutdown / runner cleanup) or by logic inside the
-          # commit-prep step itself.  See PR #1255 investigation: editor
+          # (runner cleanup) or by logic inside the commit-prep step itself.  See PR #1255 investigation: editor
           # edits present here (attempt 1, 9+/9-), absent ~5s later at
           # commit-prep with no visible git command in between.
           echo "::group::Working tree state (checkpoint=editor_exit)"

@@ -355,7 +355,6 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 		"scripts/validate_changed_files_syntax.sh",
 		"prompts/mode-implement-diagnose.txt",
 		"prompts/mode-implement-repair-syntax.txt",
-		"prompts/serena-efficiency-block.txt",
 	):
 		src = REPO_ROOT / rel
 		dst = repo_dir / rel
@@ -1222,7 +1221,7 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	assert "DO NOT redo these — go straight to editing" in codex_block, (
 		"Recap header must instruct the model to skip re-exploration and edit"
 	)
-	assert "apply_patch, printf, or Serena write tools" in codex_block, (
+	assert "apply_patch or printf shell exec" in codex_block, (
 		"Recap must point the model at the actual editing tools to use"
 	)
 	assert "Do NOT narrate — call a write tool" in codex_block, (
@@ -1259,12 +1258,12 @@ def test_retry_prompt_includes_exec_history_recap() -> None:
 	#     elapsed values, `exited <code> in <N>ms:` failure forms,
 	#     non-zero ms values) so a parser that accidentally hard-codes
 	#     `succeeded in 0ms:` would fail this test.
-	# A long synthetic command (>500 chars) that mirrors the
-	# `mcp__serena__find_symbol` style — these get serialized into one
-	# line and routinely exceed 500 chars. The parser must show them
-	# (truncated) rather than drop them, otherwise the model can't see
-	# they were already tried and re-runs them on retry.
-	long_cmd = "/bin/bash -lc 'mcp__serena__find_symbol --name " + ("X" * 600) + "' in /repo succeeded in 99ms:"
+	# A long synthetic command (>500 chars) that mirrors MCP tool-call
+	# bash serializations — these get serialized into one line and
+	# routinely exceed 500 chars. The parser must show them (truncated)
+	# rather than drop them, otherwise the model can't see they were
+	# already tried and re-runs them on retry.
+	long_cmd = "/bin/bash -lc 'rg -n find_symbol --name " + ("X" * 600) + "' in /repo succeeded in 99ms:"
 	assert len(long_cmd) > 500, "long_cmd fixture must exceed 500 chars to exercise truncation"
 	codex_log_fixture = (
 		"some startup chatter\n"

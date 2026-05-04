@@ -13,7 +13,7 @@ Context provided below:
 - The autofix iteration count and failure reason
 - The current repository state
 
-You have full access to the repository checkout and all tools (Serena, shell,
+You have full access to the repository checkout and all tools (shell,
 file reads). Use them to inspect the actual code — do not rely solely on
 comment summaries.
 
@@ -41,8 +41,7 @@ Rules:
 - Be precise. Cite specific files and line numbers.
 - Do not refactor, redesign, or expand scope.
 - For option B (fix): make the actual code changes in the repository. Do not
-  just describe what to change — apply the fixes directly using file writes
-  or Serena tools.
+  just describe what to change — apply the fixes directly using file writes.
 - For option C (close_and_reissue): write a detailed issue body that explains
   what went wrong and provides specific implementation guidance.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
@@ -60,8 +59,6 @@ Autonomous decision-making: you are the decision-maker — there is no human in 
   theoretical attack vector that requires same-UID access on a CI runner),
   merge and document the limitation. Only block if the risk is exploitable
   in the target runtime environment.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output contract:
 - Output MUST be a single valid JSON object. No markdown fences or surrounding text.

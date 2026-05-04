@@ -567,12 +567,12 @@ done
 # Remove root-level workflow-generated artifacts so they are never
 # committed to caller repos.  Skip when running on coding-workflows
 # itself — these files are actual source code there, not artifacts.
-# NOTE: .serena/ and prompts/ are cleaned up in the final
-# "Cleanup temporary artifacts" step because later notification steps
-# (Telegram, labeling) still need scripts/tg_helpers.sh and
-# scripts/label_helpers.sh.  prompts/ and .serena/ are excluded
-# from git add via ':!.serena', ':!prompts' patterns; fetched
-# scripts are excluded via the bootstrap-generated scripts/.gitignore.
+# NOTE: prompts/ is cleaned up in the final "Cleanup temporary
+# artifacts" step because later notification steps (Telegram,
+# labeling) still need scripts/tg_helpers.sh and
+# scripts/label_helpers.sh.  prompts/ is excluded from git add via
+# ':!prompts' patterns; fetched scripts are excluded via the
+# bootstrap-generated scripts/.gitignore.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   rm -f ./pre_assembled_static.txt
   rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
@@ -787,8 +787,8 @@ if [ -n "$(git status --porcelain)" ]; then
         _rs_script_excludes+=(":!scripts/${_ign_entry}")
       done < scripts/.gitignore
     fi
-    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
   fi
   echo "Staged files before commit:"
   STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -805,9 +805,9 @@ if [ -n "$(git status --porcelain)" ]; then
     git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
     PROTECTED_LEAKED=true
   fi
-  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
     echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-    git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+    git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
     PROTECTED_LEAKED=true
   fi
   if [ "${PROTECTED_LEAKED}" = "true" ]; then

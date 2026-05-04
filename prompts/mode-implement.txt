@@ -98,6 +98,4 @@ Data-file output discipline (when writing YAML or JSON):
 
 If clarification context is incomplete, apply the safest minimal interpretation and explicitly record assumptions in your output/log summary without asking interactive questions.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
-
 Your output should be repository changes only.

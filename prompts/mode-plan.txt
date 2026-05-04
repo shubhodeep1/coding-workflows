@@ -33,6 +33,4 @@ Rules:
 - If external APIs are needed, include concrete details from provided context; if missing, ask rather than invent.
 - Do not write code.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-
 Output must be plain text suitable for posting as an issue comment.

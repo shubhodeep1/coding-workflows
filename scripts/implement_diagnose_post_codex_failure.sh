@@ -257,8 +257,7 @@ EOF
 fi
 
 DIAGNOSE_MODE_PROMPT="${DIAGNOSE_MODE_PROMPT_TEMPLATE}"
-if ensure_diagnose_asset "scripts/render_prompt.sh" "scripts/render_prompt.sh" && \
-  ensure_diagnose_asset "prompts/serena-efficiency-block.txt" "prompts/serena-efficiency-block.txt"; then
+if ensure_diagnose_asset "scripts/render_prompt.sh" "scripts/render_prompt.sh"; then
   DIAGNOSE_RENDERED_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.rendered.txt"
   if bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
     DIAGNOSE_MODE_PROMPT="${DIAGNOSE_RENDERED_PROMPT}"

@@ -2566,48 +2566,6 @@ jobs:
             echo "OK: $f ($(wc -c < "$f") bytes)"
           done
 
-          if [ ! -s "prompts/serena-efficiency-block.txt" ]; then
-            echo "FAIL: prompts/serena-efficiency-block.txt is missing or empty"
-            exit 1
-          fi
-          if [ ! -x "scripts/render_prompt.sh" ]; then
-            echo "FAIL: scripts/render_prompt.sh is missing or not executable"
-            exit 1
-          fi
-
-          target_prompts=(
-            prompts/mode-clarify.txt
-            prompts/mode-plan.txt
-            prompts/mode-implement.txt
-            prompts/mode-implement-diagnose.txt
-            prompts/mode-implement-repair.txt
-            prompts/mode-implement-repair-syntax.txt
-            prompts/mode-orchestrate.txt
-            prompts/mode-workflow-analysis.txt
-            prompts/mode-judge.txt
-            prompts/mode-judge-review-blocked.txt
-            prompts/mode-judge-stall-recovery.txt
-            prompts/mode-clarify-respond.txt
-            prompts/mode-validate-generate.txt
-            prompts/mode-validate-diagnose.txt
-            prompts/mode-validate-self-heal.txt
-          )
-
-          for pf in "${target_prompts[@]}"; do
-            if grep -q '^SERENA MCP EFFICIENCY (MANDATORY):$' "${pf}"; then
-              echo "FAIL: ${pf} still contains inline SERENA MCP EFFICIENCY block"
-              exit 1
-            fi
-            rendered_file="$(mktemp)"
-            bash scripts/render_prompt.sh "${pf}" > "${rendered_file}"
-            if grep -qE '^\{\{SERENA_EFFICIENCY_BLOCK_[A-Z_]+\}\}$' "${rendered_file}"; then
-              echo "FAIL: unresolved Serena placeholders remain after rendering ${pf}"
-              rm -f "${rendered_file}"
-              exit 1
-            fi
-            rm -f "${rendered_file}"
-          done
-
       - name: Script-workflow cross-reference
         run: |
           set -euo pipefail

@@ -48,8 +48,6 @@ Rules:
 - If `action` is `resolve_merge_conflict`, include `target_pr` and `head_ref`.
 - For all other actions, `target_pr` and `head_ref` may be omitted.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-
 Output contract:
 - Output MUST be a single valid JSON object. No markdown fences or extra text.
 - Schema:

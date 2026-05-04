@@ -23,8 +23,6 @@ Execution rules:
 - Do not perform broad refactors, formatting-only churn, or unrelated cleanup.
 - Keep changes deterministic and idempotent.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
-
 Validation target:
 - Resolve reported syntax failures from the provided diagnostics so post-repair syntax gate can pass.
 

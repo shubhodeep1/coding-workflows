@@ -33,14 +33,6 @@ On ambiguity: choose the safest conservative interpretation, minimize change sco
 
 ---
 
-## 2.5) Serena (MCP) Semantic Tooling
-
-**See `codex_system_instructions.md` § Serena** for the full tool reference and rules.
-
-Summary: ALWAYS prefer Serena symbol tools over full-file reads/writes. Fall back to file operations if Serena is unavailable.
-
----
-
 ## 3) Mandatory Context Loading
 
 Before any work, read:

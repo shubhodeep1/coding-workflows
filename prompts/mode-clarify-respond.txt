@@ -74,12 +74,8 @@ ESCALATE rule:
   articulate exactly what is missing and why the repo cannot provide it.
 - ESCALATE is a last resort, not a convenience exit.
 
-Use Serena MCP tools or targeted file reads only to inspect specific code
+Use targeted file reads only to inspect specific code
 symbols referenced in the questions. Keep tool usage minimal.
-
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-- If Serena tools are completely unavailable (startup failure), fall back to
-  shell grep/rg once per search. Do not attempt Serena calls after a failure.
 
 Output format (exact):
 

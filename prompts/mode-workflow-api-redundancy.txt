@@ -54,8 +54,6 @@ Out of scope (do not raise here):
 - Bug fixes, shellcheck violations, dead code unrelated to API calls, expression-size issues, duplication that is not an API-call duplication. Those belong in the Deep Audit section already in the report.
 - New API calls you think should be added. This pass is about removing or merging, not adding.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
-
 Output format:
 - Begin output with the exact header line `## API Call Consolidation & Dead-Call Analysis (YYYY-MM-DD)`. Determine the UTC date from the analysis context block if provided; otherwise use today's UTC date.
 - Emit the following subsections, in order, using `###` headings. Emit every subsection even if empty (state "No findings." in that case).

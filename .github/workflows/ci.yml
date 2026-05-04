@@ -94,7 +94,6 @@ jobs:
           python3 -m py_compile scripts/ai_context_utils.py
           python3 -m py_compile scripts/issue_attachment_bundle.py
           python3 -m py_compile scripts/generate_symbol_diff_summary.py
-          python3 -m py_compile scripts/serena_efficiency_report.py
           python3 -m py_compile scripts/orchestrate_lib.py
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
@@ -116,11 +115,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_merge_probe.py
-
-      - name: MCP handshake probe unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
 
       - name: Overlap validation fallback unit tests
         run: |
@@ -247,52 +241,6 @@ jobs:
               exit 1
             fi
             echo "OK: $f ($(wc -c < "$f") bytes)"
-          done
-
-          if [ ! -s "prompts/serena-efficiency-block.txt" ]; then
-            echo "FAIL: prompts/serena-efficiency-block.txt is missing or empty"
-            exit 1
-          fi
-          if [ ! -x "scripts/render_prompt.sh" ]; then
-            echo "FAIL: scripts/render_prompt.sh is missing or not executable"
-            exit 1
-          fi
-
-          target_prompts=(
-            prompts/mode-clarify.txt
-            prompts/mode-plan.txt
-            prompts/mode-implement.txt
-            prompts/mode-implement-diagnose.txt
-            prompts/mode-implement-repair.txt
-            prompts/mode-implement-repair-syntax.txt
-            prompts/mode-orchestrate.txt
-            prompts/mode-workflow-analysis.txt
-            prompts/mode-judge.txt
-            prompts/mode-judge-review-blocked.txt
-            prompts/mode-judge-stall-recovery.txt
-            prompts/mode-clarify-respond.txt
-            prompts/mode-validate-generate.txt
-            prompts/mode-validate-diagnose.txt
-            prompts/mode-validate-self-heal.txt
-          )
-
-          for pf in "${target_prompts[@]}"; do
-            if [ ! -f "${pf}" ]; then
-              echo "FAIL: ${pf} is missing"
-              exit 1
-            fi
-            if grep -q '^SERENA MCP EFFICIENCY (MANDATORY):$' "${pf}"; then
-              echo "FAIL: ${pf} still contains inline SERENA MCP EFFICIENCY block"
-              exit 1
-            fi
-            rendered_file="$(mktemp)"
-            bash scripts/render_prompt.sh "${pf}" > "${rendered_file}"
-            if grep -qE '^\{\{SERENA_EFFICIENCY_BLOCK_[A-Z_]+\}\}$' "${rendered_file}"; then
-              echo "FAIL: unresolved Serena placeholders remain after rendering ${pf}"
-              rm -f "${rendered_file}"
-              exit 1
-            fi
-            rm -f "${rendered_file}"
           done
 
       - name: Shell script syntax check
