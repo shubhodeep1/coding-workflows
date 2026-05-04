@@ -4,7 +4,7 @@
 The cycle-based schedule machinery (REVIEW_REASONING_SCHEDULE,
 REVIEW_AUTODOWNGRADE_DISABLED) has been removed. Non-smoke-test runs use
 the configured THINKING_LEVEL_* for every cycle. Smoke test runs override
-reasoning to ``none`` for both reviewer and editor phases.
+reasoning to ``low`` for both reviewer and editor phases.
 """
 
 from __future__ import annotations
@@ -34,9 +34,9 @@ def test_no_cycle_selector_step() -> None:
 
 def test_smoke_test_forces_none_reasoning() -> None:
 	wf = _workflow()
-	assert 'REVIEWER_REASONING_EFFORT=none' in wf
-	assert 'EDITOR_REASONING_EFFORT=none' in wf
-	assert 'model_reasoning_effort = "none"' in wf
+	assert 'REVIEWER_REASONING_EFFORT=low' in wf
+	assert 'EDITOR_REASONING_EFFORT=low' in wf
+	assert 'model_reasoning_effort = "low"' in wf
 
 
 def test_editor_switch_replaces_any_reasoning_value() -> None:
