@@ -857,3 +857,127 @@ Cross-cutting note: repository-wide grep over `.github/workflows/*.yml`, `script
 | Code modularization | 7-9 | Large |
 | Expression size reduction | 4-8 | Large |
 | Medium/Low fixes | 1-2 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-04)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is statically provable and can be removed/consolidated without changing filters, retry/error behavior, or concurrency semantics. `NEEDS_VERIFICATION` means there is a plausible consolidation/reuse opportunity, but a human must first verify semantics, cache freshness, or failure-mode equivalence. `RISKY_SKIP` means the overlap exists but sits in a retry/poll/race-defense path or other sensitive control flow, so it must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/review_autofix.yml:1353-1405`, `.github/workflows/review_autofix.yml:3759-3764`, `scripts/review_rb_judge.sh:146-170`  
+  **Current call count** — 1 early batched GraphQL fetch for linked issues, then an extra 1 GraphQL fetch + up to **N** per-issue REST GETs inside the judge.  
+  **Proposed call count** — keep the early batched fetch; reduce the judge to **0 extra** linked-issue lookups on the cache-hit path, with the current GraphQL/REST logic retained only as cache-miss fallback.  
+  **Endpoint(s)** — GraphQL `pullRequest(number: ...){ closingIssuesReferences(first: 50) { nodes { number title body } } }`; GraphQL `pullRequest(number: ...){ closingIssuesReferences(first: 50) { nodes { number } } }`; REST `GET /repos/{repo}/issues/{issue_number}`.  
+  **Evidence** — `review_autofix.yml` already fetches linked issue numbers plus title/body early and writes derivative artifacts, but `review_rb_judge.sh` re-discovers the same issue set and bodies instead of reusing that snapshot.
+  ```bash
+  # .github/workflows/review_autofix.yml:1353-1371
+  # Fetch linked issue title+body via GraphQL — single call that also
+  # populates LINKED_ISSUES_JSON early ...
+  if gh_retry "${_linked_tmp}" api graphql \
+    ...
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+  ```
+  ```bash
+  # .github/workflows/review_autofix.yml:1385-1390
+  if [ "${_linked_fetch_ok}" = "true" ]; then
+    ...
+    printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_numbers}" >> "$GITHUB_ENV"
+  fi
+  ```
+  ```bash
+  # scripts/review_rb_judge.sh:146-166
+  ISSUE_NUMBERS="$(gh_retry gh api graphql ... closingIssuesReferences ...)"
+  ...
+  while IFS= read -r issue_number; do
+    ...
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+  **Proposed fix** — Extend the early `Collect PR metadata` step to persist the full linked-issue snapshot (for example `RUNTIME_DIR/linked_issues_full.json`, not just numbers-only `LINKED_ISSUES_JSON`), then update `scripts/review_rb_judge.sh` to read issue numbers and the first issue body from that cached file before falling back to its current GraphQL/REST path. Reuse the repo’s existing cycle-local cache pattern rather than adding another late fetch.  
+  **Safety rationale** — This is the same workflow job, but the judge runs after a long reviewer/editor path, so static reading cannot prove that reusing the earlier issue-body snapshot is always acceptable if a human edits the linked issue mid-run.  
+  **Downstream signal** — Verify that the judge always runs with the early linked-issue snapshot available (including `force_rb_judge` and degraded/failure paths), and decide explicitly whether stale issue bodies are acceptable before switching the judge to cache-first behavior.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/review_autofix.yml:207-210`, `.github/workflows/review_autofix.yml:1062-1077`  
+  **Current call count** — 2 PR-state reads per normal PR run in separate jobs/steps.  
+  **Proposed call count** — 1, if the later step reused gate output instead of re-fetching.  
+  **Endpoint(s)** — REST `GET /repos/{repo}/pulls/{pr_number}`.  
+  **Evidence** — the gate job already reads PR state, then a later step explicitly re-reads PR state as a race-defense check.
+  ```bash
+  # .github/workflows/review_autofix.yml:207-210
+  if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), ...] | @tsv')"; then
+    IFS=$'\t' read -r pr_state pr_merged ...
+  fi
+  ```
+  ```bash
+  # .github/workflows/review_autofix.yml:1062-1077
+  - name: Check PR state (defense-in-depth)
+  ...
+  pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' || echo "")"
+  if [ -n "${pr_state}" ] && [ "${pr_state}" != "open" ]; then
+    echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+  fi
+  ```
+  **Proposed fix** — If this is ever revisited manually, the only plausible consolidation is to expose `pr_state` from the gate job and prove a later in-job/state poll still covers close/merge races before deleting the defense-in-depth fetch.  
+  **Safety rationale** — The later call is explicitly documented as upstream-race defense in a separate job/step boundary, which is a named `RISKY_SKIP` trigger in this audit.  
+  **Downstream signal** — Do not auto-implement; manual review must prove that removing the later fetch does not miss PR closures/merges that happen after the gate job finishes and does not change the existing `PR_CLOSED=true` control-flow signal.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File path and line ranges** — `.github/workflows/internal-review.yml:98-109`, `.github/workflows/internal-review.yml:120-134`  
+  **Current call count** — 2 calls in `resolve-claude-branch-pr` even when an open PR already exists for the pushed branch.  
+  **Proposed call count** — 1 call on the `existing_pr != ""` branch; unchanged behavior on the `proceed=true` branch.  
+  **Endpoint(s)** — REST `GET /repos/{repo}/pulls?state=open&head={owner}:{branch}`; REST `GET /repos/{repo}`.  
+  **Evidence** — `base_ref` is fetched before the open-PR decision, but the only downstream consumer of `base_ref` is a job that runs only when `proceed == 'true'`.
+  ```bash
+  # .github/workflows/internal-review.yml:98-109
+  existing_pr="$(gh api \
+    "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+    --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+  base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  if [ -n "${existing_pr}" ]; then
+    ...
+    echo "proceed=false"
+    ...
+    echo "base_ref=${base_ref}"
+  fi
+  ```
+  ```yaml
+  # .github/workflows/internal-review.yml:120-134
+  review-claude-branch-push:
+    needs: resolve-claude-branch-pr
+    if: ${{ github.event_name == 'push' && needs.resolve-claude-branch-pr.outputs.proceed == 'true' }}
+    with:
+      ...
+      base_ref_override: ${{ needs.resolve-claude-branch-pr.outputs.base_ref }}
+  ```
+  **Proposed fix** — Move the `base_ref` lookup into the `no existing_pr` path, so it is fetched only when `review-claude-branch-push` can actually consume it. If you want a second-stage cleanup later, you can separately verify whether `github.event.repository.default_branch` is sufficient and remove the API call entirely for push events.  
+  **Safety rationale** — The dead lookup is in the same step, there is no intervening mutation, and the only consumer is gated on `proceed == 'true'`, so skipping the repo-metadata fetch on the `proceed=false` branch preserves behavior and retry semantics.  
+  **Downstream signal** — In `resolve-claude-branch-pr`, fetch `base_ref` only after confirming `existing_pr` is empty; keep the current `main` fallback on the `proceed=true` path.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `RISKY_SKIP` — the proposed helper consolidation crosses paginated comments/reviews/review-comments fetches, so page-boundary and fallback semantics need manual review.
+- `API-002`: `NEEDS_VERIFICATION` — the batch classification looks reusable, but the implementer must confirm the Telegram skip decision stays semantically aligned with the current orchestrator-detection behavior.
+- `API-003`: `RISKY_SKIP` — the duplicate log download is inside a polling/analyser loop, so changing that fetch pattern alters a race-sensitive wait path.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 2 | REUSE-001, API-002 |
+| RISKY_SKIP | 3 | REUSE-002, API-001, API-003 |
+
+### Implement-Stage Handoff
+
+- `DEAD-API-001`
