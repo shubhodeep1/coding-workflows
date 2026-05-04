@@ -135,12 +135,21 @@ def test_review_autofix_failure_log_artifact_upload_contract() -> None:
 
 	# Top-level prompt / summary / context files. Without these a cold
 	# post-mortem can't reconstruct what context the editor saw.
+	# The reviewer_prompt_pass1.txt / reviewer_prompt_pass2.txt /
+	# cross_pollination_summary.txt files are the actual prompts the
+	# two-pass reviewer pipeline uses (review_run_reviewers.sh:1133,
+	# :1155, :1160) — without them a reviewer-side empty-output
+	# failure is undebuggable because reviewer_prompt.txt is just the
+	# legacy single-pass artefact (Copilot review on #2086).
 	for f in (
 		"editor_summary.txt",
 		"editor_prompt.txt",
 		"editor_prompt_body.txt",
 		"pr_editor_comment.txt",
 		"reviewer_consensus.txt",
+		"reviewer_prompt_pass1.txt",
+		"reviewer_prompt_pass2.txt",
+		"cross_pollination_summary.txt",
 		"conflict_resolver_summary.txt",
 		"conflict_resolver_prompt.txt",
 		"committed_files.txt",

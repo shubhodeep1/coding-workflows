@@ -4781,6 +4781,8 @@ jobs:
             for f in editor_summary.txt editor_prompt.txt editor_prompt_body.txt \
                      pr_editor_comment.txt reviewer_consensus.txt \
                      reviewer_prompt.txt reviewer_prompt_body.txt \
+                     reviewer_prompt_pass1.txt reviewer_prompt_pass2.txt \
+                     cross_pollination_summary.txt \
                      conflict_resolver_summary.txt conflict_resolver_prompt.txt \
                      committed_files.txt pr_check_runs_context.txt \
                      linked_issue_context.txt memory_context.txt \
