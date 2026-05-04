@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repository should be improved?**\nChoices:\n- **A** \u2014 The AI pipeline workflows under `.github/workflows` (RECOMMENDED)\n- **B** \u2014 The shell/Python helper scripts under `scripts/`\n- **C** \u2014 The documentation (`README.md`, `agents.md`, prompts, runbooks)\n- **D** \u2014 A specific file or component you will name\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a concrete bug or broken behavior (RECOMMENDED)\n- **B** \u2014 Improve reliability/safety of an existing flow without changing its purpose\n- **C** \u2014 Improve developer/operator experience (docs, logs, diagnostics, clarity)\n- **D** \u2014 Reduce cost/runtime/API usage\nReply: `Q2: A`\n**Q3: What should the implementation be anchored to?**\nChoices:\n- **A** \u2014 A specific failing issue/PR/workflow run/log snippet you will provide (RECOMMENDED)\n- **B** \u2014 A specific user-visible behavior change you will describe\n- **C** \u2014 A targeted cleanup in a named file, with no behavior change\nReply: `Q3: A`",
+  "fingerprint": "46fe48c8acba0cc49270f07ae817a074cdeca422da641d1c2c025bb1d2770b73",
+  "lineage": {
+    "issue_number": 2070,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25308093988",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25308093988",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260504080838_5d5b9f79a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2070,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25308093988"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2070 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-04T08:08:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
