@@ -3579,6 +3579,21 @@ jobs:
         timeout-minutes: 60
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
+          # ("Detect smoke test PR" step) sets editor reasoning to "none" so
+          # the single-line bait removal completes deterministically. That
+          # patches ~/.codex/config.toml, which the conflict resolver below
+          # would otherwise inherit. With reasoning=none gpt-5.3-codex hits
+          # the same empty-stdout failure mode documented on the editor step
+          # ("Switch reasoning effort for editor"): it runs one read tool
+          # call, exits cleanly with rc=0 and zero stdout, and the retry
+          # loop bails after MAX_ATTEMPTS with no edits. Observed on PR
+          # #2058 / run 25300219172 where the resolver was given a 1-line
+          # canary conflict, never wrote a final message, and the
+          # [ai-merge-resolve] commit was aborted. Pin the resolver to a
+          # workflow-controlled effort so the smoke override never starves
+          # it.
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'medium' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"

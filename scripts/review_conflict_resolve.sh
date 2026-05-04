@@ -166,6 +166,41 @@ trap _resolver_exit_trap EXIT
 # ----------------------------------------------------------------------
 INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS=3
 RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
+
+# Pin the resolver's Codex reasoning effort independent of the editor's.
+# review_autofix.yml's "Detect smoke test PR" step rewrites
+# ~/.codex/config.toml's model_reasoning_effort to "none" (so the
+# single-line smoke-canary edit completes deterministically). The
+# conflict resolver runs against the same config and inherits that
+# value, which reliably trips the empty-stdout failure mode of
+# gpt-5.3-codex (documented on the editor step's
+# "Switch reasoning effort" block): one tool call, rc=0, zero output,
+# no final assistant message — the retry loop then exhausts and aborts
+# the [ai-merge-resolve] commit. PR #2058 / run 25300219172 hit this on
+# a 1-line canary conflict.
+#
+# Override config.toml here using CONFLICT_RESOLVER_REASONING_EFFORT
+# (set by the workflow step's env, defaults to "medium"). Also ensure
+# model_reasoning_summary = "auto" is present — same diagnostic +
+# anti-empty-stdout rationale as the editor step.
+_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-medium}"
+_codex_config="${HOME}/.codex/config.toml"
+if [ -f "${_codex_config}" ]; then
+  if grep -q '^model_reasoning_effort = ' "${_codex_config}"; then
+    sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${_resolver_reasoning_effort}\"/" "${_codex_config}"
+  else
+    printf '\nmodel_reasoning_effort = "%s"\n' "${_resolver_reasoning_effort}" >> "${_codex_config}"
+  fi
+  if grep -q '^model_reasoning_summary = ' "${_codex_config}"; then
+    sed -i 's/^model_reasoning_summary = ".*"/model_reasoning_summary = "auto"/' "${_codex_config}"
+  else
+    sed -i '/^model_reasoning_effort = /a model_reasoning_summary = "auto"' "${_codex_config}"
+  fi
+  echo "Conflict resolver reasoning effort set to ${_resolver_reasoning_effort} (model_reasoning_summary=auto)."
+else
+  echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override skipped."
+fi
+
 RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing.txt"
 RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
 RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
