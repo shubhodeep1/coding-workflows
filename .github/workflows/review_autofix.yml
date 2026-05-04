@@ -4728,6 +4728,92 @@ jobs:
 
           true
 
+      - name: Stage codex logs for upload (failure or empty-editor)
+        # Mirrors the failure-log capture pattern PR #1940 added for
+        # implement.yml. The gate is broader than a plain failure() ||
+        # cancelled() because review_autofix is fail-open on editor
+        # empty-output: when gpt-5.3-codex completes with 0-byte stdout
+        # (no apply_patch invocation, no final assistant summary — see
+        # the comment in the "Switch reasoning effort for editor" step
+        # documenting run #25115530167) the job posts the noop-comment
+        # path and exits success(), so we'd miss exactly the case this
+        # artifact exists for. EDITOR_NOOP_SUSPICIOUS and
+        # EDITOR_CHANGES_LOST are the two existing flags that mark
+        # "editor produced nothing useful" on a job that still exited
+        # success; capturing on either keeps us aligned with the
+        # downstream "Telegram editor-noop-suspicious" / "Telegram
+        # editor-changes-lost" alerts.
+        if: always() && env.RUNTIME_DIR != '' && (failure() || cancelled() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true')
+        run: |
+          set -euo pipefail
+          # Stage everything under RUNNER_TEMP so the Cleanup step
+          # below cannot race the upload — it rm -rf's RUNTIME_DIR.
+          # The upload step's path: glob is also more predictable when
+          # rooted at a single dir we own.
+          STAGE_DIR="${RUNNER_TEMP:-/tmp}/codex-review-autofix-failure-logs"
+          rm -rf "${STAGE_DIR}"
+          mkdir -p "${STAGE_DIR}/runtime" "${STAGE_DIR}/previous_reviews" "${STAGE_DIR}/codex-home-log"
+
+          if [ -d "${RUNTIME_DIR:-}" ]; then
+            # Top-level prompts, summaries, and diagnostic context. The
+            # editor_* and conflict_resolver_* files are the codex stdout
+            # / synthesised summaries; pr_check_runs_context.txt and
+            # reviewer_consensus.txt let us reconstruct what context the
+            # editor saw without re-fetching from the API on a cold
+            # investigation.
+            for f in editor_summary.txt editor_prompt.txt editor_prompt_body.txt \
+                     pr_editor_comment.txt reviewer_consensus.txt \
+                     reviewer_prompt.txt reviewer_prompt_body.txt \
+                     conflict_resolver_summary.txt conflict_resolver_prompt.txt \
+                     committed_files.txt pr_check_runs_context.txt \
+                     linked_issue_context.txt memory_context.txt \
+                     pr_diff.patch original_pr_diff.patch \
+                     symbol_diff_summary.txt; do
+              [ -f "${RUNTIME_DIR}/${f}" ] && \
+                cp -f "${RUNTIME_DIR}/${f}" "${STAGE_DIR}/runtime/${f}" || true
+            done
+          fi
+
+          # Per-attempt editor stdout / stderr — the primary signal for
+          # the empty-output failure. review_apply_fixes.sh writes
+          # editor_attempt_${attempt}.txt (codex stdout) and
+          # editor_attempt_${attempt}.err (codex stderr) for every retry,
+          # plus editor_attempt_${attempt}_changes_lost.txt when the
+          # claimed-changes-lost guard fires. Without these the only
+          # remaining trace of why codex produced 0 bytes is the
+          # truncated stderr in the live job log.
+          if [ -d "${PREVIOUS_REVIEWS_DIR:-}" ]; then
+            for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.txt \
+                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err \
+                     "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_changes_lost.txt \
+                     "${PREVIOUS_REVIEWS_DIR}"/review_*.txt \
+                     "${PREVIOUS_REVIEWS_DIR}"/review_*.err; do
+              [ -f "${f}" ] && cp -f "${f}" "${STAGE_DIR}/previous_reviews/" || true
+            done
+          fi
+
+          # Codex CLI's own session log directory carries the raw
+          # OpenRouter wire trace (request/response bodies, finish_reason,
+          # tool-router rejections). Copy unconditionally — no
+          # mtime filter — so a multi-attempt failure does not lose the
+          # earliest session log to a sliding window. retention-days on
+          # the upload step caps the storage cost.
+          if [ -d "${CODEX_HOME:-$HOME/.codex}/log" ]; then
+            cp -rf "${CODEX_HOME:-$HOME/.codex}/log/." "${STAGE_DIR}/codex-home-log/" 2>/dev/null || true
+          fi
+
+          echo "CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR=${STAGE_DIR}" >> "$GITHUB_ENV"
+          echo "Staged $(find "${STAGE_DIR}" -type f | wc -l) file(s) for review_autofix failure-log upload."
+
+      - name: Upload codex logs (failure or empty-editor)
+        if: always() && env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: codex-review-autofix-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR }}
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Cleanup temporary artifacts
         if: always()
         run: |
@@ -4741,6 +4827,15 @@ jobs:
           # error.  Skip cleanly when unset (nothing to clean up anyway).
           if [ -n "${RUNTIME_DIR:-}" ]; then
             rm -rf "${RUNTIME_DIR}"
+          fi
+
+          # Also clean the failure-log staging dir so successive runs on
+          # a warm runner don't see a stale copy. Path-shape regex guard
+          # mirrors the RUNTIME_DIR guard above and the equivalent
+          # cleanup PR #1940 added in implement.yml.
+          if [ -n "${CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR:-}" ] && \
+             [[ "${CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR}" =~ ^${RUNNER_TEMP:-/tmp}/codex-review-autofix-failure-logs$ ]]; then
+            rm -rf "${CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR}"
           fi
 
           # Remove workflow-fetched support files that were preserved for
