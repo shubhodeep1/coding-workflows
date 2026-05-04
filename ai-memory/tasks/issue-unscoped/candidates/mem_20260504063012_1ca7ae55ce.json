@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:167, 894 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The \"Used By\" column for THINKING_LEVEL_CONFLICT_RESOLVER lists only orchestrate_poll, but the PR now also consumes it in review_autofix.yml.\n  WHY: This is a documentation mismatch/completeness issue; no runtime impact, but the README should reflect both consumers (severity is low across reviewers, with one reviewer omitting severity and others aligning on low-equivalent documentation issue).\n- scripts/review_conflict_resolve.sh:229-241 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Post-rewrite verification greps use exact-match anchoring that may miss valid TOML formatting variants, and the effort/summary checks are split so a first failure can suppress the second warning.\n  WHY: Reviewers disagree on impact: some treat this as a possible false-positive diagnostic on whitespace variants, while others rejected it because the rewrite path canonicalizes output and the warning is diagnostic-only; highest reported severity/confidence preserved from the flagged reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- README.md:167 (thinking-levels table) and 894 (variable-description table) | severity=low | confidence=4\n  PROBLEM: The \"Used By\" column for `THINKING_LEVEL_CONFLICT_RESOLVER` at line 167 lists only `orchestrate_poll`, but the PR adds consumption of this variable in `.github/workflows/review_autofix.yml` at line 3596.\n  WHY: The description at line 894 says \"Reasoning effort for the orchestrator's Codex-based merge conflict resolver\" \u2014 now also used by the review_autofix workflow, so this description is incomplete.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- README.md:167 and 894 | severity=low | confidence=4\n  PROBLEM: The \"Used By\" column for `THINKING_LEVEL_CONFLICT_RESOLVER` lists only `orchestrate_poll`, but the PR adds consumption in `review_autofix.yml`.\n  WHY: The documentation should reflect both consumers.\n- scripts/review_conflict_resolve.sh:237-240 | severity=low | confidence=3\n  PROBLEM: Post-rewrite verification grep uses exact-match patterns without allowing TOML-permissible whitespace variants.\n  WHY: The `$` anchor requires the line to end immediately with no trailing whitespace, so the checks can produce false warnings on otherwise successful rewrites.\n- scripts/review_conflict_resolve.sh:228 | severity=low | confidence=3\n  PROBLEM: The append inserts `model_reasoning_summary = \"auto\"` without matching the indentation of the preceding `model_reasoning_effort` line.\n  WHY: While valid TOML, this creates visual inconsistency.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- README.md:167 and 894 | severity=low | confidence=4\n  PROBLEM: The \"Used By\" column for THINKING_LEVEL_CONFLICT_RESOLVER lists only orchestrate_poll, but the PR now also consumes it in review_autofix.yml.\n  WHY: This is a documentation mismatch; consumers won't know the variable also controls the review_autofix.yml resolver step.\n- scripts/review_conflict_resolve.sh:233-236 | severity=low | confidence=3\n  PROBLEM: Post-rewrite verification grep uses strict exact-match pattern without allowing TOML-permissible whitespace variants.\n  WHY: If the sed produces a line with extra spaces, the verification grep will fail to match despite the config being valid, causing a false warning that the resolver may run with stale reasoning.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- README.md:167 and 894 | severity=low | confidence=4\n  PROBLEM: The THINKING_LEVEL_CONFLICT_RESOLVER variable's \"Used By\" column lists only orchestrate_poll but should also include review_autofix.\n  WHY: The PR adds a consumption site in review_autofix.yml at line 3596, so the documentation is incomplete; no runtime impact.\n- scripts/review_conflict_resolve.sh:235-238 | severity=low | confidence=2\n  PROBLEM: The post-rewrite verification greps anchor with ^ and $ without whitespace tolerance, while the match-phase sed/grep tolerates leading/trailing whitespace.\n  WHY: If an unexpected intermediary modifies the file between the sed and the verification grep, the verification can emit a false-positive warning even though the resolver runs correctly.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- README.md:167, 894 (THINKING_LEVEL_CONFLICT_RESOLVER table rows) | severity=low | confidence=5\n  PROBLEM: \"Used By\" column lists only \"orchestrate_poll\", omitting \"review_autofix\".\n  WHY: Documentation is incomplete/misleading; operators reading README see incomplete consumer list and may miss the repo var when troubleshooting review_autofix resolver failures.\n- scripts/review_conflict_resolve.sh:229-236 (post-rewrite verification) | severity=low | confidence=3\n  PROBLEM: elif chain between effort and summary grep checks short-circuits: if effort grep fails, summary check is skipped and its warning never emitted.\n  WHY: No functional failure, but it reduces observability by masking the full rewrite failure mode.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- README.md:167 (first table with \"Used By\" column) | severity=low | confidence=4\n  PROBLEM: The \"Used By\" column lists only `orchestrate_poll`, but this PR adds consumption in `review_autofix.yml` as well.\n  WHY: After this PR lands, the variable is used by both workflows, so the README is incomplete.\n- scripts/review_conflict_resolve.sh:236-241 | severity=low | confidence=2\n  PROBLEM: The post-edit verification grep patterns use exact-match anchors without allowing trailing whitespace.\n  WHY: This is a minor diagnostic-only concern; the resolver continues executing and the warning can be misleading only in edge cases.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "016db9a454acb9c1ed956c8ec6475519275abbde184821f34360c687e85ca793",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2059,
+    "run_id": "25303629616",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25303629616",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504063012_1ca7ae55ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2059,
+    "run_id": "25303629616"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T06:30:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
