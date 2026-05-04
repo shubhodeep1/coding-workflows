@@ -164,7 +164,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_JUDGE` | `medium` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
 | `THINKING_LEVEL_VALIDATE` | `medium` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
-| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | orchestrate_poll, review_autofix | Reasoning effort for the Codex-based merge conflict resolver (orchestrator integration-sync runs and review_autofix's post-editor resolver step) |
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
 | Variable | Default | Used By | Description |
@@ -891,7 +891,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | Reasoning effort for auto-answering clarification questions |
 | `THINKING_LEVEL_VALIDATE` | `medium` | Reasoning effort for runtime validation harness generation and diagnosis |
-| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the Codex-based merge conflict resolver (used by orchestrate_poll integration-sync and review_autofix's post-editor resolver step) |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 | `SEMANTIC_CACHE_BACKEND` | `none` | Semantic cache backend selector for clarification workloads: `none`, `redis`, `sqlite-vec` |
