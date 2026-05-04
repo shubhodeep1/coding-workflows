@@ -4801,18 +4801,18 @@ jobs:
           # editor_attempt_${attempt}.err (codex stderr) for every retry,
           # plus editor_attempt_${attempt}_changes_lost.txt when the
           # claimed-changes-lost guard fires. The reviewer-side .log /
-          # .txt / .err / status_* files plus pass1/pass2 two-pass logs
-          # and consensus_pass1.txt cover the reviewer-fanout failure
-          # modes (all written by review_run_reviewers.sh into
-          # PREVIOUS_REVIEWS_DIR). Without these the only remaining
-          # trace of why a codex stage produced 0 bytes is the
-          # truncated stderr in the live job log.
+          # .txt / status_* files plus pass1/pass2 two-pass logs and
+          # consensus_pass1.txt cover the reviewer-fanout failure modes
+          # (all written by review_run_reviewers.sh into
+          # PREVIOUS_REVIEWS_DIR — note: reviewers produce .log not
+          # .err, the .err extension is editor-only). Without these the
+          # only remaining trace of why a codex stage produced 0 bytes
+          # is the truncated stderr in the live job log.
           if [ -d "${PREVIOUS_REVIEWS_DIR:-}" ]; then
             for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err \
                      "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_changes_lost.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/review_*.txt \
-                     "${PREVIOUS_REVIEWS_DIR}"/review_*.err \
                      "${PREVIOUS_REVIEWS_DIR}"/review_*.log \
                      "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt \
                      "${PREVIOUS_REVIEWS_DIR}"/pass1_*.log \

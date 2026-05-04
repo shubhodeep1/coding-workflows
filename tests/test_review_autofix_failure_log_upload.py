@@ -141,12 +141,17 @@ def test_review_autofix_failure_log_artifact_upload_contract() -> None:
 	# :1155, :1160) — without them a reviewer-side empty-output
 	# failure is undebuggable because reviewer_prompt.txt is just the
 	# legacy single-pass artefact (Copilot review on #2086).
+	# reviewer_prompt_body.txt is the un-rendered template that
+	# assemble_reviewer_prompt() uses to build pass1/pass2 — pinned so
+	# template-side regressions are still attributable from the
+	# artifact alone (claude-branch-review on #2086).
 	for f in (
 		"editor_summary.txt",
 		"editor_prompt.txt",
 		"editor_prompt_body.txt",
 		"pr_editor_comment.txt",
 		"reviewer_consensus.txt",
+		"reviewer_prompt_body.txt",
 		"reviewer_prompt_pass1.txt",
 		"reviewer_prompt_pass2.txt",
 		"cross_pollination_summary.txt",
@@ -187,20 +192,45 @@ def test_review_autofix_failure_log_artifact_upload_contract() -> None:
 	# stderr for each reviewer is preserved as ${PREVIOUS_REVIEWS_DIR}/
 	# review_<model>.log by review_run_reviewers.sh:736 BEFORE the
 	# reviewer's ephemeral CODEX_HOME is wiped, so these globs are the
-	# correct surrogate for the reviewer wire trace.
+	# correct surrogate for the reviewer wire trace. The pass1_*.log /
+	# pass2_*.log files are the per-pass codex stderr; cache_probe_*
+	# captures the prompt-cache HTTP probe diagnostics
+	# (review_run_reviewers.sh:114-117). All four .log/cache_probe
+	# globs were pinned in response to the claude-branch-review on
+	# #2086 — without them a refactor that drops them would lose
+	# diagnostics with no CI signal. Note: there is no review_*.err
+	# glob — reviewers produce .log not .err (the .err extension is
+	# editor-only), and the reviewer script never writes review_*.err.
 	for glob in (
 		"review_*.txt",
 		"review_*.log",
 		"pass1_*.txt",
+		"pass1_*.log",
 		"pass2_*.txt",
+		"pass2_*.log",
 		"status_*.txt",
 		"consensus_pass1.txt",
+		"cache_probe_*.txt",
+		"cache_probe_*.log",
 	):
 		assert glob in stage_block, (
 			f"Staging step must include reviewer-fanout glob {glob} "
 			f"so reviewer-side codex failures (not just editor) are "
 			f"diagnosable from the artifact"
 		)
+	# Anti-assertion: the dead review_*.err glob must NOT be staged.
+	# review_run_reviewers.sh produces .log files for reviewer stderr,
+	# never .err — the .err extension is reserved for editor attempts
+	# (review_apply_fixes.sh:964). A stale review_*.err glob is a
+	# harmless no-op but actively misleading to future maintainers.
+	# claude-branch-review consensus across 6 reviewers flagged this
+	# on #2086.
+	assert '"${PREVIOUS_REVIEWS_DIR}"/review_*.err' not in stage_block, (
+		"Staging step must NOT include review_*.err: reviewers produce "
+		".log not .err. The dead glob misleads readers into thinking "
+		"reviewer stderr lives in .err files when it actually lives "
+		"in review_*.log."
+	)
 
 	# ~/.codex/log must be copied WITHOUT a wall-clock filter — same
 	# rationale as the implement.yml equivalent. A single review_autofix
