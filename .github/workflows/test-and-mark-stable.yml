@@ -381,20 +381,27 @@ jobs:
             echo "::error::Canary spec template missing at ${SPEC_TEMPLATE_PATH}"
             exit 1
           fi
-          # Substitute RUN_ID and strip any trailing newline so it doesn't
-          # double-up inside the markdown fenced block below.
-          SPEC_BLOCK=$(sed "s/__RUN_ID__/${RUN_ID}/g" "${SPEC_TEMPLATE_PATH}")
+          # Substitute RUN_ID. Use the trailing-newline-preserving
+          # sentinel trick around `$(...)` because command substitution
+          # otherwise strips ALL trailing newlines, which would render
+          # the issue body's fenced code block one line shorter than
+          # the byte-for-byte spec the pytest verifier asserts. The
+          # `; echo X` appends a sentinel char so the trailing `\n`
+          # from the spec template survives, and `${var%X}` strips it
+          # back off — net result: SPEC_BLOCK ends in `\n` exactly as
+          # the template does.
+          SPEC_BLOCK=$(sed "s|__RUN_ID__|${RUN_ID}|g" "${SPEC_TEMPLATE_PATH}"; echo X)
+          SPEC_BLOCK="${SPEC_BLOCK%X}"
           # Build a single-line printf-quoted form for the example shell
           # command later in the body (newlines as literal `\n`).
           SPEC_PRINTF=$(printf '%s' "${SPEC_BLOCK}" | awk 'BEGIN{ORS="\\n"}1' | sed 's/\\n$//')
 
           BODY="## Task
 
-          The file \`tests/e2e_smoke_canary.txt\` already exists in the repository. Update its content so it is **exactly** these three lines (no more, no less):
+          The file \`tests/e2e_smoke_canary.txt\` already exists in the repository. Update its content so it is **exactly** these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention):
 
           \`\`\`text
-          ${SPEC_BLOCK}
-          \`\`\`
+          ${SPEC_BLOCK}\`\`\`
 
           ## How to do it
 
@@ -1552,6 +1559,28 @@ jobs:
       # detour. Phase 3c's `pr_already_closed` path is still
       # hard-failing on its own (test-setup race, not editor
       # reliability).
+      #
+      # Status outputs (echoed into $GITHUB_OUTPUT, consumed by the
+      # aggregator below):
+      #   success                  — first attempt passed
+      #   success_after_retry      — passed after one re-dispatch
+      #   spec_mismatch            — pytest FAILED after retry (real editor bug)
+      #   harness_misconfigured    — pytest fixture/INTERNALERROR (workflow / runner / template
+      #                              issue, not editor)
+      #   no_editor_commit         — canary content correct but PR head still equals BAIT_SHA
+      #   fetch_failed             — Contents API couldn't return the canary on first attempt
+      #   fetch_failed_after_retry — same, after retry
+      #   pytest_unavailable       — pip + apt fallback both failed (infra error)
+      #   pr_head_fetch_failed     — pulls/<n> API failed; refused to fail-open commit guard
+      #   retry_dispatch_failed    — gh workflow run failed, or wait-review id non-numeric
+      #   retry_timeout            — re-dispatched run did not complete in 10 min
+      #   retry_workflow_failed    — retry run completed but conclusion != success
+      #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
+      #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
+      #                              (~60s of GitHub API outage); poll loop bails to avoid
+      #                              burning the full 10-min retry window
+      # Aggregator hard-fails on anything except success / success_after_retry. Phase 3c's
+      # pr_already_closed (test-setup race) is hard-failed in the aggregator separately.
       #
       # Gate on wait-review's status: if the review pipeline didn't
       # complete cleanly upstream, retrying it from here would burn
