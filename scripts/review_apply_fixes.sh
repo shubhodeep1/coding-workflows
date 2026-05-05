@@ -503,9 +503,9 @@ EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls)
 - Returning an empty completion or a final assistant message that only
   describes the fix ("I will apply_patch ...", "applying the requested
   edit now", "the resolution is straightforward") is a FAILURE. The
-  workflow's stuck-detection counts these as no-actionable-output and
-  bails after 2 consecutive empty attempts. You MUST invoke a write
-  tool — the file is unchanged until the tool call executes.
+  editor retry loop counts these as no-actionable-output and bails
+  after 3 attempts without a commit. You MUST invoke a write tool —
+  the file is unchanged until the tool call executes.
 - Known model bug: gpt-5.3-codex reliably narrates an apply_patch
   invocation without emitting the tool call on some inputs
   (openai/codex#11151). The fallback paths above exist for that case.

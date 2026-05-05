@@ -1115,10 +1115,7 @@ jobs:
             the actual content and path) for fully-specified plain-text
             files (.txt, .csv, small data fixtures), or any other write
             tool. Pick whatever gets the bytes onto disk this turn — what
-            matters is that the file actually changes. The skeleton below
-            is illustrative — substitute the real lines and target path
-            from the plan, not the literal placeholders:
-              printf 'line1\nline2\nline3\n' > path/to/file.txt
+            matters is that the file actually changes.
             Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
             source — they exit 0 even when the regex misses, leaving the
             file unchanged. After ANY shell write, verify with
