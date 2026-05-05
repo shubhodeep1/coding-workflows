@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:175-185 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new test step invokes `python3 tests/test_review_conflict_resolve_smoke_deterministic.py` directly instead of running it through pytest.\n  WHY: This is a maintenance inconsistency with adjacent CI steps that use pytest; it works now, but future use of pytest features would require CI changes.\n- scripts/review_conflict_resolve.sh:289-327 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The test\u2019s awk extraction logic is brittle because it assumes the script block\u2019s exact multiline formatting.\n  WHY: A refactor that changes indentation or quoting could break extraction and leave the test validating stale semantics rather than the actual awk program.\n- scripts/review_conflict_resolve.sh:546-573 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_empty_stdout_observed` is initialized outside the empty-stdout branch and may retain stale per-iteration state.\n  WHY: If the loop spans multiple iterations, the log condition can misreport empty vs non-empty stdout based on a prior iteration; the reviewer recommends resetting it each loop.\n- tests/test_review_conflict_resolve_smoke_deterministic.py:140-170 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The test slices source text using fixed layout assumptions around the snapshot marker.\n  WHY: If the script layout changes, the slice could miss the intended body checks and let an unintended refactor pass unnoticed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/ci.yml:175-185 | severity=low | confidence=3\n  PROBLEM: The new test step invokes `python3 tests/test_review_conflict_resolve_smoke_deterministic.py` directly instead of running it through pytest.\n  WHY: This is a maintenance inconsistency with adjacent CI steps that use pytest; it works now, but future use of pytest features would require CI changes.\n- scripts/review_conflict_resolve.sh:289-327 | severity=medium | confidence=4\n  PROBLEM: The test\u2019s awk extraction logic is brittle because it assumes the script block\u2019s exact multiline formatting.\n  WHY: A refactor that changes indentation or quoting could break extraction and leave the test validating stale semantics rather than the actual awk program.\n- scripts/review_conflict_resolve.sh:546-573 | severity=medium | confidence=4\n  PROBLEM: `_empty_stdout_observed` is initialized outside the empty-stdout branch and may retain stale per-iteration state.\n  WHY: If the loop spans multiple iterations, the log condition can misreport empty vs non-empty stdout based on a prior iteration; the reviewer recommends resetting it each loop.\n- tests/test_review_conflict_resolve_smoke_deterministic.py:140-170 | severity=low | confidence=3\n  PROBLEM: The test slices source text using fixed layout assumptions around the snapshot marker.\n  WHY: If the script layout changes, the slice could miss the intended body checks and let an unintended refactor pass unnoticed.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===",
+  "fingerprint": "25851d9bc15cbc335a23e05e8d773e2392551a7d51efda1b19a79c183db32fea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2113,
+    "run_id": "25371973926",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25371973926",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260505111828_1a7132d2b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2113,
+    "run_id": "25371973926"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-05T11:18:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
