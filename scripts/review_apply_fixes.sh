@@ -648,10 +648,24 @@ rm -f "${EDITOR_SUMMARY_FILE}"
 # branch in codex's offline model_info fallback).
 #
 # Apply the override's specified resolution deterministically before
-# entering the codex retry loop, gated on (a) IS_SMOKE_TEST=true, (b)
-# the canary file exists and currently carries the well-known bait
-# shape (`# E2E_EDITOR_BAIT_<run_id>:` marker line). Production runs
-# (IS_SMOKE_TEST unset) skip the block entirely.
+# entering the codex retry loop, gated on (a) IS_SMOKE_TEST=true and
+# (b) the canary file exists and currently carries any of the three
+# bait fingerprints the smoke gate seeds: `BROKEN_BY_E2E_BAIT`
+# (status line corruption), `WRONG_VALUE_SHOULD_BE` (run_id line
+# corruption), or `# E2E_EDITOR_BAIT_<run_id>:` (trailer marker).
+# Matching any one is sufficient to recognise a smoke run with bait —
+# the deterministic restoration writes the canonical 3-line spec, so
+# it correctly recovers the file regardless of which subset is
+# present. Production runs (IS_SMOKE_TEST unset) skip the block
+# entirely.
+#
+# Run-id extraction below is narrower and DOES require the
+# `# E2E_EDITOR_BAIT_<run_id>:` marker line specifically — that's
+# the only fingerprint that embeds the genuine run_id we need to
+# write. If gate (b) matched on one of the other fingerprints alone
+# (no marker line), the extraction yields empty and the block falls
+# through to a `::warning::` + model-driven restoration, preserving
+# the pre-deterministic-fix behaviour for that edge case.
 #
 # Mirrors the resolver-side block in scripts/review_conflict_resolve.sh
 # (added by PR #2113). The codex editor invocation below still runs

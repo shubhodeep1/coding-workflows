@@ -237,6 +237,21 @@ for cfg in "${summariser_codex_home}/config.toml" "${summariser_codex_home}/.cod
 		else
 			printf '\nsandbox_mode = "read-only"\n' >> "${cfg}" 2>/dev/null || true
 		fi
+		# Post-edit verification: the sed/printf above silence errors with
+		# `2>/dev/null || true` so a permission / disk-full / sed-syntax
+		# failure would otherwise leave the config carrying whatever
+		# sandbox_mode the inherited file had (including workspace-write,
+		# the exact thing this pin is meant to neutralise). Verify the
+		# canonical line landed; warn loudly if it didn't so the operator
+		# sees the regression in the live job log instead of trusting a
+		# silent pin failure. We do NOT hard-fail the summariser step on
+		# a missed pin — the summariser is non-gating and the CLI's own
+		# `--sandbox read-only` flag still applies; an audible warning is
+		# the right severity (matches the pattern in
+		# scripts/review_conflict_resolve.sh's reasoning-effort verifier).
+		if ! grep -qE '^sandbox_mode = "read-only"$' "${cfg}" 2>/dev/null; then
+			echo "::warning::summariser sandbox pin did not take effect on ${cfg}: expected line 'sandbox_mode = \"read-only\"' is missing. Inherited sandbox setting may persist; verify the run's session-header sandbox line." >&2
+		fi
 	fi
 done
 
