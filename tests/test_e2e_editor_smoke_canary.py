@@ -14,6 +14,11 @@ it to a tmp path, and runs this test with three env vars:
 When E2E_PHASE_4B_INVOKED is not set and either of the canary vars is
 missing, every test skips so the file stays runnable from a normal
 `pytest tests/` sweep without polluting CI signal.
+
+The expected canary spec is read from the sibling `e2e_smoke_canary_spec.txt`
+template file (with `__RUN_ID__` substituted) so it stays in sync with
+whatever the create-issue step in test-and-mark-stable.yml renders into
+the issue body — single source of truth lives in the spec file.
 """
 
 from __future__ import annotations
@@ -23,8 +28,26 @@ import os
 import pytest
 
 
+SPEC_PATH = os.path.join(os.path.dirname(__file__), "e2e_smoke_canary_spec.txt")
+RUN_ID_PLACEHOLDER = b"__RUN_ID__"
+
+
 def _expected_content(run_id: str) -> bytes:
-    return f"status: ok\nrun_id: {run_id}\nupdated-by: ai-pipeline\n".encode("utf-8")
+    """Read the spec template + substitute __RUN_ID__ at byte level.
+
+    Reading in binary mode and substituting bytes (rather than text mode +
+    encoding) preserves the trailing newline and any other byte-level
+    properties of the template, matching the byte-for-byte contract
+    Phase 4b enforces.
+    """
+    with open(SPEC_PATH, "rb") as fh:
+        template = fh.read()
+    if RUN_ID_PLACEHOLDER not in template:
+        raise AssertionError(
+            f"Spec template at {SPEC_PATH!r} is missing the {RUN_ID_PLACEHOLDER!r} "
+            "placeholder — workflow harness change broke the test contract"
+        )
+    return template.replace(RUN_ID_PLACEHOLDER, run_id.encode("ascii"))
 
 
 @pytest.fixture(scope="module")

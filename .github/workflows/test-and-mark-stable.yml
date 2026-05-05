@@ -369,14 +369,29 @@ jobs:
 
           TITLE="[E2E Smoke Test] Update smoke-test canary (run ${RUN_ID})"
 
+          # Single source of truth for the canary spec lives in
+          # tests/e2e_smoke_canary_spec.txt with `__RUN_ID__` as the
+          # placeholder. Phase 4b's pytest reads the same file and
+          # substitutes the same way, so the issue body and the
+          # downstream byte-for-byte assertion can never drift.
+          SPEC_TEMPLATE_PATH="tests/e2e_smoke_canary_spec.txt"
+          if [ ! -f "${SPEC_TEMPLATE_PATH}" ]; then
+            echo "::error::Canary spec template missing at ${SPEC_TEMPLATE_PATH}"
+            exit 1
+          fi
+          # Substitute RUN_ID and strip any trailing newline so it doesn't
+          # double-up inside the markdown fenced block below.
+          SPEC_BLOCK=$(sed "s/__RUN_ID__/${RUN_ID}/g" "${SPEC_TEMPLATE_PATH}")
+          # Build a single-line printf-quoted form for the example shell
+          # command later in the body (newlines as literal `\n`).
+          SPEC_PRINTF=$(printf '%s' "${SPEC_BLOCK}" | awk 'BEGIN{ORS="\\n"}1' | sed 's/\\n$//')
+
           BODY="## Task
 
           The file \`tests/e2e_smoke_canary.txt\` already exists in the repository. Update its content so it is **exactly** these three lines (no more, no less):
 
           \`\`\`text
-          status: ok
-          run_id: ${RUN_ID}
-          updated-by: ai-pipeline
+          ${SPEC_BLOCK}
           \`\`\`
 
           ## How to do it
@@ -384,7 +399,7 @@ jobs:
           Overwrite the entire file. For example, the equivalent shell command would be:
 
           \`\`\`bash
-          printf 'status: ok\nrun_id: ${RUN_ID}\nupdated-by: ai-pipeline\n' > tests/e2e_smoke_canary.txt
+          printf '${SPEC_PRINTF}\n' > tests/e2e_smoke_canary.txt
           \`\`\`
 
           ## Constraints
@@ -1595,15 +1610,20 @@ jobs:
           # by every gh api call in this step (fetch helpers + poll
           # loop) so any single API blip gets up to 3 attempts with
           # 2s/4s backoff before being treated as terminal. On final
-          # failure the last attempt's stderr is surfaced as a warning
-          # so triage isn't blind to the underlying API error.
+          # failure ALL attempts' stderr is surfaced (not just the
+          # last) so triage can spot patterns like "first 2 were
+          # rate-limited then 3rd was 5xx".
           gh_api_with_retry() {
             local out
             local rc=0
             local err_file
             err_file="$(mktemp)"
             for try in 1 2 3; do
-              out=$(gh api "$@" 2>"${err_file}") && {
+              # Tag each attempt's stderr so they're distinguishable
+              # in the final warning and append (>>) — overwriting
+              # would lose earlier diagnostics.
+              echo "--- attempt ${try} stderr ---" >> "${err_file}"
+              out=$(gh api "$@" 2>>"${err_file}") && {
                 rm -f "${err_file}"
                 printf '%s' "${out}"
                 return 0
@@ -1612,7 +1632,7 @@ jobs:
               [ "${try}" -lt 3 ] && sleep $((try * 2))
             done
             if [ -s "${err_file}" ]; then
-              echo "::warning::gh api failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "${err_file}" | head -c 500)" >&2
+              echo "::warning::gh api failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "${err_file}" | head -c 1000)" >&2
             fi
             rm -f "${err_file}"
             return "${rc}"
@@ -1716,7 +1736,14 @@ jobs:
           # UsageError, and similar infra failures that should NOT
           # blame the editor.
           classify_pytest_failure() {
-            if grep -qE "INTERNALERROR" "${PYTEST_OUTPUT}" 2>/dev/null; then
+            # Case-insensitive INTERNALERROR (-i) for forward-compat
+            # against pytest output-format tweaks. ^FAILED  stays
+            # case-sensitive — pytest's short-summary prefix is
+            # documented as uppercase and matching it case-insensitively
+            # would risk false positives on user-controlled error
+            # message bodies that happen to contain "failed " at line
+            # start.
+            if grep -qiE "INTERNALERROR" "${PYTEST_OUTPUT}" 2>/dev/null; then
               echo "harness_misconfigured"
             elif grep -qE "^FAILED " "${PYTEST_OUTPUT}" 2>/dev/null; then
               echo "spec_mismatch"
