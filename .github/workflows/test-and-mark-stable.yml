@@ -1482,13 +1482,14 @@ jobs:
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
-      # ── Phase 4b: Verify the editor restored the bait commit ──
+      # ── Phase 4b: Verify editor restored the canary file ──
       # Confirms the reviewer→editor→commit pipeline actually fired by
       # running the pytest assertions in tests/test_e2e_editor_smoke_canary.py
-      # against the canary fetched from the post-review PR head. The
-      # test asserts byte-for-byte match to the issue's 3-line spec
-      # (any value mangled, any line added/removed, any bait marker
-      # surviving = test fails).
+      # against the canary file fetched from the post-review PR head,
+      # then checking the editor pushed at least one commit past the
+      # Phase 3c bait commit. The pytest test asserts byte-for-byte
+      # match to the issue's 3-line spec (any value mangled, any line
+      # added/removed, any bait marker surviving = test fails).
       #
       # Hard-fail with retry budget: the autofix editor model is
       # known-flaky (seven prior in-tree fixes targeting reasoning
@@ -1528,6 +1529,12 @@ jobs:
 
           python3 -m pip install --quiet pytest >/dev/null 2>&1 || {
             echo "::warning::pip install pytest failed; trying apt fallback"
+            # Refresh package indexes before the apt install — without
+            # this a stale index on a long-running runner image can
+            # surface as a spurious pytest_unavailable. Other workflows
+            # in this repo (review_autofix.yml) precede their apt-get
+            # installs the same way.
+            sudo apt-get update -qq >/dev/null 2>&1 || true
             sudo apt-get install -y --no-install-recommends python3-pytest >/dev/null 2>&1 || true
           }
           # Verify pytest is actually importable. Without this, a
@@ -1667,21 +1674,41 @@ jobs:
 
           echo "::warning::Phase 4b first attempt failed — re-dispatching review_autofix and retrying once"
 
-          # ── Retry: redispatch internal-review.yml on the bait commit ──
+          # ── Retry: redispatch internal-review.yml on the current branch head ──
           # Mirrors the Phase 3c fallback dispatch (lines ~1101-1109),
           # which uses internal-review.yml as the public entry-point that
           # gates into review_autofix.yml without an `[ai-autofix]` self-
           # trigger guard.
+          #
+          # Capture the branch head SHA right before dispatch — that's
+          # what the new workflow_dispatch run will carry as head_sha,
+          # and what we'll poll for. Filtering on BAIT_SHA would miss
+          # the retry run whenever the editor's first attempt already
+          # advanced the branch past the bait (e.g. the editor pushed
+          # a wrong-fix commit but pytest still failed); we'd hit
+          # retry_timeout even though the dispatch succeeded.
+          if ! RETRY_DISPATCH_SHA=$(gh_api_with_retry "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" --jq '.object.sha // empty'); then
+            echo "::error::Could not resolve ${BRANCH} head SHA before retry dispatch"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ -z "${RETRY_DISPATCH_SHA}" ]; then
+            echo "::error::Branch head SHA empty before retry dispatch"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "  resolved ${BRANCH} head for retry dispatch: ${RETRY_DISPATCH_SHA:0:7}"
+
           if ! gh workflow run "internal-review.yml" \
               --repo "${TEST_REPO}" \
-              --ref "${BRANCH}" \
+              --ref "${RETRY_DISPATCH_SHA}" \
               -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
             echo "::error::Retry dispatch failed; cannot recover"
             cat /tmp/retry_dispatch.txt >&2 || true
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          echo "✓ Retry dispatch sent — polling for the new review run"
+          echo "✓ Retry dispatch sent at ${RETRY_DISPATCH_SHA:0:7} — polling for the new review run"
 
           # Poll for the new review run on the bait SHA. Skip the run
           # we already saw via wait-review by recording its id.
@@ -1703,7 +1730,7 @@ jobs:
             fi
             CANDIDATES=$(gh_api_with_retry \
               "repos/${TEST_REPO}/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=10" \
-              --jq ".workflow_runs[] | select(.head_sha == \"${BAIT_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"") || CANDIDATES=""
+              --jq ".workflow_runs[] | select(.head_sha == \"${RETRY_DISPATCH_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"") || CANDIDATES=""
             if [ -z "${CANDIDATES}" ]; then
               echo "  (no new review run yet, pr_state=${PR_STATE})"
               continue
