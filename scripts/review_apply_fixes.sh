@@ -217,9 +217,8 @@ MANDATORY ACTIONS for this run:
 3. Do not modify any file other than tests/e2e_smoke_canary.txt.
 4. After the apply_patch succeeds, emit the standard editor summary
    schema below as usual; under "Changes made:" list the bullet
-   "modified tests/e2e_smoke_canary.txt: restored canary to issue
-   spec (removed bait corruption)", and under "Change status:" emit
-   "- edited".
+   "modified tests/e2e_smoke_canary.txt: restored canary to issue spec (removed bait corruption)",
+   and under "Change status:" emit "- edited".
 
 The remaining sections of this prompt (reviewer inputs, consolidator,
 hardening tasks, etc.) still apply, but for this fixture the only

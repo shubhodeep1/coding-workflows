@@ -343,6 +343,17 @@ jobs:
           fi
           echo "Target repo: ${TEST_REPO}"
           echo "Phase timeout: ${PHASE_TIMEOUT} minutes"
+          echo "Review workflow file: ${REVIEW_WORKFLOW_FILE}"
+          # Validate REVIEW_WORKFLOW_FILE before it gets passed to
+          # `gh workflow run` / Actions API as a positional. If the
+          # value starts with `-` (e.g. `--help`), gh would treat it
+          # as a flag; if it contains `/` or other unexpected chars,
+          # the API path can break. Lock it down to a basename
+          # matching `<safe>.yml` and reject anything else early.
+          if ! printf '%s' "${REVIEW_WORKFLOW_FILE}" | grep -qE '^[A-Za-z0-9_.-]+\.yml$'; then
+            echo "::error::REVIEW_WORKFLOW_FILE='${REVIEW_WORKFLOW_FILE}' is not a safe basename matching ^[A-Za-z0-9_.-]+\\.yml\$ — refusing to proceed"
+            exit 1
+          fi
           # Verify we can access the repo
           gh api "repos/${TEST_REPO}" --jq '.full_name' \
             || { echo "::error::Cannot access ${TEST_REPO}. Check GH_PAT permissions."; exit 1; }
@@ -1511,7 +1522,7 @@ jobs:
       # known-flaky (seven prior in-tree fixes targeting reasoning
       # effort and prompt content; production runs hit empty-completion
       # state non-deterministically). On first pytest failure we
-      # snapshot the branch head SHA, re-dispatch internal-review.yml
+      # snapshot the branch head SHA, re-dispatch ${REVIEW_WORKFLOW_FILE}
       # via `--ref "${BRANCH}"`, and poll for a new workflow_dispatch
       # run whose head_sha matches the snapshotted SHA. We allow up
       # to 10 minutes for the new run to complete; if the second
@@ -2699,7 +2710,11 @@ jobs:
             PASSED=false
           fi
 
-          # Check editor bait removal (Phase 4b)
+          # Check Phase 4b — pytest verification that the editor
+          # restored the canary file byte-for-byte and pushed a fix
+          # commit past the bait. (Variable names retain the "BAIT_"
+          # prefix from the prior single-line-bait era so existing
+          # log greps and downstream tooling keep working.)
           BAIT_INJECTED="${{ steps.inject-bait.outputs.status }}"
           BAIT_VERIFIED="${{ steps.verify-bait-removed.outputs.status }}"
           REVIEW_OK=false

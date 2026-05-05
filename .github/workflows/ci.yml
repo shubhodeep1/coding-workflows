@@ -101,8 +101,11 @@ jobs:
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
           # Phase 4b smoke-test fixture (only run from
-          # test-and-mark-stable.yml; py_compile catches syntax/import
-          # breakage in CI before it lands silently in the release path).
+          # test-and-mark-stable.yml). py_compile catches syntax-level
+          # breakage (parse errors, indentation) early in CI; it does
+          # NOT exercise imports, so import-time errors (e.g. missing
+          # pytest at runtime) still surface only when Phase 4b
+          # actually runs the test on the smoke runner.
           python3 -m py_compile tests/test_e2e_editor_smoke_canary.py
 
       - name: Orchestrate lib unit tests
