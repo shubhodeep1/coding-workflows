@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains 6 lines of corrupted bait content instead of exactly the 3 lines required by issue #2105.\n  WHY: The file\u2019s values are wrong (`status`, `run_id`, and `updated-by`) and it includes three extra lines, so it will fail the E2E smoke validation gate; all reviewers reported the same root cause with confidence 5.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file contains 6 lines of bait-corrupted content instead of exactly the 3 lines required by issue #2105.\n  WHY: The file\u2019s values are wrong and it includes three extra lines, so the smoke gate tests that compare against the issue spec byte-for-byte will fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file contains corrupted bait content with wrong values and three extra lines that violate the \"exactly three lines\" constraint.\n  WHY: The implementation failed to write the correct three-line specification, so the E2E smoke test gate will fail when it validates the canary file.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file contains 6 lines with incorrect values and extra content instead of exactly 3 lines as specified in issue #2105.\n  WHY: The current content has wrong values and includes 3 extra lines that violate the \"exactly three lines\" constraint, which will cause the smoke gate validation to fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file contains 6 lines of bait/corrupted content instead of the exact 3 lines specified in issue #2105.\n  WHY: The corrupted values and extra lines will cause the E2E smoke validation gate to fail, blocking downstream merge/deployment workflows.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File content does not match the exact specification from issue #2105.\n  WHY: It contains incorrect values and three extra lines instead of exactly three lines, so the E2E smoke validation gate will fail.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file contains 6 lines of corrupted \"E2E bait\" content instead of the exactly three lines specified in issue #2105.\n  WHY: The current corrupted content will fail the smoke test, blocking merges and deployments; the linked issue explicitly requires byte-exact content with exactly three lines and a trailing newline.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4b84093c2d3eb04d6e3ce2fa5c5075684a97147c04d1ee8335d2a8c2dc18d5af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2112,
+    "run_id": "25370115370",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25370115370",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260505103336_e5639fd65c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2112,
+    "run_id": "25370115370"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-05T10:33:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
