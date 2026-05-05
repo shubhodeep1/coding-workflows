@@ -121,7 +121,8 @@ EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
   turn.
 - Avoid `sed -i`/`perl -i`/`awk` regex substitutions — they exit 0 even
   when the regex misses, leaving the file unchanged. After ANY shell write,
-  verify with `git diff --stat <file>`; if zero lines changed, switch tools.
+  verify with `git diff --stat -- path/to/file` (substitute the actual
+  path); if zero lines changed, switch tools.
 - Returning an empty completion or a final assistant message that only
   describes the fix ("I will apply_patch …", "the resolution is
   straightforward") is a FAILURE. The retry loop counts these as
