@@ -557,12 +557,17 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # fail the existing retry / no-progress / exhaustion paths handle
   # it. Write a placeholder summary so downstream commit / posting
   # logic always has parseable text.
+  _empty_stdout_observed=0
   if [ ! -s "${tmp_output}" ]; then
+    _empty_stdout_observed=1
     printf 'Resolver produced no stdout on attempt %s; working-tree state validated directly (markers + fingerprint gates).\n' "${attempt}" > "${tmp_output}"
-    echo "Conflict resolver produced no stdout on attempt ${attempt}; falling through to soft validation against working tree."
   fi
   mv "${tmp_output}" "${CONFLICT_RESOLVER_SUMMARY_FILE}"
-  echo "Conflict resolver produced output on attempt ${attempt}; running soft validation."
+  if [ "${_empty_stdout_observed}" -eq 1 ]; then
+    echo "Conflict resolver produced no stdout on attempt ${attempt}; using placeholder summary and running soft validation against working tree."
+  else
+    echo "Conflict resolver produced output on attempt ${attempt}; running soft validation."
+  fi
 
   # Soft validation #1: residual Git conflict markers.  A
   # resolver output that leaves markers behind never parses
