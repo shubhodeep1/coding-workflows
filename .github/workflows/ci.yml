@@ -100,6 +100,10 @@ jobs:
           python3 -m py_compile scripts/analyze_workflow_logs.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
+          # Phase 4b smoke-test fixture (only run from
+          # test-and-mark-stable.yml; py_compile catches syntax/import
+          # breakage in CI before it lands silently in the release path).
+          python3 -m py_compile tests/test_e2e_editor_smoke_canary.py
 
       - name: Orchestrate lib unit tests
         run: |

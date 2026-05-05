@@ -1629,8 +1629,17 @@ jobs:
 
           run_pytest() {
             : > "${PYTEST_OUTPUT}"
+            # Locally disable -e so a non-zero pytest exit doesn't
+            # propagate up before we can capture it. `set -e` semantics
+            # for a function called from `if !` should already exempt
+            # the body, but pipefail + the `tee` pipeline make the
+            # interaction subtle enough to be worth pinning down
+            # explicitly.
+            set +e
             python3 -m pytest tests/test_e2e_editor_smoke_canary.py -v --no-header 2>&1 | tee "${PYTEST_OUTPUT}"
-            return "${PIPESTATUS[0]}"
+            local rc="${PIPESTATUS[0]}"
+            set -e
+            return "${rc}"
           }
 
           # When pytest fails, distinguish a true editor regression
@@ -1701,6 +1710,13 @@ jobs:
           # advanced the branch past the bait (e.g. the editor pushed
           # a wrong-fix commit but pytest still failed); we'd hit
           # retry_timeout even though the dispatch succeeded.
+          #
+          # `gh workflow run` is dispatched with --ref "${BRANCH}"
+          # (its documented contract is branch/tag, not raw SHA);
+          # RETRY_DISPATCH_SHA is used only as the poll filter. Tiny
+          # race window if the branch advances between snapshot and
+          # dispatch — acceptable, and the retry_timeout path catches
+          # it cleanly.
           if ! RETRY_DISPATCH_SHA=$(gh_api_with_retry "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" --jq '.object.sha // empty'); then
             echo "::error::Could not resolve ${BRANCH} head SHA before retry dispatch"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -1715,14 +1731,14 @@ jobs:
 
           if ! gh workflow run "internal-review.yml" \
               --repo "${TEST_REPO}" \
-              --ref "${RETRY_DISPATCH_SHA}" \
+              --ref "${BRANCH}" \
               -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
             echo "::error::Retry dispatch failed; cannot recover"
             cat /tmp/retry_dispatch.txt >&2 || true
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          echo "✓ Retry dispatch sent at ${RETRY_DISPATCH_SHA:0:7} — polling for the new review run"
+          echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — polling for the new review run"
 
           # Poll for the new review run on the bait SHA. Skip the run
           # we already saw via wait-review by recording its id.

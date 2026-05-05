@@ -23,26 +23,32 @@ import os
 import pytest
 
 
-def _expected_content(run_id: str) -> str:
-    return f"status: ok\nrun_id: {run_id}\nupdated-by: ai-pipeline\n"
+def _expected_content(run_id: str) -> bytes:
+    return f"status: ok\nrun_id: {run_id}\nupdated-by: ai-pipeline\n".encode("utf-8")
 
 
 @pytest.fixture(scope="module")
-def canary_invocation() -> tuple[str, str, str]:
-    """Resolve canary path + expected run id, then read the file.
+def canary_invocation() -> tuple[str, str, bytes]:
+    """Resolve canary path + expected run id, then read the file as bytes.
 
     Reading the file in the fixture (not in individual tests) makes
     file-existence failures deterministic regardless of pytest's test-
     collection / execution order. Each test gets the (path, run_id,
-    content) tuple and works on the already-loaded content.
+    content_bytes) tuple and works on the already-loaded content.
+
+    Read mode is binary ("rb") so universal-newlines translation
+    (CRLF→LF on text-mode read) does not mask line-ending drift in
+    the byte-for-byte assertion downstream.
     """
     canary_file = os.environ.get("E2E_CANARY_FILE")
     expected_run_id = os.environ.get("E2E_EXPECTED_RUN_ID")
     invoked_from_phase_4b = os.environ.get("E2E_PHASE_4B_INVOKED") == "1"
     if invoked_from_phase_4b:
         # Production invocation: missing config is a workflow bug, not
-        # a reason to skip silently. Fail loudly so the run shows
-        # status=spec_mismatch in Phase 4b's exit handling.
+        # a reason to skip silently. Fail loudly — Phase 4b's
+        # classify_pytest_failure maps any non-FAILED pytest exit to
+        # status=harness_misconfigured (operators look at the workflow
+        # YAML / runner setup, not the editor).
         if not canary_file or not expected_run_id:
             raise RuntimeError(
                 "E2E_PHASE_4B_INVOKED=1 but E2E_CANARY_FILE / "
@@ -60,25 +66,25 @@ def canary_invocation() -> tuple[str, str, str]:
             "Phase 4b should have written the fetched contents here "
             "before invoking pytest"
         )
-    with open(canary_file, encoding="utf-8") as fh:
+    with open(canary_file, "rb") as fh:
         content = fh.read()
     return canary_file, expected_run_id, content
 
 
 def test_canary_does_not_contain_bait_marker(
-    canary_invocation: tuple[str, str, str],
+    canary_invocation: tuple[str, str, bytes],
 ) -> None:
     _, _, content = canary_invocation
     # Phase 3c always injects a marker line of the form
     # "# E2E_EDITOR_BAIT_<run_id>: ...". The editor MUST strip this
     # marker; if it survives, the canary is still corrupted.
-    assert "E2E_EDITOR_BAIT_" not in content, (
+    assert b"E2E_EDITOR_BAIT_" not in content, (
         "canary still contains the bait marker — editor failed to remove it"
     )
 
 
 def test_canary_matches_issue_spec_byte_for_byte(
-    canary_invocation: tuple[str, str, str],
+    canary_invocation: tuple[str, str, bytes],
 ) -> None:
     _, expected_run_id, actual = canary_invocation
     expected = _expected_content(expected_run_id)
