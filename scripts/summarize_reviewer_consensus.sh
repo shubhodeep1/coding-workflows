@@ -217,9 +217,41 @@ mkdir -p "${summariser_codex_home}/bin"
 
 # Patch reasoning effort in the isolated config — same sed recipe the reviewer
 # runner uses. Check both top-level and .codex/ nested layouts.
+#
+# Also pin sandbox_mode to "read-only" in the cloned config. The summariser is
+# advisory: its prompt explicitly says "Your output must never be treated as
+# a gate" and reviewers run sandbox=read-only for the same reason. The CLI
+# already passes `--sandbox read-only` (see the codex invocation below), but
+# run 25370115370 demonstrated that the inherited config.toml's
+# `sandbox_mode = "workspace-write"` takes precedence over the flag — the
+# summariser session header reported `sandbox: workspace-write [...] (network
+# access enabled)` and the model used its write access to overwrite
+# tests/e2e_smoke_canary.txt via `printf >`. That happened to fix the smoke
+# fixture this once but is a latent foot-gun: a future summariser run could
+# rewrite arbitrary repo files with no allowlist guard. Fix at config-source.
 for cfg in "${summariser_codex_home}/config.toml" "${summariser_codex_home}/.codex/config.toml"; do
 	if [ -f "${cfg}" ]; then
 		sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${SUMMARISER_REASONING}\"/" "${cfg}" 2>/dev/null || true
+		if grep -qE '^[[:space:]]*sandbox_mode[[:space:]]*=' "${cfg}" 2>/dev/null; then
+			sed -i 's|^[[:space:]]*sandbox_mode[[:space:]]*=.*|sandbox_mode = "read-only"|' "${cfg}" 2>/dev/null || true
+		else
+			printf '\nsandbox_mode = "read-only"\n' >> "${cfg}" 2>/dev/null || true
+		fi
+		# Post-edit verification: the sed/printf above silence errors with
+		# `2>/dev/null || true` so a permission / disk-full / sed-syntax
+		# failure would otherwise leave the config carrying whatever
+		# sandbox_mode the inherited file had (including workspace-write,
+		# the exact thing this pin is meant to neutralise). Verify the
+		# canonical line landed; warn loudly if it didn't so the operator
+		# sees the regression in the live job log instead of trusting a
+		# silent pin failure. We do NOT hard-fail the summariser step on
+		# a missed pin — the summariser is non-gating and the CLI's own
+		# `--sandbox read-only` flag still applies; an audible warning is
+		# the right severity (matches the pattern in
+		# scripts/review_conflict_resolve.sh's reasoning-effort verifier).
+		if ! grep -qE '^sandbox_mode = "read-only"$' "${cfg}" 2>/dev/null; then
+			echo "::warning::summariser sandbox pin did not take effect on ${cfg}: expected line 'sandbox_mode = \"read-only\"' is missing. Inherited sandbox setting may persist; verify the run's session-header sandbox line." >&2
+		fi
 	fi
 done
 

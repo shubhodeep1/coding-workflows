@@ -1552,8 +1552,10 @@ jobs:
       # snapshot the branch head SHA, re-dispatch ${REVIEW_WORKFLOW_FILE}
       # via `--ref "${BRANCH}"`, and poll for a new workflow_dispatch
       # run whose head_sha matches the snapshotted SHA. We allow up
-      # to 10 minutes for the new run to complete; if the second
-      # verification also fails, we hard-fail this step. The retry
+      # to 25 minutes for the new run to complete (raised from 10 min
+      # after run 25371432937 truncated a still-running successful
+      # retry); if the second verification also fails, we hard-fail
+      # this step. The retry
       # absorbs single-shot model flakes without re-introducing the
       # release-blocking failure mode that drove the soft-check
       # detour. Phase 3c's `pr_already_closed` path is still
@@ -1573,18 +1575,18 @@ jobs:
       #   pytest_unavailable       — pip + apt fallback both failed (infra error)
       #   pr_head_fetch_failed     — pulls/<n> API failed; refused to fail-open commit guard
       #   retry_dispatch_failed    — gh workflow run failed, or wait-review id non-numeric
-      #   retry_timeout            — re-dispatched run did not complete in 10 min
+      #   retry_timeout            — re-dispatched run did not complete in 25 min
       #   retry_workflow_failed    — retry run completed but conclusion != success
       #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
       #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
       #                              (~60s of GitHub API outage); poll loop bails to avoid
-      #                              burning the full 10-min retry window
+      #                              burning the full 25-min retry window
       # Aggregator hard-fails on anything except success / success_after_retry. Phase 3c's
       # pr_already_closed (test-setup race) is hard-failed in the aggregator separately.
       #
       # Gate on wait-review's status: if the review pipeline didn't
       # complete cleanly upstream, retrying it from here would burn
-      # the 10-min retry window on a known-broken state. Skip Phase 4b
+      # the 25-min retry window on a known-broken state. Skip Phase 4b
       # in that case — the aggregator already counts the review
       # failure, and the skipped status is treated non-blocking
       # ("review didn't complete") instead of double-counting it as
@@ -1891,7 +1893,13 @@ jobs:
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          DEADLINE=$(( $(date +%s) + 600 ))  # 10 minutes
+          # 25 minutes (was 10 min; raised after run 25371432937 timed out
+          # during the retry's reviewer pass — full review_autofix pipeline
+          # is 6 reviewers + consolidator + editor + conflict resolver and
+          # observed to take ~20 min wall time, so 600s reliably truncated
+          # genuine successful retries. 25 min keeps the upper bound below
+          # the orchestrator phase budget while covering the observed P95).
+          DEADLINE=$(( $(date +%s) + 1500 ))
           RETRY_RUN_ID=""
           RETRY_STATUS=""
           RETRY_CONCL=""
@@ -1899,7 +1907,7 @@ jobs:
           # failure / parse failure) for too many consecutive iterations
           # we're effectively polling blind and the closed-PR guard
           # above is inactive. Bail out instead of burning the full
-          # 10-min retry window during a GitHub outage.
+          # 25-min retry window during a GitHub outage.
           PR_STATE_FAILURES=0
           PR_STATE_FAILURE_LIMIT=4  # ~60s of consecutive unknowns
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
@@ -1945,7 +1953,7 @@ jobs:
           done
 
           if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
-            echo "::error::Retry review run did not complete within 10 minutes"
+            echo "::error::Retry review run did not complete within 25 minutes"
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
           fi

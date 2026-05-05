@@ -175,6 +175,21 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_smoke_conflict_resolver_override.py
 
+      - name: Review conflict-resolve smoke deterministic contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py
+
+      - name: Review apply-fixes smoke deterministic contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_smoke_deterministic.py
+
+      - name: Summariser sandbox-mode pin contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_summarize_reviewer_consensus_sandbox_pin.py
+
       - name: Clarify loop guard unit tests
         run: |
           set -euo pipefail
