@@ -883,9 +883,9 @@ jobs:
           - Batch shell searches with && or ;.
           - Do NOT run `git diff` to display your own changes at the end of the
             run. The CI pipeline handles commit and diff reporting separately.
-            (Intermediate `git diff --stat -- path/to/file` checks during edit
-            verification — see EDIT TOOL DISCIPLINE below — are fine; this
-            prohibition is about end-of-run change reporting only.)
+            (Intermediate `git diff --stat` checks scoped to the edited file
+            during edit verification — see EDIT TOOL DISCIPLINE below — are
+            fine; this prohibition is about end-of-run change reporting only.)
           - Do NOT emit progress/status messages. Output ONLY repository changes.
 
           EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
@@ -893,18 +893,17 @@ jobs:
             source files (.sol, .ts, .py, .js, .go, .rs, .java, .json, etc.) — it
             produces the cleanest diff and the smallest blast radius.
           - If `apply_patch` does not land on a particular hunk, fall back to your
-            best judgment: a different `apply_patch` shape, a shell heredoc /
-            `printf '...content...' > path/to/file` (substitute the actual
-            content and path) for fully-specified plain-text files (.txt,
-            .csv, small data fixtures), or any other write tool you have
-            available. Pick whatever gets the bytes onto disk this turn —
-            what matters is that the file actually changes.
+            best judgment: a different `apply_patch` shape, a shell heredoc or
+            `printf` redirected to the target file for fully-specified
+            plain-text files (.txt, .csv, small data fixtures), or any other
+            write tool you have available. Pick whatever gets the bytes onto
+            disk this turn — what matters is that the file actually changes.
           - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
             source — they exit 0 even when the regex misses, leaving the
             file unchanged. After ANY shell write, verify with
-            `git diff --stat -- path/to/file` (substitute the actual
-            path); if zero lines changed, switch tools instead of
-            retrying the same regex shape.
+            `git diff --stat` (scoped to the edited file as needed); if zero
+            lines changed, switch tools instead of retrying the same regex
+            shape.
           - Returning an empty completion or a final assistant message that only
             describes the fix ("I will apply_patch …", "applying the requested
             edit now", "the resolution is straightforward") is a FAILURE. The
@@ -1114,17 +1113,17 @@ jobs:
             existing source files (.sol, .ts, .py, .js, .go, .rs, .java,
             .json, etc.). If it does not land on a particular hunk, fall back
             to your best judgment: a different `apply_patch` shape, a shell
-            heredoc / `printf '...content...' > path/to/file` (substitute
-            the actual content and path) for fully-specified plain-text
-            files (.txt, .csv, small data fixtures), or any other write
-            tool. Pick whatever gets the bytes onto disk this turn — what
-            matters is that the file actually changes.
+            heredoc or `printf` redirected to the target file for
+            fully-specified plain-text files (.txt, .csv, small data
+            fixtures), or any other write tool. Pick whatever gets the bytes
+            onto disk this turn — what matters is that the file actually
+            changes.
             Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
             source — they exit 0 even when the regex misses, leaving the
             file unchanged. After ANY shell write, verify with
-            `git diff --stat -- path/to/file` (substitute the actual
-            path); if zero lines changed, switch tools instead of
-            retrying the same regex shape.
+            `git diff --stat` (scoped to the edited file as needed); if
+            zero lines changed, switch tools instead of retrying the same
+            regex shape.
           - Do NOT read additional files until your first write tool call
             has succeeded. Pick the file you understand best from
             the plan, edit it first, verify the change landed on disk, and
