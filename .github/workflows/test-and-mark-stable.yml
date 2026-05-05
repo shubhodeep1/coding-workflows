@@ -1473,21 +1473,13 @@ jobs:
       # PR head no longer contains the bait marker AND that the editor
       # pushed at least one commit on top of the bait.
       #
-      # Soft check: emits the same diagnostic outputs (status=success /
-      # bait_remained / no_editor_commit / fetch_failed), but the step
-      # itself uses continue-on-error so a failure does not short-circuit
-      # the rest of the e2e job. The aggregator below ("Verify all phases
-      # passed") downgrades a failed editor-removed-bait check to a
-      # non-blocking warning because the autofix editor (codex CLI →
-      # OpenRouter `openai/gpt-5.3-codex`) has a known reliability gap
-      # that returns empty completions for ~100% of recent smoke runs;
-      # a 28-run failure streak (2026-04-30 → 2026-05-04, runs 25200104592+
-      # via `gh run list --workflow=test-and-mark-stable.yml`) was
-      # repeatedly mis-blocking releases despite seven prior in-tree
-      # fixes (016cbad, 358b1b9, ceb8617, edef200, 93d13e8, 2dc3646,
-      # 7fe2b80) targeting reasoning effort and prompt content. Phase 3c's
-      # `pr_already_closed` path is still hard-failing — that's a test-setup
-      # race, not editor reliability.
+      # Soft check (continue-on-error + WARN downgrade in the aggregator):
+      # the autofix editor model is flaky enough that this gate has been
+      # blocking unrelated releases. The diagnostic status (success /
+      # bait_remained / no_editor_commit / fetch_failed) is still emitted
+      # for visibility. Phase 3c's `pr_already_closed` is unaffected and
+      # remains hard-failing — that path signals a test-setup race, not
+      # editor reliability.
       - name: "Phase 4b: Verify editor removed bait line"
         id: verify-bait-removed
         if: steps.inject-bait.outputs.status == 'injected'
@@ -2385,12 +2377,8 @@ jobs:
             echo "  ✓ Editor Bait. PASSED (editor removed bait + pushed fix commit)"
           else
             # Soft check: editor-side failures (bait_remained,
-            # no_editor_commit, fetch_failed) do not block release. The
-            # autofix editor model is known-flaky on smoke runs (see
-            # Phase 4b comment for context); blocking on it caused a
-            # 28-run consecutive-failure streak that gated unrelated
-            # changes. The diagnostic is preserved in Phase 4b's log so
-            # we can still see when the editor regresses or recovers.
+            # no_editor_commit, fetch_failed) do not block release —
+            # see Phase 4b's comment for the rationale.
             echo "  ⚠ Editor Bait. WARN (${BAIT_VERIFIED:-not_run}) — editor pipeline did not exercise correctly (soft check; non-blocking — see Phase 4b log)"
           fi
 
