@@ -28,7 +28,7 @@ def _expected_content(run_id: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def canary_invocation(request: pytest.FixtureRequest) -> tuple[str, str, str]:
+def canary_invocation() -> tuple[str, str, str]:
     """Resolve canary path + expected run id, then read the file.
 
     Reading the file in the fixture (not in individual tests) makes

@@ -150,20 +150,21 @@ echo "Artifacts: floor_tags=$(wc -c < "${FLOOR_TAGS_FILE}" 2>/dev/null || echo 0
 # The smoke override prepends a "you MUST call apply_patch on
 # tests/e2e_smoke_canary.txt" directive to the editor prompt, but
 # only when (a) the workflow flagged this as a smoke run AND (b) the
-# canary file actually contains an injected bait line.
+# canary file actually contains an injected bait marker.
 #
 # (b) matters because review_autofix triggers on pull_request:opened
 # (internal-review.yml:4-5), which fires the FIRST review_autofix run
 # the moment the smoke PR is created — BEFORE
-# test-and-mark-stable.yml's Phase 3c appends the bait commit
-# (test-and-mark-stable.yml:904-1009). On that first round the canary
-# is still the legitimate 3-line file from the implement step; telling
-# the editor it "currently contains 4 lines" would force a
-# guaranteed-false apply_patch (Copilot review on PR #2086).
+# test-and-mark-stable.yml's Phase 3c rewrites the canary with the
+# multi-line corruption. On that first round the canary is still the
+# legitimate 3-line file from the implement step; telling the editor
+# it "is corrupted and must be restored" would force a guaranteed-
+# false apply_patch (Copilot review on PR #2086).
 #
-# The bait line shape is fixed by Phase 3c at line ~1007:
-#   "# E2E_EDITOR_BAIT_${GITHUB_RUN_ID}: this line should be removed
-#    by the editor (smoke gate)"
+# Phase 3c rewrites the canary with mangled values, extra noise lines,
+# and a marker line of the form:
+#   "# E2E_EDITOR_BAIT_${GITHUB_RUN_ID}: canary corrupted; restore to
+#    linked issue spec (smoke gate)"
 # Match on the leading comment + marker prefix only — the run ID
 # changes per smoke run and we don't want to plumb it through here.
 EDITOR_BODY_RENDER_SMOKE=false
