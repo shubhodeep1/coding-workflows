@@ -1594,15 +1594,27 @@ jobs:
           # 429/5xx doesn't bypass the editor-flake retry budget. Used
           # by every gh api call in this step (fetch helpers + poll
           # loop) so any single API blip gets up to 3 attempts with
-          # 2s/4s backoff before being treated as terminal.
+          # 2s/4s backoff before being treated as terminal. On final
+          # failure the last attempt's stderr is surfaced as a warning
+          # so triage isn't blind to the underlying API error.
           gh_api_with_retry() {
             local out
             local rc=0
+            local err_file
+            err_file="$(mktemp)"
             for try in 1 2 3; do
-              out=$(gh api "$@" 2>/dev/null) && { printf '%s' "${out}"; return 0; }
+              out=$(gh api "$@" 2>"${err_file}") && {
+                rm -f "${err_file}"
+                printf '%s' "${out}"
+                return 0
+              }
               rc=$?
               [ "${try}" -lt 3 ] && sleep $((try * 2))
             done
+            if [ -s "${err_file}" ]; then
+              echo "::warning::gh api failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "${err_file}" | head -c 500)" >&2
+            fi
+            rm -f "${err_file}"
             return "${rc}"
           }
 
@@ -1785,8 +1797,20 @@ jobs:
 
           # Poll for the new review run on RETRY_DISPATCH_SHA (the
           # branch head we snapshotted at dispatch time). Skip the run
-          # we already saw via wait-review by recording its id.
+          # we already saw via wait-review by recording its id. We
+          # gate Phase 4b on wait-review having succeeded, which means
+          # review_run_id should be a non-empty numeric string here;
+          # if it's somehow empty/non-numeric, the jq exclusion filter
+          # would default to `select(.id != 0)` (no-op, since GitHub
+          # run ids are always positive) and could pick up the
+          # original review run as the "retry run". Fail fast in that
+          # case rather than silently misattribute.
           PRIOR_REVIEW_RUN="${{ steps.wait-review.outputs.review_run_id }}"
+          if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]]; then
+            echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing to enter retry poll loop with a no-op exclusion filter"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           DEADLINE=$(( $(date +%s) + 600 ))  # 10 minutes
           RETRY_RUN_ID=""
           RETRY_STATUS=""
