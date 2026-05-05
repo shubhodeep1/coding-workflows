@@ -1740,7 +1740,8 @@ jobs:
           fi
           echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — polling for the new review run"
 
-          # Poll for the new review run on the bait SHA. Skip the run
+          # Poll for the new review run on RETRY_DISPATCH_SHA (the
+          # branch head we snapshotted at dispatch time). Skip the run
           # we already saw via wait-review by recording its id.
           PRIOR_REVIEW_RUN="${{ steps.wait-review.outputs.review_run_id }}"
           DEADLINE=$(( $(date +%s) + 600 ))  # 10 minutes
