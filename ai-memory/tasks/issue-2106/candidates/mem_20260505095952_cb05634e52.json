@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What part of this repository should be improved?**\nChoices:\n- **A** \u2014 A specific workflow or script; I will name the exact file/path (RECOMMENDED)\n- **B** \u2014 A specific pipeline phase; I will name the phase (`clarify`, `plan`, `implement`, `review_autofix`, `orchestrate`, `validate`)\n- **C** \u2014 The whole repository / general quality improvements\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a concrete bug or failing behavior (RECOMMENDED)\n- **B** \u2014 Improve reliability/performance without changing intended behavior\n- **C** \u2014 Add or change functionality/automation behavior\n- **D** \u2014 Improve docs/readability/maintainability only\nReply: `Q2: A`\n**Q3: What should be treated as the acceptance criterion?**\nChoices:\n- **A** \u2014 I will describe the exact before/after behavior or failure that should be fixed (RECOMMENDED)\n- **B** \u2014 Match an existing issue/PR/workflow run that I will reference\n- **C** \u2014 Apply a general cleanup with no specific behavioral target\nReply: `Q3: A`\n**Q4: How broad should the change be?**\nChoices:\n- **A** \u2014 Minimal targeted fix only (RECOMMENDED)\n- **B** \u2014 Fix the main issue plus closely related code in the same area\n- **C** \u2014 Broader cross-repo cleanup/refactor\nReply: `Q4: A`",
+  "fingerprint": "18e75b3b83e7f7113555cfbf1133284861bbc250c2d9ae3bb4ac90b4644f4c49",
+  "lineage": {
+    "issue_number": 2106,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25369806181",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25369806181",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260505095952_cb05634e52",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2106,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25369806181"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2106 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-05T09:59:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
