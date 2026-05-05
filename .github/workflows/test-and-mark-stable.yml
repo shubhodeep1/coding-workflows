@@ -1634,16 +1634,30 @@ jobs:
           }
 
           # When pytest fails, distinguish a true editor regression
-          # (assertion failure on canary content) from a harness/infra
-          # error (fixture RuntimeError on missing config, internal
-          # pytest error, etc.). Operators investigating spec_mismatch
-          # look at the editor; harness_misconfigured points them at
-          # the workflow YAML / runner setup instead.
+          # (test assertion failed on canary content) from a harness/
+          # infra error (fixture exception, pytest internal error,
+          # missing dependency, runner I/O failure). pytest's own
+          # FAILED-vs-ERROR distinction is the cleanest signal:
+          #
+          #   FAILED  → the test function ran and an assertion failed
+          #             → real editor/spec bug → spec_mismatch
+          #   ERROR   → fixture / collection / setup raised before the
+          #             test body could run → harness issue
+          #   INTERNALERROR → pytest itself crashed → harness issue
+          #
+          # Anything that's neither FAILED nor a clean pass falls into
+          # the harness bucket — that catches RuntimeError from the
+          # canary_invocation fixture, ImportError on a broken Python
+          # env, OSError/PermissionError on runner I/O, pytest
+          # UsageError, and similar infra failures that should NOT
+          # blame the editor.
           classify_pytest_failure() {
-            if grep -qE "RuntimeError|INTERNALERROR" "${PYTEST_OUTPUT}" 2>/dev/null; then
+            if grep -qE "INTERNALERROR" "${PYTEST_OUTPUT}" 2>/dev/null; then
               echo "harness_misconfigured"
-            else
+            elif grep -qE "^FAILED " "${PYTEST_OUTPUT}" 2>/dev/null; then
               echo "spec_mismatch"
+            else
+              echo "harness_misconfigured"
             fi
           }
 
@@ -1785,6 +1799,10 @@ jobs:
           fi
           echo "✓ Editor produced commit(s) past the bait on retry (PR head: ${PR_HEAD:0:7}, bait: ${BAIT_SHA:0:7})"
           echo "status=success_after_retry" >> "$GITHUB_OUTPUT"
+          # Explicit exit 0 — symmetric with the first-attempt success
+          # path above, and a guard against future code being added
+          # past this echo without realising the step was already done.
+          exit 0
 
       # ── Phase 5: Orchestrator script integration test ──────────
       - name: Checkout repository for integration tests
