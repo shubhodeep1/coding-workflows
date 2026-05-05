@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains corrupted bait content and extra lines instead of the exact three-line canary specification required by issue #2124.\n  WHY: All reviewers reported that the E2E smoke-test validation gate expects exactly `status: ok`, `run_id: 25378639747`, and `updated-by: ai-pipeline` with a trailing newline, and the current content violates that exact-match requirement.\n- tests/e2e_smoke_canary.txt:1-6 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The automated bot reviews gave incorrect reassurance that the canary file was intact when it was actually corrupted.\n  WHY: This is a review-process integrity issue rather than a code defect, and the reviewer explicitly noted the bots likely reviewed the wrong commit.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: The file contains 6 lines of intentionally corrupted \"bait\" content instead of the exact 3 lines required by issue #2124.\n  WHY: The E2E smoke test validation gate reads this file and asserts exact content, so the corrupted 6-line content will fail the gate.\n- tests/e2e_smoke_canary.txt:N/A | severity=low | confidence=3\n  PROBLEM: The Copilot and Gemini automated reviews incorrectly reported that the file was correct.\n  WHY: This is an informational review-process issue, not a runtime code defect, but it could let the corruption merge if not corrected.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: File content is corrupted with bait values and extra lines instead of the exact three-line specification from issue #2124.\n  WHY: The E2E smoke test gate validates that the canary file contains exactly the three specified lines, so the corrupted content will cause validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: The file contains corrupted bait content with 6 lines instead of the required 3 lines specified in issue #2124.\n  WHY: The E2E smoke-test validation gate expects exactly three lines, and the current content has wrong values plus three extra lines that violate the issue specification.\n- tests/e2e_smoke_canary.txt:N/A | severity=low | confidence=3\n  PROBLEM: The Copilot and Gemini automated reviews incorrectly indicated the file was correct.\n  WHY: This appears to be a review-process signal integrity gap rather than a code defect.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: The file contains 6 lines of intentionally corrupted bait content instead of the exact 3-line canary specification required by issue #2124.\n  WHY: The E2E smoke test gate validates this canary file, so the corrupted content will cause the smoke test validation to fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: File content does not match the exact three-line specification required by issue #2124.\n  WHY: The E2E smoke test validation gate expects precisely `status: ok\\nrun_id: 25378639747\\nupdated-by: ai-pipeline\\n`, and the current content has incorrect values, three extra lines, and a comment.\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: Extra line \"extra: this line violates the issue spec\" present.\n  WHY: Issue mandates exactly three lines with no additional content, so any extra lines fail the smoke test's line-count or content validation.\n- tests/e2e_smoke_canary.txt:5 | severity=critical | confidence=5\n  PROBLEM: Extra line \"also: another line that must be removed\" present.\n  WHY: Issue mandates exactly three lines with no additional content, so any extra lines fail the smoke test's line-count or content validation.\n- tests/e2e_smoke_canary.txt:6 | severity=critical | confidence=5\n  PROBLEM: Comment line \"# E2E_EDITOR_BAIT_25378639747: canary corrupted; restore to linked issue spec (smoke gate)\" present.\n  WHY: Issue forbids comments, headers, or extra text, so the smoke test expects a clean three-line format without comments.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1 | severity=critical | confidence=5\n  PROBLEM: The status field must be exactly \"ok\" per the linked issue #2124 specification.\n  WHY: The E2E smoke test validation gate will reject any status value other than \"ok\".\n- tests/e2e_smoke_canary.txt:2 | severity=critical | confidence=5\n  PROBLEM: The run_id field must be exactly \"25378639747\" per the linked issue #2124 specification.\n  WHY: The E2E smoke test validation expects the literal run_id value \"25378639747\", not a descriptive string.\n- tests/e2e_smoke_canary.txt:3 | severity=critical | confidence=5\n  PROBLEM: The updated-by field must be exactly \"ai-pipeline\" per the linked issue #2124 specification.\n  WHY: The E2E smoke test validation expects the literal value \"ai-pipeline\".\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The file must contain exactly three lines with no additional fields per the linked issue #2124 constraints.\n  WHY: The E2E smoke test validation will fail because the file has extra content beyond the three required lines.\n- tests/e2e_smoke_canary.txt:5 | severity=critical | confidence=5\n  PROBLEM: The file must contain exactly three lines with no additional fields per the linked issue #2124 constraints.\n  WHY: The E2E smoke test validation will fail because the file has extra content beyond the three required lines.\n- tests/e2e_smoke_canary.txt:6 | severity=critical | confidence=5\n  PROBLEM: The file must contain exactly three lines with no comments, headers, or extra text per the linked issue #2124 constraints.\n  WHY: The E2E smoke test validation will fail because the file contains a comment line which violates the \"no comments\" constraint.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9e2157d4ccce2c62783b45cff1c34bce67b15f1ca1333e3d98493d62857adaaf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2131,
+    "run_id": "25379011710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25379011710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260505133114_34c32ca995",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2131,
+    "run_id": "25379011710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-05T13:31:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
