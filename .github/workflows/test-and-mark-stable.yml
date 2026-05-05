@@ -2697,10 +2697,17 @@ jobs:
           # cancel_on_pr_close already ran successfully on the original
           # close. Detect that case and verify the cancel run that fired
           # for the prior close instead.
+          # Default to '{}' on gh failure so subsequent jq parses don't
+          # blow up under `set -euo pipefail`.
           PR_INFO=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-            --jq '{state, head_sha: .head.sha}' 2>/dev/null || echo "")
+            --jq '{state, head_sha: .head.sha}' 2>/dev/null || echo "{}")
           PR_STATE=$(echo "${PR_INFO}" | jq -r '.state // ""')
           PR_HEAD_SHA=$(echo "${PR_INFO}" | jq -r '.head_sha // ""')
+          if [ -z "${PR_STATE}" ]; then
+            echo "::error::Could not read state of PR #${PR_NUMBER} (gh api returned empty)"
+            echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if [ "${PR_STATE}" = "closed" ]; then
             echo "PR #${PR_NUMBER} is already closed (head_sha=${PR_HEAD_SHA}); looking up the cancel-on-close run that fired for that closure."
             EXISTING=$(gh api \
@@ -2715,18 +2722,29 @@ jobs:
             EXISTING_STATUS=$(echo "${EXISTING}" | jq -r '.status // ""')
             EXISTING_CONCLUSION=$(echo "${EXISTING}" | jq -r '.conclusion // ""')
             echo "  found pre-existing cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS}, conclusion=${EXISTING_CONCLUSION}"
-            # If still in flight, wait briefly for it to settle.
-            WAIT_DEADLINE=$(( $(date +%s) + 120 ))
+            # Match the open-PR poll budget (600s) so a slow/queued run
+            # doesn't flake the smoke test if it would have eventually
+            # succeeded.
+            WAIT_DEADLINE=$(( $(date +%s) + 600 ))
             while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
               sleep 5
-              REFRESH=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
-                --jq '{status, conclusion}' 2>/dev/null || echo "")
-              EXISTING_STATUS=$(echo "${REFRESH}" | jq -r '.status // ""')
-              EXISTING_CONCLUSION=$(echo "${REFRESH}" | jq -r '.conclusion // ""')
-              echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS}, conclusion=${EXISTING_CONCLUSION}"
+              # `gh api --jq` consumes the JSON inside gh, so a transient
+              # failure produces an empty string rather than malformed
+              # JSON for the next iteration to parse.
+              EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+                --jq '.status // ""' 2>/dev/null || echo "")
+              EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+                --jq '.conclusion // ""' 2>/dev/null || echo "")
+              echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
             done
+            if [ "${EXISTING_STATUS}" != "completed" ]; then
+              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within 600s (status=${EXISTING_STATUS:-?})"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             if [ "${EXISTING_CONCLUSION}" != "success" ]; then
-              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} concluded ${EXISTING_CONCLUSION}"
+              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} concluded ${EXISTING_CONCLUSION:-no_run}"
               echo "status=${EXISTING_CONCLUSION:-no_run}" >> "$GITHUB_OUTPUT"
               echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
               exit 1
