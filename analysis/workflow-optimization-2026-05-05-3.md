@@ -690,3 +690,131 @@ The repository’s own workflow-log analysis prompt explicitly references **GitH
 | 25356037835 | nightly_validation_selftest | 100 | self-test matrix | fixtures=3, passed=1, failed=2 |
 
 If you want, I can turn this into a shorter exec-ready action list with owners, estimated effort, and rollout order.
+
+## Deep Audit — Workflows & Scripts (2026-05-05)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — BUG-001  
+  **File path** — `.github/workflows/issue_pr_status.yml:240-249`; `.github/workflows/review_autofix.yml:3728-3746, 3848-3867, 4592-4599`; `scripts/label_helpers.sh:146-197`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — Several workflow-local fallback implementations of `set_issue_phase_label_resilient` only do `POST /labels` for the target label, while the canonical helper in `scripts/label_helpers.sh` first reads current labels, removes conflicting phase labels, and then `PUT`s the reconciled set. If `label_helpers.sh` cannot be sourced, these reduced fallbacks can leave mutually exclusive phase labels on the same issue, e.g. `ai:review-blocked` and `ai:ready-to-merge` together.  
+  **Recommended fix** — Remove the inline POST-only fallbacks and source `scripts/label_helpers.sh` earlier in the job so the canonical `set_issue_phase_label_resilient <issue_number> <target_label> <repo>` is always available. If a fallback must remain, copy the full GET/compute/PUT implementation from `scripts/label_helpers.sh` rather than the simplified POST-only variant.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — API-001  
+  **File path** — `.github/workflows/review_autofix.yml:1248-1378`; `scripts/gh_helpers.sh:735-899`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The `Collect PR metadata` step manually hydrates PR context with four separate logical GitHub calls in the common path: 1× PR payload, 1× issue comments pagination, 1× reviews pagination, and 1× review comments pagination, then separately performs a GraphQL linked-issues fetch. The repo already has `gh_pr_with_all_comments` in `scripts/gh_helpers.sh`, which batches PR metadata, issue comments, and review comments behind one GraphQL-first helper with REST fail-open fallback. Current logical call count in this path is **5**; proposed count is **2** (**1** `gh_pr_with_all_comments` + **1** linked-issues GraphQL).  
+  **Recommended fix** — Replace the hand-rolled hydration in `.github/workflows/review_autofix.yml` with `gh_pr_with_all_comments "${owner}" "${repo}" "${PR_NUMBER}" "${PRELOADED_PR_META}"`, then keep the existing linked-issues GraphQL call. Reuse the helper’s output to populate `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, and `PR_REVIEW_COMMENTS_FILE`.
+
+- **ID** — BATCH-001  
+  **File path** — `.github/workflows/issue_pr_status.yml:188-193, 297-330, 503-512`  
+  **Severity** — High  
+  **Category tag** — `api-batching`  
+  **Description** — `issue_pr_status.yml` fetches linked issues more than once in the same execution path, then falls back to per-issue REST inside loops. It does: **1** GraphQL call to get linked issue numbers, **1** second GraphQL call to classify orchestrator tracking/managed issues, then on GraphQL failure it performs up to **N** `GET /issues/{n}` REST lookups, and later the Telegram alert gate performs up to **N** more `_safe_gh_jq` body fetches to rediscover whether any linked issue is orchestrated. Current logical call count is **2 + up to 2N**; proposed count is **1** batched GraphQL query reused across close/label/alert logic, with **0** extra per-issue calls on the happy path.  
+  **Recommended fix** — Extend one batched GraphQL query to return `number`, `labels`, and `body` for all linked issues, cache that result in a JSON variable/file, and reuse it for both orchestrator classification and alert suppression. Follow the existing batching patterns in `scripts/orchestrate_poll_process.sh`, especially `_fetch_candidate_issue_details_graphql` and `_fetch_linked_pr_status_graphql`.
+
+- **ID** — API-002  
+  **File path** — `scripts/review_rb_judge.sh:191-201`; `.github/workflows/review_autofix.yml:1104-1105, 1544-1548, 2232-2239`  
+  **Severity** — Low  
+  **Category tag** — `api-redundancy`  
+  **Description** — `review_rb_judge.sh` always refetches the PR diff with `gh api ... -H 'Accept: application/vnd.github.diff'` even though `review_autofix.yml` already materializes `PR_DIFF_FILE` and `ORIGINAL_PR_DIFF_FILE` earlier in the same run. Current logical call count is **1** extra diff fetch per judge invocation; proposed count is **0** extra calls when the cached diff files exist.  
+  **Recommended fix** — Teach `scripts/review_rb_judge.sh` to prefer `${PR_DIFF_FILE}` or `${ORIGINAL_PR_DIFF_FILE}` when present, and only fall back to the diff API if neither file exists. Reuse the existing runtime-file cache contract already established by `review_autofix.yml`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — DUP-001  
+  **File path** — `.github/workflows/validate.yml:199-277`; `.github/workflows/issue_pr_status.yml:59-125`; `.github/workflows/validation-improvements-intake.yml:66-128`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The support-repo bootstrap logic is duplicated across workflows: `WF_REMOTE_URL` construction, `checkout_support_ref`, and `copy_from_ref_or_local` are implemented repeatedly with only small variations. This duplication increases drift risk for fallback semantics, remote/local precedence, and warning behavior.  
+  **Recommended fix** — Extract a shared helper such as `scripts/fetch_workflow_support.sh` with a signature like `fetch_workflow_support <wf_source> <preferred_ref> <workspace_root> [--require-remote-canonical]`. Update `validate.yml`, `issue_pr_status.yml`, and `validation-improvements-intake.yml` to call the shared script.
+
+- **ID** — DUP-002  
+  **File path** — `.github/workflows/review_autofix.yml:3713-3747, 3836-3868, 4591-4599`; `.github/workflows/issue_pr_status.yml:240-249`; `scripts/label_helpers.sh:146-197`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — `set_issue_phase_label_resilient` is redefined inline multiple times in `review_autofix.yml` and once in `issue_pr_status.yml`, despite already existing as a reusable canonical function in `scripts/label_helpers.sh`. The inline copies are not semantically equivalent to the shared implementation, so this is both duplication and behavior drift.  
+  **Recommended fix** — Make `scripts/label_helpers.sh` the single owner of `set_issue_phase_label_resilient <issue_number> <target_label> <repo>`. Update the callers in `review_autofix.yml` and `issue_pr_status.yml` to fail over to a copied-once helper artifact instead of redefining local versions.
+
+- **ID** — DUP-003  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:27-48`; `.github/workflows/orchestrate_poll.yml:66-88`; `.github/workflows/review_autofix.yml:1258-1292`; `.github/workflows/test-and-mark-stable.yml:1202-1224, 4350-4371`; `scripts/gh_helpers.sh:391-716`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Rate-limit/backoff wrappers are duplicated in several workflows (`_rl_wait`, `_gh_retry`, `gh_api_safe`, local `gh_retry`) even though `scripts/gh_helpers.sh` already owns the canonical retry, JSON-validation, and curl wrappers. These copies diverge in retry counts, stderr handling, and JSON safety.  
+  **Recommended fix** — Standardize on `scripts/gh_helpers.sh` as the shared module. Use existing signatures `gh_retry "$@"`, `gh_retry_to_file <outfile> ...`, `gh_api_json_to_file <outfile> ...`, and `curl_gh_api ...`. Update callers in `cancel_on_pr_close.yml`, `orchestrate_poll.yml`, `review_autofix.yml`, `test-and-mark-stable.yml`, and `mark-stable.yml` to source the helper instead of embedding local retry code.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — EXPR-001  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1187-1518`  
+  **Severity** — High  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Phase 3d/Wait for review workflow` run block contains `${{ }}` interpolations and is approximately **19,701** characters long, leaving only about **1,299** characters of headroom before GitHub’s 21,000-character template-expression limit. This is already inside the repo’s documented high-risk zone.  
+  **Recommended fix** — Extract this polling logic to an external script under `scripts/` (preferred), e.g. `scripts/e2e_wait_review.sh`, and pass only the small set of required environment variables from YAML.
+
+- **ID** — EXPR-002  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1604-2009`  
+  **Severity** — High  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Phase 4b: Verify editor restored canary (pytest + retry)` run block contains `${{ }}` interpolations and is approximately **21,289** characters long, which is about **289 characters over** the hard 21,000-character ceiling by raw block size estimate. Because GitHub counts the compiled template expression rather than the YAML source verbatim, this is an overflow-risk finding rather than a confirmed parser failure. [NEEDS VERIFICATION]  
+  **Recommended fix** — Split the step immediately. The safest path is to move the retry-dispatch/poll logic into a dedicated script such as `scripts/e2e_verify_retry_canary.sh`, or split the step into separate “prepare”, “retry dispatch/poll”, and “pytest classify” steps.
+
+- **ID** — EXPR-003  
+  **File path** — `.github/workflows/review_autofix.yml:1251-1573`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Collect PR metadata` run block contains `${{ }}` interpolations and is approximately **16,438** characters long, leaving about **4,562** characters of headroom. The block also embeds two Python heredocs, which makes future edits likely to push it over the threshold.  
+  **Recommended fix** — Move the metadata assembly and context rendering into external scripts, e.g. `scripts/build_pr_context.py` and/or a thin shell wrapper that sources `scripts/gh_helpers.sh`, then keep YAML limited to env wiring.
+
+- **ID** — EXPR-004  
+  **File path** — `.github/workflows/validate.yml:183-476`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Fetch workflow support files` run block contains `${{ }}` interpolations and is approximately **16,486** characters long, leaving about **4,514** characters of headroom. Its large inline file list and support-bootstrap functions make it a growth hotspot.  
+  **Recommended fix** — Extract the whole support-fetch/bootstrap routine to `scripts/fetch_workflow_support.sh` and keep the YAML step as a short `bash scripts/fetch_workflow_support.sh` invocation.
+
+- **ID** — EXPR-005  
+  **File path** — `.github/workflows/orchestrate_clarify_respond.yml:813-1096`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The `Parse and post answer` run block contains `${{ }}` interpolations and is approximately **15,141** characters long, leaving about **5,859** characters of headroom. The inline memory-loop-guard and comment-posting logic is already large enough that a few more branches could move it into the danger zone.  
+  **Recommended fix** — Extract the answer parsing / loop-guard / posting path into a dedicated script such as `scripts/orchestrate_parse_and_post_answer.sh`, or split the current step into smaller “parse”, “loop guard”, and “post answer / escalate” steps.
+
+**Workflow file size note:** no audited workflow exceeds the 800 KB early-warning threshold; the largest observed files are `review_autofix.yml` (~278 KB) and `test-and-mark-stable.yml` (~255 KB).
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — SHELL-001  
+  **File path** — `scripts/review_commit_changes.sh:455`; `scripts/review_conflict_resolve.sh:994`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — Two scripts set the authenticated remote URL without quoting the full argument: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. Elsewhere in the repo the same pattern is quoted. This is a classic SC2086-style inconsistency on a secret-bearing argument and makes the command more fragile if token/repo formatting ever changes.  
+  **Recommended fix** — Quote the URL exactly as the workflows already do, e.g. `git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"`, and standardize on one quoting pattern across scripts and workflows.
+
+No additional dead-code blocks or `TODO`/`FIXME`/`HACK` markers were found in the audited workflow/script set.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BATCH-001, EXPR-001, EXPR-002 |
+| Medium | 8 | BUG-001, API-001, DUP-001, DUP-002, DUP-003, EXPR-003, EXPR-004, EXPR-005 |
+| Low | 2 | API-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 4 | Medium |
+| Code modularization | 6 | Large |
+| Expression size reduction | 4 | Large |
+| Medium/Low fixes | 2 | Small |
