@@ -799,3 +799,138 @@ Ordered by end-to-end impact across the pipeline.
 | `copilot_pull_request_reviewer` / Prepare | `github.paginate(github.rest.pulls.listFiles, per_page: 100)` | repeated full-file listing each run | reuse outputs where possible |
 | `copilot_pull_request_reviewer` / Cleanup artifacts | `gh api /actions/runs/<id>/artifacts` | extra fetch in separate job | reuse artifact IDs / consolidate jobs |
 | `orchestrate_poll` / retry wrapper | `gh api -i /rate_limit` | small overhead on retry path | keep only on actual retries |
+
+## Deep Audit — Workflows & Scripts (2026-05-05)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — `BUG-001`  
+  **File path** — `.github/workflows/internal-review.yml:91-103`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The `resolve-claude-branch-pr` gate uses raw `gh api` calls under `set -euo pipefail`, but both calls are softened with `|| echo ""` / `|| echo 'main'`. On any transient GitHub API failure, `existing_pr` collapses to empty and the step emits `proceed=true`, which dispatches the no-PR claude-branch review path even when an open PR already exists. Because this path is meant to suppress duplicate reviewer runs, the current fail-open behavior can double-fire review/autofix work and post duplicate review output.  
+  **Recommended fix** — Source `scripts/gh_helpers.sh` (or an equivalent early bootstrap helper) and make the PR lookup retryable. If lookup remains inconclusive after retries, fail closed for this gate (`proceed=false`) and log a warning rather than assuming “no open PR”.
+
+- **ID** — `BUG-002`  
+  **File path** — `.github/workflows/orchestrate_clarify_respond.yml:59-77`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The first step in `orchestrate_clarify_respond` calls `gh api` directly for the issue payload and optional tracking title, before any retry helper is sourced. Under `set -euo pipefail`, a transient 403/429/5xx aborts the whole workflow before it can determine whether the issue is orchestrator-managed. Later in the same workflow, the file already uses `gh_retry gh api` for equivalent GitHub reads (`.github/workflows/orchestrate_clarify_respond.yml:397-420`), so the opening gate is the outlier.  
+  **Recommended fix** — Reuse the same `gh_retry` pattern already used later in this workflow, or inline a minimal retry wrapper in the first step. On repeated failure, fail open to `is_orchestrator=false`/skip instead of hard-failing the unattended clarify-response path.
+
+- **ID** — `BUG-003`  
+  **File path** — `scripts/orchestrate_poll_process.sh:6794-6838`  
+  **Severity** — High  
+  **Category tag** — `bug`  
+  **Description** — The standalone stall-recovery `retrigger_review` branch treats the action as successful even when no retrigger actually happened. `git commit --allow-empty` and `git push origin "HEAD:${head_ref}"` are both allowed to fail with `|| true`, but the code still emits the “re-triggered review flow” notification, sets `STALL_RECOVERY_SHOULD_INCREMENT=true`, and marks `took_action=true`. A rejected push, checkout failure, or empty-commit failure therefore consumes recovery budget without producing a `pull_request.synchronize` event.  
+  **Recommended fix** — Capture fetch/checkout/commit/push return codes explicitly and only set `took_action=true` after a confirmed push. If the git path fails, fall back to an explicit `gh workflow run review_autofix.yml` dispatch for the linked PR branch, or leave the state unchanged so the next poll can retry honestly.
+
+- **ID** — `SEC-001`  
+  **File path** — `.github/workflows/validate.yml:160-169`  
+  **Severity** — Medium  
+  **Category tag** — `security`  
+  **Description** — `Configure git auth for memory helper clones` rewrites `origin` to `https://x-access-token:${GH_TOKEN}@...`, which persists the PAT inside `.git/config`. This is weaker than the safer header-based pattern already used later in the same workflow for support-file fetches (`.github/workflows/validate.yml:196-218`). Any later `git remote -v`, verbose git failure, or accidental workspace capture can expose the token-bearing URL.  
+  **Recommended fix** — Replace the remote rewrite with per-command auth, e.g. `git -c http.extraHeader=Authorization: Basic ...`, or use a credential helper scoped to the job. The header-based clone pattern already in this file is the repo-local precedent to copy.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — `API-001`  
+  **File path** — `scripts/orchestrate_poll_process.sh:3407-3519`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The final-merge path re-fetches the same PR repeatedly via separate field-specific calls. In the common “final PR already exists, merge attempt fails or needs re-check” path it does: 2 calls for `state`/`merged_at` (`3411-3412`), then 3 more for `state`/`mergeable`/`merged_at` (`3466-3468`), then another 3 after merge (`3517-3519`). **Current call count:** up to 8 reads against `repos/{repo}/pulls/{final_pr}` in one execution path.  
+  **Recommended fix** — Reuse the existing `_fetch_pr_json` + `_jq_field` pattern already defined in this file (`scripts/orchestrate_poll_process.sh:688-718`). Cache one JSON blob per decision point and read all needed fields from it. **Proposed call count after fix:** 3 PR reads (pre-check, pre-merge, post-merge). **Batching/helper pattern to extend:** `_fetch_pr_json` / `_jq_field`.
+
+- **ID** — `API-002`  
+  **File path** — `scripts/orchestrate_poll_process.sh:6346-6353`  
+  **Severity** — Medium  
+  **Category tag** — `api-batching`  
+  **Description** — The standalone-stall candidate sweep enumerates open issues by running `gh issue list` once per label (`ai:clarification`, `ai:planning`, `ai:awaiting-approval`, `ai:implementing`, `ai:done`, `ai:ready-to-merge`, `ai:review-blocked`) and then unions the results in jq. **Current call count:** 7 REST list calls per poll cycle before any per-issue processing. This is precisely the kind of multi-item label discovery that CLAUDE.md §15 says to batch.  
+  **Recommended fix** — Extend a GraphQL batch helper so one request returns all open issues carrying any pipeline label, ideally with labels/comments in the same payload. **Proposed call count after fix:** 1 GraphQL query per poll cycle. **Batching/helper pattern to extend:** `_fetch_candidate_issue_details_graphql` or `_fetch_standalone_marker_issues_graphql`.
+
+- **ID** — `API-003`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1739-1745,1913-1949`  
+  **Severity** — High  
+  **Category tag** — `api-redundancy`  
+  **Description** — The Phase 4b retry poll loop keeps polling both PR state and workflow runs every 15 seconds until a 25-minute deadline. That is one `fetch_pr_state` call plus one `actions/workflows/.../runs` call per iteration, even after the retry run becomes identifiable. **Current call count:** about 200 REST reads for a full 25-minute retry window (≈100 iterations × 2 calls), excluding any retries inside `gh_api_with_retry`. This overlaps the in-progress report’s Phase 4b hotspot, but the source code here pins the exact call sites.  
+  **Recommended fix** — Capture the retry run once (dispatch timestamp + branch, or run ID once it appears), then poll only `actions/runs/{id}` thereafter; drop the repeated PR-state probe after the run is known unless the PR-close guard is still needed. **Proposed call count after fix:** about 101 reads (1 run-discovery query + ≈100 single-run status reads), or lower if replaced with a dedicated watcher helper. **Batching/helper pattern to extend:** the cycle-local cache pattern already used elsewhere in `orchestrate_poll_process.sh` (`_fetch_pr_json`, `STALL_MANAGED_LINKED_PR_CACHE`).
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — `DUP-001`  
+  **File path** — `scripts/label_helpers.sh:121-197; scripts/validate_process.sh:500-595; scripts/orchestrate_poll_process.sh:1114-1215; scripts/review_rb_judge.sh:78-110`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The repo contains at least four near-identical implementations of “ensure label exists” and “replace the issue’s phase label set safely” logic. They all do the same GET-labels / compute replacement / PUT-labels or POST fallback dance, but with slightly different error handling and logging. This is already diverging: `label_helpers.sh` has `set_issue_phase_label_resilient`, while `validate_process.sh` and `orchestrate_poll_process.sh` still carry local copies.  
+  **Recommended fix** — Make `scripts/label_helpers.sh` the single owner. Reuse the existing `ensure_label_exists <label_name> [repo]` and promote one canonical phase-swap helper, e.g. `set_issue_phase_label_resilient <issue_number> <target_label> [repo]`. Update callers in `validate_process.sh`, `orchestrate_poll_process.sh`, and `review_rb_judge.sh` to source that module instead of maintaining forked copies.
+
+- **ID** — `DUP-002`  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:27-52; .github/workflows/mark-stable.yml:309-335,458-483; .github/workflows/orchestrate_poll.yml:66-96; .github/workflows/review_autofix.yml:1258-1291; .github/workflows/test-and-mark-stable.yml:453-470,578-595,771-788,1205-1224,1659-1681,4282-4307; .github/workflows/comprehensive-test-and-release.yml:72-98,315-340`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Rate-limit and retry wrappers are duplicated across many workflows (`_rl_wait`, `_gh_retry`, `gh_api_safe`, `gh_api_with_retry`) with different retry counts, backoff rules, and stderr handling. This is already causing policy drift: some wrappers retry non-transient failures, some silently return empty strings, and some consult `/rate_limit` on every rate-limit path.  
+  **Recommended fix** — Consolidate on `scripts/gh_helpers.sh` as the canonical implementation for checked-out jobs, and add one bootstrap wrapper module/composite action for pre-checkout jobs. Target signatures should stay aligned with the existing helper surface: `gh_retry gh api ...`, `gh_retry_to_file <path> gh api ...`, `gh_api_json_to_file <path> ...`. Update the listed workflows to call the shared helper instead of maintaining inline variants.
+
+- **ID** — `DUP-003`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:3197-3235,3269-3293,3332-3360,3688-3720,4097-4107`  
+  **Severity** — Low  
+  **Category tag** — `duplication`  
+  **Description** — `test-and-mark-stable.yml` repeats the same “snapshot latest run → dispatch workflow → poll for new run ID → poll status/conclusion” shell block for multiple workflows (`workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-validate`, alt-model capture). The blocks differ only in workflow name, timeout, and accepted conclusions.  
+  **Recommended fix** — Extract a shared helper, preferably `scripts/watch_workflow_dispatch.sh`, with a signature like `watch_workflow_dispatch <repo> <workflow_file> <timeout_secs> [accepted_conclusions_csv] [branch_filter]`. Update the repeated callers in `test-and-mark-stable.yml` to pass parameters instead of duplicating the watch loop.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — `EXPR-001`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1187-1518`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The `wait-review` `run:` block contains `${{ }}` interpolation and is already large enough to be a template-expression risk. Estimated current expanded body size is **~16.6 KB**, leaving only **~4.4 KB** before the 21 KB hard failure. The block mixes helper definitions, retry logic, live-log probing, and inactivity handling in one expression-bearing step, so routine edits can push it over the limit.  
+  **Recommended fix** — Extract the whole loop to an external script such as `scripts/e2e_wait_review.sh`, or split helper-definition / wait-loop / diagnostics into multiple smaller steps. External script extraction is the safer option because it removes the run-body from expression accounting entirely.
+
+- **ID** — `EXPR-002`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1604-2009`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The Phase 4b “verify canary + retry review” `run:` block is another interpolation-bearing block near the limit. Estimated current expanded body size is **~17.4 KB**, leaving only **~3.6 KB** of headroom. It combines package install fallback, multiple helper functions, pytest classification, retry dispatch, and polling in one template expression.  
+  **Recommended fix** — Move this logic into a dedicated script such as `scripts/e2e_verify_canary_retry.sh`, or split it into separate steps (`install pytest`, `attempt 1`, `retry dispatch/watch`, `attempt 2`). Moving it to `scripts/` is the preferred fix because this block is already a known growth surface.
+
+No workflow file currently exceeds the 800 KB early-warning threshold. The largest audited workflow files are `review_autofix.yml` (**277,694 chars**) and `test-and-mark-stable.yml` (**251,001 chars**), both well below the 1 MB hard cap.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — `DEAD-001`  
+  **File path** — `scripts/orchestrate_poll_process.sh:4765-4771`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `read_standalone_state_json()` is defined but has no in-repo callers. `rg` only finds its definition, while the live standalone-state path uses `_extract_standalone_state_json_from_comments` directly and passes cached `state_comment_id` into `write_standalone_state_json`.  
+  **Recommended fix** — Remove the unused wrapper, or switch one caller to it if a comments-fetching abstraction is still desired. As written, it increases maintenance surface without providing a unique behavior.
+
+- **ID** — `SHELL-001`  
+  **File path** — `scripts/memory_helpers.sh:56-57`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — `memory_ensure_branch()` declares `local token="${GH_TOKEN:-}"`, but never uses it. ShellCheck reports this as `SC2034`, and the surrounding comment says “Resolve authenticated origin URL,” which suggests the token was intended to influence auth but currently does not. The helper therefore silently depends on `origin` already being authenticated.  
+  **Recommended fix** — Either remove the dead variable, or actually use it to apply header-based auth when creating/pushing the temporary repo (matching the safer auth patterns already used elsewhere in this repo). That resolves both the ShellCheck warning and the auth-contract ambiguity.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the audited `.github/workflows/*.yml` and `scripts/*.{sh,py}` scope.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-003, API-003 |
+| Medium | 9 | BUG-001, BUG-002, SEC-001, API-001, API-002, DUP-001, DUP-002, EXPR-001, EXPR-002 |
+| Low | 3 | DUP-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 2 | Medium |
+| Code modularization | 7 | Large |
+| Expression size reduction | 1 | Medium |
+| Medium/Low fixes | 6 | Medium |
