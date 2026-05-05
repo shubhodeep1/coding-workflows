@@ -1101,18 +1101,21 @@ jobs:
           # Defense-in-depth for "Bug B" (PR #1811): the Contents-API PUT
           # above sometimes succeeds (commit + PR head pointer updated)
           # without GitHub fanning out a `pull_request: synchronize`
-          # event, so internal-review.yml is never auto-triggered and
+          # event, so the wrapper workflow (${REVIEW_WORKFLOW_FILE},
+          # default internal-review.yml) is never auto-triggered and
           # wait-review (Phase 4) ages out at REVIEW_TIMEOUT minutes.
           # Run 25204168842 was the most recent confirmed occurrence.
-          # Explicitly dispatch internal-review.yml against the PR
+          # Explicitly dispatch ${REVIEW_WORKFLOW_FILE} against the PR
           # branch so a review run with head_sha=BAIT_SHA always exists
           # — workflow_dispatch resolves the ref's tip SHA at dispatch
           # time, and we just pushed the bait commit there, so the
           # dispatched run carries head_sha=BAIT_SHA and is matched by
           # wait-review's pinned filter without any extra logic.
-          # The dispatch is keyed on a separate concurrency group (see
-          # internal-review.yml:48-50, `internal-review-dispatch-pr-N`),
-          # so if the synchronize event ever DID fire, both runs are
+          # The dispatch is keyed on a separate concurrency group (in
+          # the source repo's internal-review.yml at lines 48-50,
+          # group `internal-review-dispatch-pr-N`; consumer repos with
+          # a renamed wrapper own the equivalent guard there), so if
+          # the synchronize event ever DID fire, both runs are
           # serialised downstream by review_autofix.yml's `pr-autofix-N`
           # group rather than racing — only one autofix proceeds.
           # Fail-soft: if dispatch fails, the synchronize event (when
@@ -1219,7 +1222,7 @@ jobs:
             # (status=skipped path).
             #
             # The URL no longer pins event=pull_request: Phase 3c also
-            # dispatches internal-review.yml as a Bug B fallback, and
+            # dispatches ${REVIEW_WORKFLOW_FILE} as a Bug B fallback, and
             # those runs carry event=workflow_dispatch. Dropping the
             # event filter from the URL lets head_sha=BAIT_SHA match
             # both paths uniformly. (We still rely on the jq name match
@@ -1737,11 +1740,11 @@ jobs:
 
           echo "::warning::Phase 4b first attempt failed — re-dispatching review_autofix and retrying once"
 
-          # ── Retry: redispatch internal-review.yml on the current branch head ──
+          # ── Retry: redispatch ${REVIEW_WORKFLOW_FILE} on the current branch head ──
           # Mirrors the Phase 3c fallback dispatch (lines ~1101-1109),
-          # which uses internal-review.yml as the public entry-point that
-          # gates into review_autofix.yml without an `[ai-autofix]` self-
-          # trigger guard.
+          # which uses ${REVIEW_WORKFLOW_FILE} as the public entry-point
+          # that gates into review_autofix.yml without an `[ai-autofix]`
+          # self-trigger guard.
           #
           # Capture the branch head SHA right before dispatch — that's
           # what the new workflow_dispatch run will carry as head_sha,
