@@ -490,10 +490,11 @@ EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls)
   produces the cleanest diff and the smallest blast radius.
 - If apply_patch does not land on a particular hunk, fall back to your
   best judgment: a different apply_patch shape, a shell heredoc /
-  printf '...content...' > path/to/file for fully-specified plain-text
-  files (.txt, .csv, small data fixtures), or any other write tool you
-  have available. Pick whatever gets the bytes onto disk this turn —
-  what matters is that the file actually changes.
+  printf '...content...' > path/to/file (substitute the actual content
+  and path) for fully-specified plain-text files (.txt, .csv, small data
+  fixtures), or any other write tool you have available. Pick whatever
+  gets the bytes onto disk this turn — what matters is that the file
+  actually changes.
 - Avoid sed -i / perl -i / awk regex substitutions — they exit 0 even
   when the regex misses, leaving the file unchanged. After ANY shell
   write, verify with git diff --stat -- path/to/file (substitute the
