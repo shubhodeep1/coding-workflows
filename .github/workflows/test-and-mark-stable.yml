@@ -1482,23 +1482,29 @@ jobs:
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'none' }}
 
-      # ── Phase 4b: Verify the editor removed the bait commit ───
-      # Closes the loop on Phase 3c: confirms the reviewer→editor→commit
-      # pipeline actually fired by checking the canary on the post-review
-      # PR head no longer contains the bait marker AND that the editor
-      # pushed at least one commit on top of the bait.
+      # ── Phase 4b: Verify the editor restored the bait commit ──
+      # Confirms the reviewer→editor→commit pipeline actually fired by
+      # running the pytest assertions in tests/test_e2e_editor_smoke_canary.py
+      # against the canary fetched from the post-review PR head. The
+      # test asserts byte-for-byte match to the issue's 3-line spec
+      # (any value mangled, any line added/removed, any bait marker
+      # surviving = test fails).
       #
-      # Soft check (continue-on-error + WARN downgrade in the aggregator):
-      # the autofix editor model is flaky enough that this gate has been
-      # blocking unrelated releases. The diagnostic status (success /
-      # bait_remained / no_editor_commit / fetch_failed) is still emitted
-      # for visibility. Phase 3c's `pr_already_closed` is unaffected and
-      # remains hard-failing — that path signals a test-setup race, not
-      # editor reliability.
-      - name: "Phase 4b: Verify editor removed bait line"
+      # Hard-fail with retry budget: the autofix editor model is
+      # known-flaky (seven prior in-tree fixes targeting reasoning
+      # effort and prompt content; production runs hit empty-completion
+      # state non-deterministically). On first pytest failure we
+      # re-dispatch internal-review.yml against the bait commit and
+      # poll the new run for up to 10 minutes; if the second
+      # verification also fails we hard-fail this step. The retry
+      # absorbs single-shot model flakes without re-introducing the
+      # release-blocking failure mode that drove the soft-check
+      # detour. Phase 3c's `pr_already_closed` path is still
+      # hard-failing on its own (test-setup race, not editor
+      # reliability).
+      - name: "Phase 4b: Verify editor restored canary (pytest + retry)"
         id: verify-bait-removed
         if: steps.inject-bait.outputs.status == 'injected'
-        continue-on-error: true
         env:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
@@ -1508,50 +1514,138 @@ jobs:
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
           CANARY_PATH="tests/e2e_smoke_canary.txt"
-          # Reconstruct the issue's exact 3-line target. Phase 3c
-          # corrupts every line of the canary plus adds extras; the
-          # editor must restore EXACTLY this content. The issue body
-          # at line ~347 hardcodes `run_id: ${RUN_ID}` where RUN_ID =
-          # GITHUB_RUN_ID, so the same value works on both sides.
-          EXPECTED=$(printf 'status: ok\nrun_id: %s\nupdated-by: ai-pipeline\n' "${GITHUB_RUN_ID}")
+          # The pytest test reconstructs the issue's exact 3-line target
+          # from E2E_EXPECTED_RUN_ID. Issue body at line ~347 hardcodes
+          # `run_id: ${RUN_ID}` where RUN_ID = GITHUB_RUN_ID, so the
+          # same value works on both sides.
+          export E2E_EXPECTED_RUN_ID="${GITHUB_RUN_ID}"
+          export E2E_CANARY_FILE="${RUNNER_TEMP:-/tmp}/e2e_canary_fetched.txt"
 
-          # Re-fetch canary on the (post-review) PR head.
-          BLOB=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null || echo "")
-          if [ -z "${BLOB}" ]; then
+          python3 -m pip install --quiet pytest >/dev/null 2>&1 || {
+            echo "::warning::pip install pytest failed; trying apt fallback"
+            sudo apt-get install -y --no-install-recommends python3-pytest >/dev/null 2>&1 || true
+          }
+
+          fetch_canary_to_tmp() {
+            # NOTE: do NOT use `blob=$(gh api ... || echo "")` — on
+            # non-zero exit, `gh api` writes the error JSON body
+            # (e.g. `{"message":"Not Found",...}`) to stdout, which
+            # would land in $blob as a valid-looking but bogus
+            # response. Capture exit status separately and require
+            # the .content field to be present before returning OK.
+            local blob_path="${RUNNER_TEMP:-/tmp}/e2e_canary_blob.json"
+            : > "${blob_path}"
+            local rc=0
+            gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" \
+              > "${blob_path}" 2>/dev/null || rc=$?
+            if [ "${rc}" -ne 0 ] || [ ! -s "${blob_path}" ]; then
+              return 1
+            fi
+            # Validate response schema before trusting it.
+            local content_b64
+            content_b64=$(jq -r '.content // empty' "${blob_path}")
+            if [ -z "${content_b64}" ]; then
+              return 1
+            fi
+            printf '%s' "${content_b64}" | tr -d '\n' | base64 -d > "${E2E_CANARY_FILE}" 2>/dev/null || return 1
+            return 0
+          }
+
+          run_pytest() {
+            python3 -m pytest tests/test_e2e_editor_smoke_canary.py -v --no-header
+          }
+
+          # ── Attempt 1 ──────────────────────────────────────────────
+          echo "─── Phase 4b attempt 1: fetch + pytest ───"
+          if ! fetch_canary_to_tmp; then
             echo "::error::Could not re-fetch ${CANARY_PATH} after review — branch may be gone"
             echo "status=fetch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          DECODED=$(echo "${BLOB}" | jq -r '.content // empty' | tr -d '\n' | base64 -d 2>/dev/null || echo "")
-          if echo "${DECODED}" | grep -qF "${BAIT_MARKER}"; then
-            echo "::error::Editor failed to remove bait marker ${BAIT_MARKER}. Canary contents:"
-            printf '%s\n' "${DECODED}"
-            echo "status=bait_remained" >> "$GITHUB_OUTPUT"
+          if run_pytest; then
+            echo "✓ Canary verification passed on first attempt"
+            # Confirm the editor pushed at least one commit on top of the bait.
+            PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+            if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
+              echo "::error::PR head is still the bait commit — editor did not push a fix commit"
+              echo "status=no_editor_commit" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "✓ Editor produced commit(s) past the bait (PR head: ${PR_HEAD:0:7}, bait: ${BAIT_SHA:0:7})"
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::warning::Phase 4b first attempt failed — re-dispatching review_autofix and retrying once"
+
+          # ── Retry: redispatch internal-review.yml on the bait commit ──
+          # Mirrors the Phase 3c fallback dispatch (lines ~1101-1109),
+          # which uses internal-review.yml as the public entry-point that
+          # gates into review_autofix.yml without an `[ai-autofix]` self-
+          # trigger guard.
+          if ! gh workflow run "internal-review.yml" \
+              --repo "${TEST_REPO}" \
+              --ref "${BRANCH}" \
+              -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
+            echo "::error::Retry dispatch failed; cannot recover"
+            cat /tmp/retry_dispatch.txt >&2 || true
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          if [ "${DECODED}" != "${EXPECTED}" ]; then
-            echo "::error::Canary content does not match the issue's required 3-line spec."
-            echo "Expected:"
-            printf '%s' "${EXPECTED}" | sed 's/^/  /'
-            echo "Actual:"
-            printf '%s' "${DECODED}" | sed 's/^/  /'
+          echo "✓ Retry dispatch sent — polling for the new review run"
+
+          # Poll for the new review run on the bait SHA. Skip the run
+          # we already saw via wait-review by recording its id (if
+          # available) and matching .head_sha + greater-than created_at.
+          PRIOR_REVIEW_RUN="${{ steps.wait-review.outputs.review_run_id }}"
+          DEADLINE=$(( $(date +%s) + 600 ))  # 10 minutes
+          RETRY_RUN_ID=""
+          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+            sleep 15
+            CANDIDATES=$(gh api "repos/${TEST_REPO}/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=10" \
+              --jq ".workflow_runs[] | select(.head_sha == \"${BAIT_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"" 2>/dev/null || echo "")
+            if [ -z "${CANDIDATES}" ]; then
+              echo "  (no new review run yet)"
+              continue
+            fi
+            # Pick the latest candidate id
+            RETRY_RUN_ID=$(echo "${CANDIDATES}" | tail -n 1 | awk '{print $1}')
+            RETRY_STATUS=$(echo "${CANDIDATES}" | tail -n 1 | awk '{print $2}')
+            RETRY_CONCL=$(echo "${CANDIDATES}" | tail -n 1 | awk '{print $3}')
+            echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
+            if [ "${RETRY_STATUS}" = "completed" ]; then
+              break
+            fi
+          done
+
+          if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
+            echo "::error::Retry review run did not complete within 10 minutes"
+            echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # ── Attempt 2 ──────────────────────────────────────────────
+          echo "─── Phase 4b attempt 2: re-fetch + pytest after retry ───"
+          if ! fetch_canary_to_tmp; then
+            echo "::error::Could not re-fetch ${CANARY_PATH} after retry"
+            echo "status=fetch_failed_after_retry" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if ! run_pytest; then
+            echo "::error::Canary verification still failed after retry — editor is broken or model fully unavailable"
             echo "status=spec_mismatch" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          echo "✓ Canary restored to the issue's exact 3-line spec"
+          echo "✓ Canary verification passed on retry"
 
-          # Confirm the editor pushed at least one commit on top of the bait.
-          COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
-            --jq "[.[] | select(.sha != \"${BAIT_SHA}\") | .sha] | length" 2>/dev/null || echo "0")
-          # The PR head SHA should differ from the bait SHA.
           PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
           if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
-            echo "::error::PR head is still the bait commit — editor did not push a fix commit"
+            echo "::error::PR head is still the bait commit after retry — editor did not push a fix commit"
             echo "status=no_editor_commit" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          echo "✓ Editor produced commit(s) past the bait (PR head: ${PR_HEAD:0:7}, bait: ${BAIT_SHA:0:7})"
-          echo "status=success" >> "$GITHUB_OUTPUT"
+          echo "✓ Editor produced commit(s) past the bait on retry (PR head: ${PR_HEAD:0:7}, bait: ${BAIT_SHA:0:7})"
+          echo "status=success_after_retry" >> "$GITHUB_OUTPUT"
 
       # ── Phase 5: Orchestrator script integration test ──────────
       - name: Checkout repository for integration tests
@@ -2404,12 +2498,18 @@ jobs:
             echo "  ✗ Editor Bait. FAILED (pr_already_closed) — PR was merged/closed before bait injection; editor never invoked. See Phase 3c log."
             PASSED=false
           elif [ "$BAIT_VERIFIED" = "success" ]; then
-            echo "  ✓ Editor Bait. PASSED (editor removed bait + pushed fix commit)"
+            echo "  ✓ Editor Bait. PASSED (editor restored canary + pushed fix commit)"
+          elif [ "$BAIT_VERIFIED" = "success_after_retry" ]; then
+            echo "  ✓ Editor Bait. PASSED on retry (editor restored canary after one re-dispatch — see Phase 4b log)"
           else
-            # Soft check: editor-side failures (bait_remained,
-            # no_editor_commit, fetch_failed) do not block release —
-            # see Phase 4b's comment for the rationale.
-            echo "  ⚠ Editor Bait. WARN (${BAIT_VERIFIED:-not_run}) — editor pipeline did not exercise correctly (soft check; non-blocking — see Phase 4b log)"
+            # Hard-fail: pytest verification (Phase 4b) failed both on
+            # the first attempt AND after a one-shot review_autofix
+            # re-dispatch. This is consistent with a real production
+            # regression (Serena/MCP breakage, prompt drift, parser bug)
+            # rather than a single-shot model flake — those get absorbed
+            # by the retry budget.
+            echo "  ✗ Editor Bait. FAILED (${BAIT_VERIFIED:-not_run}) — editor pipeline did not exercise correctly even after retry"
+            PASSED=false
           fi
 
           # Check orchestrator scripts (Phase 5)
