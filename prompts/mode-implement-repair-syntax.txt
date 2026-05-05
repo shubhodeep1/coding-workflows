@@ -41,6 +41,25 @@ Category-specific repair recipes:
   repair turn. Use `sed -n '<line>p' <path>` (or `<line-2>,<line+2>p`) to
   inspect the exact bytes instead.
 
+EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
+- `apply_patch` is the preferred write tool for surgical edits to existing
+  source files. If it does not land on a particular hunk, fall back to your
+  best judgment: a different `apply_patch` shape, a shell heredoc or
+  `printf` redirected to the target file for fully-specified plain-text
+  files, or any other write tool available. What matters is that the
+  file actually changes on disk.
+- Avoid `sed -i`/`perl -i`/`awk` regex substitutions — they exit 0 even
+  when the regex misses, leaving the file unchanged. After ANY shell write,
+  verify with `git diff --stat` (scoped to the edited file as needed); if
+  zero lines changed, switch tools.
+- Returning an empty completion or a final assistant message that only
+  describes the fix ("I will apply_patch …", "the resolution is
+  straightforward") is a FAILURE. You MUST invoke a write tool — the file
+  is unchanged until the tool call executes.
+- Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
+  invocation without emitting the tool call on some inputs
+  (openai/codex#11151). The fallback paths above exist for that case.
+
 Output:
 - Apply code changes directly in-repo.
 - Provide repository changes only.
