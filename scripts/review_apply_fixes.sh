@@ -191,36 +191,38 @@ fi
 
 This run is the repository's end-to-end smoke fixture. The PR title /
 linked issue carry the marker "[E2E Smoke Test]". The smoke gate has
-deliberately appended a single bait line of the form
-"# E2E_EDITOR_BAIT_<run_id>: ..." to the file
-tests/e2e_smoke_canary.txt; the file currently contains 4 lines and
-must end up as exactly these 3 lines (no comments, no headers, no
-trailing content beyond the final newline):
+deliberately corrupted tests/e2e_smoke_canary.txt: every required
+value has been mangled (status / run_id / updated-by are all wrong),
+extra noise lines have been appended, and the file ends with a marker
+line of the form "# E2E_EDITOR_BAIT_<run_id>: ...".
 
-  status: ok
-  run_id: <whatever value already appears on line 2 of the file>
-  updated-by: ai-pipeline
+The file MUST be restored to EXACTLY the 3-line target specified in
+the linked issue body — no comments, no headers, no extra lines, no
+trailing content beyond the final newline. The issue body lists the
+exact required content (status / run_id / updated-by); use those
+literal values, not the corrupted ones currently in the file.
 
 MANDATORY ACTIONS for this run:
 1. You MUST invoke the apply_patch tool on tests/e2e_smoke_canary.txt
-   in this turn. Removing the bait line is a one-line patch — do not
+   in this turn. Restoring the file is a deterministic edit — do not
    wait for additional context, do not ask for clarification, do not
    defer to a future iteration.
 2. Do NOT exit without calling apply_patch. Returning an empty
    completion / a final assistant message that only describes the fix
    ("I will apply_patch ..." / "the change is straightforward") is a
-   smoke-test FAILURE — the gate downstream greps the file via the
-   GitHub contents API after this run and fails the e2e job if the
-   bait line is still present.
+   smoke-test FAILURE — the gate downstream re-fetches the file via
+   the GitHub contents API and fails the e2e job if the contents do
+   not match the issue spec byte-for-byte.
 3. Do not modify any file other than tests/e2e_smoke_canary.txt.
 4. After the apply_patch succeeds, emit the standard editor summary
-   schema below as usual; under "Changes made:" list the single bullet
-   "modified tests/e2e_smoke_canary.txt: removed E2E_EDITOR_BAIT
-   line", and under "Change status:" emit "- edited".
+   schema below as usual; under "Changes made:" list the bullet
+   "modified tests/e2e_smoke_canary.txt: restored canary to issue
+   spec (removed bait corruption)", and under "Change status:" emit
+   "- edited".
 
 The remaining sections of this prompt (reviewer inputs, consolidator,
 hardening tasks, etc.) still apply, but for this fixture the only
-WILL_FIX item is the bait removal above. Proceed directly to
+WILL_FIX item is the canary restoration above. Proceed directly to
 apply_patch.
 
 === END E2E SMOKE TEST OVERRIDE ===

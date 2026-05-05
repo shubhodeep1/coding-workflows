@@ -1002,10 +1002,25 @@ jobs:
             exit 0
           fi
 
-          # Build new content: existing content + bait line. Strip any trailing
-          # newline first so the bait doesn't end up two lines down.
-          BAIT_LINE="# ${BAIT_MARKER}: this line should be removed by the editor (smoke gate)"
-          NEW_CONTENT="$(printf '%s' "${BLOB_CONTENT%$'\n'}")"$'\n'"${BAIT_LINE}"$'\n'
+          # Build new content: a multi-line corruption that violates the
+          # linked issue's spec on every line, plus extra noise lines. The
+          # editor must restore the file to the issue's exact 3-line target
+          # — a single-line removal is no longer sufficient. This stresses
+          # more of the production review pipeline (reviewer consensus on
+          # multiple findings, multi-hunk apply_patch, post-edit validation)
+          # so failures here track real production-class regressions
+          # (Serena/MCP breakage, prompt-template drift, parser bugs)
+          # rather than just "did the model strip one line."
+          #
+          # The `# E2E_EDITOR_BAIT_<run>:` marker is preserved verbatim so
+          # the smoke override in scripts/review_apply_fixes.sh still
+          # triggers (it greps for `^# E2E_EDITOR_BAIT_[0-9]+:`).
+          NEW_CONTENT="status: BROKEN_BY_E2E_BAIT_${GITHUB_RUN_ID}"$'\n'
+          NEW_CONTENT+="run_id: WRONG_VALUE_SHOULD_BE_${GITHUB_RUN_ID}"$'\n'
+          NEW_CONTENT+="updated-by: e2e-bait-injector"$'\n'
+          NEW_CONTENT+="extra: this line violates the issue spec"$'\n'
+          NEW_CONTENT+="also: another line that must be removed"$'\n'
+          NEW_CONTENT+="# ${BAIT_MARKER}: canary corrupted; restore to linked issue spec (smoke gate)"$'\n'
           NEW_B64=$(printf '%s' "${NEW_CONTENT}" | base64 -w0)
 
           echo "Pushing bait commit to ${BRANCH}..."
@@ -1493,6 +1508,12 @@ jobs:
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
           CANARY_PATH="tests/e2e_smoke_canary.txt"
+          # Reconstruct the issue's exact 3-line target. Phase 3c
+          # corrupts every line of the canary plus adds extras; the
+          # editor must restore EXACTLY this content. The issue body
+          # at line ~347 hardcodes `run_id: ${RUN_ID}` where RUN_ID =
+          # GITHUB_RUN_ID, so the same value works on both sides.
+          EXPECTED=$(printf 'status: ok\nrun_id: %s\nupdated-by: ai-pipeline\n' "${GITHUB_RUN_ID}")
 
           # Re-fetch canary on the (post-review) PR head.
           BLOB=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null || echo "")
@@ -1503,12 +1524,21 @@ jobs:
           fi
           DECODED=$(echo "${BLOB}" | jq -r '.content // empty' | tr -d '\n' | base64 -d 2>/dev/null || echo "")
           if echo "${DECODED}" | grep -qF "${BAIT_MARKER}"; then
-            echo "::error::Editor failed to remove bait line ${BAIT_MARKER}. Canary contents:"
+            echo "::error::Editor failed to remove bait marker ${BAIT_MARKER}. Canary contents:"
             printf '%s\n' "${DECODED}"
             echo "status=bait_remained" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          echo "✓ Bait line removed from canary"
+          if [ "${DECODED}" != "${EXPECTED}" ]; then
+            echo "::error::Canary content does not match the issue's required 3-line spec."
+            echo "Expected:"
+            printf '%s' "${EXPECTED}" | sed 's/^/  /'
+            echo "Actual:"
+            printf '%s' "${DECODED}" | sed 's/^/  /'
+            echo "status=spec_mismatch" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "✓ Canary restored to the issue's exact 3-line spec"
 
           # Confirm the editor pushed at least one commit on top of the bait.
           COMMITS_AFTER=$(gh api "repos/${TEST_REPO}/commits?sha=${BRANCH}&per_page=20" \
