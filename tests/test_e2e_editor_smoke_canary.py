@@ -32,18 +32,26 @@ SPEC_PATH = os.path.join(os.path.dirname(__file__), "e2e_smoke_canary_spec.txt")
 RUN_ID_PLACEHOLDER = b"__RUN_ID__"
 
 
-def _expected_content(run_id: str) -> bytes:
+def _load_expected_content(run_id: str) -> bytes:
     """Read the spec template + substitute __RUN_ID__ at byte level.
 
     Reading in binary mode and substituting bytes (rather than text mode +
     encoding) preserves the trailing newline and any other byte-level
     properties of the template, matching the byte-for-byte contract
     Phase 4b enforces.
+
+    This helper is invoked from the `canary_invocation` fixture so any
+    template-loading or placeholder-validation failure surfaces as a
+    pytest ERROR (fixture setup failure) — Phase 4b's
+    classify_pytest_failure routes ERRORs to status=harness_misconfigured.
+    Calling this from a test body would surface AssertionError as a
+    pytest FAILED, which would be misclassified as spec_mismatch
+    (an editor bug) when the real cause is harness drift.
     """
     with open(SPEC_PATH, "rb") as fh:
         template = fh.read()
     if RUN_ID_PLACEHOLDER not in template:
-        raise AssertionError(
+        raise RuntimeError(
             f"Spec template at {SPEC_PATH!r} is missing the {RUN_ID_PLACEHOLDER!r} "
             "placeholder — workflow harness change broke the test contract"
         )
@@ -51,13 +59,18 @@ def _expected_content(run_id: str) -> bytes:
 
 
 @pytest.fixture(scope="module")
-def canary_invocation() -> tuple[str, str, bytes]:
-    """Resolve canary path + expected run id, then read the file as bytes.
+def canary_invocation() -> tuple[str, str, bytes, bytes]:
+    """Resolve canary path + expected run id, load actual + expected bytes.
 
-    Reading the file in the fixture (not in individual tests) makes
-    file-existence failures deterministic regardless of pytest's test-
-    collection / execution order. Each test gets the (path, run_id,
-    content_bytes) tuple and works on the already-loaded content.
+    Reading both files (canary + spec template) in the fixture rather than
+    in individual tests means *any* harness/setup failure (missing env
+    vars, missing canary file, missing/invalid spec template) surfaces as
+    a pytest ERROR instead of FAILED. Phase 4b's classify_pytest_failure
+    routes ERRORs to status=harness_misconfigured (operators look at the
+    workflow YAML / runner setup), and FAILEDs to status=spec_mismatch
+    (operators look at the editor model). Keeping the boundary clean here
+    is what lets the smoke gate distinguish "editor regression" from
+    "smoke harness regression."
 
     Read mode is binary ("rb") so universal-newlines translation
     (CRLF→LF on text-mode read) does not mask line-ending drift in
@@ -67,11 +80,8 @@ def canary_invocation() -> tuple[str, str, bytes]:
     expected_run_id = os.environ.get("E2E_EXPECTED_RUN_ID")
     invoked_from_phase_4b = os.environ.get("E2E_PHASE_4B_INVOKED") == "1"
     if invoked_from_phase_4b:
-        # Production invocation: missing config is a workflow bug, not
-        # a reason to skip silently. Fail loudly — Phase 4b's
-        # classify_pytest_failure maps any non-FAILED pytest exit to
-        # status=harness_misconfigured (operators look at the workflow
-        # YAML / runner setup, not the editor).
+        # Production invocation: missing config is a workflow bug. Raise
+        # so pytest reports ERROR → harness_misconfigured, not FAILED.
         if not canary_file or not expected_run_id:
             raise RuntimeError(
                 "E2E_PHASE_4B_INVOKED=1 but E2E_CANARY_FILE / "
@@ -84,20 +94,22 @@ def canary_invocation() -> tuple[str, str, bytes]:
         )
     assert canary_file and expected_run_id  # narrowed by the branches above
     if not os.path.isfile(canary_file):
-        raise AssertionError(
+        # Same "fixture-time → ERROR" rationale as above.
+        raise RuntimeError(
             f"canary file not found at {canary_file!r} — "
             "Phase 4b should have written the fetched contents here "
             "before invoking pytest"
         )
     with open(canary_file, "rb") as fh:
         content = fh.read()
-    return canary_file, expected_run_id, content
+    expected = _load_expected_content(expected_run_id)
+    return canary_file, expected_run_id, content, expected
 
 
 def test_canary_does_not_contain_bait_marker(
-    canary_invocation: tuple[str, str, bytes],
+    canary_invocation: tuple[str, str, bytes, bytes],
 ) -> None:
-    _, _, content = canary_invocation
+    _, _, content, _ = canary_invocation
     # Phase 3c always injects a marker line of the form
     # "# E2E_EDITOR_BAIT_<run_id>: ...". The editor MUST strip this
     # marker; if it survives, the canary is still corrupted.
@@ -107,10 +119,9 @@ def test_canary_does_not_contain_bait_marker(
 
 
 def test_canary_matches_issue_spec_byte_for_byte(
-    canary_invocation: tuple[str, str, bytes],
+    canary_invocation: tuple[str, str, bytes, bytes],
 ) -> None:
-    _, expected_run_id, actual = canary_invocation
-    expected = _expected_content(expected_run_id)
+    _, _, actual, expected = canary_invocation
     assert actual == expected, (
         "canary content does not match the issue's required 3-line spec.\n"
         f"expected: {expected!r}\n"
