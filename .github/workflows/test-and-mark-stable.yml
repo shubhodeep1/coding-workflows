@@ -1495,17 +1495,30 @@ jobs:
       # known-flaky (seven prior in-tree fixes targeting reasoning
       # effort and prompt content; production runs hit empty-completion
       # state non-deterministically). On first pytest failure we
-      # re-dispatch internal-review.yml against the bait commit and
-      # poll the new run for up to 10 minutes; if the second
-      # verification also fails we hard-fail this step. The retry
+      # snapshot the branch head SHA, re-dispatch internal-review.yml
+      # via `--ref "${BRANCH}"`, and poll for a new workflow_dispatch
+      # run whose head_sha matches the snapshotted SHA. We allow up
+      # to 10 minutes for the new run to complete; if the second
+      # verification also fails, we hard-fail this step. The retry
       # absorbs single-shot model flakes without re-introducing the
       # release-blocking failure mode that drove the soft-check
       # detour. Phase 3c's `pr_already_closed` path is still
       # hard-failing on its own (test-setup race, not editor
       # reliability).
+      #
+      # Gate on wait-review's status: if the review pipeline didn't
+      # complete cleanly upstream, retrying it from here would burn
+      # the 10-min retry window on a known-broken state. Skip Phase 4b
+      # in that case — the aggregator already counts the review
+      # failure, and the skipped status is treated non-blocking
+      # ("review didn't complete") instead of double-counting it as
+      # an editor failure.
       - name: "Phase 4b: Verify editor restored canary (pytest + retry)"
         id: verify-bait-removed
-        if: steps.inject-bait.outputs.status == 'injected'
+        if: |
+          steps.inject-bait.outputs.status == 'injected' &&
+          (steps.wait-review.outputs.status == 'success' ||
+           steps.wait-review.outputs.status == 'completed_with_findings')
         env:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
@@ -2661,6 +2674,10 @@ jobs:
           # Check editor bait removal (Phase 4b)
           BAIT_INJECTED="${{ steps.inject-bait.outputs.status }}"
           BAIT_VERIFIED="${{ steps.verify-bait-removed.outputs.status }}"
+          REVIEW_OK=false
+          if [ "$REVIEW" = "success" ] || [ "$REVIEW" = "completed_with_findings" ]; then
+            REVIEW_OK=true
+          fi
           if [ "$BAIT_INJECTED" = "skipped" ]; then
             echo "  - Editor Bait. SKIPPED (could not inject — non-blocking)"
           elif [ "$BAIT_INJECTED" = "pr_already_closed" ]; then
@@ -2671,6 +2688,13 @@ jobs:
             # to run because the test setup itself was sabotaged.
             echo "  ✗ Editor Bait. FAILED (pr_already_closed) — PR was merged/closed before bait injection; editor never invoked. See Phase 3c log."
             PASSED=false
+          elif [ -z "$BAIT_VERIFIED" ] && [ "$REVIEW_OK" != true ]; then
+            # Phase 4b is gated on wait-review succeeding; if Review
+            # didn't complete cleanly, Phase 4b was skipped on
+            # purpose (no point retry-polling a known-broken state).
+            # The Review FAILED line above already counts that
+            # failure — don't double-count it as an editor bug.
+            echo "  - Editor Bait. SKIPPED (review didn't complete — see Review row above)"
           elif [ "$BAIT_VERIFIED" = "success" ]; then
             echo "  ✓ Editor Bait. PASSED (editor restored canary + pushed fix commit)"
           elif [ "$BAIT_VERIFIED" = "success_after_retry" ]; then
