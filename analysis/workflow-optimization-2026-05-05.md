@@ -765,3 +765,126 @@ No workflow currently exceeds the **800 KB** warning threshold for total file si
 | Code modularization | 6 | Large |
 | Expression size reduction | 5 | Large |
 | Medium/Low fixes | 4 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-05)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is fully proven and can be implemented without changing retry/error/concurrency semantics. `NEEDS_VERIFICATION` means the overlap is real, but a human must first confirm that freshness, fallback, or downstream behavior does not rely on the calls remaining separate. `RISKY_SKIP` means the redundancy is visible, but the call sits in a retry/recovery/race-sensitive path where this pass is not authorizing auto-implementation.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:188-193`; `.github/workflows/issue_pr_status.yml:295-320`  
+  **Current call count** — 2 GraphQL reads on the common path where `closingIssuesReferences` already resolves the linked issues.  
+  **Proposed call count** — 1 GraphQL read on that same common path; only a delta follow-up query if branch/body fallback adds issue numbers that were not in `closingIssuesReferences`.  
+  **Endpoint(s)** — GitHub GraphQL `repository.pullRequest(number).closingIssuesReferences.nodes`; GitHub GraphQL aliased `repository.issue(number)` lookups.  
+  **Evidence** — The first query fetches only linked issue numbers, then the same step builds a second GraphQL batch to fetch labels/body for those same issue numbers.
+  ```yaml
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ...
+    -f query='... pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } ...' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+  ```
+  ```yaml
+  ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+  ...
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ```
+  **Proposed fix** — Extend the first `closingIssuesReferences` query to also fetch `labels(first: 50) { nodes { name } }` and `body`, persist that as a `LINKED_ISSUE_META_JSON` map keyed by issue number, and make the later tracking/managed classification consume that cache. If `BRANCH_ISSUE_NUMBER` or PR-body fallback adds extra issue numbers, batch-query only that delta set.  
+  **Safety rationale** — The overlap is in the same step with no intervening mutation, but the second query also covers branch/body-fallback issue numbers, so a one-call replacement is not fully proven without checking the delta-handling path and the #1469 safety contract.  
+  **Downstream signal** — Verify three cases before consolidating: (1) PR with only `closingIssuesReferences`; (2) PR linked only by `ai/issue-N` branch naming; (3) PR body mentioning an orchestrator tracking issue in prose. Confirm `TRACKING_ISSUES`, `MANAGED_ISSUES`, close/skip behavior, and fail-open fallback are unchanged.
+
+- **ID** — `MERGE-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:3407-3413`; `scripts/orchestrate_poll_process.sh:3463-3468`; `scripts/orchestrate_poll_process.sh:3517-3519`  
+  **Current call count** — 6-8 reads of `GET /repos/{repo}/pulls/{final_pr}` per invocation of this final-merge path, depending on whether `.final_merge_pr` was already cached in state.  
+  **Proposed call count** — 2-3 reads of that endpoint per invocation by fetching all needed fields in one call per probe point.  
+  **Endpoint(s)** — GitHub REST `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence** — The same PR endpoint is hit back-to-back for separate fields at each probe point.
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  ```bash
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  ```bash
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  **Proposed fix** — Add a local helper such as `_fetch_final_pr_status_fields()` that reads `.state`, `.mergeable`, and `.merged_at != null` in one `_safe_gh_jq` call and returns one JSON/TSV blob. Reuse it at the pre-create cached-PR probe, the pre-mergeability gate, and the post-merge-attempt recheck.  
+  **Safety rationale** — This is inside `orchestrate_poll_process.sh`’s final-merge/self-healing path, which is explicitly race-defensive; changing how many probes happen and where errors surface is not safe for automatic implementation.  
+  **Downstream signal** — Do not auto-implement. Manual review must compare merged/already-merged/race-after-merge scenarios and confirm the consolidated helper preserves every `final_merge_status`, `final_merge_error`, and self-healing branch exactly.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/implement.yml:53-76`; `.github/workflows/implement.yml:523-555`  
+  **Current call count** — 2 reads of `GET /repos/{repo}/issues/{issue_number}` on the normal non-skipped path.  
+  **Proposed call count** — 1 read on the normal path, with the existing fallback at `.github/workflows/implement.yml:629-635` retained as the corruption/missing-file backstop.  
+  **Endpoint(s)** — GitHub REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The early precheck already fetches issue state/labels; later the job fetches the full issue again to populate `ISSUE_META_FILE`.
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ISSUE_STATE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.state')"
+  ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -c '.labels')"
+  ```
+  ```bash
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+
+  ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+  ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+  ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
+  ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+  ```
+  **Proposed fix** — Persist the full issue JSON from the precheck fetch and reuse it later. Concretely: create the runtime workspace before the precheck (or emit the payload via step output), write the full issue object to `${ISSUE_META_FILE}`, and make `Fetch issue metadata` parse-only. Keep `Validate approval phase label`’s existing fallback read/API-refresh path intact.  
+  **Safety rationale** — The overlap is real, but the two calls are in separate workflow steps and consolidating them changes whether late issue title/body edits are observed before prompt construction.  
+  **Downstream signal** — Verify desired freshness semantics by editing the issue title/body between the precheck and metadata stages in a dry run; only consolidate if implement is supposed to use the approval-time snapshot rather than the latest issue text.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:11392-11392`  
+  **Current call count** — 1 repository read per standalone-conflict-sweep execution.  
+  **Proposed call count** — 0.  
+  **Endpoint(s)** — GitHub REST `GET /repos/{repo}`  
+  **Evidence** — The standalone conflict sweep fetches `DEFAULT_BRANCH`, but the value is never consumed afterward in that block; subsequent logic only uses `S_PR`, `S_HEAD`, `S_BASE`, and fields from `S_PR_JSON`.
+  ```bash
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+    S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
+    S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+    S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
+    ...
+  done
+  ```
+  Repo-local static search shows no later `DEFAULT_BRANCH` reference after line 11392 in this file.  
+  **Proposed fix** — Remove the dead `DEFAULT_BRANCH` fetch. If manual review finds that the standalone sweep was meant to special-case PRs targeting the default branch, restore that intent as an explicit `S_BASE` comparison in this block rather than leaving an unused repo read.  
+  **Safety rationale** — Although the fetched value is statically dead, the call lives inside `orchestrate_poll_process.sh`’s conflict-recovery sweep, which this audit must treat as manual-review-only.  
+  **Downstream signal** — Do not auto-implement. Manual review must first confirm no intended `S_BASE == DEFAULT_BRANCH` guard was accidentally dropped, then remove the dead fetch and re-run standalone-conflict-sweep regression coverage.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `NEEDS_VERIFICATION` — One GraphQL query can cover both values, but the implementer must preserve the push-path gate outputs and the BUG-002 fail-closed semantics.
+- BATCH-001: `NEEDS_VERIFICATION` — Reusing `ORCH_RESP` is directionally correct, but the merged-alert path still needs proof that #1469 tracking/managed classification is unchanged when data is exported across steps.
+- API-002: `RISKY_SKIP` — The duplicate log download is real, but it sits inside a long-running review wait/poll loop where retry/log-timing behavior must remain byte-for-byte compatible.
+- BATCH-002: `RISKY_SKIP` — The two `gh run list` calls overlap, but they live in a resolver failure/EXIT-trap path that explicitly defends against upstream races.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | `MERGE-001`, `REUSE-001` |
+| RISKY_SKIP | 2 | `MERGE-002`, `DEAD-API-001` |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
