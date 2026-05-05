@@ -590,3 +590,178 @@
 | No real token totals for core `review_autofix` runs | Cost ranking is directional, not dollar-precise | Emit per-call token/cache counters in hot workflows |
 | Nightly validation self-test top-level log hides failed fixture names | Limits exact remediation advice | Surface fixture/stage names from summary JSON before exit |
 | No direct GH API call counts by endpoint | Call-reduction estimates are pattern-based | Add lightweight endpoint/count aggregation per run |
+
+## Deep Audit — Workflows & Scripts (2026-05-05)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — `BUG-001`  
+  **File path** — `scripts/tg_helpers.sh:155-277`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — `tg_store_msg_id()` and `tg_store_phase_msg_id()` both implement a read-modify-write update against a shared tracking comment: they fetch recent issue comments, select the first matching marker, append the new Telegram ID with `sed`, and PATCH the whole body back. That sequence is not atomic. If two jobs send tracked alerts for the same issue/phase close together, both can read the same pre-update comment and the later PATCH overwrites the earlier one, dropping one message ID from the ledger. This repo exercises these helpers from multiple workflows (`clarify.yml`, `plan.yml`, `implement.yml`, `review_autofix.yml`, `orchestrate_clarify_respond.yml`, `validate_process.sh`), so the race is not theoretical. Lost IDs mean `tg_cleanup_msgs()` will orphan Telegram messages because it only deletes IDs that survived the last write.  
+  **Recommended fix** — Stop appending into a shared mutable comment. The safest pattern here is one immutable tracking comment per message ID, e.g. `<!-- tg_cleanup:12345 -->` / `<!-- tg_phase:clarify:12345 -->`, because the existing cleanup scanners already iterate all matching marker comments. If keeping a shared comment is required, add optimistic concurrency protection around the PATCH and retry on conflict instead of last-writer-wins replacement.
+
+- **ID** — `BUG-002`  
+  **File path** — `.github/workflows/internal-review.yml:91-118`  
+  **Severity** — High  
+  **Category tag** — `bug`  
+  **Description** — The `resolve-claude-branch-pr` gate uses raw `gh api` calls with fail-open defaults: `existing_pr` becomes empty on any API error, and `base_ref` falls back to `main`. Under `set -euo pipefail`, the command substitutions themselves do not fail the step because both calls are wrapped in `|| echo ...`. That means a transient 403/5xx/rate-limit event is interpreted as “no open PR exists,” so the workflow emits `proceed=true` and dispatches the no-PR claude-branch review path even when a real PR already exists. The normal `pull_request:synchronize` leg can then run in parallel, duplicating an expensive reviewer-panel run on the same branch.  
+  **Recommended fix** — Replace both raw calls with `gh_retry`/`_safe_gh_jq` from `scripts/gh_helpers.sh`, and fail closed on lookup failure for this gate (`proceed=false` with a warning) rather than defaulting to “no PR.” If you also batch the default-branch lookup into the PR-existence query, keep the step’s outputs unchanged but derive them from one retried request.
+
+- **ID** — `BUG-003`  
+  **File path** — `.github/workflows/orchestrate_clarify_respond.yml:59-80`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — The early “Check orchestrator metadata” step hard-depends on raw `gh api` calls for data that is already mostly present in the event payload. `ISSUE_PAYLOAD="$(gh api .../issues/${ISSUE_NUMBER})"` is not wrapped in `gh_retry`, so any transient GitHub API failure aborts the entire workflow before the memory dedupe, loop guard, or fail-open logic runs. The optional tracking-title probe at line 76 is also raw `gh api`. This produces stricter failure behavior than the rest of the repo’s GitHub-call contract and creates an avoidable single-point failure at the top of the workflow.  
+  **Recommended fix** — Use `github.event.issue.body` / `github.event.issue.title` as the primary source for orchestrator detection, since this workflow is triggered from issue comments. Only fetch the tracking issue title when a tracking number is actually present, and do that through `gh_retry` so the smoke-alert suppression path cannot fail the whole workflow.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — `API-001`  
+  **File path** — `.github/workflows/internal-review.yml:98-101`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — `resolve-claude-branch-pr` issues two separate GitHub reads on every `claude/**` push: one REST call for open PR existence and one REST call for the repo default branch. Those values are consumed together to produce one gate decision/output set.  
+  **Current call count** — 2 calls per push (`GET /pulls?state=open&head=...` + `GET /repos/{repo}`)  
+  **Proposed call count after fix** — 1 call per push  
+  **Batching/reuse pattern to extend** — Follow the aliased GraphQL batching style used by `_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`: fetch `repository.defaultBranchRef.name` and `pullRequests(headRefName: ..., states: OPEN, first: 1)` in one query.  
+  **Recommended fix** — Collapse the two reads into one GraphQL query and feed both `existing_pr` and `base_ref` from that result. That also gives one retry boundary instead of two independent failure modes.
+
+- **ID** — `BATCH-001`  
+  **File path** — `.github/workflows/issue_pr_status.yml:288-349,503-512`  
+  **Severity** — Medium  
+  **Category tag** — `api-batching`  
+  **Description** — The main label-sync step already batch-fetches linked issue labels/bodies through `ORCH_QUERY`, but the later “Send PR merged Telegram alert” step loops `LINKED_ISSUE_NUMBERS` and re-fetches each issue body individually with `_safe_gh_jq` to decide whether the PR belongs to an orchestrator-managed issue. That is duplicate data retrieval in the same execution path: the earlier batch already knows which linked issues are tracking/managed.  
+  **Current call count** — 1 GraphQL batch call + up to `N` REST calls in the merged-alert step, where `N` is the number of linked issues  
+  **Proposed call count after fix** — 1 GraphQL batch call total  
+  **Batching/reuse pattern to extend** — Reuse the existing `ORCH_QUERY` result in this workflow; if you want a helper, mirror the cached-batch contract style from `scripts/orchestrate_poll_process.sh`.  
+  **Recommended fix** — Export a step output or `GITHUB_ENV` flag derived from `ORCH_RESP` (`HAS_ORCHESTRATED_LINKED_ISSUE=true/false`, or serialized managed/tracking sets) and make the merged-alert step consume that instead of issuing per-issue body lookups.
+
+- **ID** — `API-002`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1325-1475`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — Once `ELAPSED >= 600`, the Phase 4a review wait loop downloads the same job log twice in a single poll iteration: first into `LOG_FILE` at lines 1359-1362 for early-success/editor-noop scanning, then again at lines 1471-1472 solely to compute `LOG_SIZE`. The second download adds API and bandwidth cost without providing new data.  
+  **Current call count** — 2 `/actions/jobs/{id}/logs` downloads per qualifying poll iteration  
+  **Proposed call count after fix** — 1 log download per qualifying poll iteration  
+  **Batching/reuse pattern to extend** — Reuse the already-downloaded `LOG_FILE`, just like the step already reuses `JOBS_JSON` instead of re-fetching jobs in the happy path.  
+  **Recommended fix** — Keep `LOG_FILE` until after `LOG_SIZE=$(wc -c < "$LOG_FILE")`, then remove it. That eliminates one high-volume API call every loop iteration after the 10-minute mark.
+
+- **ID** — `BATCH-002`  
+  **File path** — `scripts/review_conflict_resolve.sh:91-123`  
+  **Severity** — Low  
+  **Category tag** — `api-batching`  
+  **Description** — `_maybe_dispatch_orchestrator_poll_on_failure()` probes for active poller runs with two separate `gh run list` calls: one for `in_progress`, then one for `queued`. Both calls hit the same workflow/repo scope and only differ by status filtering.  
+  **Current call count** — 2 list-runs calls per resolver failure path  
+  **Proposed call count after fix** — 1 list-runs call per resolver failure path  
+  **Batching/reuse pattern to extend** — Reuse the single-call local filtering approach already implemented in `autofix_retrigger_has_inflight_peer()` in `scripts/gh_helpers.sh:1171-1228`.  
+  **Recommended fix** — Fetch a small run window once, then filter locally for `queued`/`in_progress`. That keeps the dedupe logic identical while cutting one API round-trip from a failure-heavy path.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — `DUP-001`  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/mark-stable.yml:309-335,457-483; .github/workflows/orchestrate_poll.yml:66-97; .github/workflows/review_autofix.yml:1254-1292; .github/workflows/comprehensive-test-and-release.yml:75-92,319-335`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — The repo has multiple hand-rolled copies of the same `_rl_wait` + `_gh_retry`/`gh_retry` logic instead of using `scripts/gh_helpers.sh`. The duplicated blocks all parse `/rate_limit`, sleep until reset on 403/429-like errors, and apply exponential backoff otherwise, but they are already drifting in names, stderr handling, temp-file paths, and retry semantics. That fragmentation is exactly the kind of retry-policy divergence called out in the current report’s reliability section.  
+  **Recommended fix** — Consolidate on `scripts/gh_helpers.sh` and add any missing helper surface there instead of cloning wrapper logic inline. A concrete module shape would be:
+  - `gh_retry <gh subcommand...>`
+  - `gh_retry_to_file <outfile> <gh subcommand...>`
+  - `gh_api_json_to_file <outfile> <gh api ...>`
+  
+  Update callers in `cancel_on_pr_close.yml`, `mark-stable.yml`, `orchestrate_poll.yml`, `review_autofix.yml`, and `comprehensive-test-and-release.yml` to source the shared helper rather than redefining local retry functions.
+
+- **ID** — `DUP-002`  
+  **File path** — `.github/workflows/issue_pr_status.yml:69-131,467-498,555-590; .github/workflows/validate.yml:209-277`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — Support-file staging is duplicated in several places with near-identical helper bodies: `checkout_support_ref`, `fetch_from_ref_or_local` / `copy_from_ref_or_local`, staging-root setup, `stable`→`main` fallback, and local-self-repo shortcuts. `issue_pr_status.yml` then duplicates the same support-clone pattern a second and third time inside its Telegram alert and cleanup steps instead of reusing the first staged checkout.  
+  **Recommended fix** — Extract support staging into a shared module. The lowest-friction option is a shell helper such as `scripts/stage_workflow_support.sh` exposing:
+  - `stage_support_checkout <wf_source> <requested_ref> <stage_root>`
+  - `copy_from_support_or_local <repo_path> <target_path> <require_remote> <allow_main_fallback>`
+  
+  Callers to update: `validate.yml`, `issue_pr_status.yml` (both the initial memory-helper fetch and the later Telegram helper steps), and then `review_autofix.yml` if you want one canonical staging path repo-wide.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — `EXPR-001`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1602-2001`  
+  **Severity** — High  
+  **Category tag** — `expression-limit`  
+  **Description** — The Phase 4b “Verify editor removed bait line” `run:` block still embeds a very large `${{ }}`-bearing shell body. Estimated current template body size is **20,849 chars**, leaving only **151 chars** of headroom before the 21,000-char hard failure. This is the same workflow family that has already tripped the expression ceiling multiple times.  
+  **Recommended fix** — Extract the entire Phase 4b retry/poll/pytest orchestration into a dedicated script under `scripts/` and pass only env vars from YAML. This block is too close to the hard ceiling to safely evolve inline.
+
+- **ID** — `EXPR-002`  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1187-1518`  
+  **Severity** — High  
+  **Category tag** — `expression-limit`  
+  **Description** — The Phase 4a review wait-loop block is also near the ceiling. Estimated current template body size is **19,700 chars**, leaving about **1,300 chars** of headroom. The block contains one `${{ }}` expression but a large amount of inline polling logic, comments, and failure handling, so even modest edits can push it over.  
+  **Recommended fix** — Move the wait-loop into a script, e.g. `scripts/e2e_wait_for_review.sh`, and keep the workflow step to wiring inputs/outputs only.
+
+- **ID** — `EXPR-003`  
+  **File path** — `.github/workflows/review_autofix.yml:1251-1573`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — “Collect PR metadata” is still a large inline `${{ }}`-bearing block. Estimated current template body size is **16,437 chars**, with about **4,563 chars** of remaining headroom. It already contains retry logic, GraphQL fetches, three comment/review collection calls, Python post-processing, and diff capture in one step.  
+  **Recommended fix** — Split this into at least two steps or extract it to `scripts/review_collect_pr_metadata.sh`. The natural split boundary is: (1) API fetch/caching, (2) comment-context/diff assembly.
+
+- **ID** — `EXPR-004`  
+  **File path** — `.github/workflows/validate.yml:183-476`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — “Fetch workflow support files” is another large interpolated `run:` block. Estimated current size is **16,485 chars**, leaving about **4,515 chars** of headroom. The block keeps growing because it mixes clone logic, fallback policy, schema copying, prompt copying, optional self-heal support, and `.gitignore` setup in one inline body.  
+  **Recommended fix** — Extract the support-staging logic to a shared script or composite action. This is the same code family flagged under `DUP-002`, so one modularization fix can also remove the expression-risk hot spot.
+
+- **ID** — `EXPR-005`  
+  **File path** — `.github/workflows/orchestrate_clarify_respond.yml:813-1096`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The “Parse and post answer” block is above the 15k warning threshold. Estimated current size is **15,140 chars**, leaving about **5,860 chars** of headroom. The step contains multiple memory-guard branches, loop-break comment generation, tracked-alert handling, and processed-command completion writes in one inline body.  
+  **Recommended fix** — Extract this path to a script such as `scripts/orchestrate_parse_and_post_answer.sh`, or split the loop-guard/escalation path from the happy-path answer-posting path.
+
+No workflow currently exceeds the **800 KB** warning threshold for total file size; the largest audited workflow in this repo is `review_autofix.yml` at roughly **277,694 chars**, well below the 1 MB hard cap.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — `DEAD-001`  
+  **File path** — `scripts/orchestrate_poll_process.sh:4765-4771`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `read_standalone_state_json()` is defined but has no in-repo call sites. Repository-wide search only finds the definition, while writers route through `write_standalone_state_json()` and readers use cached comment JSON directly. That leaves an unexercised helper in the repo’s hottest shell script.  
+  **Recommended fix** — Remove `read_standalone_state_json()` if the cached-comment path is the intended contract. If the wrapper is meant to stay, convert one real caller to it and document the pagination/fail-open behavior above the function.
+
+- **ID** — `CONSIST-001`  
+  **File path** — `.github/workflows/internal-review.yml:91-101; .github/workflows/orchestrate_clarify_respond.yml:59-76`  
+  **Severity** — Medium  
+  **Category tag** — `consistency`  
+  **Description** — Two early workflow gates bypass the repo-standard GitHub-call patterns in opposite ways: `internal-review.yml` uses raw `gh api ... || echo ""` fail-open defaults, while `orchestrate_clarify_respond.yml` uses raw `gh api` with hard-fail semantics. The rest of the repo generally standardizes on `gh_retry`/`_safe_gh_jq` from `scripts/gh_helpers.sh` or on event-payload reuse. This inconsistency is already causing divergent behavior: `BUG-002` turns transient API errors into duplicate review runs, while `BUG-003` turns them into premature workflow failures.  
+  **Recommended fix** — Standardize early metadata gates on one contract: prefer event payload when available, otherwise use `scripts/gh_helpers.sh` and make the fail-open/fail-closed choice explicit in the step comment and outputs.
+
+- **ID** — `SHELL-001`  
+  **File path** — `scripts/check_external_branch_advance.sh:180-184`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — `for sha in ${self_subject_shas}; do` relies on unquoted word splitting (`SC2086`). Today the values are expected to be commit SHAs, so the loop usually works, but the code is still brittle: any future delimiter change or unexpected whitespace will silently alter iteration behavior.  
+  **Recommended fix** — Convert `self_subject_shas` to a newline-delimited stream and iterate with `while IFS= read -r sha; do ...; done`, or populate a bash array with `mapfile -t` and iterate over `"${array[@]}"`.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-002, EXPR-001, EXPR-002 |
+| Medium | 11 | BUG-001, BUG-003, API-001, BATCH-001, API-002, DUP-001, DUP-002, EXPR-003, EXPR-004, EXPR-005, CONSIST-001 |
+| Low | 3 | BATCH-002, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 4 | Medium |
+| Code modularization | 6 | Large |
+| Expression size reduction | 5 | Large |
+| Medium/Low fixes | 4 | Medium |
