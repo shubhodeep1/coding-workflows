@@ -87,6 +87,18 @@ def canary_invocation() -> tuple[str, str, bytes, bytes]:
                 "E2E_PHASE_4B_INVOKED=1 but E2E_CANARY_FILE / "
                 "E2E_EXPECTED_RUN_ID not set — Phase 4b harness misconfigured"
             )
+        # Validate the run id format up-front so a malformed value
+        # surfaces as a clear harness error instead of as a downstream
+        # UnicodeEncodeError (from `.encode("ascii")` on non-ASCII
+        # input) or a confusing byte-mismatch in the assertion.
+        # GITHUB_RUN_ID is always a positive integer string in
+        # practice; locking down to that shape is a tighter contract
+        # than ASCII-only.
+        if not expected_run_id.isdigit():
+            raise RuntimeError(
+                f"E2E_EXPECTED_RUN_ID={expected_run_id!r} is not a "
+                "numeric GITHUB_RUN_ID — Phase 4b harness misconfigured"
+            )
     elif not canary_file or not expected_run_id:
         pytest.skip(
             "E2E_CANARY_FILE / E2E_EXPECTED_RUN_ID not set — "
