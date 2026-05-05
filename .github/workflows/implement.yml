@@ -885,6 +885,26 @@ jobs:
             handles commit and diff reporting separately.
           - Do NOT emit progress/status messages. Output ONLY repository changes.
 
+          EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
+          - `apply_patch` is the preferred write tool for surgical edits to existing
+            source files (.sol, .ts, .py, .js, .go, .rs, .java, .json, etc.) — it
+            produces the cleanest diff and the smallest blast radius.
+          - If `apply_patch` does not land on a particular hunk, fall back to your
+            best judgment: a different `apply_patch` shape, a shell heredoc /
+            `printf … > path` for fully-specified plain-text files (.txt, .csv,
+            small data fixtures), or any other write tool you have available. Pick
+            whatever gets the bytes onto disk this turn — what matters is that the
+            file actually changes.
+          - Returning an empty completion or a final assistant message that only
+            describes the fix ("I will apply_patch …", "applying the requested
+            edit now", "the resolution is straightforward") is a FAILURE. The
+            workflow's stuck-detection counts these as no-actionable-output and
+            bails after 2 consecutive attempts. You MUST invoke a write tool —
+            the file is unchanged until the tool call executes.
+          - Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
+            invocation without emitting the tool call on some inputs
+            (openai/codex#11151). The fallback paths above exist for that case.
+
           CONFLICT DETECTION:
           - Flag any factual conflicts between the implementation plan and the actual
             codebase (e.g., a function name in the plan doesn't match the code, a file
@@ -1080,20 +1100,37 @@ jobs:
           writing to disk. Proceed now.
 
           Concretely on this attempt:
-          - Use `apply_patch` or shell exec to make
-            edits. For plain-text files (.txt, .csv, canary files, data
-            files) with fully-specified content, a direct shell write is
-            equally valid and avoids apply_patch diff-format issues:
+          - `apply_patch` is the preferred write tool for surgical edits to
+            existing source files (.sol, .ts, .py, .js, .go, .rs, .java,
+            .json, etc.). If it does not land on a particular hunk, fall back
+            to your best judgment: a different `apply_patch` shape, a shell
+            heredoc / `printf … > path` for fully-specified plain-text files
+            (.txt, .csv, small data fixtures), or any other write tool. Pick
+            whatever gets the bytes onto disk this turn — what matters is
+            that the file actually changes:
               printf 'line1\nline2\nline3\n' > path/to/file.txt
-            Avoid `sed`/`rg` for content replacements — quoting is fragile.
+            Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
+            source — they exit 0 even when the regex misses, leaving the
+            file unchanged. After ANY shell write, verify with
+            `git diff --stat <file>`; if zero lines changed, switch tools
+            instead of retrying the same regex shape.
           - Do NOT read additional files until your first write tool call
             has succeeded. Pick the file you understand best from
             the plan, edit it first, verify the change landed on disk, and
             only then expand scope.
           - WARNING: describing or quoting the file's new content in your
-            response does NOT write it to disk. You MUST call a write tool
-            (apply_patch or printf shell exec) — the
-            file is unchanged until a tool call is actually executed.
+            response does NOT write it to disk. Returning an empty
+            completion or a final assistant message that only describes the
+            fix ("I will apply_patch …", "applying the requested edit now",
+            "the resolution is straightforward") is a FAILURE — the
+            workflow's stuck-detection counts this as no-actionable-output.
+            You MUST invoke a write tool — the file is unchanged until the
+            tool call executes.
+          - Known model bug: `gpt-5.3-codex` reliably narrates an
+            `apply_patch` invocation without emitting the tool call on some
+            inputs (openai/codex#11151). The fallback paths above exist for
+            that case — switch tools immediately rather than retrying the
+            same `apply_patch` shape.
 
           RETRY_EOF
                 if [ -n "${prior_exec_history}" ]; then

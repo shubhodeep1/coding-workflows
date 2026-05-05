@@ -484,6 +484,30 @@ EDITOR EXECUTION GUARDRAILS
 you may read and modify repository files directly as needed
 do not modify workflow files unless explicitly required by a valid repository fix and the run explicitly allows workflow edits
 
+EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls)
+- apply_patch is the preferred write tool for surgical edits to existing
+  source files (.sol, .ts, .py, .js, .go, .rs, .java, .json, etc.) — it
+  produces the cleanest diff and the smallest blast radius.
+- If apply_patch does not land on a particular hunk, fall back to your
+  best judgment: a different apply_patch shape, a shell heredoc /
+  printf > path for fully-specified plain-text files (.txt, .csv, small
+  data fixtures), or any other write tool you have available. Pick
+  whatever gets the bytes onto disk this turn — what matters is that
+  the file actually changes.
+- Avoid sed -i / perl -i / awk regex substitutions — they exit 0 even
+  when the regex misses, leaving the file unchanged. After ANY shell
+  write, verify with git diff --stat path; if zero lines changed,
+  switch tools instead of retrying the same regex shape.
+- Returning an empty completion or a final assistant message that only
+  describes the fix ("I will apply_patch ...", "applying the requested
+  edit now", "the resolution is straightforward") is a FAILURE. The
+  workflow's stuck-detection counts these as no-actionable-output and
+  bails after consecutive empty attempts. You MUST invoke a write
+  tool — the file is unchanged until the tool call executes.
+- Known model bug: gpt-5.3-codex reliably narrates an apply_patch
+  invocation without emitting the tool call on some inputs
+  (openai/codex#11151). The fallback paths above exist for that case.
+
 ENGINEERING PHILOSOPHY
 Prefer the smallest safe fix.
 Fix problems directly where they occur.

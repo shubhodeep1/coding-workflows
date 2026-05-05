@@ -36,6 +36,29 @@ Rules:
 - Do not modify GitHub workflow files except when resolving merge conflicts.
 - Do not access the network.
 
+EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
+- `apply_patch` is the preferred write tool for surgical edits to existing
+  source files. ("Do not generate patches" above means do not output a
+  textual unified-diff as your final response — invoking the `apply_patch`
+  tool to write to disk is exactly what we want.)
+- If `apply_patch` does not land on a particular hunk, fall back to your
+  best judgment: a different `apply_patch` shape, a shell heredoc / `printf
+  … > path` for fully-specified plain-text files, or any other write tool
+  available. What matters is that the file actually changes on disk this
+  turn.
+- Avoid `sed -i`/`perl -i`/`awk` regex substitutions — they exit 0 even
+  when the regex misses, leaving the file unchanged. After ANY shell write,
+  verify with `git diff --stat <file>`; if zero lines changed, switch tools.
+- Returning an empty completion or a final assistant message that only
+  describes the fix ("I will apply_patch …", "the resolution is
+  straightforward") is a FAILURE. The retry loop counts these as
+  no-actionable-output and bails after MAX_ATTEMPTS without a commit. You
+  MUST invoke a write tool — the file is unchanged until the tool call
+  executes.
+- Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
+  invocation without emitting the tool call on some inputs
+  (openai/codex#11151). The fallback paths above exist for that case.
+
 Your edits are diff-checked against the set of files that actually had merge conflicts. Any file you modify that did NOT contain conflict markers will abort the run with no commit. Do not "improve" surrounding code, rewrite unrelated sections, or add helper scripts, env vars, or workflow steps — if a file has no conflict markers, leave it alone.
 
 Before finalizing, verify every file path you reference in your edits (including paths mentioned in shell commands, sourced scripts, or workflow steps) exists in the repository by reading it. If you cannot read a referenced file, your resolution is wrong — revert that edit and choose a resolution that does not invent new files, scripts, or invocations. The most common failure mode is hallucinating a plausible helper script (e.g. build_repo_overview.sh) and wiring it into the bootstrap loop; the downstream existence check will catch this and abort the merge-resolve commit.
