@@ -818,3 +818,125 @@ No additional dead-code blocks or `TODO`/`FIXME`/`HACK` markers were found in th
 | Code modularization | 6 | Large |
 | Expression size reduction | 4 | Large |
 | Medium/Low fixes | 2 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-05)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap/deadness is proven locally enough that implement can act without changing retry, pagination, auth, or concurrency semantics. `NEEDS_VERIFICATION` means the optimization looks real, but a human or follow-up audit must confirm a cross-step/file contract before changing it. `RISKY_SKIP` means the redundancy may be real, but it lives in a retry/race-defense/poller path that this pass must not auto-implement.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — REUSE-001  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `scripts/review_rb_judge.sh:146-156`; `.github/workflows/review_autofix.yml:1102-1105, 1336-1350`  
+  **Current call count** — 1 extra REST PR fetch on the “GraphQL returned no linked issues” fallback path  
+  **Proposed call count** — 0 extra REST PR fetches on that path  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence** — The judge fallback re-fetches PR title/body even though the caller already materializes both `PR_PAYLOAD_FILE` and `PR_META_FILE` earlier in the same workflow run.
+
+  ```bash
+  ISSUE_NUMBERS="$(gh_retry gh api graphql ... )"
+  
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    ...
+  fi
+  ```
+
+  ```bash
+  echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
+  echo "PR_META_FILE=${RUNTIME_DIR}/pr_meta.json"
+  ...
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  ...
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  **Proposed fix** — In `scripts/review_rb_judge.sh`, build `PR_DATA` from `PR_PAYLOAD_FILE` first, then `PR_META_FILE`, and keep the existing `gh api repos/.../pulls/${PR_NUMBER}` call only as a last-resort fallback when both files are missing/empty.  
+  **Safety rationale** — NEEDS_VERIFICATION because the reuse crosses the workflow→script boundary; this pass cannot prove from static reading alone that every in-repo `review_rb_judge.sh` invocation always seeds valid `PR_PAYLOAD_FILE`/`PR_META_FILE`.  
+  **Downstream signal** — Verify every in-repo invocation of `review_rb_judge.sh` exports readable `PR_PAYLOAD_FILE` or `PR_META_FILE` before execution; if true, switch the fallback `PR_DATA` assembly to file-first and keep the current `gh api` call as the last-resort fallback.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — DEAD-API-001  
+  **Safety tag** — SAFE_TO_MERGE  
+  **File path and line ranges** — `scripts/review_rb_judge.sh:161-170`; `scripts/review_rb_judge.sh:241-249, 645-651`  
+  **Current call count** — `N` issue-body fetches for `N` linked issues  
+  **Proposed call count** — `1` issue-body fetch total  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence** — The loop fetches every linked issue body, but downstream only uses the first linked issue’s number/body.
+
+  ```bash
+  FIRST_ISSUE=""
+  FIRST_ISSUE_BODY=""
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    if [ -z "${FIRST_ISSUE}" ]; then
+      FIRST_ISSUE="${issue_number}"
+    fi
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if [ -z "${FIRST_ISSUE_BODY}" ]; then
+      FIRST_ISSUE_BODY="${BODY}"
+    fi
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+
+  Later reads are only against the first issue/body:
+
+  ```bash
+  echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
+  echo "${FIRST_ISSUE_BODY}"
+  ```
+
+  ```bash
+  - Replaces: ${FIRST_ISSUE:+#${FIRST_ISSUE} }(PR #${PR_NUMBER} closed — approach rework)
+  ```
+  **Proposed fix** — In `scripts/review_rb_judge.sh`, fetch the issue body only when `FIRST_ISSUE_BODY` is still empty, then stop issuing `repos/.../issues/{n}` calls for later linked issues.  
+  **Safety rationale** — SAFE_TO_MERGE because the extra calls are in the same function, no downstream branch consumes later issue bodies, and removing them does not alter pagination, retry shape, auth scope, or concurrency boundaries.  
+  **Downstream signal** — In `scripts/review_rb_judge.sh`, fetch issue body only for the first linked issue and skip `repos/.../issues/{n}` calls for later linked issues.
+
+- **ID** — DEAD-API-002  
+  **Safety tag** — RISKY_SKIP  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:11379-11415`  
+  **Current call count** — 1  
+  **Proposed call count** — 0  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}`  
+  **Evidence** — The standalone conflict sweep fetches `default_branch` into `DEFAULT_BRANCH`, but this assignment is not consumed anywhere in the sweep body that follows.
+
+  ```bash
+  STANDALONE_PRS="$(gh_retry gh pr list ...)"
+  STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+  echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
+  
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+    ...
+    S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" || echo '{}')"
+    ...
+  done
+  ```
+  **Proposed fix** — Remove the `DEFAULT_BRANCH` fetch from this sweep, or prove a hidden contract requires refreshing it here before touching the code.  
+  **Safety rationale** — RISKY_SKIP because the dead call sits inside `scripts/orchestrate_poll_process.sh`, which the audit contract explicitly treats as a race-defense path that must not be auto-implemented.  
+  **Downstream signal** — Do not auto-delete this call; manually review the standalone conflict-sweep path in `orchestrate_poll_process.sh` and confirm no hidden sourcing/logging contract depends on `DEFAULT_BRANCH` being refreshed here.
+
+### Cross-References to Deep Audit Section
+
+- API-001: NEEDS_VERIFICATION — Directionally correct helper consolidation, but comment/review pagination parity and exact env/file output shape should be checked before swapping out the hand-rolled hydration.
+- BATCH-001: NEEDS_VERIFICATION — The single cached GraphQL payload should cover close/label/alert logic, but the conservative tracking-vs-managed fallback behavior needs parity verification before removing per-issue reads.
+- API-002: NEEDS_VERIFICATION — Reusing `PR_DIFF_FILE`/`ORIGINAL_PR_DIFF_FILE` is the right direction, but implement should first confirm every `review_rb_judge.sh` invocation is seeded with those files.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 1 | REUSE-001 |
+| RISKY_SKIP | 1 | DEAD-API-002 |
+
+### Implement-Stage Handoff
+
+- DEAD-API-001
