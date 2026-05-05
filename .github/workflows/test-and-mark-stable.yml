@@ -57,6 +57,16 @@ name: Test & Mark Stable Release
         required: false
         type: number
         default: 30
+      review_workflow_file:
+        description: >
+          Filename (under .github/workflows/ in TEST_REPO) of the
+          review-autofix wrapper that the smoke gate dispatches and
+          polls. Defaults to `internal-review.yml`, the source repo's
+          template. Override only when smoke-testing against a
+          consumer repo that renamed the wrapper.
+        required: false
+        type: string
+        default: "internal-review.yml"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -300,6 +310,12 @@ jobs:
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
       REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 30 }}
       POLL_INTERVAL: 10
+      # Wrapper-workflow filename used by the smoke gate to dispatch
+      # / poll review_autofix runs. Defaults to the source repo's
+      # `internal-review.yml`; override at workflow_dispatch time
+      # (input below) when smoke-testing against a TEST_REPO that
+      # uses a different wrapper filename.
+      REVIEW_WORKFLOW_FILE: ${{ inputs.review_workflow_file || 'internal-review.yml' }}
 
     steps:
       # Checkout repo at the start so `if: always()` steps (per-phase
@@ -1098,13 +1114,13 @@ jobs:
           # itself, per the early checkout at line 316) instead of the
           # repo we just pushed the bait commit to, leaving Phase 4
           # still vulnerable to no_review_triggered.
-          if gh workflow run "internal-review.yml" \
+          if gh workflow run "${REVIEW_WORKFLOW_FILE}" \
               --repo "${TEST_REPO}" \
               --ref "${BRANCH}" \
               -f pr_number="${PR_NUMBER}" >/tmp/dispatch_resp.txt 2>&1; then
-            echo "✓ Dispatched internal-review.yml on ${BRANCH} for PR #${PR_NUMBER} (Bug B fallback)"
+            echo "✓ Dispatched ${REVIEW_WORKFLOW_FILE} on ${BRANCH} for PR #${PR_NUMBER} (Bug B fallback)"
           else
-            echo "::warning::Could not dispatch internal-review.yml as Bug B fallback; relying on pull_request:synchronize event only"
+            echo "::warning::Could not dispatch ${REVIEW_WORKFLOW_FILE} as Bug B fallback; relying on pull_request:synchronize event only"
             cat /tmp/dispatch_resp.txt >&2 || true
           fi
 
@@ -1742,7 +1758,7 @@ jobs:
           fi
           echo "  resolved ${BRANCH} head for retry dispatch: ${RETRY_DISPATCH_SHA:0:7}"
 
-          if ! gh workflow run "internal-review.yml" \
+          if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
               --repo "${TEST_REPO}" \
               --ref "${BRANCH}" \
               -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
@@ -1773,7 +1789,7 @@ jobs:
               exit 1
             fi
             CANDIDATES=$(gh_api_with_retry \
-              "repos/${TEST_REPO}/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=10" \
+              "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=10" \
               --jq ".workflow_runs[] | select(.head_sha == \"${RETRY_DISPATCH_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"") || CANDIDATES=""
             if [ -z "${CANDIDATES}" ]; then
               echo "  (no new review run yet, pr_state=${PR_STATE})"
@@ -1794,6 +1810,18 @@ jobs:
           if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
             echo "::error::Retry review run did not complete within 10 minutes"
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Validate the retry run's conclusion. If review_autofix
+          # itself errored (failure / cancelled / timed_out), running
+          # attempt-2 pytest against the resulting unchanged canary
+          # would surface as spec_mismatch and falsely blame the
+          # editor model. Report retry_workflow_failed so operators
+          # look at the retry run's logs, not the editor.
+          if [ "${RETRY_CONCL}" != "success" ]; then
+            echo "::error::Retry review run #${RETRY_RUN_ID} completed with conclusion=${RETRY_CONCL} (not 'success'); refusing to attribute the resulting canary state to the editor"
+            echo "status=retry_workflow_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
