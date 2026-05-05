@@ -881,8 +881,11 @@ jobs:
             For large refactors that touch many files, exceeding the budget is acceptable —
             the budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.
-          - Do NOT run `git diff` to display your own changes at the end. The CI pipeline
-            handles commit and diff reporting separately.
+          - Do NOT run `git diff` to display your own changes at the end of the
+            run. The CI pipeline handles commit and diff reporting separately.
+            (Intermediate `git diff --stat -- path/to/file` checks during edit
+            verification — see EDIT TOOL DISCIPLINE below — are fine; this
+            prohibition is about end-of-run change reporting only.)
           - Do NOT emit progress/status messages. Output ONLY repository changes.
 
           EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
