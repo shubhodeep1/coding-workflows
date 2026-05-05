@@ -934,3 +934,117 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the audited `.github/workflo
 | Code modularization | 7 | Large |
 | Expression size reduction | 1 | Medium |
 | Medium/Low fixes | 6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-05)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is repo-local, same-scope, and behavior-preserving from static review alone. `NEEDS_VERIFICATION` means the overlap is real, but a human or follow-up analysis must confirm caller contracts, fallback semantics, or mutation timing before changing it. `RISKY_SKIP` means the redundancy is visible, but it sits in a retry/poll/pagination/race-defense path where this pass is not authorizing auto-implementation.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:188-193`, `.github/workflows/issue_pr_status.yml:220-228`, `.github/workflows/issue_pr_status.yml:295-330`  
+  **Current call count** — 2 GitHub GraphQL calls on the common path, plus up to `N` REST fallbacks if the second batch probe fails.  
+  **Proposed call count** — 1 GraphQL call on the common path; keep a second lookup only when `BRANCH_ISSUE_NUMBER` adds an issue not already present in `closingIssuesReferences`.  
+  **Endpoint(s)** — GitHub GraphQL `repository.pullRequest(number).closingIssuesReferences` and GraphQL `repository.issue(number)` aliases.  
+  **Evidence** — The step first fetches linked issue numbers, then later re-queries the same linked issue set for labels/body to classify tracking vs managed issues.
+  ```yaml
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ... \
+    -f query='query(...) { repository(...) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+  ```
+  ```yaml
+  ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ```
+  The second query is only needed because the first query drops `labels`/`body`, even though those fields are what the classifier consumes downstream.  
+  **Proposed fix** — Extend the first `closingIssuesReferences` GraphQL query to include `labels(first: 50) { nodes { name } }` and `body`, build the `TRACKING_ISSUES` / `MANAGED_ISSUES` sets directly from that payload, and issue a tiny follow-up alias query only if `BRANCH_ISSUE_NUMBER` introduces a number not already in the first result set. Use the same batched-GraphQL style already established by `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because the branch-derived issue augmentation changes the final issue set, so the merged query must be proven to preserve classification for three cases: closing-links only, branch-only linkage, and mixed linkage.  
+  **Downstream signal** — Verify on PRs covering `closingIssuesReferences`-only, branch-derived-only, and mixed linkage that the merged query produces byte-identical `TRACKING_ISSUES` / `MANAGED_ISSUES` sets before removing the second GraphQL pass.
+
+- **ID** — `MERGE-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/clarify.yml:367-372`  
+  **Current call count** — 2 calls to the issue-comments endpoint when `SEMANTIC_CACHE_BACKEND != none`.  
+  **Proposed call count** — 1 call in the cache-enabled branch, deriving both outputs from one fetched payload.  
+  **Endpoint(s)** — GitHub REST `GET /repos/{repo}/issues/{issue_number}/comments`.  
+  **Evidence** — The same issue comments are fetched twice back-to-back: once as a bounded prompt snapshot, then again as a paginated full-thread history.
+  ```yaml
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+    if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+  ```
+  **Proposed fix** — Manual-review option only: in the semantic-cache-enabled branch, fetch the full paginated comment set once to a temp JSON file, derive `THREAD_HISTORY_FILE` from the full payload, and derive the bounded `ISSUE_COMMENTS_FILE` from the same cached data; leave the cache-disabled branch unchanged.  
+  **Safety rationale** — `RISKY_SKIP` because one of the involved calls uses `--paginate`, and consolidating it changes page-boundary/truncation behavior in a prompt-construction path.  
+  **Downstream signal** — Do not auto-implement; manual review must prove that the derived `ISSUE_COMMENTS_FILE` stays byte-compatible with the current 50-comment snapshot and that large-thread memory/runtime behavior does not regress.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:175-207`, `.github/workflows/internal-issue-pr-status.yml:1-12`  
+  **Current call count** — 1 conditional REST refetch of the PR payload when `PR_DATA` is blank.  
+  **Proposed call count** — 0 conditional refetches.  
+  **Endpoint(s)** — GitHub REST `GET /repos/{repo}/pulls/{pull_number}`.  
+  **Evidence** — The reusable workflow already receives `PR_TITLE` and `PR_BODY` from the closed-PR event payload, then conditionally re-reads the same fields from REST only if that concatenated string is blank.
+  ```yaml
+  env:
+    PR_TITLE: ${{ github.event.pull_request.title }}
+    PR_BODY: ${{ github.event.pull_request.body || '' }}
+  ...
+  PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+  The only in-repo caller is the closed-PR wrapper:
+  ```yaml
+  on:
+    pull_request:
+      types: [closed]
+  ```
+  **Proposed fix** — Remove the conditional `GET /pulls/{PR_NUMBER}` fallback from `issue_pr_status.yml` and rely on `${PR_TITLE} ${PR_BODY}` from the `pull_request.closed` event payload already passed into the job.  
+  **Safety rationale** — `SAFE_TO_MERGE` because, within this repository, the reusable workflow is only invoked from a `pull_request.closed` wrapper, so the PR title is already available in the same job and no extra API read is needed to recover it.  
+  **Downstream signal** — Delete the `gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"` fallback in `issue_pr_status.yml` and keep the existing event-payload string as the sole PR title/body source.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/implement.yml:53-76`, `.github/workflows/implement.yml:528-538`  
+  **Current call count** — 2 reads of `GET /repos/{repo}/issues/{ISSUE_NUMBER}` in the same job.  
+  **Proposed call count** — 1 issue read, if approval-time snapshot semantics are acceptable.  
+  **Endpoint(s)** — GitHub REST `GET /repos/{repo}/issues/{issue_number}`.  
+  **Evidence** — The job first fetches state+labels for precheck, then later fetches the same issue again to populate `ISSUE_META_FILE`.
+  ```yaml
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ```
+  ```yaml
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+  ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+  ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+  ```
+  **Proposed fix** — Have `Precheck approval phase label` fetch the full issue JSON once into `${ISSUE_META_FILE}` (or a temp file later promoted to it), parse state/labels from that file for the precheck gate, and let `Fetch issue metadata` reuse the same file unless a product decision explicitly requires “latest issue body/title after queueing.”  
+  **Safety rationale** — `NEEDS_VERIFICATION` because there are many intervening setup steps, and a human may intentionally edit the issue body/title/labels between the approval trigger and the later metadata-read step.  
+  **Downstream signal** — Verify whether implement should honor mid-run issue edits; if approval-time snapshot semantics are acceptable, persist the first issue payload and remove the second `GET /issues/{ISSUE_NUMBER}` call.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `RISKY_SKIP` — valid redundancy, but it lives in `scripts/orchestrate_poll_process.sh` final-merge logic, which this pass must not auto-consolidate because that path explicitly defends against upstream races.
+- `API-002`: `RISKY_SKIP` — valid batching opportunity, but it is inside the poller/stall-recovery codepath in `scripts/orchestrate_poll_process.sh`, so manual review is required before changing discovery semantics.
+- `API-003`: `RISKY_SKIP` — valid hotspot, but it sits inside an explicit retry/poll loop in `test-and-mark-stable.yml`, so this pass must not auto-merge calls there.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 2 | MERGE-001, REUSE-002 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- REUSE-001
