@@ -115,10 +115,10 @@ EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
   textual unified-diff as your final response — invoking the `apply_patch`
   tool to write to disk is exactly what we want.)
 - If `apply_patch` does not land on a particular hunk, fall back to your
-  best judgment: a different `apply_patch` shape, a shell heredoc / `printf
-  … > path` for fully-specified plain-text files, or any other write tool
-  available. What matters is that the file actually changes on disk this
-  turn.
+  best judgment: a different `apply_patch` shape, a shell heredoc /
+  `printf '...content...' > path/to/file` for fully-specified plain-text
+  files, or any other write tool available. What matters is that the
+  file actually changes on disk this turn.
 - Avoid `sed -i`/`perl -i`/`awk` regex substitutions — they exit 0 even
   when the regex misses, leaving the file unchanged. After ANY shell write,
   verify with `git diff --stat -- path/to/file` (substitute the actual
@@ -126,7 +126,7 @@ EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
 - Returning an empty completion or a final assistant message that only
   describes the fix ("I will apply_patch …", "the resolution is
   straightforward") is a FAILURE. The retry loop counts these as
-  no-actionable-output and bails after MAX_ATTEMPTS without a commit. You
+  no-actionable-output and bails after 3 attempts without a commit. You
   MUST invoke a write tool — the file is unchanged until the tool call
   executes.
 - Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`

@@ -50,9 +50,10 @@ Rules:
 EDIT TOOL DISCIPLINE for option B (prevents announce-without-editing stalls):
 - `apply_patch` is the preferred write tool for surgical edits to existing
   source files. If it does not land on a particular hunk, fall back to your
-  best judgment: a different `apply_patch` shape, a shell heredoc / `printf
-  … > path` for fully-specified plain-text files, or any other write tool
-  available. What matters is that the file actually changes on disk.
+  best judgment: a different `apply_patch` shape, a shell heredoc /
+  `printf '...content...' > path/to/file` for fully-specified plain-text
+  files, or any other write tool available. What matters is that the
+  file actually changes on disk.
 - Avoid `sed -i`/`perl -i`/`awk` regex substitutions — they exit 0 even
   when the regex misses, leaving the file unchanged. After ANY shell write,
   verify with `git diff --stat -- path/to/file` (substitute the actual
