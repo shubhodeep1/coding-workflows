@@ -29,12 +29,22 @@ def _expected_content(run_id: str) -> str:
 def canary_invocation() -> tuple[str, str]:
     canary_file = os.environ.get("E2E_CANARY_FILE")
     expected_run_id = os.environ.get("E2E_EXPECTED_RUN_ID")
-    if not canary_file or not expected_run_id:
+    invoked_from_phase_4b = os.environ.get("E2E_PHASE_4B_INVOKED") == "1"
+    if invoked_from_phase_4b:
+        # Production invocation: missing config is a workflow bug, not
+        # a reason to skip silently. Fail loudly so the run shows
+        # status=spec_mismatch in Phase 4b's exit handling.
+        if not canary_file or not expected_run_id:
+            raise RuntimeError(
+                "E2E_PHASE_4B_INVOKED=1 but E2E_CANARY_FILE / "
+                "E2E_EXPECTED_RUN_ID not set — Phase 4b harness misconfigured"
+            )
+    elif not canary_file or not expected_run_id:
         pytest.skip(
             "E2E_CANARY_FILE / E2E_EXPECTED_RUN_ID not set — "
             "test only runs from test-and-mark-stable Phase 4b"
         )
-    return canary_file, expected_run_id
+    return canary_file or "", expected_run_id or ""
 
 
 def test_canary_file_exists(canary_invocation: tuple[str, str]) -> None:

@@ -1520,11 +1520,24 @@ jobs:
           # same value works on both sides.
           export E2E_EXPECTED_RUN_ID="${GITHUB_RUN_ID}"
           export E2E_CANARY_FILE="${RUNNER_TEMP:-/tmp}/e2e_canary_fetched.txt"
+          # Sentinel telling the test fixture this is the production
+          # invocation: missing canary env vars must fail loudly here
+          # (a configuration bug), not skip silently.
+          export E2E_PHASE_4B_INVOKED=1
 
           python3 -m pip install --quiet pytest >/dev/null 2>&1 || {
             echo "::warning::pip install pytest failed; trying apt fallback"
             sudo apt-get install -y --no-install-recommends python3-pytest >/dev/null 2>&1 || true
           }
+          # Verify pytest is actually importable. Without this, a
+          # double-failure in pip+apt would later surface as a
+          # ModuleNotFoundError that looks like a test/spec mismatch
+          # rather than the infrastructure error it is.
+          if ! python3 -c "import pytest" 2>/dev/null; then
+            echo "::error::pytest is not importable after pip + apt install attempts; cannot verify canary"
+            echo "status=pytest_unavailable" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
           fetch_canary_to_tmp() {
             # NOTE: do NOT use `blob=$(gh api ... || echo "")` — on
@@ -1551,6 +1564,30 @@ jobs:
             return 0
           }
 
+          # Fetch PR head SHA with the same fail-loud discipline as
+          # fetch_canary_to_tmp. Echoes the SHA on stdout, returns rc=0
+          # on success and rc=1 on any API/parse failure — callers MUST
+          # check rc and treat empty as "infrastructure error", not as
+          # "head differs from bait" (the original `|| echo ""` form
+          # silently fail-opened the no_editor_commit guard).
+          fetch_pr_head_sha() {
+            local resp_path="${RUNNER_TEMP:-/tmp}/e2e_pr_head_resp.json"
+            : > "${resp_path}"
+            local rc=0
+            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+              > "${resp_path}" 2>/dev/null || rc=$?
+            if [ "${rc}" -ne 0 ] || [ ! -s "${resp_path}" ]; then
+              return 1
+            fi
+            local sha
+            sha=$(jq -r '.head.sha // empty' "${resp_path}")
+            if [ -z "${sha}" ]; then
+              return 1
+            fi
+            printf '%s' "${sha}"
+            return 0
+          }
+
           run_pytest() {
             python3 -m pytest tests/test_e2e_editor_smoke_canary.py -v --no-header
           }
@@ -1565,7 +1602,11 @@ jobs:
           if run_pytest; then
             echo "✓ Canary verification passed on first attempt"
             # Confirm the editor pushed at least one commit on top of the bait.
-            PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+            if ! PR_HEAD=$(fetch_pr_head_sha); then
+              echo "::error::Could not fetch PR head SHA to verify editor commit; treating as infra failure (refusing to fail-open the no_editor_commit guard)"
+              echo "status=pr_head_fetch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
               echo "::error::PR head is still the bait commit — editor did not push a fix commit"
               echo "status=no_editor_commit" >> "$GITHUB_OUTPUT"
@@ -1594,24 +1635,42 @@ jobs:
           fi
           echo "✓ Retry dispatch sent — polling for the new review run"
 
+          # gh api wrapper with a small retry budget so a transient
+          # 429/5xx during the 10min poll window doesn't cause a
+          # spurious retry_timeout.
+          gh_api_with_retry() {
+            local out
+            local rc
+            for try in 1 2 3; do
+              out=$(gh api "$@" 2>/dev/null) && { printf '%s' "${out}"; return 0; }
+              rc=$?
+              [ "${try}" -lt 3 ] && sleep $((try * 2))
+            done
+            return "${rc}"
+          }
+
           # Poll for the new review run on the bait SHA. Skip the run
-          # we already saw via wait-review by recording its id (if
-          # available) and matching .head_sha + greater-than created_at.
+          # we already saw via wait-review by recording its id.
           PRIOR_REVIEW_RUN="${{ steps.wait-review.outputs.review_run_id }}"
           DEADLINE=$(( $(date +%s) + 600 ))  # 10 minutes
           RETRY_RUN_ID=""
+          RETRY_STATUS=""
+          RETRY_CONCL=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             sleep 15
-            CANDIDATES=$(gh api "repos/${TEST_REPO}/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=10" \
-              --jq ".workflow_runs[] | select(.head_sha == \"${BAIT_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"" 2>/dev/null || echo "")
+            CANDIDATES=$(gh_api_with_retry \
+              "repos/${TEST_REPO}/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=10" \
+              --jq ".workflow_runs[] | select(.head_sha == \"${BAIT_SHA}\") | select(.id != ${PRIOR_REVIEW_RUN:-0}) | \"\(.id) \(.status) \(.conclusion // \"null\")\"") || CANDIDATES=""
             if [ -z "${CANDIDATES}" ]; then
               echo "  (no new review run yet)"
               continue
             fi
-            # Pick the latest candidate id
-            RETRY_RUN_ID=$(echo "${CANDIDATES}" | tail -n 1 | awk '{print $1}')
-            RETRY_STATUS=$(echo "${CANDIDATES}" | tail -n 1 | awk '{print $2}')
-            RETRY_CONCL=$(echo "${CANDIDATES}" | tail -n 1 | awk '{print $3}')
+            # GitHub returns runs newest-first; the matching list is in
+            # the same order so head -n 1 picks the most recent
+            # candidate (the run we just dispatched).
+            RETRY_RUN_ID=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $1}')
+            RETRY_STATUS=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $2}')
+            RETRY_CONCL=$(echo "${CANDIDATES}" | head -n 1 | awk '{print $3}')
             echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
             if [ "${RETRY_STATUS}" = "completed" ]; then
               break
@@ -1638,7 +1697,11 @@ jobs:
           fi
           echo "✓ Canary verification passed on retry"
 
-          PR_HEAD=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+          if ! PR_HEAD=$(fetch_pr_head_sha); then
+            echo "::error::Could not fetch PR head SHA after retry; treating as infra failure"
+            echo "status=pr_head_fetch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
             echo "::error::PR head is still the bait commit after retry — editor did not push a fix commit"
             echo "status=no_editor_commit" >> "$GITHUB_OUTPUT"
