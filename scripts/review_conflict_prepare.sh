@@ -520,26 +520,31 @@ working tree for residual conflict markers and aborts the
 [ai-merge-resolve] commit if any remain.
 
 MANDATORY ACTIONS for this run:
-1. You MUST invoke the apply_patch tool on tests/e2e_smoke_canary.txt
-   in this turn. Removing the 3 conflict-marker lines and the bait
-   `alt-` line is a small, well-specified patch — do not wait for
-   additional context, do not ask for clarification, do not defer to
-   a future iteration.
-2. Do NOT exit without calling apply_patch. Returning an empty
+1. You MUST write tests/e2e_smoke_canary.txt to disk in this turn.
+   Either tool is acceptable — `apply_patch` works, but a direct shell
+   write also works and is often more reliable on tiny fully-specified
+   files (printf 'status: ok\nrun_id: <HEAD-side run_id>\nupdated-by: ai-pipeline\n' > tests/e2e_smoke_canary.txt).
+   Do not wait for additional context, do not ask for clarification,
+   do not defer to a future iteration. (Background: gpt-5.3-codex
+   reliably no-ops on this trivial fixture when forced through
+   apply_patch — see openai/codex#11151 — so the printf escape hatch
+   exists for that case.)
+2. Do NOT exit without writing the file. Returning an empty
    completion / a final assistant message that only describes the fix
    ("I will apply_patch ..." / "the resolution is straightforward")
    is a smoke-test FAILURE — the soft-validation marker scan in
    scripts/review_conflict_resolve.sh fails and the resolver retry
    loop bails out at MAX_ATTEMPTS without a commit.
 3. Do not modify any file other than tests/e2e_smoke_canary.txt.
-4. After the apply_patch succeeds, emit the standard resolver summary
+4. After the write succeeds, emit the standard resolver summary
    schema below as usual; under "Conflicts resolved:" list the single
    bullet "tests/e2e_smoke_canary.txt".
 
 The remaining sections of this prompt (rules, self-check
 requirements, output schema) still apply, but for this fixture the
 only file with markers is the canary above. Proceed directly to
-apply_patch.
+writing the file (apply_patch or printf — whichever the model finds
+easier).
 
 === END E2E SMOKE TEST OVERRIDE ===
 

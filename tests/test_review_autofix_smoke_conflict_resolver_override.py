@@ -180,20 +180,34 @@ def test_prepare_script_contains_smoke_only_block() -> None:
 	# off the empty-completion failure mode. Each is asserted by
 	# substring so wording can drift slightly, but the load-bearing
 	# phrases must remain.
-	assert "MUST invoke the apply_patch tool" in script, (
-		"Smoke override must explicitly mandate apply_patch — codex "
-		"on the production conflict-resolver prompt repeatedly exits "
-		"without invoking the tool on this single-line conflict "
-		"(run 25324565713)."
+	#
+	# History: PR #2095 originally mandated `apply_patch`, but
+	# openai/codex#11151 documents that the gpt-5.3-codex slug doesn't
+	# get matched into the apply_patch-providing branch in codex's
+	# offline model_info fallback, so the directive could not be
+	# satisfied even when the model wanted to. The override now allows
+	# either `apply_patch` or a direct shell write (`printf '...' >
+	# path`) — same escape hatch implement.yml's prompt has documented
+	# since #1933 — so the model has a reliable path to the file.
+	assert "MUST write tests/e2e_smoke_canary.txt to disk" in script, (
+		"Smoke override must explicitly mandate writing the canary file "
+		"this turn — without the directive codex on the production "
+		"conflict-resolver prompt repeatedly exits without writing "
+		"(run 25324565713 / run 25370025320)."
 	)
-	assert "Do NOT exit without calling apply_patch" in script, (
+	assert "apply_patch" in script and "printf" in script, (
+		"Smoke override must offer both apply_patch and a printf shell "
+		"write as acceptable means — gpt-5.3-codex flakes on the "
+		"former (openai/codex#11151) but reliably executes the latter."
+	)
+	assert "Do NOT exit without writing the file" in script, (
 		"Smoke override must explicitly forbid the empty-completion "
-		"path so the 'I will apply_patch ...' announce-without-invoke "
-		"variant is also caught."
+		"path so the 'I will apply_patch ...' / 'I will write ...' "
+		"announce-without-invoke variant is also caught."
 	)
 	assert "smoke-test FAILURE" in script, (
-		"Smoke override must explain the consequence of skipping "
-		"apply_patch so the model treats the directive as a hard "
+		"Smoke override must explain the consequence of skipping the "
+		"write so the model treats the directive as a hard "
 		"requirement, not a suggestion."
 	)
 
@@ -392,8 +406,11 @@ def test_smoke_override_renders_only_when_canary_has_markers() -> None:
 			"Override must be the very first content of the prompt "
 			"when rendered — late placement weakens the directive."
 		)
-		assert "apply_patch" in body_with_markers, (
-			"Override must mention apply_patch in the rendered output."
+		assert "apply_patch" in body_with_markers and "printf" in body_with_markers, (
+			"Override must mention both apply_patch and the printf shell "
+			"escape hatch in the rendered output — gpt-5.3-codex needs "
+			"the latter when the apply_patch tool is unavailable on its "
+			"slug (openai/codex#11151)."
 		)
 
 
