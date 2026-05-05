@@ -348,10 +348,12 @@ jobs:
           # `gh workflow run` / Actions API as a positional. If the
           # value starts with `-` (e.g. `--help`), gh would treat it
           # as a flag; if it contains `/` or other unexpected chars,
-          # the API path can break. Lock it down to a basename
-          # matching `<safe>.yml` and reject anything else early.
-          if ! printf '%s' "${REVIEW_WORKFLOW_FILE}" | grep -qE '^[A-Za-z0-9_.-]+\.yml$'; then
-            echo "::error::REVIEW_WORKFLOW_FILE='${REVIEW_WORKFLOW_FILE}' is not a safe basename matching ^[A-Za-z0-9_.-]+\\.yml\$ — refusing to proceed"
+          # the API path can break. Require a leading alphanumeric
+          # character so degenerate basenames like `.yml`, `..yml`,
+          # `-x.yml` are rejected at validation time instead of
+          # later at dispatch.
+          if ! printf '%s' "${REVIEW_WORKFLOW_FILE}" | grep -qE '^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$'; then
+            echo "::error::REVIEW_WORKFLOW_FILE='${REVIEW_WORKFLOW_FILE}' is not a safe basename matching ^[A-Za-z0-9][A-Za-z0-9_.-]*\\.yml\$ — refusing to proceed"
             exit 1
           fi
           # Verify we can access the repo
@@ -1567,7 +1569,6 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
-          BAIT_MARKER: ${{ steps.inject-bait.outputs.marker }}
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
         run: |
           set -euo pipefail
@@ -1842,6 +1843,13 @@ jobs:
           RETRY_RUN_ID=""
           RETRY_STATUS=""
           RETRY_CONCL=""
+          # Circuit breaker: if fetch_pr_state returns "unknown" (API
+          # failure / parse failure) for too many consecutive iterations
+          # we're effectively polling blind and the closed-PR guard
+          # above is inactive. Bail out instead of burning the full
+          # 10-min retry window during a GitHub outage.
+          PR_STATE_FAILURES=0
+          PR_STATE_FAILURE_LIMIT=4  # ~60s of consecutive unknowns
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             sleep 15
             # Bail out if the PR closed/merged during the wait — no
@@ -1852,6 +1860,18 @@ jobs:
               echo "::error::PR #${PR_NUMBER} closed during retry wait — abandoning retry"
               echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"
               exit 1
+            fi
+            if [ "${PR_STATE}" = "unknown" ]; then
+              PR_STATE_FAILURES=$((PR_STATE_FAILURES + 1))
+              if [ "${PR_STATE_FAILURES}" -ge "${PR_STATE_FAILURE_LIMIT}" ]; then
+                echo "::error::PR state unresolvable after ${PR_STATE_FAILURES} consecutive attempts (likely GitHub API outage) — bailing out instead of burning the full retry window"
+                echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+            else
+              # Reset on any successful resolve so we only bail on
+              # *consecutive* failures, not cumulative.
+              PR_STATE_FAILURES=0
             fi
             CANDIDATES=$(gh_api_with_retry \
               "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=10" \
