@@ -1015,6 +1015,52 @@ jobs:
           # recall on a path that's already a confirmed no-op.
           ANNOUNCE_EDIT_REGEX='(apply_patch|applying (a |an |the |this |requested |first |minimal |approved |implementation |new |my |our |proposed )*(patch|edit|implementation|change|fix|plan|update|modification|overwrite|rewrite|replacement)|(patching|editing|overwriting|rewriting|replacing|writing) `?[A-Za-z0-9_./-]+|i.?ll (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace)|will (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace))'
 
+          # Salvage gate. Returns 0 iff at least one path in the porcelain
+          # delta passed in carries a non-whitespace change vs HEAD/index
+          # (or, for an untracked file, contains any non-whitespace bytes).
+          # Used by the empty-stdout and watchdog-kill salvage branches
+          # below so a trivial trailing-newline / whitespace-only edit can't
+          # masquerade as partial implementation work and short-circuit the
+          # retry loop. Run b3f07ad7-4d9f-56b2-923f-aa222a1ab049 issue 200:
+          # gpt-5.3-codex announced an apply_patch in attempt 1, then on
+          # attempt 2 ran `printf '\n' >> contracts/FunOFTAdapter.sol`,
+          # exited with empty stdout, and the cmd_rc==0 + empty-stdout
+          # salvage branch broke the loop at 2/5. The workflow then
+          # committed the lone-newline diff and shipped PR #202 with zero
+          # implementation of the issue's required guards or regression
+          # tests. `-w --ignore-blank-lines` together suppress in-line
+          # whitespace AND blank-line-only changes — `-w` alone still
+          # surfaces a `+` blank-line append. Fail-open (treat untracked
+          # files we can't stat as substantive) so a malformed porcelain
+          # line never silently discards real work.
+          delta_is_substantive() {
+            local delta="$1"
+            [ -n "${delta}" ] || return 1
+            local line status path
+            while IFS= read -r line; do
+              [ -z "${line}" ] && continue
+              status="${line:0:2}"
+              path="${line:3}"
+              case "${path}" in
+                *' -> '*) path="${path##* -> }" ;;
+              esac
+              case "${status}" in
+                "??")
+                  if [ ! -f "${path}" ] || grep -q '[^[:space:]]' "${path}" 2>/dev/null; then
+                    return 0
+                  fi
+                  ;;
+                *)
+                  if ! git diff --quiet -w --ignore-blank-lines -- "${path}" 2>/dev/null \
+                     || ! git diff --quiet -w --ignore-blank-lines --cached -- "${path}" 2>/dev/null; then
+                    return 0
+                  fi
+                  ;;
+              esac
+            done <<< "${delta}"
+            return 1
+          }
+
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
@@ -1269,10 +1315,12 @@ jobs:
                 # discarded full sets of streamed apply_patch diffs.
                 # Salvage any file changes already on disk here too.
                 codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
-                if [ -n "${codex_delta}" ]; then
+                if delta_is_substantive "${codex_delta}"; then
                   echo "::warning::Codex returned empty output on attempt ${attempt} but produced file changes; salvaging partial work."
                   implement_succeeded=true
                   break
+                elif [ -n "${codex_delta}" ]; then
+                  echo "::warning::Codex returned empty output on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
                 fi
                 # Stuck-intent on stderr: when stdout is empty but the
                 # per-attempt stderr log carries an announce-edit
@@ -1303,10 +1351,12 @@ jobs:
               # discarded and the loop wastes its remaining budget restarting
               # from scratch (see analyze-log run 24989488561).
               codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
-              if [ -n "${codex_delta}" ]; then
+              if delta_is_substantive "${codex_delta}"; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} but produced file changes; salvaging partial work."
                 implement_succeeded=true
                 break
+              elif [ -n "${codex_delta}" ]; then
+                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
               fi
               # Watchdog-kill / non-zero-exit + empty stdout is the same
               # stuck/no-output failure mode as the cmd_rc==0 + empty
