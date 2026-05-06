@@ -101,6 +101,17 @@ env:
   # state, emit grounded findings) → medium per the OpenAI prompt guide.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'medium' }}
   REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}
+  # Pass-2 diff-size gate (review_run_reviewers.sh): when LAST_RUN_DIFF
+  # is "large" (≥ REVIEWER_PASS2_DIFF_LARGE_LOC added+removed lines, default
+  # 200) Pass 2 escalates to xhigh; otherwise it runs at medium. Per the
+  # OpenAI prompt guide for gpt-5.3-codex: "Use `high` or `xhigh` for
+  # hardest tasks." Small diffs don't benefit from xhigh and risk the
+  # over-think / empty-output failure mode documented at L1846 below.
+  # The operator override (THINKING_LEVEL_REVIEWER / smoke-set
+  # REVIEWER_REASONING_EFFORT) always wins over the gate.
+  REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
+  REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'medium' }}
+  REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
   # Editor (codex apply-fixes loop) — a Switch-reasoning step later in
   # this workflow already drops the editor's runtime reasoning to "low"
   # (execution-heavy: apply known fixes). Keep this knob configurable
