@@ -873,9 +873,15 @@ jobs:
           Implement the approved implementation plan. Modify only the files the plan requires; keep changes minimal and safe.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
-          - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
-            request large ranges speculatively. Use targeted line
-            ranges (e.g. sed -n '10,30p') instead of full-file reads.
+          - The files named in the approved plan's "Files likely to change" set
+            are already inlined verbatim under "=== TARGETED FILE CONTEXT ===" below.
+            Do NOT issue shell reads (`sed`, `cat`, `rg`, `head`, `awk`, ...) to
+            re-fetch them — jump straight to apply_patch using the inlined contents
+            as ground truth.
+          - For ANY other file you genuinely need to read, request only the specific
+            line range you need. Do NOT read entire files speculatively, and do NOT
+            run repeated `rg`/`grep` sweeps to discover structure the plan already
+            described.
           - Never read the same file region twice. Plan your reads upfront.
           - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
             For large refactors that touch many files, exceeding the budget is acceptable —
@@ -936,10 +942,87 @@ jobs:
           Your output should be repository changes only.
           EOF
 
-          # Build prompt: static context + instructions + dynamic implementation context,
-          # all inlined so the model doesn't waste tool calls reading files.
-          # The static prefix (pre_assembled_static.txt) is identical across all
-          # runs, enabling LLM provider prompt-prefix caching.
+          # Targeted file context: parse the approved plan's "Files likely to
+          # change" section, inline each named file's contents into the prompt
+          # so Codex can apply_patch without first issuing shell reads to
+          # discover their structure. This addresses the gpt-5.3-codex
+          # "announce-without-emit" failure mode (openai/codex#11151) where
+          # the agent burns its budget on rg/sed exploration of files the
+          # plan already named, then bails before invoking apply_patch.
+          # Bounded by file count + total bytes so large-refactor plans
+          # don't bloat the prompt past provider limits.
+          TARGETED_FILES_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+          : > "${TARGETED_FILES_FILE}"
+          TARGETED_MAX_FILES="${TARGETED_FILE_CONTEXT_MAX_FILES:-10}"
+          TARGETED_MAX_BYTES="${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
+
+          # Extract `backticked` paths under the "Files likely to change"
+          # markdown header. Section ends at the next bold header
+          # (`**...**` on its own line) or EOF. Reject absolute paths and
+          # parent-traversal tokens so a malformed plan can't escape the
+          # workspace.
+          targeted_paths_raw="$(
+            awk '
+              BEGIN { in_section = 0 }
+              /^\*\*Files likely to change\*\*[[:space:]]*$/ { in_section = 1; next }
+              in_section && /^\*\*[^*]+\*\*[[:space:]]*$/ { in_section = 0 }
+              in_section {
+                while (match($0, /`[^`]+`/)) {
+                  token = substr($0, RSTART + 1, RLENGTH - 2)
+                  $0 = substr($0, RSTART + RLENGTH)
+                  if (token ~ /^[A-Za-z0-9._\/-]+$/ && token !~ /^\// && token !~ /\.\./) {
+                    print token
+                  }
+                }
+              }
+            ' "${PLAN_FILE}" 2>/dev/null | awk '!seen[$0]++' || true
+          )"
+
+          inlined_count=0
+          inlined_bytes=0
+          if [ -n "${targeted_paths_raw}" ]; then
+            while IFS= read -r path; do
+              [ -z "${path}" ] && continue
+              if [ "${inlined_count}" -ge "${TARGETED_MAX_FILES}" ]; then
+                echo "::notice::Targeted file context: ${TARGETED_MAX_FILES}-file cap reached; skipping remaining plan files."
+                break
+              fi
+              if [ ! -f "${path}" ]; then
+                echo "::notice::Targeted file context: skipping plan file '${path}' (not present in worktree; codex will explore if needed)."
+                continue
+              fi
+              fsize="$(wc -c < "${path}" 2>/dev/null || echo 0)"
+              if [ "$((inlined_bytes + fsize))" -gt "${TARGETED_MAX_BYTES}" ]; then
+                echo "::notice::Targeted file context: ${TARGETED_MAX_BYTES}-byte cap would be exceeded by '${path}' (${fsize}B); skipping (already inlined ${inlined_bytes}B)."
+                continue
+              fi
+              {
+                printf -- '----- FILE: %s -----\n' "${path}"
+                cat "${path}"
+                printf '\n'
+              } >> "${TARGETED_FILES_FILE}"
+              inlined_count=$((inlined_count + 1))
+              inlined_bytes=$((inlined_bytes + fsize))
+            done <<EOF_TARGETED_PATHS
+          ${targeted_paths_raw}
+          EOF_TARGETED_PATHS
+          fi
+
+          if [ "${inlined_count}" -gt 0 ]; then
+            echo "Targeted file context: inlined ${inlined_count} file(s), ${inlined_bytes} bytes from approved plan."
+          else
+            echo "Targeted file context: no plan files matched (plan may lack a 'Files likely to change' section, or all named paths were missing/over-cap)."
+          fi
+
+          # Build prompt: static context + instructions + targeted file
+          # contents + dynamic implementation context, all inlined so the
+          # model doesn't waste tool calls reading files.
+          # The static prefix (pre_assembled_static.txt) is identical across
+          # all runs, enabling LLM provider prompt-prefix caching. The
+          # targeted file block is appended AFTER the cacheable prefix and
+          # the rendered template so the cache hit on the prefix is preserved
+          # — the targeted block varies per plan and is never expected to be
+          # cache-hit material.
           {
             cat ./pre_assembled_static.txt
             echo
@@ -948,6 +1031,19 @@ jobs:
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
+            if [ -s "${TARGETED_FILES_FILE}" ]; then
+              echo "=== TARGETED FILE CONTEXT ==="
+              echo "The files below are named in the approved plan's \"Files"
+              echo "likely to change\" section. Their full contents are inlined"
+              echo "here as ground truth. Use them directly with apply_patch —"
+              echo "do NOT issue shell reads to re-fetch them. If the plan also"
+              echo "names files that are absent here, they were missing from the"
+              echo "worktree or exceeded the inlining cap; only those may be read"
+              echo "via shell, and only with targeted line ranges."
+              echo
+              cat "${TARGETED_FILES_FILE}"
+              echo
+            fi
             echo "=== AI MEMORY CONTEXT ==="
             cat "${MEMORY_CONTEXT_FILE}"
             echo
