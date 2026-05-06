@@ -1198,6 +1198,21 @@ jobs:
           PREV_STATE=""
           ELAPSED=0
           RATE_LIMIT_BACKOFF=0
+          # Mutable pin tracking the head SHA the loop is currently polling
+          # against. Initialised to BAIT_SHA; advances to the new PR head
+          # whenever the pinned run reports `cancelled` AND the PR head has
+          # moved past the pin. internal-review.yml uses `cancel-in-progress:
+          # true` on a `head_ref`-keyed group, so the editor's fix-commit
+          # push fires a fresh `pull_request: synchronize` event whose
+          # successor review run cancels the bait-triggered predecessor.
+          # Without advancing the pin, the BAIT_SHA-anchored jq filter never
+          # matches the successor (its head_sha is the editor's fix SHA, not
+          # the bait SHA) and the loop polls the dead cancelled run until
+          # the 30-minute inactivity timeout fires — observed on
+          # run-25428461223 (PR #2165), where the editor pushed 8234a6e at
+          # +10m, the bait run was cancelled at +10m22s, and wait-review
+          # then idled for the full REVIEW_TIMEOUT before failing.
+          PIN_SHA="${BAIT_SHA:-}"
 
           # ── Rate-limit-aware gh api wrapper ──
           # Runs gh api; on 403 rate-limit, sleeps with backoff and
@@ -1254,9 +1269,9 @@ jobs:
             # the bait SHA.) The dispatched run's head_sha matches
             # BAIT_SHA because we dispatch with --ref "${BRANCH}" and
             # GitHub records the ref's tip SHA at dispatch time.
-            if [ -n "${BAIT_SHA:-}" ]; then
+            if [ -n "${PIN_SHA:-}" ]; then
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix\"; \"i\")) | select(.head_sha == \"${BAIT_SHA}\")] | sort_by(.created_at) | last" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] | sort_by(.created_at) | last" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix"; "i"))] | sort_by(.created_at) | last' || echo "")
@@ -1293,6 +1308,27 @@ jobs:
                   exit 0
                 elif [ "$RUN_CONCLUSION" = "cancelled" ]; then
                   echo "Review run was cancelled — checking for newer run..."
+                  # internal-review.yml's concurrency group is keyed on
+                  # `head_ref` with `cancel-in-progress: true`, so the
+                  # autofix editor pushing a fix commit fires a fresh
+                  # `pull_request: synchronize` event whose successor run
+                  # cancels this one. When that happens the PR head has
+                  # already moved past the pin, and the successor's
+                  # head_sha equals the new PR head — advance the pin so
+                  # the next iteration latches onto the successor instead
+                  # of polling this dead run forever (the failure mode on
+                  # run-25428461223). Reset the activity timer because
+                  # the pivot itself is meaningful progress.
+                  PIN_HEAD_NOW=$(gh_api_safe "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' || echo "")
+                  if [ -n "${PIN_SHA:-}" ] && [ -n "${PIN_HEAD_NOW}" ] && [ "${PIN_HEAD_NOW}" != "${PIN_SHA}" ]; then
+                    echo "  ↪ PR head advanced past pin (${PIN_SHA:0:7} → ${PIN_HEAD_NOW:0:7}); advancing pin and polling successor run next iteration"
+                    PIN_SHA="${PIN_HEAD_NOW}"
+                    LAST_ACTIVITY=$NOW
+                    PREV_STATE=""
+                    sleep "$POLL_INTERVAL"
+                    ELAPSED=$((ELAPSED + POLL_INTERVAL))
+                    continue
+                  fi
                 fi
               fi
 
@@ -1497,7 +1533,11 @@ jobs:
               # jq's `last` on an empty array yields the literal string
               # "null" rather than empty, so both branches are needed.
               if [ -n "${BAIT_SHA:-}" ] && { [ -z "${REVIEW_RUN:-}" ] || [ "${REVIEW_RUN}" = "null" ]; }; then
-                echo "::error::No review workflow run (Internal: AI Review & Autofix) with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
+                if [ "${PIN_SHA:-}" != "${BAIT_SHA:-}" ]; then
+                  echo "::error::Review run pin was advanced from BAIT_SHA=${BAIT_SHA} to PIN_SHA=${PIN_SHA} after a cancellation, but no successor run with head_sha=${PIN_SHA} appeared within ${REVIEW_TIMEOUT}m — the editor's fix-commit push did not produce a review_autofix run"
+                else
+                  echo "::error::No review workflow run (Internal: AI Review & Autofix) with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
+                fi
                 echo "status=no_review_triggered" >> "$GITHUB_OUTPUT"
                 echo "Diagnostic: workflow runs visible on branch ${PR_BRANCH}:" >&2
                 gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=20" \
