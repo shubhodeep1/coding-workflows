@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What specifically should be improved?\nChoices:\nA. A specific workflow or script in this repo (for example: clarify, plan, implement, review, validate) (RECOMMENDED)\nB. Repo documentation or setup experience\nC. Overall reliability/performance, but I will name the exact failing behavior\nD. Something else; I will describe the exact component and problem\nQ2. What outcome do you want from this change?\nChoices:\nA. Fix a concrete bug; I will describe the current behavior and the expected behavior (RECOMMENDED)\nB. Add a new capability; I will describe the user-visible feature\nC. Improve maintainability or code quality; I will name the file(s) and what is wrong now\nD. Improve UX/content; I will describe the exact workflow step, message, or document to change\nQ3. Where is the problem or requested change located?\nChoices:\nA. I will provide the exact file path(s) or workflow name(s) involved (RECOMMENDED)\nB. I do not know the file, but I can name the command, job, workflow, or feature area\nC. I only have a general idea and need the team to infer the location from a detailed problem description\nQ4. How should success be judged?\nChoices:\nA. A specific observable result or acceptance criterion I will provide (RECOMMENDED)\nB. Match an example output / comment / behavior I will provide\nC. General improvement only, no precise acceptance criteria",
+  "fingerprint": "065439a04b459e1c8628833ef250b134f4a70c88b2ed710c57ef7788c278a803",
+  "lineage": {
+    "issue_number": 2167,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25431217742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25431217742",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260506105941_c1628eb19c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2167,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25431217742"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2167 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-06T10:59:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
