@@ -795,10 +795,9 @@ reconstructed from the ledger alone by filtering on `kind=run_substate`.
 
 ### Non-Goals
 
-- Replacing `CLAUDE.md`, `agents.md`, `unattended_system_instructions.md`
-  or `unattended_system_instructions.md`. These remain the
-  authoritative system instructions; `WORKFLOW.md` is an **overlay**
-  with a narrow allowed-key schema.
+- Replacing `CLAUDE.md`, `agents.md`, or `unattended_system_instructions.md`.
+  These remain the authoritative system instructions; `WORKFLOW.md` is an
+  **overlay** with a narrow allowed-key schema.
 - Hot-reload. GitHub Actions checks out the latest default branch on
   each run; that is sufficient.
 - An HTTP server. The snapshot is a JSON artifact, optionally

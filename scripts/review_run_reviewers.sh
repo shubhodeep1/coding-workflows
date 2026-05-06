@@ -1228,11 +1228,21 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     PASS2_REASONING_LARGE="xhigh" ;;
   esac
 
-  # Count diff lines: added (^+) + removed (^-), excluding +++/--- file
-  # headers. grep -c on the line patterns is fast and tolerates a missing
-  # / placeholder LAST_RUN_DIFF_FILE (returns 0).
+  # Count diff lines: added (^+) + removed (^-), excluding only the
+  # unified-diff file header lines (`+++ <path>` / `--- <path>`).
+  #
+  # Why awk and not `grep -c '^[+-][^+-]'`: that earlier shape
+  # undercounts content lines whose first character is itself `+` or
+  # `-`, e.g. a real added line `++foo` would not be counted because
+  # position 2 is `+` (matched by `[^+-]`). The file-header lines are
+  # specifically `+++ ` / `--- ` (three consecutive markers followed
+  # by a space + path) per the unified-diff format, so excluding only
+  # that exact shape avoids the under-count without false positives on
+  # content lines that legitimately start with `+++`/`---`.
+  #
+  # Tolerates missing / placeholder LAST_RUN_DIFF_FILE (returns 0).
   if [ -s "${LAST_RUN_DIFF_FILE}" ]; then
-    PASS2_DIFF_LOC="$({ grep -c '^[+-][^+-]' "${LAST_RUN_DIFF_FILE}" || true; } | tr -d '[:space:]')"
+    PASS2_DIFF_LOC="$(awk '/^[+-]{3} / { next } /^[+-]/ { n++ } END { print n+0 }' "${LAST_RUN_DIFF_FILE}" 2>/dev/null || echo 0)"
   else
     PASS2_DIFF_LOC=0
   fi
