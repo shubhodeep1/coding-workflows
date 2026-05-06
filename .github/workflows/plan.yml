@@ -60,12 +60,15 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        with:
+          codex_version: ${{ env.CODEX_VERSION }}
+
+      - name: Persist Codex CLI to tool cache
+        if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
-          # Persist to tool cache for future runs
           CODEX_BIN="$(which codex)"
-          CODEX_DIR="$(dirname "${CODEX_BIN}")"
           mkdir -p "${{ runner.tool_cache }}/codex"
           cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
           cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"

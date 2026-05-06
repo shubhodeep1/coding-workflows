@@ -194,10 +194,9 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
-        run: |
-          set -euo pipefail
-          CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
-          npm install -g @openai/codex@"${CODEX_VERSION}" --include=optional --no-audit --no-fund
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
