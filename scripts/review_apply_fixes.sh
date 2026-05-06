@@ -42,7 +42,8 @@ fi
 # appended a lone `\n` to a contract file in fun-token-multi-chain run
 # 25436981639 issue 200 and the implement workflow shipped a no-op PR;
 # review_autofix has the same exposure via the `_git_has_diff` check
-# on line ~1071). The flag pair `--ignore-space-at-eol
+# inside the EDITOR_CHANGES_LOST gate further down in this file).
+# The flag pair `--ignore-space-at-eol
 # --ignore-blank-lines` is deliberate: `-w` would also drop leading-
 # whitespace changes, which are semantic in Python/YAML/Makefiles, so
 # an editor that fixes a real bug via indentation-only edits would be
