@@ -16,7 +16,7 @@ Test verification:
 
 Restrictions:
 - Do not ask clarification questions (unattended runtime).
-- {{WORKFLOW_EDIT_RESTRICTION}}
+{{WORKFLOW_EDIT_RESTRICTION}}
 - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
 
 Sibling-conflict discipline: if the issue body lists `files_touched:` (machine
