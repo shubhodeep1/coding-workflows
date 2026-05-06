@@ -865,3 +865,195 @@ _Only additional line-level candidates not already covered by the in-progress re
 | Code modularization | 4 | Large |
 | Expression size reduction | 4 | Large |
 | Medium/Low fixes | 6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-06)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is fully proven to preserve endpoint scope, filters, pagination, auth, retry/failure behavior, and control-flow semantics; downstream implement can act directly. `NEEDS_VERIFICATION` means the overlap looks real, but at least one parity condition is not fully provable from static reading and must be checked first. `RISKY_SKIP` means the redundancy sits in a polling/race-defense/retry-sensitive path (or similar protected path) and must not be auto-implemented even if it looks mergeable.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/review_autofix.yml:1357-1363`; downstream consumer `.github/workflows/review_autofix.yml:1454-1516`; existing consolidation helper `scripts/gh_helpers.sh:698-731`, `scripts/gh_helpers.sh:735-760`, `scripts/gh_helpers.sh:812-900`  
+  **Current call count** — 4 logical fetches in one workflow step (`GET /pulls/{n}` + paginated issue comments + paginated reviews + paginated review comments).  
+  **Proposed call count** — 1 logical helper call on the common no-pagination path, with fail-open fallback to the current REST parity path when GraphQL pagination/transform fallback triggers.  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pull_number}`; `GET /repos/{repo}/issues/{pull_number}/comments`; `GET /repos/{repo}/pulls/{pull_number}/reviews`; `GET /repos/{repo}/pulls/{pull_number}/comments`; GraphQL `repository.pullRequest(...)` via `gh api graphql`.  
+  **Evidence** — `review_autofix.yml` currently hydrates four separate artifacts in one step:
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
+  gh_retry /tmp/gh_reviews_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews
+  gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
+  ```
+  `.github/workflows/review_autofix.yml:1357-1363`
+
+  The repo already has a GraphQL-first PR-context batching helper with REST fail-open parity:
+  ```bash
+  # gh_pr_with_all_comments — GraphQL-first consolidated PR context.
+  # Emits JSON object:
+  # {
+  #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
+  #   "comments": [...],
+  #   "review_comments": [...]
+  # }
+  ```
+  `scripts/gh_helpers.sh:735-760`
+
+  And `review_autofix.yml` immediately re-reads the three generated JSON files into one combined context builder:
+  ```python
+  issue_comments_file = os.environ["PR_ISSUE_COMMENTS_FILE"]
+  reviews_file = os.environ["PR_REVIEWS_FILE"]
+  review_comments_file = os.environ["PR_REVIEW_COMMENTS_FILE"]
+  ```
+  `.github/workflows/review_autofix.yml:1454-1456`
+
+  The only missing parity field in the helper is the separate `reviews` array; the helper already fetches `reviews` in GraphQL and could be extended to emit review metadata instead of forcing a separate REST leg. `scripts/gh_helpers.sh:794-807`, `scripts/gh_helpers.sh:854-899`  
+  **Proposed fix** — Extend `scripts/gh_helpers.sh::gh_pr_with_all_comments` and `scripts/gh_helpers.sh::_gh_pr_with_all_comments_rest` to emit a `reviews` array (`id`, `author`, `state`, `body`, `submitted_at`, `updated_at`), then update the `Collect PR metadata` step in `.github/workflows/review_autofix.yml` to call that helper once and materialize `PR_PAYLOAD_FILE`, `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEWS_FILE`, and `PR_REVIEW_COMMENTS_FILE` from the returned JSON.  
+  **Safety rationale** — Same job and same auth scope make this a real consolidation candidate, but `SAFE_TO_MERGE` is not yet provable because the helper must first demonstrate exact parity for paginated `reviews` and preserve the current retry/fail-open behavior.  
+  **Downstream signal** — Verify helper parity on PRs with large comment/review counts and confirm fallback semantics match the current four-call path before replacing `.github/workflows/review_autofix.yml:1357-1363`.
+
+- **ID** — `MERGE-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:2774-2777`; reference one-call pattern `.github/workflows/test-and-mark-stable.yml:3339-3341`  
+  **Current call count** — 2 calls per poll iteration.  
+  **Proposed call count** — 1 call per poll iteration.  
+  **Endpoint(s)** — `GET /repos/{repo}/actions/runs/{run_id}`  
+  **Evidence** — In the cancel-on-close verification poll loop, the same run resource is fetched twice per iteration:
+  ```bash
+  EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.status // ""' 2>/dev/null || echo "")
+  EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.conclusion // ""' 2>/dev/null || echo "")
+  ```
+  `.github/workflows/test-and-mark-stable.yml:2774-2777`
+
+  The same workflow already uses the safer one-call shape elsewhere:
+  ```bash
+  JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+  STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+  CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+  ```
+  `.github/workflows/test-and-mark-stable.yml:3339-3341`  
+  **Proposed fix** — If a human explicitly approves the change, manually align the cancel-on-close poller with the one-call `{status, conclusion}` pattern already used in the dispatch/watch blocks.  
+  **Safety rationale** — This is inside a polling loop for workflow-run completion, so the repo’s own safety rules make it `RISKY_SKIP`; changing poll-loop fetch shape can alter timing, logging, and failure-surface semantics.  
+  **Downstream signal** — Do not auto-implement; manual review must confirm that collapsing the two `/actions/runs/{id}` reads does not change poll cadence, error logging, or timeout behavior in the cancel-on-close verification path.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — PR snapshot source `.github/workflows/review_autofix.yml:1365-1371`; redundant fallback call sites `.github/workflows/review_autofix.yml:3775-3778`, `.github/workflows/review_autofix.yml:3896-3899`, `.github/workflows/review_autofix.yml:4630-4633`  
+  **Current call count** — Up to 3 extra `GET /pulls/{PR_NUMBER}` calls across late-stage label/failure paths.  
+  **Proposed call count** — 0 extra calls if the snapshot contract is accepted, or 1 shared refresh per job if “live title/body” is intentionally required.  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence** — Early in the job, `review_autofix.yml` already writes a PR metadata snapshot:
+  ```bash
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  `.github/workflows/review_autofix.yml:1365-1371`
+
+  But three later steps still fall back to re-fetching the same PR title/body from GitHub:
+  ```bash
+  PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+  `.github/workflows/review_autofix.yml:3775-3778`
+
+  The same pattern repeats at `.github/workflows/review_autofix.yml:3896-3899` and `.github/workflows/review_autofix.yml:4630-4633`.  
+  **Proposed fix** — Introduce one shared helper in `review_autofix.yml` (or a small shell helper under `scripts/`) that reads `PR_META_FILE` once and returns the cached `title + body`; update the three late-stage paths to reuse it instead of re-hitting `/pulls/{n}`. If a live refresh is actually required, do it once and export the result for all three callers.  
+  **Safety rationale** — The data is already available in-job, but `SAFE_TO_MERGE` is not provable because static reading cannot rule out an intentional desire to observe PR title/body edits made after the workflow started.  
+  **Downstream signal** — Verify whether these late-stage paths are supposed to use the run-start PR snapshot or the latest live PR title/body; if snapshot semantics are acceptable, remove all three fallback `/pulls/{PR_NUMBER}` re-fetches.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/internal-review.yml:98-109`; downstream gate `.github/workflows/internal-review.yml:120-134`  
+  **Current call count** — 2 calls on the “open PR already exists” skip path.  
+  **Proposed call count** — 1 call on that path.  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls?state=open&head={owner}:{branch}`; `GET /repos/{repo}`  
+  **Evidence** — The resolve step fetches `default_branch` before it knows whether it will skip:
+  ```bash
+  existing_pr="$(gh api \
+    "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+    --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+  base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  if [ -n "${existing_pr}" ]; then
+    ...
+    echo "proceed=false"
+    ...
+    echo "base_ref=${base_ref}"
+    exit 0
+  fi
+  ```
+  `.github/workflows/internal-review.yml:98-109`
+
+  But the only consumer of `base_ref` is the no-PR dispatch job, which is gated on `proceed == 'true'`:
+  ```yaml
+  review-claude-branch-push:
+    needs: resolve-claude-branch-pr
+    if: ${{ github.event_name == 'push' && needs.resolve-claude-branch-pr.outputs.proceed == 'true' }}
+  ```
+  `.github/workflows/internal-review.yml:120-123`  
+  **Proposed fix** — Move the `gh api "repos/${REPOSITORY}" --jq '.default_branch'` call into the `no_open_pr` branch only, and stop emitting `base_ref` when `proceed=false`.  
+  **Safety rationale** — The fetched `base_ref` is not consumed when `proceed=false`, but `SAFE_TO_MERGE` is not claimed until a human confirms no downstream automation or log parser depends on the skip-path `base_ref=` output.  
+  **Downstream signal** — Verify that nothing reads `needs.resolve-claude-branch-pr.outputs.base_ref` or greps skip-path logs when `proceed=false`; then move the default-branch lookup below the `existing_pr` early exit.
+
+- **ID** — `DEAD-API-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — caller `.github/workflows/internal-issue-pr-status.yml:3-12`; reusable workflow env and fallback `.github/workflows/issue_pr_status.yml:180-208`  
+  **Current call count** — 1 fallback `GET /pulls/{PR_NUMBER}` call in a branch that appears unreachable under the current trigger contract.  
+  **Proposed call count** — 0.  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence** — The reusable workflow is currently called only from a `pull_request.closed` wrapper:
+  ```yaml
+  on:
+    pull_request:
+      types: [closed]
+  ...
+  jobs:
+    sync-status:
+      uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@main
+  ```
+  `.github/workflows/internal-issue-pr-status.yml:3-12`
+
+  Inside the reusable workflow, PR title/body are already populated from the event payload:
+  ```bash
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_BODY: ${{ github.event.pull_request.body || '' }}
+  ...
+  PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+  `.github/workflows/issue_pr_status.yml:181-182`, `.github/workflows/issue_pr_status.yml:205-208`
+
+  Under a normal `pull_request.closed` event, the title is already present, so the whitespace guard should not trip.  
+  **Proposed fix** — Remove the fallback PR re-fetch in `.github/workflows/issue_pr_status.yml`, or replace it with an explicit “future-caller only” guard if the reusable workflow is later broadened beyond `pull_request` callers.  
+  **Safety rationale** — The branch looks dead under the current caller set, but `SAFE_TO_MERGE` is not proven until all workflow_call entrypoints are checked for non-`pull_request` invocations.  
+  **Downstream signal** — Verify that every caller of `.github/workflows/issue_pr_status.yml` is a `pull_request`-based wrapper with `github.event.pull_request.title/body` populated; if true, delete the fallback `GET /pulls/{PR_NUMBER}` call.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `NEEDS_VERIFICATION` — The overlap is real, but the GraphQL batch must preserve the current fail-open behavior between classification and alert suppression before auto-implementation.
+- `API-002`: `NEEDS_VERIFICATION` — Batched label lookup is directionally correct, but the fallback path still needs parity validation for regex-derived candidate issues and no-linked-issues behavior.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | MERGE-001, REUSE-001, DEAD-API-001, DEAD-API-002 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
