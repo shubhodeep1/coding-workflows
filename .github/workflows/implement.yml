@@ -877,7 +877,9 @@ jobs:
           The system context (`unattended_system_instructions.md`) above already
           defines the persistence rule, edit-tool discipline (apply_patch first,
           fallbacks, the gpt-5.3-codex#11151 carve-out), no-revert /
-          no-destructive-git rules, and parallel-reads guidance. Apply them.
+          no-destructive-git rules, and parallel-reads guidance. Apply them —
+          and re-read the IMPORTANT section near the end of this prompt
+          before you start writing.
 
           Efficiency:
           - Aim to keep total tool calls (MCP + shell exec combined) under
@@ -907,6 +909,42 @@ jobs:
           - Do not ask clarification questions (unattended runtime).
           {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
+
+          === IMPORTANT — MUST READ BEFORE WRITING ===
+
+          (This restates `unattended_system_instructions.md` §4 Edit-Tool
+          Discipline. The duplication is intentional — recency reinforcement
+          for gpt-5.3-codex's announce-without-emit regression
+          (openai/codex#11151). Do NOT skip this section, even though §4
+          already covered it earlier in the prompt.)
+
+          - `apply_patch` is the preferred write tool for surgical edits to
+            existing source files (`.sol`, `.ts`, `.py`, `.js`, `.go`, `.rs`,
+            `.java`, `.json`, …). It produces the cleanest diff and the
+            smallest blast radius.
+          - Do not use `apply_patch` for auto-generated artefacts (lockfiles,
+            formatter output, code generators). Run the generator instead.
+          - If `apply_patch` does not land on a particular hunk, fall back: a
+            different `apply_patch` shape, then `printf`/heredoc redirection
+            for fully-specified plain-text targets (`.txt`, `.csv`, small data
+            fixtures), then any other write tool. Pick whatever gets the bytes
+            onto disk this turn.
+          - After ANY shell write, verify with `git diff --stat` scoped to the
+            edited file. If zero lines changed, switch tools instead of
+            retrying the same regex shape.
+          - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
+            source — they exit 0 even when the regex misses, leaving the file
+            unchanged.
+          - Returning an empty completion or a final assistant message that
+            only describes the fix ("I will apply_patch …", "applying the
+            requested edit now", "the resolution is straightforward") is a
+            FAILURE — the workflow's stuck-detection counts this as
+            no-actionable-output. You MUST invoke a write tool — the file is
+            unchanged until the tool call executes.
+          - Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
+            invocation without emitting the tool call on some inputs
+            (openai/codex#11151). The fallback paths above exist for that
+            case.
 
           Output: repository changes only.
           EOF

@@ -674,6 +674,39 @@ When you modify any previously changed hunk, populate the top-level
 "Regression fingerprint:" and "Runtime failure path:" sections below
 with concrete values (not the "- n/a" default).
 
+=== IMPORTANT — MUST READ BEFORE WRITING ===
+
+(This restates the EDIT TOOL DISCIPLINE section earlier in this prompt.
+The duplication is intentional — recency reinforcement for gpt-5.3-codex's
+announce-without-emit regression (openai/codex#11151). Autofix runs have
+been observed where the editor reads files, narrates intent, and exits
+with empty stdout despite the discipline rules being in mid-prompt. Do
+NOT skip this section.)
+
+- apply_patch is the preferred write tool for surgical edits to existing
+  source files (.sol, .ts, .py, .js, .go, .rs, .java, .json, etc.) — it
+  produces the cleanest diff and the smallest blast radius.
+- Do not use apply_patch for auto-generated artefacts (lockfiles, formatter
+  output, code generators). Run the generator instead.
+- If apply_patch does not land on a particular hunk, fall back: a different
+  apply_patch shape, then printf/heredoc redirection for fully-specified
+  plain-text targets (.txt, .csv, small data fixtures), then any other
+  write tool. Pick whatever gets the bytes onto disk this turn.
+- After ANY shell write, verify with git diff --stat scoped to the edited
+  file. If zero lines changed, switch tools instead of retrying the same
+  regex shape.
+- Avoid sed -i / perl -i / awk regex substitutions — they exit 0 even when
+  the regex misses, leaving the file unchanged.
+- Returning an empty completion or a final assistant message that only
+  describes the fix ("I will apply_patch ...", "applying the requested
+  edit now", "the resolution is straightforward") is a FAILURE — the
+  editor retry loop counts these as no-actionable-output and bails after
+  3 attempts. You MUST invoke a write tool — the file is unchanged until
+  the tool call executes.
+- Known model bug: gpt-5.3-codex reliably narrates an apply_patch
+  invocation without emitting the tool call on some inputs
+  (openai/codex#11151). The fallback paths above exist for that case.
+
 FINAL RESPONSE FORMAT
 Plain text only.
 Output exactly these sections in this order:
