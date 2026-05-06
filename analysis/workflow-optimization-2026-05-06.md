@@ -876,3 +876,178 @@ No workflow file exceeds the 800 KB early-warning threshold; the largest audited
 | Code modularization | 7 | Large |
 | Expression size reduction | 4 | Medium |
 | Medium/Low fixes | 4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-06)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is local, shape-compatible, and can be consolidated without changing retry/failure/concurrency behavior. `NEEDS_VERIFICATION` means the overlap looks real, but a human must confirm there is no semantic drift before changing it. `RISKY_SKIP` means the redundancy is visible, but the call lives in a poll/retry/race-defense path where auto-consolidation is not authorized.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File path and line ranges** — `scripts/review_rb_judge.sh:146-151`, `scripts/review_rb_judge.sh:161-168`  
+  **Current call count** — `1 + N` reads (`1` GraphQL linked-issue lookup, then up to `N` REST issue-body reads)  
+  **Proposed call count** — `1` read  
+  **Endpoint(s)** — GraphQL `repository.pullRequest(number:).closingIssuesReferences.nodes`; REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The script already does a linked-issue GraphQL fetch, then immediately loops over those issue numbers and re-reads issue bodies one by one, even though only `FIRST_ISSUE` and `FIRST_ISSUE_BODY` are consumed downstream.
+
+  ```sh
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ... \
+    -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+  ```
+
+  ```sh
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    if [ -z "${FIRST_ISSUE}" ]; then
+      FIRST_ISSUE="${issue_number}"
+    fi
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if [ -z "${FIRST_ISSUE_BODY}" ]; then
+      FIRST_ISSUE_BODY="${BODY}"
+    fi
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+
+  ```sh
+  if [ -n "${FIRST_ISSUE}" ]; then
+    echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
+    echo
+    echo "${FIRST_ISSUE_BODY}"
+  fi
+  ```
+  **Proposed fix** — Extend the existing GraphQL query in `scripts/review_rb_judge.sh` to request `nodes { number body }`, parse `FIRST_ISSUE` plus the first non-empty `body` from that same response, and delete the per-issue `_safe_gh_jq` loop.  
+  **Safety rationale** — Same function, same GraphQL call site, no pagination, no intervening mutation, and the merged call only adds a strict superset field (`body`) to data already fetched there.  
+  **Downstream signal** — Extend the existing `closingIssuesReferences` GraphQL query to include `body`, preserve current “first non-empty body” selection, and remove the per-issue REST body loop.
+
+- **ID** — `MERGE-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:8878-8882`, `scripts/orchestrate_poll_process.sh:8903-8910`  
+  **Current call count** — Read side: `1 + M` (`1` PR list, then up to `M` per-PR reads for behind PRs); writes unchanged  
+  **Proposed call count** — Read side: `1`; writes unchanged  
+  **Endpoint(s)** — `gh pr list --json ...` (CLI-mediated PR listing), REST `GET /repos/{repo}/pulls/{number}`, REST `PUT /repos/{repo}/pulls/{number}/update-branch`  
+  **Evidence** — The feature sweep lists open PRs in batch, then does a per-PR `GET /pulls/{n}` only to recover `head.sha` before calling `update-branch`.
+
+  ```sh
+  _FEATURE_SWEEP_JSON="$(gh_retry gh pr list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --json number,headRefName,baseRefName,mergeable,mergeStateStatus \
+    --limit 100 2>/dev/null || echo "[]")"
+  ```
+
+  ```sh
+  _fs_head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}" --jq '.head.sha' 2>/dev/null || echo "")"
+  ...
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
+    -X PUT -f expected_head_sha="${_fs_head_sha}" >/dev/null 2>&1; then
+  ```
+  **Proposed fix** — Extend the existing feature-sweep batch shape to include head SHA/OID in the first query; if `gh pr list --json` cannot expose it on this runner version, add one batched GraphQL helper modeled on `_fetch_linked_pr_status_graphql` and feed `expected_head_sha` from that response.  
+  **Safety rationale** — This lives inside `scripts/orchestrate_poll_process.sh` on a race-sensitive update path, so even a clear batching win is not safe for unattended implementation.  
+  **Downstream signal** — Do not auto-implement inside the poller; manual review must prove the replacement preserves feature-sweep log lines, behind/dirty gating, and `update-branch` race behavior under concurrent PR churn.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:61-76`, `.github/workflows/orchestrate_clarify_respond.yml:400-412`  
+  **Current call count** — `2` guaranteed reads + up to `2` conditional reads (`issues/{ISSUE_NUMBER}` twice; tracking issue read once for title, then again for body if present)  
+  **Proposed call count** — `1` guaranteed read + up to `1` conditional read  
+  **Endpoint(s)** — REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The job fetches the child issue and tracking issue in the gate step, then re-fetches the same records later for prompt assembly.
+
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+
+  ```sh
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  **Proposed fix** — In `Check orchestrator metadata`, persist the child-issue JSON plus parsed `TRACKING_NUM`; if `TRACKING_NUM` exists, fetch the tracking issue once there and store both `title` and `body` via `GITHUB_OUTPUT`/temp JSON for `Fetch issue and tracking context` to reuse.  
+  **Safety rationale** — Same job, but not the same step; consolidating would change which snapshot wins if the issue or tracking issue is edited mid-run, and it would also change retry/failure behavior (`gh api` vs `gh_retry gh api`).  
+  **Downstream signal** — Verify that no automation or human edit to the child/tracking issue between these two steps is relied on, then test a single-snapshot implementation that preserves current fail-open/fail-fast behavior on API errors.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/implement.yml:64-66`, `.github/workflows/implement.yml:540-545`  
+  **Current call count** — `2` reads  
+  **Proposed call count** — `1` read  
+  **Endpoint(s)** — REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The workflow prechecks the issue once for `state` and `labels`, then later fetches the full issue again for body/title/URL.
+
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ISSUE_STATE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.state')"
+  ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -c '.labels')"
+  ```
+
+  ```sh
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+  ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+  ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
+  ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+  ```
+  **Proposed fix** — Either move runtime workspace creation ahead of the precheck and write the full issue payload once to `ISSUE_META_FILE`, or have the precheck emit a full JSON snapshot to a temp file/env var that `Fetch issue metadata` reuses.  
+  **Safety rationale** — The later fetch uses `gh_retry` while the precheck does not, and labels/state can legitimately change between those steps, so the consolidation needs behavior verification rather than blind rollout.  
+  **Downstream signal** — Verify whether any actor/workflow mutates issue state/labels/body between precheck and metadata fetch, then test a one-fetch implementation that still short-circuits closed/non-approved issues exactly as today.
+
+- **ID** — `REUSE-003`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:295-317`, `.github/workflows/issue_pr_status.yml:503-512`  
+  **Current call count** — `1 + N` reads (`1` batch GraphQL classification, then up to `N` late per-issue body reads)  
+  **Proposed call count** — `1` read on the successful batch path  
+  **Endpoint(s)** — GraphQL `repository.issue(number:) { number labels body }`; REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The update step already batch-fetches issue `labels` and `body` for orchestrator classification, but the later merged-alert step re-fetches issue bodies one at a time to answer the same “orchestrated?” question.
+
+  ```sh
+  ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ...
+  select(
+    ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+    or
+    ((.body // "") | contains("Managed by: AI Orchestrator"))
+  ) | .number
+  ```
+
+  ```sh
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+      IS_ORCHESTRATED="true"
+      break
+    fi
+  done <<< "${LINKED_ISSUE_NUMBERS}"
+  ```
+  **Proposed fix** — Persist `MANAGED_ISSUES` or a single `HAS_ORCHESTRATED_LINK=true/false` output from the earlier classification step and have `Send PR merged Telegram alert` read that instead of re-fetching issue bodies. Keep the current late per-issue lookup only as the fallback path when the earlier GraphQL batch failed.  
+  **Safety rationale** — The overlap is real, but the data crosses step boundaries and the later step currently tolerates earlier-batch failure by independently re-reading issue bodies.  
+  **Downstream signal** — Verify that merged-alert suppression is intended to reuse the earlier orchestrator classification, then persist that classification across steps and confirm behavior on both the successful-batch path and the GraphQL-fallback path.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `BATCH-001`: `RISKY_SKIP` — valid batching opportunity, but it is inside `scripts/orchestrate_poll_process.sh` close/recovery logic, so it needs manual race-semantics review before any implementation.
+- `API-001`: `NEEDS_VERIFICATION` — the fallback per-issue label reads in `review_autofix.yml` are genuinely batchable, but the implement stage must preserve the current fail-open behavior when GraphQL label hydration is partial or unavailable.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | `MERGE-001` |
+| NEEDS_VERIFICATION | 3 | `REUSE-001`, `REUSE-002`, `REUSE-003` |
+| RISKY_SKIP | 1 | `MERGE-002` |
+
+### Implement-Stage Handoff
+- `MERGE-001`
