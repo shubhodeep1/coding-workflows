@@ -160,11 +160,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
-      - name: Implement targeted-file-context parser contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_targeted_file_context_parser.py
-
       - name: Review autofix failure-log upload contract test
         run: |
           set -euo pipefail

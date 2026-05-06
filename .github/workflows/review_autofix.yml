@@ -1211,24 +1211,7 @@ jobs:
               echo
             fi
             if [ -f "${SUPPORT_AGENTS_FILE}" ]; then
-              # agents.md is a verbatim copy of codex_system_instructions.md
-              # (same PRE-TASK MANDATORY CONTEXT LOADING preamble, same §0
-              # Prime Directive "STOP. ASK. DO NOT PROCEED", same §2
-              # Always-On Ask-First Mode, same FINAL REMINDER). For
-              # unattended runs those rules conflict with the
-              # UNATTENDED SYSTEM INSTRUCTIONS block above. Emit an
-              # explicit displacement note so the model treats the
-              # agents.md system-rules sections as overridden — without
-              # this the model can pattern-match the concrete "STOP and
-              # ASK" rules over the override and enter the
-              # narrate-without-edit stuck state that EDITOR_NOOP_SUSPICIOUS
-              # detects (see the same fix applied to implement.yml in
-              # this commit; analogous failure mechanism). agents.md's
-              # repo-specific guidance (Q-format, naming, contract paths,
-              # MongoDB rules, etc.) still applies.
               echo "=== AGENTS.MD ==="
-              echo "NOTE: agents.md reproduces codex_system_instructions.md's PRE-TASK MANDATORY CONTEXT LOADING preamble, §0 Prime Directive, §2 Always-On Ask-First Mode, and FINAL REMINDER verbatim. Those four sections are OVERRIDDEN for this unattended run by the UNATTENDED SYSTEM INSTRUCTIONS block at the top of this prompt — see its §0 (Execution Mode) and §3 (Mandatory Context Loading: 'If a file is missing: continue with available context'). agents.md's repo-specific guidance (custom Q-formats, naming conventions, contract paths, MongoDB rules, code-style §9, etc.) still applies; only its STOP-and-ASK directives are displaced."
-              echo
               cat "${SUPPORT_AGENTS_FILE}"
               echo
             fi
