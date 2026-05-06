@@ -886,12 +886,19 @@ jobs:
           - The files named in the approved plan's "Files likely to change" set
             are already inlined verbatim under "=== TARGETED FILE CONTEXT ===" below.
             Do NOT issue shell reads (`sed`, `cat`, `rg`, `head`, `awk`, ...) to
-            re-fetch them — jump straight to apply_patch using the inlined contents
-            as ground truth.
-          - For ANY other file you genuinely need to read, request only the specific
-            line range you need. Do NOT read entire files speculatively, and do NOT
-            run repeated `rg`/`grep` sweeps to discover structure the plan already
-            described.
+            re-fetch THOSE files — jump straight to apply_patch using the inlined
+            contents as ground truth.
+          - When the plan does NOT contain a "Files likely to change" section, or
+            when no TARGETED FILE CONTEXT block appears below, targeted shell
+            discovery (`rg <symbol>`, `grep -n <pattern>`, `sed -n '<n>,<m>p'`) is
+            the right tool — use it, but request specific patterns / line ranges
+            rather than full-file sweeps. The restriction above is about avoiding
+            duplicate reads of files already inlined, not about banning shell
+            discovery in general.
+          - For ANY file not present in TARGETED FILE CONTEXT, request only the
+            specific line range you need. Do NOT read entire files speculatively,
+            and do NOT run repeated `rg`/`grep` sweeps to re-discover structure
+            the plan or a previous read already described.
           - Never read the same file region twice. Plan your reads upfront.
           - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
             For large refactors that touch many files, exceeding the budget is acceptable —
@@ -1008,24 +1015,52 @@ jobs:
                 if (lc ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+files[[:space:]]+[^\n]*change/) start_match = 1
                 if (start_match && !in_section) {
                   in_section = 1
+                  # Track ATX heading depth at section start so the
+                  # end-rule below can distinguish a peer-or-shallower
+                  # heading (which terminates the section) from a nested
+                  # subheading like "### Backend files" inside the
+                  # section (which must NOT terminate). For non-ATX
+                  # starts (bold, numbered, plain) leave depth=0 to
+                  # preserve the prior behaviour where any ATX heading
+                  # closes the section.
+                  section_start_depth = 0
+                  if (orig_line ~ /^[[:space:]]{0,3}#+[[:space:]]+/) {
+                    match(orig_line, /#+/)
+                    section_start_depth = RLENGTH
+                  }
                   next
                 }
               }
               {
                 # Section end: peer header at same depth.
-                # Numbered-item end is gated: the body after the "1." prefix
-                # MUST look like a section TITLE, not a path entry. Plans
-                # written as "1. Files likely to change / 1. `src/foo.ts` /
-                # 2. `src/bar.ts`" must keep the section open through the
-                # numbered children — only "2. Functions/modules to
-                # implement" (a multi-word natural-language phrase) should
-                # close it. Heuristic: a numbered line is a section
-                # terminator if its body does NOT begin with a backtick AND
-                # its first whitespace-delimited token is not lower-case
-                # path-like (slash present, lower-case start).
+                # ATX end is gated by section-start depth (tracked in
+                # section_start_depth at the section-start branch above):
+                # an ATX section like "## Files likely to change" closes
+                # only on a peer-or-shallower ATX heading ("## Functions",
+                # "# Anything"), NOT on a nested deeper heading like
+                # "### Backend files" inside the section. Non-ATX section
+                # starts (bold/numbered/plain) leave section_start_depth=0
+                # and any ATX heading still terminates them (current
+                # behaviour preserved).
+                # Numbered-item end is gated: the body after the "1."
+                # prefix MUST look like a section TITLE, not a path entry.
+                # Plans written as "1. Files likely to change /
+                # 1. `src/foo.ts` / 2. `src/bar.ts`" must keep the section
+                # open through the numbered children — only the next
+                # numbered title (multi-word natural-language phrase, like
+                # "2. Functions/modules to implement") should close it.
+                # is_path_entry rule: a numbered line is a path entry
+                # (= keep section open) if its body begins with a backtick
+                # OR its first whitespace-token contains "/" AND ends with
+                # a file-extension dot-suffix. Case-agnostic — handles
+                # both "1. src/foo.ts" and "1. API/Button.tsx".
                 end_match = 0
                 if (in_section && orig_line ~ /^[[:space:]]*\*\*[^*]+\*\*[[:space:]]*$/) end_match = 1
-                if (in_section && orig_line ~ /^[[:space:]]{0,3}#+[[:space:]]+[^[:space:]]/) end_match = 1
+                if (in_section && orig_line ~ /^[[:space:]]{0,3}#+[[:space:]]+[^[:space:]]/) {
+                  match(orig_line, /#+/)
+                  this_atx_depth = RLENGTH
+                  if (section_start_depth == 0 || this_atx_depth <= section_start_depth) end_match = 1
+                }
                 numbered_peer = 0
                 if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[.][[:space:]]+[^[:space:]]/) numbered_peer = 1
                 if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+[^[:space:]]/) numbered_peer = 1
@@ -1121,6 +1156,7 @@ jobs:
               denied_path=0
               case "${path}" in
                 .git|.git/*|*/.git|*/.git/*) denied_path=1 ;;
+                .gitmodules|*/.gitmodules) denied_path=1 ;;
                 .env|.env.*|*/.env|*/.env.*) denied_path=1 ;;
                 .npmrc|*/.npmrc|.pypirc|*/.pypirc|.netrc|*/.netrc) denied_path=1 ;;
                 .ssh|.ssh/*|*/.ssh|*/.ssh/*) denied_path=1 ;;
@@ -1162,6 +1198,7 @@ jobs:
                 "${ws_resolved}/.ssh/"*) denied_resolved=1 ;;
               esac
               case "${resolved_path}" in
+                "${ws_resolved}/.gitmodules") denied_resolved=1 ;;
                 "${ws_resolved}/.env"|"${ws_resolved}/.env."*) denied_resolved=1 ;;
                 "${ws_resolved}/.npmrc"|"${ws_resolved}/.pypirc"|"${ws_resolved}/.netrc") denied_resolved=1 ;;
               esac

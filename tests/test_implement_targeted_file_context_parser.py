@@ -307,6 +307,63 @@ def test_atx_section_with_paren_numbered_children(tmp_path: Path) -> None:
 	assert _run_parser(plan, tmp_path) == ["core/util.py", "core/parse.py"]
 
 
+def test_nested_atx_subheading_keeps_section_open(tmp_path: Path) -> None:
+	"""A `### Backend files` subheading inside a `## Files likely to change`
+	section must NOT terminate the section — only a peer-or-shallower
+	heading does.
+
+	Regression case for PR #2150 multi-reviewer finding (moonshotai +
+	qwen): the previous end-rule treated any `#+` heading as a section
+	terminator regardless of depth, so plan authors who grouped paths
+	under sub-headings would silently lose every entry that followed
+	the first sub-heading. Fixed by tracking section-start ATX depth
+	and only closing on depth ≤ start_depth."""
+	plan = (
+		"## Files likely to change\n"
+		"\n"
+		"### Backend files\n"
+		"- `src/backend/api.go`\n"
+		"- `src/backend/db.go`\n"
+		"\n"
+		"### Frontend files\n"
+		"- `src/frontend/App.tsx`\n"
+		"\n"
+		"## Functions/modules to implement\n"
+		"- not_a_path/should_not_appear.ts\n"
+	)
+	assert _run_parser(plan, tmp_path) == [
+		"src/backend/api.go",
+		"src/backend/db.go",
+		"src/frontend/App.tsx",
+	]
+
+
+def test_atx_section_closes_on_peer_heading(tmp_path: Path) -> None:
+	"""A peer-depth ATX heading (## inside ## section) MUST still
+	close the section — the depth gate only protects deeper nested
+	headings, not shallower / equal ones."""
+	plan = (
+		"## Files likely to change\n"
+		"- `src/keep.ts`\n"
+		"## Risks\n"
+		"- `src/should_not_appear.ts`\n"
+	)
+	assert _run_parser(plan, tmp_path) == ["src/keep.ts"]
+
+
+def test_atx_section_closes_on_shallower_heading(tmp_path: Path) -> None:
+	"""A shallower ATX heading (# inside ## section) closes the
+	section — operator-level demarcation is at least as authoritative
+	as the section header itself."""
+	plan = (
+		"## Files likely to change\n"
+		"- `src/keep.ts`\n"
+		"# Top-level Section\n"
+		"- `src/should_not_appear.ts`\n"
+	)
+	assert _run_parser(plan, tmp_path) == ["src/keep.ts"]
+
+
 def test_peer_section_title_still_ends_section(tmp_path: Path) -> None:
 	"""Confirms the carve-out doesn't break the normal end-rule: a peer
 	section title (multi-word natural-language phrase, no leading
