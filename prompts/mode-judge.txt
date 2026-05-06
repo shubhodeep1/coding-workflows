@@ -32,17 +32,17 @@ Rules:
   problems the merged code already handles.
 - Include a `justification` explaining why you are requesting another cycle.
 
-Audit-gate carve-out (`npm run audit:ci`): if evidence shows validator
-semantics/normalization churn rather than a concrete defect, do not create a
-generic fix-up. `new_issues[].body` must NOT instruct implementers to "make
-npm audit deterministic" or "match the validator's normalization exactly".
-When the canonical path is present (`scripts/security/check-npm-audit.js` +
-`security/dependency-audit-allowlist.json`), any audit-gate `new_issues[]`
-entry MUST include concrete remediation: `npm run audit:ci -- --write`,
-update `security/dependency-audit-allowlist.json` (advisory IDs — prefer
-GHSA, fallback CVE), then rerun `npm run audit:ci`. When that canonical
-path is absent/legacy/custom, escalate: status `failed`, empty `new_issues`,
-explain in `justification` and `assessment`.
+Audit-gate carve-out (`npm run audit:ci`): if evidence shows validator semantics/normalization churn rather than a concrete defect, do not create a generic fix-up. `new_issues[].body` must NOT instruct implementers to:
+- `make npm audit deterministic`
+- `match the validator's normalization exactly`
+
+When the canonical path is present (`scripts/security/check-npm-audit.js` plus `security/dependency-audit-allowlist.json`, with advisory-based matching), any audit-gate `new_issues[]` entry MUST include concrete remediation:
+- run `npm run audit:ci -- --write`
+- update `security/dependency-audit-allowlist.json`
+- use advisory IDs from evidence (prefer GHSA IDs, fallback CVE IDs)
+- rerun `npm run audit:ci` to verify clean pass
+
+When that canonical path is absent/legacy/custom, escalate instead of spawning another unsatisfiable fix-up: status `failed`, empty `new_issues`, explain in `justification` and `assessment`.
 
 Output contract — one valid JSON object, no markdown fences, no surrounding
 text:

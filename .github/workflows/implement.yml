@@ -1635,6 +1635,31 @@ jobs:
             exit 1
           fi
 
+          # Repair phases are narrow execution-heavy tasks (apply a known
+          # fix at a known location). Per the OpenAI prompt guide we drop
+          # reasoning to MODEL_REPAIR_REASONING_EFFORT (default "low") for
+          # them, distinct from the editor's MODEL_REASONING_EFFORT
+          # (default "medium"). Patch ~/.codex/config.toml in-place so
+          # `codex exec` honors it (the CLI has no --reasoning-effort
+          # flag). Validate against the known set first; fall back with a
+          # warning on a typo.
+          REPAIR_REASONING="${MODEL_REPAIR_REASONING_EFFORT:-low}"
+          case "${REPAIR_REASONING}" in
+            xhigh|high|medium|low|none) ;;
+            *)
+              echo "::warning::Invalid MODEL_REPAIR_REASONING_EFFORT='${REPAIR_REASONING}'. Falling back to 'low'."
+              REPAIR_REASONING="low"
+              ;;
+          esac
+          REPAIR_CODEX_CONFIG="${HOME:-/root}/.codex/config.toml"
+          if [ -f "${REPAIR_CODEX_CONFIG}" ] && grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${REPAIR_CODEX_CONFIG}"; then
+            sed -i \
+              -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${REPAIR_REASONING}\"/" \
+              -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${REPAIR_REASONING}\"/" \
+              "${REPAIR_CODEX_CONFIG}" || true
+            echo "Patched ~/.codex/config.toml: model_reasoning_effort=${REPAIR_REASONING} for repair phase."
+          fi
+
           : > "${INITIAL_CHANGED_FILE}"
           while IFS= read -r -d '' path; do
             printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"

@@ -67,7 +67,7 @@ $ARGUMENTS
    - Reusable workflow that the consumer wrapper calls (under `workflow-templates/` or `.github/workflows/`).
    - Scripts invoked by that workflow (under `scripts/`).
    - Prompt files invoked by those scripts (under `prompts/`).
-   - Any contracts (`db/contracts/*.yml`), agents config (`agents.md`), or `CLAUDE.md` rules referenced by the failing path.
+   - Any contracts (`db/contracts/*.yml`), agents config (`agents.md`), or system rules referenced by the failing path (unattended workflow paths use `unattended_system_instructions.md`; interactive Claude Code sessions use `CLAUDE.md`).
    - PRs / issues in `shubhodeep1/coding-workflows` that touched the relevant files between `PREVIOUS_UPSTREAM_SHA` and `UPSTREAM_SHA` (resolved in Step 2) — these are the most likely culprits if the regression is upstream-introduced. Use `mcp__github__list_commits` with `path=<file>` (and a `since` / `sha` window bounded by the two refs) and `mcp__github__search_issues` / `mcp__github__search_pull_requests` scoped to the repo. If `PREVIOUS_UPSTREAM_SHA` is null (Step 2 found `UPSTREAM_TAG` was the lowest tag, or the consumer is pinned to a branch / direct SHA), skip this regression-window search and note it under **Open Questions**.
    - Cross-reference: intersect files changed in upstream PRs merged between `PREVIOUS_UPSTREAM_SHA` and `UPSTREAM_SHA` with the files implicated by the consumer-side stack trace / log.
 

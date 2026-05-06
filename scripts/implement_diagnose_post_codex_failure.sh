@@ -69,6 +69,19 @@ TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE=20
 DIAGNOSE_MODEL="${MODEL_DIAGNOSE:-${MODEL_EDITOR:-openai/gpt-5.4}}"
 DIAGNOSE_REASONING="${MODEL_DIAGNOSE_REASONING_EFFORT:-medium}"
 
+# Validate DIAGNOSE_REASONING against the known codex-CLI reasoning
+# levels. A typo (e.g. "MEDIUM" or "med" or "average") would silently
+# write an unknown value into ~/.codex/config.toml; codex would then
+# either ignore the key or error at parse time. Mirror the allow-list
+# in scripts/review_consolidate.sh.
+case "${DIAGNOSE_REASONING}" in
+  xhigh|high|medium|low|none) ;;
+  *)
+    echo "::warning::Invalid MODEL_DIAGNOSE_REASONING_EFFORT='${DIAGNOSE_REASONING}'. Falling back to 'medium'." >&2
+    DIAGNOSE_REASONING="medium"
+    ;;
+esac
+
 # Patch the diagnose reasoning effort into ~/.codex/config.toml so the
 # isolated diagnose call doesn't inherit the implement editor's
 # (typically medium-but-could-be-high) reasoning. codex exec doesn't

@@ -35,13 +35,25 @@ tool for the ecosystem (`npm install`, `uv lock`, `go mod tidy`,
 If the regenerator tool is unavailable in the runner, record the blocker in
 your output instead of committing a partial change.
 
-Data-file output discipline: when writing under `db/contracts/` or any other
-YAML/JSON path, emit raw YAML/JSON only — no markdown fences, no language
-tags, no surrounding prose. The file's first byte must be valid YAML/JSON.
-For YAML: any scalar whose first non-whitespace character is a YAML reserved
-indicator (`` ` `` `@` `*` `&` `|` `>` `!` `%` `#` `?` `,` `[` `]` `{` `}`)
-must be wrapped in double quotes — bare scalars starting with these blow up
-`yaml.scanner.ScannerError`.
+Data-file output discipline: when writing files under `db/contracts/` or any
+other YAML/JSON path, emit raw YAML or raw JSON only. Never wrap the file
+body in markdown code fences (` ``` ` or ` ```yaml ` / ` ```json `), and
+never include language tags, fence markers, or surrounding prose in the
+file. The file's first byte must be valid YAML/JSON, and its last byte
+must be valid YAML/JSON — anything else is a syntax error that breaks the
+post-Codex validation step.
+
+YAML reserved-indicator quoting: when writing or editing `*.yml` / `*.yaml`
+files, any scalar (list item or mapping value) whose first non-whitespace
+character is one of `` ` ``, `@`, `*`, `&`, `|`, `>`, `!`, `%`, `#`, `?`,
+`,`, `[`, `]`, `{`, or `}` MUST be wrapped in double quotes. Plain (unquoted)
+scalars starting with these characters are reserved indicators in YAML 1.2
+and cause `yaml.scanner.ScannerError: ... found character 'X' that cannot
+start any token` at parse time. This is enforced by
+`scripts/validate_changed_files_syntax.sh` and a single failure burns a
+post-Codex repair attempt. Common cases: prose-heavy invariants in
+`db/contracts/*.yml` mentioning backticked technical terms, list items
+beginning with `@username` mentions, or a `*` glob pattern.
 
 If clarification context is incomplete: apply the safest minimal
 interpretation, encode the assumption as a code comment in the file you're
