@@ -1036,21 +1036,37 @@ jobs:
           delta_is_substantive() {
             local delta="$1"
             [ -n "${delta}" ] || return 1
-            local line status path
+            local line status path grep_rc
             while IFS= read -r line; do
               [ -z "${line}" ] && continue
               status="${line:0:2}"
               path="${line:3}"
-              case "${path}" in
-                *' -> '*) path="${path##* -> }" ;;
-              esac
               case "${status}" in
                 "??")
-                  if [ ! -f "${path}" ] || grep -q '[^[:space:]]' "${path}" 2>/dev/null; then
+                  # Untracked: porcelain prints the raw filename (never the
+                  # `old -> new` rename form), so don't strip on ` -> `;
+                  # truncating would misclassify any untracked filename
+                  # that legitimately contains the substring. Fail-open on
+                  # any grep exit other than 1 (no match): unreadable file,
+                  # I/O error, or other read failure must NOT silently
+                  # discard real work.
+                  if [ ! -f "${path}" ]; then
+                    return 0
+                  fi
+                  grep_rc=0
+                  grep -q '[^[:space:]]' "${path}" 2>/dev/null || grep_rc=$?
+                  if [ "${grep_rc}" != 1 ]; then
                     return 0
                   fi
                   ;;
                 *)
+                  # Tracked: only rename (`R*`) and copy (`C*`) lines carry
+                  # the `old -> new` form; resolve to the new name so the
+                  # `git diff` calls below operate on what's actually in
+                  # the worktree / index.
+                  case "${status}" in
+                    R*|C*) path="${path##* -> }" ;;
+                  esac
                   if ! git diff --quiet -w --ignore-blank-lines -- "${path}" 2>/dev/null \
                      || ! git diff --quiet -w --ignore-blank-lines --cached -- "${path}" 2>/dev/null; then
                     return 0
