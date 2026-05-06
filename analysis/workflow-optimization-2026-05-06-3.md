@@ -421,3 +421,124 @@ Ranked by expected failure-rate or rerun-rate reduction.
 | Direct per-run token totals in sampled deep-dive workflow logs | Largely unavailable | Most target workflow logs did not emit `tokens_used`/provider totals |
 | Collector-derived total tokens in workflow-log-analysis run **25428493736** | **918,175** | Derived inside the analysis workflow’s own telemetry window, not emitted by each target workflow directly |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-06)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path** — `.github/workflows/internal-review.yml:91-118`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — The PR-resolution gate fails open on GitHub API errors. `existing_pr` is populated with a raw `gh api` call that falls back to `""` on error, and `base_ref` falls back to `'main'` the same way. If either lookup transiently fails, the step still emits `proceed=true`, which can dispatch the no-PR `review_autofix.yml` path even when an open PR already exists, and can also report the wrong base branch.
+- **Recommended fix** — Source `scripts/gh_helpers.sh` here and use `gh_retry`/`_safe_gh_jq` for both lookups. If the PR lookup fails after retries, fail closed (`proceed=false`) or hard-fail the step instead of assuming “no PR”. Reuse the repo’s existing retry pattern rather than raw `gh api`.
+
+#### SHELL-001
+- **File path** — `scripts/review_commit_changes.sh:448-455; scripts/review_conflict_resolve.sh:993-994`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — Both scripts set the authenticated remote URL with unquoted expansions: `https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. That is an avoidable SC2086 class issue: the token/repo portion is subject to shell word-splitting and glob expansion. The repo already uses the safer quoted form in multiple workflows, e.g. `.github/workflows/implement.yml:334` and `.github/workflows/review_autofix.yml:815`.
+- **Recommended fix** — Quote the full URL argument exactly as the workflows already do: `git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"`. Apply the same normalization to every remaining unquoted `git remote set-url origin` site in shell scripts.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path** — `.github/workflows/review_autofix.yml:1357-1363; scripts/gh_helpers.sh:761-900`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The PR-context assembly step performs four separate logical GitHub calls on the happy path: one for PR payload, one for issue comments, one for reviews, and one for review comments. Immediately after that, it reshapes the fetched data into the same consolidated structure that `gh_pr_with_all_comments()` already exposes in `scripts/gh_helpers.sh`. **Current call count:** 4 logical PR-context calls (plus the separate linked-issues GraphQL call). **Proposed call count:** 1 logical PR-context call by using `gh_pr_with_all_comments`, then keep the existing linked-issues query. This is duplicate fetch logic rather than a missing capability.
+- **Recommended fix** — Replace the four-call block with a single helper invocation and write its `meta/comments/review_comments` output into the existing files (`PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEW_COMMENTS_FILE`). If the workflow still needs review-state objects that the helper does not expose, extend `gh_pr_with_all_comments()` in `scripts/gh_helpers.sh` instead of maintaining a second bespoke hydrator.
+
+#### BATCH-001
+- **File path** — `scripts/review_rb_judge.sh:146-170`
+- **Severity** — High
+- **Category tag** — `api-batching`
+- **Description** — The judge first fetches linked issue numbers in one GraphQL call, then immediately loops over those numbers and performs one REST `gh api repos/.../issues/<n>` call per issue body. That is an N+1 pattern in a review-blocked path the repo explicitly treats as API-sensitive. **Current call count:** 1 GraphQL call + N REST issue calls. **Proposed call count:** 1 GraphQL call total by fetching `number` and `body` together for all linked issues. This is the strongest batching candidate in the scoped shell scripts.
+- **Recommended fix** — Extend the initial GraphQL query so each linked issue node includes `body`, or batch bodies with aliases using the same pattern already used in `.github/workflows/issue_pr_status.yml:295-317`. If a reusable helper is preferred, extend `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh` to support this shape and consume that helper here.
+
+#### API-002
+- **File path** — `.github/workflows/issue_pr_status.yml:295-347,503-512`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The workflow already batches orchestrator/tracking classification for all linked issues with one GraphQL request in the main status-sync step, but the later “Send PR merged Telegram alert” step re-fetches each linked issue body one-by-one just to decide whether to suppress the standalone merged alert. **Current call count:** 1 batched GraphQL classification call in the main step + N per-issue body lookups in the alert step. **Proposed call count:** keep the existing 1 batched call and reduce the alert step to 0 extra classification calls by reusing cached results.
+- **Recommended fix** — Persist the tracked/managed classification from the main step into `$GITHUB_ENV` or a small JSON file under `${RUNNER_TEMP}`, then let the merged-alert step read that cache instead of re-querying issue bodies. The existing `ORCH_ALIAS_FRAGMENT` batch in this file is the pattern to extend; no new API shape is needed.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/orchestrate_poll.yml:67-101; .github/workflows/mark-stable.yml:309-335,457-484; .github/workflows/review_autofix.yml:1275-1313`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — The same inline rate-limit wrapper pattern (`_rl_wait` + `_gh_retry`/`gh_retry`) is duplicated across multiple workflows with only trivial naming differences. The copies are already drifting: some print stderr, some do not; some special-case 429/secondary-rate-limit text, some do not; some wrap `gh`, others `gh api`. This increases maintenance cost whenever retry policy changes.
+- **Recommended fix** — Move the bootstrap retry logic into a shared module, e.g. `scripts/bootstrap_gh_retry.sh`, with a narrow contract such as `_gh_retry <command...>` and `_rl_wait`. Update the pre-support-fetch callers above to source that module. Post-checkout callers should continue standardizing on `scripts/gh_helpers.sh`.
+
+#### DUP-002
+- **File path** — `scripts/label_helpers.sh:102-196; .github/workflows/issue_pr_status.yml:239-249; .github/workflows/review_autofix.yml:3733-3768,3857-3889`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — The repo already has canonical label helpers (`ensure_label_exists` and `set_issue_phase_label_resilient`) in `scripts/label_helpers.sh`, but multiple workflows re-declare fallback versions inline. Those copies hardcode colors/descriptions and POST-only fallback behavior separately, which creates drift risk the next time label semantics or resilient phase swapping change.
+- **Recommended fix** — Keep `scripts/label_helpers.sh` as the single owner with the existing signatures `ensure_label_exists <label_name> <repo>` and `set_issue_phase_label_resilient <issue_number> <target_label> <repo>`. Update the listed callers to fetch/source `label_helpers.sh` once and remove the inline function bodies, or introduce one tiny “ensure support helpers present” bootstrap step before these late-stage label mutations.
+
+#### DUP-003
+- **File path** — `.github/workflows/issue_pr_status.yml:41-171,466-499,555-590`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — `issue_pr_status.yml` repeats the same support-repo clone / fallback-to-main / copy-into-scripts scaffolding three times in one workflow: once for memory helpers, once for merged-alert Telegram helpers, and once for Telegram cleanup. The code is structurally the same but maintained in separate blocks.
+- **Recommended fix** — Extract the support-fetch logic into a shared script such as `scripts/fetch_support_assets.sh` with a contract like `fetch_from_ref_or_local <repo_path> <target_path> [allow_main_fallback=true]`. Then call that script from all three steps and reuse the already-fetched helper files instead of recloning the support repo.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1187-1558`
+- **Severity** — High
+- **Category tag** — `expression-limit`
+- **Description** — The `Phase 4: Wait for review & autofix to complete` `run:` block contains `${{ }}` interpolations and is already about **19,117 characters**, leaving only **1,883 characters** of headroom before GitHub’s 21,000-character expression hard limit. This block is already packed with inline helper functions, jq filters, and large comments; a modest future edit can push it over the limit and make the whole workflow unloadable.
+- **Recommended fix** — Extract the entire wait loop into a dedicated script under `scripts/` (preferred), e.g. `scripts/test_and_mark_stable_wait_review.sh`, and pass only the minimal env needed from YAML. The repo already uses this pattern successfully in `scripts/implement_diagnose_post_codex_failure.sh`, which was extracted specifically to avoid the same limit.
+
+#### EXPR-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1644-2049`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — The `Phase 4b: Verify bait removed after review` `run:` block also contains `${{ }}` interpolations and is about **17,408 characters**, leaving **3,592 characters** of headroom. It is below the hard threshold but already large enough that adding another retry path or helper function would meaningfully increase expression-length risk.
+- **Recommended fix** — Split the inline helper functions (`gh_api_with_retry`, `fetch_canary_to_tmp`, `fetch_pr_head_sha`, `run_pytest`, `classify_pytest_failure`) into an external script and keep the YAML step as a thin wrapper. Reusing the same extraction style as `scripts/implement_diagnose_post_codex_failure.sh` would keep future edits away from the expression ceiling.
+
+**Workflow file size check:** No workflow exceeds the 800 KB early-warning threshold. The largest scoped workflow files are `.github/workflows/review_autofix.yml` (**279,270 chars**) and `.github/workflows/test-and-mark-stable.yml` (**258,259 chars**), both well below GitHub’s 1 MB file limit.
+
+### Section 5: Cross-Cutting Concerns
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflows/scripts.
+
+#### CONSIST-001
+- **File path** — `.github/workflows/issue_pr_status.yml:264-316,503-512`
+- **Severity** — Medium
+- **Category tag** — `consistency`
+- **Description** — The workflow uses two different definitions of “orchestrator-managed issue”. In the main label-sync step, managed issues are recognized when they have the `ai:orchestrator-managed` label **or** the `Managed by: AI Orchestrator` body marker. In the later merged-alert suppression step, the code checks only the body marker. A label-only managed issue can therefore be classified as orchestrator-managed for closing/labeling but still receive an incorrect standalone “PR merged” Telegram alert.
+- **Recommended fix** — Reuse the earlier classification result instead of recomputing a weaker variant. The cleanest fix is to export `MANAGED_ISSUES`/`TRACKING_ISSUES` from the main step and consume them in the alert step; alternatively, move the classification into one shared helper and use that helper in both places.
+
+#### DEAD-001
+- **File path** — `scripts/validate_changed_files_syntax.sh:70-73`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — The redaction `case` arm contains overlapping patterns: `*.env*` on line 71 already matches `.envrc` and `.env*`, so the later `*,*.envrc|*,.env*` alternatives on line 73 are unreachable. ShellCheck reports this as SC2221/SC2222. The current behavior still works, but the dead branch obscures the real secret-redaction rule set.
+- **Recommended fix** — Remove the shadowed alternatives or rewrite the case arm into a single non-overlapping pattern set. That keeps the redaction policy readable and prevents future edits from being made against a branch that can never match.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BATCH-001, EXPR-001 |
+| Medium | 7 | BUG-001, API-001, API-002, DUP-001, DUP-002, EXPR-002, CONSIST-001 |
+| Low | 3 | SHELL-001, DUP-003, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Small |
+| API call optimization | 3 | Medium |
+| Code modularization | 5 | Medium |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 4 | Small |
