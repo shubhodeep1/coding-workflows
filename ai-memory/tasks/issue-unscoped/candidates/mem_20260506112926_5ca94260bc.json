@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No issues identified in last_run_diff.patch.\nHARDENING_SUGGESTIONS:\n(none)\nISSUE_CONFIDENCE: 5 (exact spec match verified against diff))\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No issues identified. The implementation is correct and complete.\nHARDENING_SUGGESTIONS:\nNone applicable. This is a trivial file overwrite with no runtime behavior.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "13ab8d452ad806135cfe2228c16e141782b557706444a9a5cbdede2362a4d055",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2174,
+    "run_id": "25431924841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25431924841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260506112926_5ca94260bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2174,
+    "run_id": "25431924841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-06T11:29:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
