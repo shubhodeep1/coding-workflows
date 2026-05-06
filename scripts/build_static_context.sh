@@ -25,6 +25,10 @@
 #               ai_pipeline.md trimmed before Phase 3;
 #               README.md trimmed before "### 2. Create wrapper workflows".
 #   implement — codex sections 0-6 + section 9 (Code Style) + FINAL REMINDER;
+#               unattended_llm_system_instructions.md (full) — inlined as
+#               an EXPLICIT override of codex's STOP-and-ASK rules so the
+#               unattended-execution policy is concretely present, not
+#               only referenced by name from codex §2;
 #               ai_pipeline.md Shared Runtime + Phase 3 only;
 #               agents.md canonical + repo-local; README.md NOT included.
 #
@@ -141,6 +145,43 @@ case "${phase}" in
 			awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
 			echo
 
+			# Inline the unattended-execution override. The implement phase
+			# runs non-interactively on a GitHub Actions runner; the model
+			# cannot ask the user a question. The static prefix above
+			# contains the PRE-TASK MANDATORY CONTEXT LOADING preamble
+			# ("STOP and ask using mandatory Q/A format" if agents.md /
+			# db/contracts/ are missing), §0 Prime Directive ("STOP. ASK.
+			# DO NOT PROCEED" on uncertainty), and FINAL REMINDER ("If
+			# uncertainty exists: ASK"). Without the override file inlined,
+			# the model sees only a NAME-reference at §2 to
+			# unattended_llm_system_instructions.md and must trust that
+			# pointer against three concrete "ASK" rules — empirically it
+			# does not, and on consumer repos that lack agents.md / a
+			# db/contracts/ tree (e.g. fun-token-multi-chain, run
+			# 25406869763 issue #195) the model enters an
+			# "I should ask but I am forbidden to ask" stuck state that
+			# manifests as narration-without-apply_patch, tripping the
+			# implement.yml empty_streak watchdog after 2 attempts.
+			# Inlining §0–§6 of the override here makes the
+			# "never ask, continue on missing files" policy CONCRETELY
+			# present in the same context window as the rules it overrides.
+			if [ -f unattended_llm_system_instructions.md ]; then
+				echo "=== UNATTENDED EXECUTION OVERRIDE (governs this run) ==="
+				echo "This run is non-interactive. The rules below OVERRIDE the corresponding sections of SYSTEM INSTRUCTIONS above for the duration of this run — specifically the PRE-TASK MANDATORY CONTEXT LOADING 'STOP and ask if missing' rule, §0 Prime Directive's 'STOP. ASK. DO NOT PROCEED', §2 Always-On Ask-First Mode, and the FINAL REMINDER's 'If uncertainty exists: ASK'."
+				echo
+				cat unattended_llm_system_instructions.md
+				echo
+			else
+				# Loud signal: silent omission would leave the model with the
+				# original SYSTEM INSTRUCTIONS' STOP-and-ASK rules and no
+				# override context, reintroducing exactly the conflict this
+				# block is meant to resolve. Operators who see this warning
+				# should add unattended_llm_system_instructions.md to their
+				# consumer-repo wrapper-workflow staging step (the same step
+				# that already stages codex_system_instructions.md).
+				echo "::warning::build_static_context.sh: unattended_llm_system_instructions.md is missing from the working tree — the implement-phase static context will OMIT the UNATTENDED EXECUTION OVERRIDE block. This leaves the model with the original SYSTEM INSTRUCTIONS' STOP-and-ASK rules and no override context, which can drive the gpt-5.3-codex announce-without-emit failure mode. Stage the file alongside codex_system_instructions.md in your wrapper-workflow bootstrap." >&2
+			fi
+
 			echo "=== AI PIPELINE (implementation-trimmed) ==="
 			# Keep shared runtime behavior and implementation phase details only.
 			awk '
@@ -158,8 +199,23 @@ case "${phase}" in
 			# a bare "${RUNTIME_DIR:-}/agents_canonical.md" would test
 			# "/agents_canonical.md" at filesystem root when unset, and the
 			# subsequent cat would trip set -u without a default.
+			#
+			# Both files are verbatim (or near-verbatim) copies of
+			# codex_system_instructions.md's PRE-TASK MANDATORY CONTEXT
+			# LOADING preamble, §0 Prime Directive, §2 Always-On Ask-First
+			# Mode, and FINAL REMINDER. For an unattended run those four
+			# sections conflict with the UNATTENDED EXECUTION OVERRIDE
+			# block above. Without an explicit displacement note the model
+			# can pattern-match the later concrete "STOP and ASK" rules
+			# over the override and re-enter the narrate-without-emit
+			# stuck state — same conflict structure that affected
+			# review_autofix.yml's editor static context. The displacement
+			# note is emitted ONCE before the agents.md cats and names
+			# the four overridden sections by title.
 			if { [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; } || [ -f agents.md ]; then
 				echo "=== AGENTS.MD ==="
+				echo "NOTE: agents.md (and agents_canonical.md if present) reproduces codex_system_instructions.md's PRE-TASK MANDATORY CONTEXT LOADING preamble, §0 Prime Directive, §2 Always-On Ask-First Mode, and FINAL REMINDER. Those four sections are OVERRIDDEN for this unattended run by the UNATTENDED EXECUTION OVERRIDE block above — see its §0 (Execution Mode: 'Never ask for clarifications or stop due to ambiguity') and §3 (Mandatory Context Loading: 'If a file is missing: continue with available context'). agents.md's repo-specific guidance (custom Q-formats, naming conventions, contract paths, MongoDB rules, code-style conventions, etc.) still applies; only its STOP-and-ASK directives are displaced."
+				echo
 				if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; then
 					cat "${RUNTIME_DIR}/agents_canonical.md"
 					echo
