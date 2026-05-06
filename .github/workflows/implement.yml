@@ -1094,10 +1094,40 @@ jobs:
           inlined_bytes=0
           if [ -n "${targeted_paths_raw}" ]; then
             while IFS= read -r path; do
+              # Defensive whitespace trim. The here-string below feeds
+              # `${targeted_paths_raw}` flush-left, but a future caller
+              # that builds the variable from a different source could
+              # leak indentation; trimming makes the loop tolerant of
+              # either input shape.
+              path="${path#"${path%%[![:space:]]*}"}"
+              path="${path%"${path##*[![:space:]]}"}"
               [ -z "${path}" ] && continue
               if [ "${inlined_count}" -ge "${TARGETED_MAX_FILES}" ]; then
                 echo "::notice::Targeted file context: ${TARGETED_MAX_FILES}-file cap reached; skipping remaining plan files."
                 break
+              fi
+              # Credential-bearing path denylist (defense in depth — the
+              # plan is LLM-produced and not fully trusted). Earlier in
+              # this workflow `git remote set-url origin
+              # "https://x-access-token:${GH_TOKEN}@..."` writes GH_PAT
+              # in plaintext into .git/config, and other dotfiles
+              # commonly hold secrets (.env, .npmrc, .pypirc,
+              # .netrc, etc.). Reject any plan-named path that
+              # resolves into one of these so a malformed or malicious
+              # plan cannot exfiltrate credentials into the prompt sent
+              # to OpenRouter. The check runs against both the
+              # plan-supplied STRING and (after realpath below) the
+              # resolved location — symlink-into-.git is also blocked.
+              denied_path=0
+              case "${path}" in
+                .git|.git/*|*/.git|*/.git/*) denied_path=1 ;;
+                .env|.env.*|*/.env|*/.env.*) denied_path=1 ;;
+                .npmrc|*/.npmrc|.pypirc|*/.pypirc|.netrc|*/.netrc) denied_path=1 ;;
+                .ssh|.ssh/*|*/.ssh|*/.ssh/*) denied_path=1 ;;
+              esac
+              if [ "${denied_path}" -eq 1 ]; then
+                echo "::warning::Targeted file context: refusing plan file '${path}' (denylist: .git/*, .env*, .npmrc, .pypirc, .netrc, .ssh/* commonly contain credentials and must not enter the LLM prompt)."
+                continue
               fi
               if [ ! -e "${path}" ]; then
                 echo "::notice::Targeted file context: skipping plan file '${path}' (not present in worktree; codex will explore if needed)."
@@ -1122,6 +1152,23 @@ jobs:
                   continue
                   ;;
               esac
+              # Resolved-path denylist (catches symlink-into-.git etc.).
+              # Mirrors the plan-string denylist above, run after symlink
+              # resolution so a checked-in symlink at, say, `notes.md ->
+              # .git/config` is also rejected.
+              denied_resolved=0
+              case "${resolved_path}/" in
+                "${ws_resolved}/.git/"*) denied_resolved=1 ;;
+                "${ws_resolved}/.ssh/"*) denied_resolved=1 ;;
+              esac
+              case "${resolved_path}" in
+                "${ws_resolved}/.env"|"${ws_resolved}/.env."*) denied_resolved=1 ;;
+                "${ws_resolved}/.npmrc"|"${ws_resolved}/.pypirc"|"${ws_resolved}/.netrc") denied_resolved=1 ;;
+              esac
+              if [ "${denied_resolved}" -eq 1 ]; then
+                echo "::warning::Targeted file context: refusing plan file '${path}' — resolves to credential-bearing path '${resolved_path}'. Possible symlink-into-secret attempt."
+                continue
+              fi
               if [ ! -f "${resolved_path}" ]; then
                 echo "::notice::Targeted file context: skipping plan file '${path}' — resolves to non-regular file '${resolved_path}'."
                 continue
@@ -1142,9 +1189,7 @@ jobs:
               } >> "${TARGETED_FILES_FILE}"
               inlined_count=$((inlined_count + 1))
               inlined_bytes=$((inlined_bytes + fsize))
-            done <<EOF_TARGETED_PATHS
-          ${targeted_paths_raw}
-          EOF_TARGETED_PATHS
+            done <<< "${targeted_paths_raw}"
           fi
 
           if [ "${inlined_count}" -gt 0 ]; then

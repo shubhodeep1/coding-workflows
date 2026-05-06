@@ -23,23 +23,28 @@ These tests pin:
     lines.
   - Deduplication of repeated entries.
   - Real plan body excerpted from fun-token-multi-chain run
-    25406869763 issue #195 (regression case for the original PR).
+    25406869763 issue #195.
 
 The test extracts the awk source verbatim from the workflow YAML so a
 regex tweak in production cannot diverge from the contract here. If
 the inline parser is later moved into a shared script, update
 `_extract_parser_awk_source` to read from that script instead.
+
+Runner convention: matches the rest of `tests/test_*.py` in this
+repo (`PYTHONDONTWRITEBYTECODE=1 python3 tests/test_*.py`). Does not
+depend on pytest. Each test takes a Path argument; the `main()`
+runner provides a fresh tempdir per test. Pytest can also run the
+file (the `tmp_path: Path` parameter name matches pytest's
+auto-fixture), but pytest is not required.
 """
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
-import textwrap
+import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -80,9 +85,9 @@ def _extract_parser_awk_source() -> str:
 
 	The parser is the first awk invocation inside the
 	`targeted_paths_raw="$(` command substitution in the
-	"Run Codex implementation" step. We locate it by anchor-string
-	search rather than full regex so the extraction tolerates
-	whitespace, comment, and reformatting changes.
+	"Run Codex implementation" step. Located by anchor-string search
+	rather than full regex so the extraction tolerates whitespace,
+	comment, and reformatting changes.
 	"""
 	run = _extract_run_block("Run Codex implementation")
 
@@ -103,7 +108,6 @@ def _extract_parser_awk_source() -> str:
 			"been moved out of inline shell? Update _extract_parser_awk_source."
 		)
 
-	# Body starts just after `awk '` (typically `awk '\n`).
 	body_start = awk_idx + len(_PARSER_AWK_BEGIN)
 
 	end_idx = run.find(_PARSER_AWK_END, body_start)
@@ -113,11 +117,6 @@ def _extract_parser_awk_source() -> str:
 			"Update _extract_parser_awk_source."
 		)
 
-	# Trim back from end_idx to the closing `'` of the awk single-quoted
-	# string. The shell text between body_start and end_idx looks like:
-	#     <awk body>\n         '
-	# (the `'` closes the awk script, `${PLAN_FILE}` follows). Find the
-	# last `'` before end_idx.
 	close_quote_idx = run.rfind("'", body_start, end_idx)
 	if close_quote_idx < 0:
 		raise RuntimeError(
@@ -126,14 +125,10 @@ def _extract_parser_awk_source() -> str:
 		)
 
 	body = run[body_start:close_quote_idx]
-	# Strip a leading newline if present (shell `awk '\n...\n'` form).
 	if body.startswith("\n"):
 		body = body[1:]
-	# Trim trailing whitespace before the closing quote.
 	body = body.rstrip()
 
-	# Sanity: the body MUST contain the section-start guard. If it does
-	# not, the extraction is wrong even if it returned non-empty.
 	if "files[[:space:]]+[^\\n]*change" not in body:
 		raise RuntimeError(
 			"Extracted awk body does not contain the expected section-start "
@@ -153,7 +148,8 @@ def _run_parser(plan_text: str, tmp_path: Path) -> list[str]:
 	Returns the de-duplicated, ordered list of extracted path tokens.
 	"""
 	awk = shutil.which("awk")
-	assert awk, "awk binary not found on PATH"
+	if not awk:
+		raise AssertionError("awk binary not found on PATH")
 	plan_file = tmp_path / "plan.txt"
 	plan_file.write_text(plan_text, encoding="utf-8")
 	awk_source = _extract_parser_awk_source()
@@ -165,7 +161,7 @@ def _run_parser(plan_text: str, tmp_path: Path) -> list[str]:
 		check=False,
 	)
 	if first.returncode != 0:
-		pytest.fail(
+		raise AssertionError(
 			f"awk parser exited {first.returncode}; stderr:\n{first.stderr}\n"
 			f"stdout:\n{first.stdout}"
 		)
@@ -438,3 +434,34 @@ def test_real_plan_from_funtoken_run_25406869763(tmp_path: Path) -> None:
 		"`contracts/FunOFT.sol`.\n"
 	)
 	assert _run_parser(plan, tmp_path) == ["contracts/FunOFT.sol"]
+
+
+# --- Standalone runner (matches `python3 tests/test_*.py` repo convention) -
+
+def main() -> int:
+	"""Discover and run every `test_*` function in this module.
+
+	Mirrors the runner pattern in tests/test_implement_post_codex_recovery.py
+	and friends: enumerate `test_*` globals, give each a fresh tempdir,
+	report PASS/FAIL with a final tally. Returns 1 on any failure so
+	`set -e` in the CI step propagates.
+	"""
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		with tempfile.TemporaryDirectory() as td:
+			try:
+				func(Path(td))
+				print(f"  PASS  {name}")
+				passed += 1
+			except Exception as e:
+				print(f"  FAIL  {name}: {e}")
+				failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
