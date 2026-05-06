@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What should be improved?\nChoices:\nA. A specific workflow or script in this repo; I will name the file/path or phase (RECOMMENDED)\nB. A user-facing behavior in the AI pipeline; I will describe the current problem and expected behavior (RECOMMENDED)\nC. A reliability/performance issue; I will describe the failing or slow behavior and where it occurs\nD. A documentation/readability improvement only\nQ2. What kind of change is expected?\nChoices:\nA. Fix a bug or broken behavior (RECOMMENDED)\nB. Add a new capability\nC. Improve maintainability/refactor existing code without changing behavior\nD. Improve docs/configuration only\nQ3. How should success be judged?\nChoices:\nA. A concrete before/after behavior or acceptance criterion; I will provide it (RECOMMENDED)\nB. Match an existing pattern elsewhere in this repo; I will point to the reference file/path\nC. Use my general intent only, no specific acceptance criteria\nQ4. Are there any scope limits or constraints?\nChoices:\nA. Keep changes minimal and local; avoid behavior changes outside the named area (RECOMMENDED)\nB. Broader cleanup/refactor is acceptable if it helps\nC. Workflow files under `.github/workflows/` must not be changed\nD. No special constraints",
+  "fingerprint": "21db0153ed22637556b109e2ec0a8d6461dd331c99ed5ebae2c4f33bd8082aea",
+  "lineage": {
+    "issue_number": 2187,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25445458774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25445458774",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260506154220_26d0a51055",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2187,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25445458774"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2187 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-06T15:42:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
