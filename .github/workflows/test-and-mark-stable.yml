@@ -1269,12 +1269,25 @@ jobs:
             # the bait SHA.) The dispatched run's head_sha matches
             # BAIT_SHA because we dispatch with --ref "${BRANCH}" and
             # GitHub records the ref's tip SHA at dispatch time.
+            #
+            # `self-healing` is part of the regex because review_autofix.yml
+            # ("Codex PR Self-Healing Semantic Agent") is dispatched directly
+            # by its own post_commit_retrigger after the editor commits the
+            # fix — that engine run is the canonical successor at PIN_SHA on
+            # repos where review_autofix.yml exists locally (coding-workflows
+            # itself, plus consumer repos that copy/sync it). Without this
+            # token the engine's name does not match `Review|review|autofix`,
+            # so the wait loop never sees the post-commit successor run and
+            # ages out at REVIEW_TIMEOUT — observed on run-25445414047 where
+            # PIN_SHA advanced to the editor commit but the engine
+            # workflow_dispatch run at that SHA was filtered out and the
+            # poll timed out 30m later.
             if [ -n "${PIN_SHA:-}" ]; then
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] | sort_by(.created_at) | last" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] | sort_by(.created_at) | last" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
-                --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix"; "i"))] | sort_by(.created_at) | last' || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
             fi
 
             # If rate-limited, skip this cycle entirely (don't corrupt state)
