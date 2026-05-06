@@ -628,3 +628,145 @@ No `TODO`, `FIXME`, or `HACK` markers were present in the audited `.github/workf
 | Code modularization | 4 | Medium |
 | Expression size reduction | 1 | Medium |
 | Medium/Low fixes | 8 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-06)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is fully proven safe to consolidate without changing filters, retries, failure behavior, cache contracts, or concurrency boundaries. `NEEDS_VERIFICATION` means the overlap looks real but at least one safety precondition is not statically provable from this read. `RISKY_SKIP` means the overlap is visible, but it sits in a retry/poll/stall-recovery or other race-defensive path where auto-consolidation is explicitly unsafe.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:1360-1366`; helper candidate in `scripts/gh_helpers.sh:698-731`, `scripts/gh_helpers.sh:761-900`
+- **Current call count** — `4` logical PR-context reads on the happy path
+- **Proposed call count** — `1` GraphQL-first helper call on the happy path, with existing REST parity path retained as fallback
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr_number}`; `GET /repos/{repo}/issues/{pr_number}/comments`; `GET /repos/{repo}/pulls/{pr_number}/reviews`; `GET /repos/{repo}/pulls/{pr_number}/comments`; candidate replacement: GraphQL `repository.pullRequest(...)`
+- **Evidence** — the workflow currently fans out one PR metadata read plus three paginated comment/review reads before normalizing them downstream:
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
+  jq -s 'add // []' /tmp/gh_issue_comments_raw.json > "${PR_ISSUE_COMMENTS_FILE}"
+  gh_retry /tmp/gh_reviews_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews
+  jq -s 'add // []' /tmp/gh_reviews_raw.json > "${PR_REVIEWS_FILE}"
+  gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
+  jq -s 'add // []' /tmp/gh_review_comments_raw.json > "${PR_REVIEW_COMMENTS_FILE}"
+  ```
+  The repo already ships a purpose-built consolidation helper for this exact shape:
+  ```bash
+  gh_pr_with_all_comments()
+  {
+  	...
+  	if ! gh_api_json_to_file "${_gql_file}" \
+  		gh api graphql \
+  		-f query="${gql_query}" \
+  		-F owner="${owner}" \
+  		-F name="${repo}" \
+  		-F number="${pr_number}"; then
+  ```
+- **Proposed fix** — extend `gh_pr_with_all_comments` in `scripts/gh_helpers.sh` to emit the exact fields still consumed here (`headRepoFullName`, review/comment ids, timestamps if needed), then replace the four-call block in `.github/workflows/review_autofix.yml` with one helper invocation that writes the normalized payload and derives `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEWS_FILE`, and `PR_REVIEW_COMMENTS_FILE` from that single result.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the helper is clearly intended for this consolidation, but its current normalized shape does not yet prove field-for-field parity with every downstream consumer in `review_autofix.yml`.
+- **Downstream signal** — Verify helper parity against current files on representative PRs: no-pagination, >100 issue comments, >50 reviews, and nested review-comment cases; only consolidate after confirming the helper preserves all fields read later from `PR_PAYLOAD_FILE`, `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEWS_FILE`, and `PR_REVIEW_COMMENTS_FILE`.
+
+#### MERGE-002 — `RISKY_SKIP`
+- **File path and line ranges** — `scripts/orchestrate_poll_process.sh:5218-5219`; `scripts/orchestrate_poll_process.sh:6918-6919`
+- **Current call count** — `2` `GET /issues/{n}` reads per affected branch invocation (`4` duplicate reads across the two sites)
+- **Proposed call count** — `1` `GET /issues/{n}` read per affected branch invocation
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_num}`
+- **Evidence** — both reissue paths fetch the same issue object twice, once for title and once for body:
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  and later:
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+- **Proposed fix** — if manually approved, fetch one issue JSON object in each branch and derive both `.title` and `.body` locally, preserving current fail-open defaults and all existing log strings.
+- **Safety rationale** — `RISKY_SKIP` because both duplicates live inside `scripts/orchestrate_poll_process.sh` stall-recovery/reissue paths, which the audit contract explicitly excludes from auto-implementation.
+- **Downstream signal** — Do not auto-implement; manual review must confirm the consolidated read preserves stall-recovery timing, fail-open behavior, and every greppable log/output string in these recovery branches.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — producer: `.github/workflows/review_autofix.yml:1390-1448`; re-fetch: `.github/workflows/review_autofix.yml:1841-1845`
+- **Current call count** — `1` early GraphQL batch + up to `1` later `GET /issues/{n}` title read
+- **Proposed call count** — `1` early GraphQL batch + `0` later REST reads on cache-hit path
+- **Endpoint(s)** — GraphQL `pullRequest.closingIssuesReferences(first: 50) { nodes { number title body } }`; `GET /repos/{repo}/issues/{issue_num}`
+- **Evidence** — the early step already fetches linked issue numbers, titles, and bodies and materializes them into a context artifact:
+  ```bash
+  if gh_retry "${_linked_tmp}" api graphql \
+    ...
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+  ```
+  then later the smoke detector resolves an issue number from `PR_BODY` and re-reads that issue title from REST:
+  ```bash
+  ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '...')
+  if [ -n "${ISSUE_NUM:-}" ]; then
+    ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+  ```
+- **Proposed fix** — persist the early `closingIssuesReferences` payload to a small JSON cache file (or enrich `LINKED_ISSUES_JSON` beyond numbers-only), then have the smoke detector look up `ISSUE_NUM` in that cache first and fall back to `_safe_gh_jq` only when the early fetch failed or the issue is absent from the cached set.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the reused data crosses step boundaries, and the current direct lookup is also serving as a fail-open fallback if the early GraphQL fetch or cache export is absent.
+- **Downstream signal** — Verify that no step between the early linked-issue fetch and smoke detection mutates linked-issue titles in ways this workflow depends on, and keep the current `_safe_gh_jq` lookup as a fallback unless the cache file is proven always present and authoritative.
+
+#### REUSE-002 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — producer: `.github/workflows/review_autofix.yml:1352-1374`; re-fetch sites: `.github/workflows/review_autofix.yml:3777-3780`, `.github/workflows/review_autofix.yml:3897-3901`, `.github/workflows/review_autofix.yml:4631-4635`
+- **Current call count** — `1` initial PR fetch + up to `3` later `GET /pulls/{n}` re-fetches across tail paths
+- **Proposed call count** — `1` initial PR fetch + `0` later re-fetches if `PR_META_FILE` validity is guaranteed, or `1` shared guarded fallback only on actual file corruption/missing-data
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr_number}`
+- **Evidence** — the workflow already normalizes PR title/body into `PR_META_FILE`:
+  ```bash
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  but three later tail steps still keep a conditional pull re-fetch when `PR_META_FILE` parses empty:
+  ```bash
+  PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+- **Proposed fix** — tighten these fallbacks so they trigger only on proven `PR_META_FILE` absence or JSON-parse failure, not on an empty-string branch that should be unreachable for a valid PR title; ideally centralize the guard in one helper used by all three tail steps.
+- **Safety rationale** — `NEEDS_VERIFICATION` because these are late-stage success/failure tails, and the fallback may be the only surviving path if `PR_META_FILE` is missing or corrupted in a caller-repo edge case.
+- **Downstream signal** — Prove, on every path that can reach these steps, that `PR_META_FILE` is created and contains a non-empty title before removing the fallback; include `workflow_dispatch`, normal PR events, and all failure-tail branches in that verification.
+
+#### REUSE-003 — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/internal-review.yml:86-101`
+- **Current call count** — `2`
+- **Proposed call count** — `1`
+- **Endpoint(s)** — `GET /repos/{repo}/pulls?state=open&head={owner}:{branch}`; `GET /repos/{repo}`
+- **Evidence** — the push-only resolver uses one call to detect an existing PR and a second call only to recover the repository default branch:
+  ```bash
+  existing_pr="$(gh api \
+    "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+    --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+  base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  ```
+  This job runs only on `push`, where the event payload may already expose the repository default branch.
+- **Proposed fix** — pass `${{ github.event.repository.default_branch }}` into the job env and use that as `base_ref`, retaining the current `main` fallback only if the event field is absent.
+- **Safety rationale** — `NEEDS_VERIFICATION` because static repo reading alone does not prove the push event payload always carries `repository.default_branch` in every environment that consumes this reusable workflow.
+- **Downstream signal** — Verify on one or more real `push` event payloads for `claude/**` branches that `${{ github.event.repository.default_branch }}` is always populated before removing the `gh api "repos/${REPOSITORY}"` fallback.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `NEEDS_VERIFICATION` — the overlap is real, but the alert-step reuse must preserve the existing GraphQL-fail-open classification path before removing the per-issue REST reads.
+- `BATCH-001`: `NEEDS_VERIFICATION` — batching the close/label mutations looks directionally correct, but partial-failure and per-issue fallback semantics need explicit parity review.
+- `API-002`: `RISKY_SKIP` — valid redundancy, but it sits in `scripts/orchestrate_poll_process.sh`, which this pass must not auto-consolidate.
+- `BATCH-002`: `NEEDS_VERIFICATION` — the fallback label lookups are batchable, but the regex-derived issue set and post-dispatch label-removal path still need equivalence testing.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | MERGE-001, REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
