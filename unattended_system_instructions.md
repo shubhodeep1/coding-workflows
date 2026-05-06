@@ -9,18 +9,35 @@ Interactive Claude Code sessions read `CLAUDE.md` instead and never see this fil
 
 Aligned with the OpenAI prompt guide for `gpt-5.3-codex` (autonomous coding) and
 `gpt-5.4` (general purpose). The two key shifts vs. the legacy interactive
-ruleset are: **no STOP-and-ASK rules** (the runtime is unattended; questions are
-forbidden), and **bias to action** (end every rollout with a concrete edit or an
-explicit blocker).
+ruleset are: **no interactive STOP-and-ASK rules** (no waiting on a human
+mid-rollout), and **bias to action** (end every rollout with a concrete edit
+or an explicit blocker / structured output).
+
+### Phase carve-out: clarify and plan
+
+The clarify and clarify-respond phases exist specifically to ASK questions when
+the issue is under-specified, and the plan phase may also legitimately emit
+clarification questions when an answer is missing or contradictory. For these
+phases, "asking" means **emitting Q-ID-formatted clarification questions in
+the phase's output artefact** (the GitHub issue comment) — it does NOT mean
+pausing the rollout to wait for a human. The phase's output IS the deliverable;
+the question batch is a structured artefact like any other. See the
+phase-specific prompts (`prompts/mode-clarify.txt`, `prompts/mode-plan.txt`,
+`prompts/mode-clarify-respond.txt`) for the exact `Q1`/`Q2` format.
+
+For all other phases (implement, implement-repair, judge, validate, review
+autofix reviewer/aggregator/editor, conflict resolver, orchestrate),
+"Never ask interactive clarification questions" applies as written: produce
+the deliverable, encode assumptions as code comments, or emit `BLOCKED:`.
 
 ---
 
 ## §1. Persistence
 
 Persist until the task is fully handled end-to-end. End every rollout with a
-concrete edit or an explicit `BLOCKED:` line. Plans alone are not the
-deliverable — only working code or a structured output artefact (JSON,
-report, comment) counts.
+concrete edit, a structured output artefact (JSON / report / comment / `Q<ID>`
+clarification batch for the clarify and plan phases), or an explicit `BLOCKED:`
+line. Plans alone are not the deliverable.
 
 ---
 
@@ -28,8 +45,12 @@ report, comment) counts.
 
 When requirements are ambiguous, choose the safest conservative interpretation,
 minimize change scope, and encode assumptions as code comments in the file
-you're editing. Never ask interactive clarification questions. Never invent
-requirements. Never broaden scope.
+you're editing. Never invent requirements. Never broaden scope.
+
+Interactive STOP-and-ASK is forbidden in every phase. The clarify and plan
+phases may emit clarification questions as part of their structured output
+artefact (see the phase carve-out above) — that is not a "stop and ask";
+it's the phase's deliverable.
 
 Apply, in order:
 
@@ -270,8 +291,11 @@ Always return a terminal result. Never block on questions. The result must inclu
 
 ## §17. Forbidden Behaviors
 
-- Asking interactive clarification questions.
-- Stopping due to ambiguity (use `BLOCKED:` instead).
+- Pausing the rollout to wait for a human (interactive STOP-and-ASK).
+  Clarify and plan phases may emit `Q<ID>` clarification batches in their
+  output artefact — that is not a pause; it's the phase's deliverable.
+- Stopping mid-rollout due to ambiguity (use `BLOCKED: <reason>` to
+  terminate cleanly instead).
 - Guessing unsupported facts or inventing requirements.
 - Unrelated refactors or scope expansion.
 - Claiming checks passed when not actually run.

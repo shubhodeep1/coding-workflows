@@ -74,19 +74,27 @@ DIAGNOSE_REASONING="${MODEL_DIAGNOSE_REASONING_EFFORT:-medium}"
 # (typically medium-but-could-be-high) reasoning. codex exec doesn't
 # accept --reasoning-effort on the CLI; the config.toml key is the
 # only honored knob.
+#
+# Note: the codex-cli invocation below already passes `--model` on the
+# command line, so we only need to ensure model_reasoning_effort is
+# present and set to DIAGNOSE_REASONING. We never write a `model = ...`
+# line here — appending one when config.toml already has a different
+# `model = ...` would create duplicate TOML keys (which strict TOML
+# parsers reject as invalid).
 patch_diagnose_reasoning_into_config() {
   local cfg="${HOME:-/root}/.codex/config.toml"
   mkdir -p "$(dirname "${cfg}")"
-  if [ -f "${cfg}" ] && grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
+  if [ ! -f "${cfg}" ]; then
+    printf 'model_reasoning_effort = "%s"\n' "${DIAGNOSE_REASONING}" > "${cfg}"
+    return 0
+  fi
+  if grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
     sed -i \
       -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${DIAGNOSE_REASONING}\"/" \
       -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${DIAGNOSE_REASONING}\"/" \
       "${cfg}" || true
   else
-    {
-      echo "model = \"${DIAGNOSE_MODEL}\""
-      printf 'model_reasoning_effort = "%s"\n' "${DIAGNOSE_REASONING}"
-    } >> "${cfg}"
+    printf 'model_reasoning_effort = "%s"\n' "${DIAGNOSE_REASONING}" >> "${cfg}"
   fi
 }
 patch_diagnose_reasoning_into_config

@@ -1212,12 +1212,14 @@ jobs:
             echo "=== UNATTENDED SYSTEM INSTRUCTIONS ==="
             cat "${SUPPORT_INSTRUCTIONS_FILE}"
             echo
-            if [ -f "${SUPPORT_CODEX_INSTRUCTIONS_FILE}" ]; then
-              echo "=== CODEX SYSTEM INSTRUCTIONS (editor-trimmed) ==="
-              # Keep only the code style section.
-              awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}' "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
-              echo
-            fi
+            # Note: SUPPORT_INSTRUCTIONS_FILE and SUPPORT_CODEX_INSTRUCTIONS_FILE
+            # both now resolve to unattended_system_instructions.md, which
+            # already contains §11 Code Style. The previous "code-style-only"
+            # extraction block (`awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}'`)
+            # was keyed to the old codex_system_instructions.md numbering and
+            # would now silently emit an empty section against the new file's
+            # `## §11. Code Style` header. Removed because the cat above
+            # already includes that section in full.
             if [ -f "${SUPPORT_AGENTS_FILE}" ]; then
               echo "=== AGENTS.MD ==="
               cat "${SUPPORT_AGENTS_FILE}"
