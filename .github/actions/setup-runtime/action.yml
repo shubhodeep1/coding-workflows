@@ -50,14 +50,15 @@ runs:
       with:
         python-version: ${{ inputs.python_version }}
 
-    - name: Install Codex CLI and core tools
+    - name: Install Codex CLI
+      uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+      with:
+        codex_version: ${{ inputs.codex_version }}
+
+    - name: Install OS-level core tools
       shell: bash
-      env:
-        CODEX_VERSION: ${{ inputs.codex_version }}
       run: |
         set -euo pipefail
-
-        npm install -g "@openai/codex@${CODEX_VERSION}" --include=optional --no-audit --no-fund
 
         missing_tools=()
         for tool in jq curl gh; do
