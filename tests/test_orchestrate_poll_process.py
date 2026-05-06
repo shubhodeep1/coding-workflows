@@ -34,9 +34,8 @@ POLLER_SUBPROCESS_TIMEOUT_SEC = 180.0
 _SANDBOX_DIRS = ("scripts", "prompts", ".github/ai")
 _SANDBOX_FILES = (
 	"agents.md",
-	"codex_system_instructions.md",
+	"unattended_system_instructions.md",
 	"ai_pipeline.md",
-	"unattended_llm_system_instructions.md",
 )
 
 

@@ -67,7 +67,7 @@ $ARGUMENTS
    - The reusable workflow that the consumer wrapper calls (under `workflow-templates/` or `.github/workflows/`).
    - Scripts invoked by that workflow (under `scripts/`).
    - Prompt files invoked by those scripts (under `prompts/`).
-   - Any contracts (`db/contracts/*.yml`), agents config (`agents.md`), or `codex_system_instructions.md` rules referenced by the failing path.
+   - Any contracts (`db/contracts/*.yml`), agents config (`agents.md`), or `CLAUDE.md` rules referenced by the failing path.
    - PRs / issues in `shubhodeep1/coding-workflows` that touched the relevant files between `PREVIOUS_UPSTREAM_SHA` and `UPSTREAM_SHA` — these are the most likely culprits if the regression is upstream-introduced. Use `mcp__github__list_commits` with `path=<file>` (and a `since` / `sha` window bounded by the two refs) and `mcp__github__search_issues` / `mcp__github__search_pull_requests` scoped to the repo. If `PREVIOUS_UPSTREAM_SHA` is null, skip this regression-window search and note it under **Open Questions**.
    - Cross-reference: intersect files changed in upstream PRs merged between `PREVIOUS_UPSTREAM_SHA` and `UPSTREAM_SHA` with the files implicated by the consumer-side stack trace / log.
 
