@@ -554,7 +554,7 @@ case "${RB_ACTION}" in
             ;;
           *)
             rm -f ./pre_assembled_static.txt
-            rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
+            rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
             rm -f scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
             rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py
             rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh

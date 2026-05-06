@@ -51,7 +51,7 @@ Section requirements:
 - ## Metrics Appendix: concise markdown tables for metrics used in analysis; at minimum include run counts, success/failure rates, p50/p95 durations, token totals, cache metrics (if available), and GH API call summaries.
 
 Rules:
-- Be specific and evidence-based: cite repo names, run IDs, workflow/job/step names, and measured values.
+- Be specific and evidence-based: cite repo names, run IDs, workflow/job/step names, and measured values inline next to each claim. Never fabricate run IDs, file paths, line numbers, commit SHAs, or quoted log lines. If a statement is an inference rather than a directly supported fact, label it as an inference.
 - Be actionable: every finding must include a concrete recommendation and expected impact.
 - Prefer safe, backward-compatible changes; do not recommend breaking interfaces or behavior.
 - Do not recommend adding external services or new infrastructure.

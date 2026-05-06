@@ -716,7 +716,7 @@ done
 # bootstrap-generated scripts/.gitignore.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   rm -f ./pre_assembled_static.txt
-  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
+  rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
 fi
 
 if [ -n "$(git status --porcelain)" ]; then

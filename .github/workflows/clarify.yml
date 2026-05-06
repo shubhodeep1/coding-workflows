@@ -30,8 +30,14 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'medium' }}
-      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'medium' }}
+      # Per OpenAI prompt guide: clarify is execution-heavy (read repo,
+      # decide whether questions are needed, emit closed STATUS contract)
+      # → low reasoning is sufficient. The smoke override below is now a
+      # noop because the default is already low; kept for parity with
+      # other phases that still flip from medium → low on smoke.
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'low' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_CLARIFY || 'low' }}
+      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'low' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
     steps:
@@ -242,7 +248,7 @@ jobs:
             fi
           done
 
-          for f in codex_system_instructions.md ai_pipeline.md; do
+          for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
@@ -700,7 +706,10 @@ jobs:
 
           Clarification format requirements (MANDATORY):
 
-          - Use the same question/answer format defined in codex_system_instructions.md section "Mandatory Decision Prompt Format".
+          - Use the Q-ID + Choices format defined in prompts/mode-clarify.txt
+            ("Mandatory Question Format" section): `Q1`/`Q2`/... identifiers,
+            lettered choices (`A`, `B`, `C`, `A+C`), at least one
+            ` (RECOMMENDED)` marker, one decision per Q-ID.
           - Use question identifiers only as Q1, Q2, Q3, ... (never 1), 2), etc.).
           - For each question, include a "Choices:" block with lettered options (A/B/C minimum as needed).
           - For each question, mark one or more best options with the exact uppercase suffix: " (RECOMMENDED)".

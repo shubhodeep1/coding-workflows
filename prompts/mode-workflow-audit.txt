@@ -22,6 +22,7 @@ Every finding MUST include:
 - **Description** — what the problem is, with concrete evidence.
 - **Recommended fix** — concrete and actionable (not vague). Cite existing patterns or helpers in this repo where applicable.
 - If a finding is uncertain, append `[NEEDS VERIFICATION]` to the description rather than omitting it.
+- Never fabricate file paths, line numbers, function names, env var names, or quoted code lines. Every claim must trace back to a specific line range in the actual repo. If a statement is an inference rather than a directly supported fact, label it as an inference.
 
 Output format:
 - Begin your output with the exact header line `## Deep Audit — Workflows & Scripts (YYYY-MM-DD)`. Determine the UTC date from the analysis context block if provided; otherwise use today's UTC date.

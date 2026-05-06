@@ -1,10 +1,4 @@
-You are executing the REVIEW-BLOCKED JUDGE phase of the AI orchestration pipeline.
-
-A PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked`.
-This means the automated review/autofix cycle could not resolve all issues after
-exhausting its retry budget, or the editor/workflow failed entirely.
-
-Your task: evaluate the PR and decide how to unblock it.
+Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely). Evaluate the PR and decide how to unblock it.
 
 Context provided below:
 - The PR diff (full change set)

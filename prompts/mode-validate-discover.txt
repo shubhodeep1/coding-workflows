@@ -1,13 +1,4 @@
-You are executing the VALIDATE-DISCOVER phase of the AI development pipeline.
-You are Codex v0.114.0 running in unattended CI mode.
-
-All context is inlined directly into the prompt for efficiency:
-- System instructions, AI pipeline spec, agents.md, and README.md appear above.
-- Discovery context appears below.
-
-Do NOT read pre_assembled_static.txt, phase context files, or any other bundled context files.
-
-Your task: infer runtime validation hints for this repository and output a single `.ai/validate.yml` document.
+Role: validate-discover. Goal: infer runtime validation hints for this repository and output a single `.ai/validate.yml` document.
 
 Goal:
 - Produce practical, minimal hints that improve harness generation accuracy.
@@ -19,6 +10,10 @@ Hard constraints:
 - Do not use real credentials.
 - Prefer concrete values found in the repo over guesses.
 - If uncertain, omit optional keys instead of inventing values.
+- Fallback on empty discovery: if the primary detection (build manifest,
+  Dockerfile, package.json, pyproject.toml) returns empty, try at least
+  one fallback (Makefile rules, README's "Getting Started", existing
+  test-runner config) before omitting a required slot.
 
 Expected YAML shape (top-level `type` and `slots` are REQUIRED; everything else is optional):
 - `type` (REQUIRED): one of the renderer-supported template families — `python-mongo-flask` | `python-mongo-repo-checks` | `python-repo-checks` | `node-hardhat-solidity`. Pick the closest match for the repo; do not invent other values (the renderer rejects unknown families with `FamilyResolutionError`).

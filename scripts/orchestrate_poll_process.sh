@@ -123,8 +123,8 @@ assemble_judge_static_context() {
   local out_file="$1"
   local missing=""
 
-  if [ ! -s codex_system_instructions.md ]; then
-    missing="codex_system_instructions.md"
+  if [ ! -s unattended_system_instructions.md ]; then
+    missing="unattended_system_instructions.md"
   fi
   if [ ! -s ai_pipeline.md ]; then
     missing="${missing}${missing:+, }ai_pipeline.md"
@@ -136,7 +136,7 @@ assemble_judge_static_context() {
 
   {
     echo "=== SYSTEM INSTRUCTIONS ==="
-    cat codex_system_instructions.md
+    cat unattended_system_instructions.md
     echo
     echo "=== AI PIPELINE ==="
     cat ai_pipeline.md
@@ -9684,7 +9684,7 @@ sys.exit(1)
                   ;;
                 *)
                   rm -f ./pre_assembled_static.txt
-                  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md probably_unnecessary_but_read_if_stuck.md
+                  rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
                   rm -f scripts/git_ref_health_check.sh \
                     scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
                     scripts/codex_model_catalog.json

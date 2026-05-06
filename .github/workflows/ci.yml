@@ -280,6 +280,76 @@ jobs:
             echo "OK: $f ($(wc -c < "$f") bytes)"
           done
 
+      - name: Prompt-length budget (OpenAI guide alignment)
+        run: |
+          set -euo pipefail
+          # Per OpenAI prompt guide: gpt-5.3-codex paths benefit from
+          # shorter rollouts; gpt-5.4 paths from "shorter, outcome-focused
+          # prompts". Cap codex paths at 200 lines and gpt-5.4 paths at
+          # 150. Hard-fails the build so prompt bloat regressions are
+          # caught at PR time rather than after merge.
+          # mode-validate-generate.txt is an explicitly allowed deferred
+          # exception — its 700+ lines of conditional procedure are slated
+          # for sidecar extraction in a separate smoke-gated PR. Same for
+          # the validate-fix-harness / validate-diagnose phase prompts.
+          declare -A CAPS=(
+            [prompts/mode-implement.txt]=200
+            [prompts/mode-implement-repair.txt]=200
+            [prompts/mode-implement-repair-syntax.txt]=200
+            [prompts/mode-implement-diagnose.txt]=150
+            [prompts/mode-clarify.txt]=150
+            [prompts/mode-clarify-respond.txt]=200
+            [prompts/mode-plan.txt]=150
+            [prompts/mode-orchestrate.txt]=200
+            [prompts/mode-judge.txt]=150
+            [prompts/mode-orchestrate-poll-judge.txt]=150
+            [prompts/mode-judge-review-blocked.txt]=200
+            [prompts/mode-judge-stall-recovery.txt]=150
+            [prompts/conflict-resolver.txt]=150
+            [prompts/integration-sync-conflict-resolver.txt]=200
+            [prompts/integration-sync-conflict-resolver-retry-prelude.txt]=100
+            [prompts/review-consolidator.txt]=150
+            [prompts/header.txt]=20
+            [prompts/mode-validate-discover.txt]=80
+            [prompts/mode-validate-self-heal.txt]=150
+            [prompts/mode-workflow-analysis.txt]=150
+            [prompts/mode-workflow-audit.txt]=200
+            [prompts/mode-workflow-api-redundancy.txt]=150
+          )
+          # Deferred (smoke-gate-required): mode-validate-generate.txt,
+          # mode-validate-fix-harness.txt, mode-validate-diagnose.txt.
+          # These contain conditional procedure that must move to a
+          # sidecar rule sheet (followup PR).
+          fail=0
+          for path in "${!CAPS[@]}"; do
+            if [ -f "${path}" ]; then
+              actual=$(wc -l < "${path}")
+              cap="${CAPS[${path}]}"
+              if [ "${actual}" -gt "${cap}" ]; then
+                echo "::error::Prompt length budget exceeded: ${path} = ${actual} lines (cap ${cap}). Slim per OpenAI prompt guide."
+                fail=1
+              else
+                echo "OK: ${path} = ${actual}/${cap} lines"
+              fi
+            fi
+          done
+          [ "${fail}" -eq 0 ] || exit 1
+
+      - name: Prompt forbidden-token soft lint
+        run: |
+          set -euo pipefail
+          # Per OpenAI prompt guide: "Don't use ALWAYS, NEVER, must, and
+          # only for judgment calls. Reserve them for true invariants."
+          # Soft lint — emits warnings, doesn't fail the build. Threshold
+          # of 8 hits per file gives operators visibility into prompts
+          # that are drifting back toward instruction-stack noise.
+          for f in prompts/*.txt; do
+            hits=$(grep -coE '\b(MANDATORY|FAILURE|NEVER|ALWAYS)\b' "${f}" || true)
+            if [ "${hits}" -gt 8 ]; then
+              echo "::warning file=${f}::High count of absolutist tokens (${hits}). Per OpenAI prompt guide, reserve MUST/NEVER/ALWAYS for true invariants."
+            fi
+          done
+
       - name: Shell script syntax check
         run: |
           set -euo pipefail

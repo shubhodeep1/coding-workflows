@@ -47,7 +47,11 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'medium' }}
+      # Clarify-respond is execution-heavy (derive an answer from the
+      # repo using a documented derivation ladder) → low reasoning per
+      # the OpenAI prompt guide.
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'low' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_CLARIFY_RESPOND || 'low' }}
       ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
@@ -320,7 +324,7 @@ jobs:
 
           # Keep canonical static instructions available in caller repos where
           # these files may not exist yet.
-          for f in codex_system_instructions.md ai_pipeline.md; do
+          for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
@@ -531,8 +535,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -s codex_system_instructions.md ] || [ ! -s ai_pipeline.md ]; then
-            echo "Missing or empty required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md"
+          if [ ! -s unattended_system_instructions.md ] || [ ! -s ai_pipeline.md ]; then
+            echo "Missing or empty required codex input file(s): unattended_system_instructions.md and/or ai_pipeline.md"
             exit 1
           fi
 
@@ -540,7 +544,7 @@ jobs:
           # provider-side prompt prefix caching can be reused across runs.
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
+            cat unattended_system_instructions.md
             echo
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md

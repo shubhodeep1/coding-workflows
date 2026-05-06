@@ -14,6 +14,16 @@ name: AI Implement
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'medium' }}
+  # MODEL_DIAGNOSE drives the post-Codex diagnose step
+  # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
+  # prompt guide that step is research/synthesis, not coding, so it
+  # defaults to gpt-5.4 rather than gpt-5.3-codex. Override via
+  # vars.WORKFLOW_DIAGNOSE_MODEL on a per-repo basis.
+  MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-5.4' }}
+  MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'medium' }}
+  # Repair phases are narrow execution-heavy tasks (apply a known fix to a
+  # known location). Per the guide we drop reasoning to low for them.
+  MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
@@ -443,7 +453,7 @@ jobs:
             fi
           done
 
-          for f in codex_system_instructions.md ai_pipeline.md; do
+          for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
@@ -862,78 +872,43 @@ jobs:
 
           Your task is to implement the approved implementation plan.
 
-          IMPORTANT: The system instructions, AI pipeline spec, and agents.md are provided
-          ABOVE in this prompt. Do NOT read pre_assembled_static.txt or any of the individual
-          source files — they are already loaded.
+          Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
 
-          The implementation context (issue description, clarification answers, approved
-          plan, and comments) is provided BELOW at the end of this prompt — do NOT read
-          implementation_context.txt separately.
+          The system context (`unattended_system_instructions.md`) above already
+          defines the persistence rule, edit-tool discipline (apply_patch first,
+          fallbacks, the gpt-5.3-codex#11151 carve-out), no-revert /
+          no-destructive-git rules, and parallel-reads guidance. Apply them.
 
-          Implement the approved implementation plan. Modify only the files the plan requires; keep changes minimal and safe.
+          Efficiency:
+          - Aim to keep total tool calls (MCP + shell exec combined) under
+            TOOL_CALL_BUDGET. For large refactors that legitimately need more,
+            exceeding the budget is acceptable — it is a guideline, not a cap.
+          - Read targeted line ranges via the read tool when available; fall
+            back to shell only when the tool surface does not cover the case.
+            When you need multiple files, request them in parallel via the
+            read tool.
+          - Do not re-read the same file region; do not run `git diff` to
+            display your own changes at end of run (the CI pipeline handles
+            commit/diff reporting). Intermediate `git diff --stat` scoped to
+            the edited file is fine.
+          - Output repository changes only — no progress/status narration.
 
-          EFFICIENCY RULES (MANDATORY — reduces token waste):
-          - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
-            request large ranges speculatively. Use targeted line
-            ranges (e.g. sed -n '10,30p') instead of full-file reads.
-          - Never read the same file region twice. Plan your reads upfront.
-          - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
-            For large refactors that touch many files, exceeding the budget is acceptable —
-            the budget is a guideline to prevent waste, not a hard cap.
-          - Batch shell searches with && or ;.
-          - Do NOT run `git diff` to display your own changes at the end of the
-            run. The CI pipeline handles commit and diff reporting separately.
-            (Intermediate `git diff --stat` checks scoped to the edited file
-            during edit verification — see EDIT TOOL DISCIPLINE below — are
-            fine; this prohibition is about end-of-run change reporting only.)
-          - Do NOT emit progress/status messages. Output ONLY repository changes.
-
-          EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
-          - `apply_patch` is the preferred write tool for surgical edits to existing
-            source files (.sol, .ts, .py, .js, .go, .rs, .java, .json, etc.) — it
-            produces the cleanest diff and the smallest blast radius.
-          - If `apply_patch` does not land on a particular hunk, fall back to your
-            best judgment: a different `apply_patch` shape, a shell heredoc or
-            `printf` redirected to the target file for fully-specified
-            plain-text files (.txt, .csv, small data fixtures), or any other
-            write tool you have available. Pick whatever gets the bytes onto
-            disk this turn — what matters is that the file actually changes.
-          - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
-            source — they exit 0 even when the regex misses, leaving the
-            file unchanged. After ANY shell write, verify with
-            `git diff --stat` (scoped to the edited file as needed); if zero
-            lines changed, switch tools instead of retrying the same regex
-            shape.
-          - Returning an empty completion or a final assistant message that only
-            describes the fix ("I will apply_patch …", "applying the requested
-            edit now", "the resolution is straightforward") is a FAILURE. The
-            workflow's stuck-detection counts these as no-actionable-output and
-            bails after 2 consecutive attempts. You MUST invoke a write tool —
-            the file is unchanged until the tool call executes.
-          - Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
-            invocation without emitting the tool call on some inputs
-            (openai/codex#11151). The fallback paths above exist for that case.
-
-          CONFLICT DETECTION:
-          - Flag any factual conflicts between the implementation plan and the actual
-            codebase (e.g., a function name in the plan doesn't match the code, a file
-            path referenced in the plan doesn't exist, or an API signature differs).
-          - When a conflict is found, note it clearly in your output and proceed with the
-            codebase truth (not the plan's assumption).
+          Conflict detection: if the plan's facts conflict with the actual
+          codebase (function name mismatch, file path absent, API signature
+          differs), proceed with the codebase truth and note the conflict in
+          your output.
 
           Test verification:
-
-          - If `pytest` is not installed, install it via `pip install pytest` before running.
-          - When running `npm test`, treat "Missing script" errors as a pass (the project
-            has no tests defined), but treat any other test failure as a real error.
+          - If `pytest` is not installed, install it via `pip install pytest`.
+          - For `npm test`, treat "Missing script" errors as a pass; treat any
+            other test failure as a real error.
 
           Restrictions:
-
-          - Do not ask clarification questions.
+          - Do not ask clarification questions (unattended runtime).
           {{WORKFLOW_EDIT_RESTRICTION}}
-          - Do not modify ai_pipeline.md or codex_system_instructions.md.
+          - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
 
-          Your output should be repository changes only.
+          Output: repository changes only.
           EOF
 
           # Build prompt: static context + instructions + dynamic implementation context,
@@ -2043,9 +2018,9 @@ jobs:
           # the commit if either:
           #
           #   (a) any deletion touches the canonical workflow-source list
-          #       (agents.md, ai_pipeline.md, codex_system_instructions.md,
-          #        unattended_llm_system_instructions.md, prompts/**,
-          #        scripts/**, .github/ai/**) and ALLOW_WORKFLOW_EDITS is
+          #       (agents.md, ai_pipeline.md, unattended_system_instructions.md,
+          #        CLAUDE.md, prompts/**, scripts/**, .github/ai/**) and
+          #       ALLOW_WORKFLOW_EDITS is
           #       not set to 'true'. Even on self-repo runs, deleting any
           #       of these files is almost never what an issue asked for;
           #       legitimate workflow-editing issues must opt in.
@@ -2065,7 +2040,7 @@ jobs:
           deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
           if [ -n "${deleted_staged}" ]; then
             canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
-              | grep -E '^(agents\.md|ai_pipeline\.md|codex_system_instructions\.md|unattended_llm_system_instructions\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
+              | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
             threshold="${BULK_DELETE_THRESHOLD:-3}"
@@ -3159,6 +3134,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           JOB_STATUS: ${{ job.status }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Diagnose is research/synthesis (parse stderr+diff, emit JSON)
+          # rather than coding, so it runs on gpt-5.4 instead of
+          # gpt-5.3-codex. The script reads MODEL_DIAGNOSE first and
+          # falls back to MODEL_EDITOR for backward compatibility.
+          MODEL_DIAGNOSE: ${{ env.MODEL_DIAGNOSE }}
+          MODEL_DIAGNOSE_REASONING_EFFORT: ${{ env.MODEL_DIAGNOSE_REASONING_EFFORT }}
         run: |
           set -euo pipefail
           bash scripts/implement_diagnose_post_codex_failure.sh

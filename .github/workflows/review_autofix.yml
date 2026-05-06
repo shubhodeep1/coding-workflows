@@ -97,8 +97,16 @@ env:
     qwen/qwen3.6-plus
     x-ai/grok-4.1-fast
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  # Reviewer is research-heavy (read PR diff + cross-check against repo
+  # state, emit grounded findings) → medium per the OpenAI prompt guide.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'medium' }}
+  REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}
+  # Editor (codex apply-fixes loop) — a Switch-reasoning step later in
+  # this workflow already drops the editor's runtime reasoning to "low"
+  # (execution-heavy: apply known fixes). Keep this knob configurable
+  # for repos that want to override.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'medium' }}
+  EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
@@ -869,8 +877,8 @@ jobs:
             echo "SUPPORT_PROMPTS_DIR=${SUPPORT_PROMPTS_DIR}"
             echo "SUPPORT_AI_MEMORY_DIR=${SUPPORT_AI_MEMORY_DIR}"
             echo "IS_WORKFLOW_SOURCE_REPO=${IS_WORKFLOW_SOURCE_REPO}"
-            echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_llm_system_instructions.md"
-            echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/codex_system_instructions.md"
+            echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
+            echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
@@ -946,7 +954,7 @@ jobs:
             echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
           fi
 
-          for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
+          for f in unattended_system_instructions.md; do
             target_path="${SUPPORT_ROOT_DIR}/${f}"
             if [ ! -f "${target_path}" ]; then
               src=".codex-workflow-src/${f}"
@@ -1193,7 +1201,7 @@ jobs:
           set -euo pipefail
 
           if [ ! -s "${SUPPORT_INSTRUCTIONS_FILE}" ]; then
-            echo "Missing required unattended_llm_system_instructions.md"
+            echo "Missing required unattended_system_instructions.md"
             exit 1
           fi
 
