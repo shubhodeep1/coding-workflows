@@ -128,7 +128,7 @@ and `prompts/mode-*.txt`:
    sub-state vocabulary (`PreparingWorkspace`, `BuildingPrompt`, etc.) and
    no consolidated per-tick snapshot.
 8. **Policy surface** is split across `CLAUDE.md`, `agents.md`,
-   `codex_system_instructions.md`, `unattended_llm_system_instructions.md`,
+   `unattended_system_instructions.md`
    ~25 files in `prompts/`, env vars in `.github/workflows/*.yml`, and
    per-repo `.ai/validate.yml`. No single in-repo overlay file.
 
@@ -485,7 +485,7 @@ exhausts. The same applies to `ai:implementing` and
    `${RUNTIME_DIR}/running_runs_by_state.json` for child scripts to
    consume) so per-issue dispatch decisions are O(1) lookups, not
    per-issue API calls. This honors the API-hygiene rule in
-   `codex_system_instructions.md` §14 (don't fan out API calls inside
+   `unattended_system_instructions.md` §14 (don't fan out API calls inside
    per-issue loops).
 3. Before dispatching a phase action for an issue in state S, consult
    the cycle-local map. If the count for state S is at-or-over cap,
@@ -795,8 +795,8 @@ reconstructed from the ledger alone by filtering on `kind=run_substate`.
 
 ### Non-Goals
 
-- Replacing `CLAUDE.md`, `agents.md`, `codex_system_instructions.md`,
-  or `unattended_llm_system_instructions.md`. These remain the
+- Replacing `CLAUDE.md`, `agents.md`, `unattended_system_instructions.md`
+  or `unattended_system_instructions.md`. These remain the
   authoritative system instructions; `WORKFLOW.md` is an **overlay**
   with a narrow allowed-key schema.
 - Hot-reload. GitHub Actions checks out the latest default branch on
@@ -1050,7 +1050,7 @@ Recommended sequencing:
   flag, default value, and one-paragraph operator guidance. The
   `agents.md` quick-reference table gains rows for the new sub-state
   vocabulary (W4) and the overlay schema (U1) on landing.
-- **Backward compatibility.** Per `codex_system_instructions.md` §6
+- **Backward compatibility.** Per `unattended_system_instructions.md` §6
   (naming immutability), no existing workflow input, env var, or
   label is renamed by this plan. New env vars are introduced
   (listed per chunk) and old ones are kept until at least one full

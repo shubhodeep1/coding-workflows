@@ -12,11 +12,22 @@
 # via a tool call) to avoid wasting a tool call round-trip and the token
 # overhead of a tool response envelope.
 #
-# All three phases now share the same trim shape: the full
-# unattended_system_instructions.md (which is already trimmed for unattended
-# codex use — no STOP-and-ASK rules, no FINAL REMINDER), plus a phase-trimmed
-# slice of ai_pipeline.md, plus agents.md (canonical + consumer) and a
-# README.md trim for non-implement phases.
+# All three phases share the same shape: the full
+# unattended_system_instructions.md (already trimmed for unattended codex
+# use — no STOP-and-ASK rules, no FINAL REMINDER), plus a phase-trimmed
+# slice of ai_pipeline.md, plus agents.md, plus a README.md trim for
+# non-implement phases.
+#
+# agents.md handling differs by phase:
+#   - clarify, plan: emit only the consumer repo's local agents.md
+#     (when present).
+#   - implement: emit the canonical agents_canonical.md staged from
+#     .codex-workflow-src (when "${RUNTIME_DIR}/agents_canonical.md" is
+#     present, i.e. the consumer-repo flow), followed by the consumer's
+#     local agents.md (when present). Both are emitted because the
+#     implement phase is the one that actually edits files and benefits
+#     from the canonical repo-architecture facts on top of the consumer's
+#     own.
 #
 # Phase-specific ai_pipeline.md trims:
 #   clarify   — Phase 1 only (stop at "## Phase 2").

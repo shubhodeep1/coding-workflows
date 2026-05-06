@@ -24,7 +24,12 @@ env:
   # Orchestrate (issue decomposition) is research-heavy → medium per
   # the OpenAI prompt guide.
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'medium' }}
-  MODEL_VERBOSITY: ${{ vars.VERBOSITY_ORCHESTRATE || 'medium' }}
+  # gpt-5.4 paths default to low verbosity per agents.md model table.
+  # Output is structured JSON (`orchestrate_decomposition.v1` schema), which
+  # is not verbosity-sensitive — the schema controls shape regardless. Low
+  # keeps free-form text in `project_summary` / issue bodies concise and
+  # information-dense per the OpenAI prompt guide.
+  MODEL_VERBOSITY: ${{ vars.VERBOSITY_ORCHESTRATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
 jobs:

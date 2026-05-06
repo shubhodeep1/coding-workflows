@@ -6,15 +6,18 @@ review_log()
 	printf 'stage=consolidator %s\n' "$*" >&2
 }
 
-# Per the OpenAI prompt guide, consolidation/aggregation is a
-# research-heavy synthesis task with a closed output contract; gpt-5.4
-# (full) is the right tier. Was gpt-5.4-mini; bumped to gpt-5.4 to align
-# with the guide's "research-heavy → medium reasoning on full model"
-# recommendation. Override via env if you need to roll back per-repo.
+# Per the OpenAI prompt guide, consolidation/aggregation is a synthesis
+# task with a closed output contract. Model TIER is bumped from
+# gpt-5.4-mini to gpt-5.4 (full) to align with the guide's "synthesis
+# tasks benefit from the full model when prompts are well-engineered".
+# REASONING is intentionally kept at "low" — the input is already a
+# structured reviewer bundle and the output is a fixed-shape issue-block
+# format, so the consolidator is execution-heavy in practice (apply the
+# merge rule; emit blocks). Per the guide: "Start with `none` for
+# execution-heavy workloads… don't treat reasoning effort as the primary
+# way to improve quality; prompt fixes often recover more performance."
+# Override via env if a particular repo wants to escalate reasoning.
 REVIEW_CONSOLIDATOR_MODEL="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4}"
-# Consolidator runs over an already-structured reviewer bundle and
-# emits a closed format. Low reasoning is sufficient and matches the
-# guide's "execution-heavy with closed output → low" pattern.
 REVIEW_CONSOLIDATOR_REASONING="${REVIEW_CONSOLIDATOR_REASONING:-low}"
 REVIEW_CONSOLIDATOR_TIMEOUT_SECS="${REVIEW_CONSOLIDATOR_TIMEOUT_SECS:-300}"
 REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT="${REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT:-16000}"
