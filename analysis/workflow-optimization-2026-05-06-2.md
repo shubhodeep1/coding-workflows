@@ -682,3 +682,148 @@ No workflow currently exceeds the 800 KB file-size early-warning threshold. The 
 | Code modularization | 5 | Large |
 | Expression size reduction | 4 | Large |
 | Medium/Low fixes | 4 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-06)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven local and semantics-preserving enough for direct implementation. `NEEDS_VERIFICATION` means the overlap is real, but a human or follow-up pass must verify freshness/error-handling assumptions before changing it. `RISKY_SKIP` means the redundancy is visible but sits in a polling/race-defense/retry-sensitive path, so it must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:2734-2737`  
+  **Current call count** — `2` calls per poll iteration  
+  **Proposed call count** — `1` call per poll iteration  
+  **Endpoint(s)** — REST `GET /repos/{repo}/actions/runs/{run_id}`  
+  **Evidence** — The loop fetches the same run resource twice, once for `status` and once for `conclusion`:
+
+  ```bash
+  EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.status // ""' 2>/dev/null || echo "")
+  EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.conclusion // ""' 2>/dev/null || echo "")
+  ```
+
+  The same workflow already uses the consolidated pattern elsewhere in later watcher blocks, e.g. `.github/workflows/test-and-mark-stable.yml:3299-3301`:
+
+  ```bash
+  JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+  STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+  CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+  ```
+
+  **Proposed fix** — In the existing-run wait loop inside `.github/workflows/test-and-mark-stable.yml:2711-2742`, replace the paired `gh api ... --jq '.status'` / `gh api ... --jq '.conclusion'` calls with one `JSON=$(gh api ... --jq '{status, conclusion}')`, reusing the same parsing shape already used at `.github/workflows/test-and-mark-stable.yml:3299-3301`, `3357-3359`, `3418-3420`, `3481-3483`, `3595-3597`, and `3779-3781`.  
+  **Safety rationale** — This is inside a 5-second polling loop for a recovery/verification path, so despite exact endpoint overlap it matches the `RISKY_SKIP` trigger for looped poll semantics.  
+  **Downstream signal** — Do not auto-implement; manual review must confirm unchanged timeout behavior, unchanged log lines, and unchanged handling when one field fetch would have failed independently.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:65-80` and `.github/workflows/orchestrate_clarify_respond.yml:404-415`  
+  **Current call count** — `2` unconditional child-issue reads, plus `2` tracking-issue reads when `TRACKING_NUM` resolves  
+  **Proposed call count** — `1` unconditional child-issue read, plus `1` tracking-issue read when `TRACKING_NUM` resolves  
+  **Endpoint(s)** — REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The first step fetches the child issue, then optionally fetches the tracking issue title:
+
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+
+  Later, the same job re-fetches the same child issue and the same tracking issue:
+
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+
+  **Proposed fix** — Extend the `Check orchestrator metadata` step to persist the full child-issue payload and, when `TRACKING_NUM` is present, the full tracking-issue payload into temp files under `$RUNNER_TEMP`; then update the later `Fetch issue metadata` step to read those cached payloads before falling back to `gh_retry gh api`.  
+  **Safety rationale** — The endpoint overlap is exact and it is the same workflow job, but the issue/tracking bodies are user-editable between steps, so freshness assumptions need validation before reuse is made authoritative.  
+  **Downstream signal** — Verify on an orchestrator-managed issue that no step between lines 65 and 415 requires fresher issue/tracking text than the initial read, then compare prompt inputs before/after reuse on one real run.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:428-435`  
+  **Current call count** — `2` calls  
+  **Proposed call count** — `1` call  
+  **Endpoint(s)** — REST `POST /repos/{repo}/issues` and REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The step creates the issue, extracts only the number, then immediately re-reads the issue just to obtain `html_url`:
+
+  ```bash
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+
+  **Proposed fix** — In the `Create issue` step, capture the full create response once (JSON string or temp file), parse both `.number` and `.html_url` from that response, and remove the immediate follow-up `GET /issues/{ISSUE_NUMBER}`.  
+  **Safety rationale** — The second call is an adjacent re-fetch of data that should already be available from the create response, but eliminating it changes the current “POST succeeded, GET failed” failure mode, so the harness behavior should be verified first.  
+  **Downstream signal** — Verify with one dry run that the create-issue response always exposes `number` and `html_url`, and confirm the release-gate step should no longer fail solely because a follow-up read would have failed.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File path and line ranges** — `scripts/review_rb_judge.sh:146-170` and `scripts/review_rb_judge.sh:241-244`  
+  **Current call count** — `N` issue-body reads, where `N` is the number of linked issues  
+  **Proposed call count** — `1` issue-body read  
+  **Endpoint(s)** — REST `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — The loop fetches every linked issue body, but only the first body is ever retained for downstream use:
+
+  ```bash
+  FIRST_ISSUE=""
+  FIRST_ISSUE_BODY=""
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    if [ -z "${FIRST_ISSUE}" ]; then
+      FIRST_ISSUE="${issue_number}"
+    fi
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if [ -z "${FIRST_ISSUE_BODY}" ]; then
+      FIRST_ISSUE_BODY="${BODY}"
+    fi
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+
+  Later, only `FIRST_ISSUE_BODY` is consumed:
+
+  ```bash
+  if [ -n "${FIRST_ISSUE}" ]; then
+    echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
+    echo
+    echo "${FIRST_ISSUE_BODY}"
+  fi
+  ```
+
+  After the first successful assignment, subsequent `BODY=...` calls are not read by any downstream path in this block.  
+  **Proposed fix** — In the linked-issue context block of `scripts/review_rb_judge.sh`, fetch the issue body only while `FIRST_ISSUE_BODY` is empty (or fetch once immediately after `FIRST_ISSUE` is chosen) and stop doing per-issue body lookups for later linked issues.  
+  **Safety rationale** — The same script only consumes the first linked issue body, with no pagination, no retry-loop semantics, and no downstream use of later `BODY` values, so removing the extra reads preserves behavior.  
+  **Downstream signal** — Implement directly: fetch only the first linked issue body and skip all subsequent per-issue body reads in that block.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `NEEDS_VERIFICATION` — The fallback `gh issue view` N+1 in `.github/workflows/review_autofix.yml` is real, but a batched GraphQL replacement needs validation for fallback ordering and fail-open behavior before implementation.
+- `BATCH-001`: `RISKY_SKIP` — The `gh run list` consolidation target is inside `scripts/orchestrate_poll_process.sh`, which this pass treats as race-defense code requiring manual review.
+- `API-002`: `NEEDS_VERIFICATION` — Reusing earlier orchestrator classification data in `.github/workflows/issue_pr_status.yml` is directionally correct, but the alert step currently gets a second chance to recover from earlier transient fetch failures.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+- `DEAD-API-001`
