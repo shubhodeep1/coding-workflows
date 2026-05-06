@@ -715,3 +715,153 @@
 | `25425170301` | `ci` | 563 | `Validate process cross-cycle escalation unit tests` |
 | `25425264723` | `ci` | 580 | `Validate process cross-cycle escalation unit tests` |
 | `25414664546` | `nightly_validation_selftest` | 90 | `validation-selftest` summary: fixtures=3, passed=1, failed=2 |
+
+## Deep Audit — Workflows & Scripts (2026-05-06)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — BUG-001  
+  **File path** — `.github/workflows/orchestrate_clarify_respond.yml:907-926`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — This step runs under `set -euo pipefail`, but `LOOP_GUARD_JSON="$(memory_clarify_loop_guard ...)"` is executed without `|| true` or a fallback payload. If `memory_clarify_loop_guard` exits non-zero, the shell exits before the later parsing/defaulting logic and before the backup comment-count guard at lines 930-949 can run. That contradicts the documented fail-open intent around the same block and can turn a memory-side transient into a hard workflow failure.  
+  **Recommended fix** — Wrap the call in an explicit fail-open branch, e.g. capture stderr to a temp file and on failure synthesize a minimal JSON payload with `blocked=false`, `reason=memory_guard_error`, and `cycle=1`. Prefer implementing that fallback in `scripts/memory_helpers.sh` so other workflows inherit the same contract.
+
+- **ID** — BUG-002  
+  **File path** — `scripts/validate_process.sh:2934-2948`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — `FIX_URL_OUTPUT="$(gh_retry gh issue create ...)"` is a bare assignment under `set -euo pipefail`. If `gh issue create` returns non-zero, the shell exits immediately and the intended recovery path at lines 2942-2948 never runs. As written, the fallback only handles the narrower case where `gh issue create` exits 0 but the URL cannot be parsed.  
+  **Recommended fix** — Convert the create into an explicit conditional: `if ! FIX_URL_OUTPUT="$(...)"`; then run the existing failure summary/comment/label logic. Reuse the surrounding `gh_retry` pattern and keep stdout/stderr separate so the parser only sees successful command output.
+
+_No additional token-leak or shell-injection issue met the evidence bar from the audited workflows/scripts._
+
+### Section 2: GitHub API Call Redundancy Audit
+
+_Only additional line-level candidates not already covered by the in-progress report are listed here._
+
+- **ID** — API-001  
+  **File path** — `.github/workflows/issue_pr_status.yml:188-193,286-320,503-512`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The same job fetches linked issues three times in different shapes: (1) `closingIssuesReferences` numbers only, (2) a second GraphQL batch for labels/body to classify orchestrator-managed vs tracking issues, then (3) per-linked-issue `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""'` calls just to suppress Telegram alerts for orchestrated issues. The third pass re-fetches data already available from the classification batch.  
+  **Current call count** — `2 + N` calls on the common path (`1` GraphQL to get numbers, `1` GraphQL batch to classify, then `N` REST reads in the alert step).  
+  **Proposed call count after fix** — `1` call if the first GraphQL fetch is extended to return `number + labels + body` and its result is exported for later steps; `2` calls if you keep the current classification batch separate but reuse its result in the alert step.  
+  **Existing batching pattern to extend** — `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`  
+  **Recommended fix** — Collapse the initial `closingIssuesReferences` query to fetch the fields the later steps need, write the managed/tracking classification to `$GITHUB_ENV` or step outputs, and make the alert step read that cache instead of re-reading each issue body.
+
+- **ID** — API-002  
+  **File path** — `.github/workflows/review_autofix.yml:497-529`  
+  **Severity** — Low  
+  **Category tag** — `api-redundancy`  
+  **Description** — In the post-merge validate-dispatch job, when `closingIssuesReferences` is empty the fallback parses issue numbers from PR title/body and then loops over them with `gh issue view ... --json labels` to rediscover `ai:orchestrator-validate-required`. That makes the fallback path scale as `2 + N` calls for `N` candidate issues. [NEEDS VERIFICATION]  
+  **Current call count** — `2 + N` calls in the fallback path (`1` GraphQL linked-issue attempt, `1` PR metadata read, `N` per-issue label reads).  
+  **Proposed call count after fix** — `3` total calls for up to a full alias batch (`1` linked-issue attempt, `1` PR metadata read, `1` batched issue-label query), or `2` total if the PR title/body from the event payload is reused and the extra PR metadata read is skipped.  
+  **Existing batching pattern to extend** — `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`  
+  **Recommended fix** — After regex fallback produces candidate issue numbers, batch-fetch their labels with a single aliased GraphQL query and test the label locally instead of calling `gh issue view` inside the loop.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — DUP-001  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:453-489,578-612,771-811,1220-1239,1699-1786,2358-2379,4403-4426`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — `test-and-mark-stable.yml` reimplements near-identical GitHub API retry/poll helpers multiple times. The early phase waits duplicate the same `gh_api_safe()` and `capture_run_id()` logic almost verbatim, while later blocks drift into slightly different wrappers (`gh_api_with_retry`, `_gh_retry`) with different retry budgets and stderr behavior. That drift makes the workflow harder to reason about and guarantees fixes land unevenly.  
+  **Recommended fix** — Extract a shared helper module such as `scripts/test_and_mark_stable_helpers.sh` with signatures like `gh_api_safe <endpoint> [gh args...]`, `capture_run_id <repo> <created_after> <name_regex> [branch]`, and `wait_for_run_completion <repo> <run_id> <deadline_secs>`. Update the phase-2/3/4 wait steps, cancel-on-close verification, alt-model capture, and SHA-status checks to source that module.
+
+- **ID** — DUP-002  
+  **File path** — `.github/workflows/review_autofix.yml:596-599,3734-3747,3857-3868,4604-4610; scripts/label_helpers.sh:110-143`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — `review_autofix.yml` defines four separate inline `ensure_label_exists()` implementations and many ad-hoc `gh_retry() { "$@"; }` fallbacks instead of reusing the canonical helpers in `scripts/label_helpers.sh` and `scripts/gh_helpers.sh`. The inline variants differ in metadata and in how they surface failures, so the same label operation is maintained in multiple places.  
+  **Recommended fix** — Make the late-stage jobs source `scripts/label_helpers.sh` wherever the support files are already present, or add a lightweight exported helper such as `ensure_label_exists_light <label> <repo>` to `scripts/label_helpers.sh`. Callers to update: deterministic-skip label setup, linked-issue ready-to-merge labeling, review-blocked labeling, and final status propagation paths.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID** — EXPR-001  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1188-1558`  
+  **Severity** — High  
+  **Category tag** — `expression-limit`  
+  **Description** — This interpolated `run:` block is already estimated at **22,588 characters**, which is **1,588 characters over** GitHub Actions’ 21,000-character expression cap. It contains multiple `${{ }}` substitutions inside a large inline polling script, so it is already in runner-rejection territory if GitHub treats the full interpolated body as one template expression, as documented in the repo’s prior incidents.  
+  **Recommended fix** — Extract the entire review-wait loop to `scripts/test_and_mark_stable_helpers.sh` (preferred), then pass only small env vars/arguments from YAML.
+
+- **ID** — EXPR-002  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:1645-2049`  
+  **Severity** — High  
+  **Category tag** — `expression-limit`  
+  **Description** — This interpolated canary-verification `run:` block is estimated at **21,289 characters**, leaving **-289 characters** of headroom. Like EXPR-001, it embeds a large shell program plus several `${{ }}` substitutions and is effectively at the hard limit already.  
+  **Recommended fix** — Move the canary fetch / retry / pytest orchestration into an external script under `scripts/`, and keep the workflow step to argument wiring and output collection only.
+
+- **ID** — EXPR-003  
+  **File path** — `.github/workflows/validate.yml:189-481`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The support-bootstrap `run:` block is estimated at **16,491 characters**, leaving **4,509 characters** of headroom. It is below the hard cap, but the embedded file list and repeated `${{ github.repository }}` / `${{ github.sha }}` logic make it vulnerable to incremental growth.  
+  **Recommended fix** — Extract the bootstrap/copy logic to a dedicated script, or move the long template-file manifest to a tracked file under `scripts/` or `workflow-templates/` and iterate over that file at runtime.
+
+- **ID** — EXPR-004  
+  **File path** — `.github/workflows/review_autofix.yml:1273-1594`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The PR-context snapshot block is estimated at **16,438 characters**, leaving **4,562 characters** of headroom. It mixes retry helpers, JSON shaping, and multiple `${{ github.* }}` substitutions in one inline shell body.  
+  **Recommended fix** — Move the snapshot assembly to an external script under `scripts/` and feed the few GitHub context values in via env vars.
+
+- **ID** — EXPR-005  
+  **File path** — `.github/workflows/orchestrate_clarify_respond.yml:818-1100`  
+  **Severity** — Medium  
+  **Category tag** — `expression-limit`  
+  **Description** — The clarify-response posting block is estimated at **15,141 characters**, leaving **5,859 characters** of headroom. The current size is still workable, but the inline loop-break and memory-ledger JSON assembly make this a growth-risk block.  
+  **Recommended fix** — Extract the answer/loop-break posting flow to a script (preferred), or split the step into smaller phases: claim/guard evaluation, loop-break handling, and answer posting.
+
+- No workflow file exceeds the **800 KB** early-warning threshold. The largest audited workflow files are `review_autofix.yml` (**279,655 chars**) and `test-and-mark-stable.yml` (**264,083 chars**).
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — DEAD-001  
+  **File path** — `scripts/orchestrate_lib.py:988-1371`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `parse_phase_failure_markers`, `resolve_label_repair_evidence`, and `choose_most_advanced_conclusive_evidence` are defined here, but repo-wide references resolve only inside `scripts/orchestrate_lib.py`; no audited workflow or shell script invokes them. This matches the documented “reserved / not yet wired” state, so they currently add maintenance surface without affecting runtime.  
+  **Recommended fix** — Either wire these helpers into the poller reconciliation path in `scripts/orchestrate_poll_process.sh` or move them behind a dedicated experimental module/test harness until rollout resumes.
+
+- **ID** — CONSIST-001  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:455-467,578-590,771-783,1220-1239,2358-2379,4403-4426; .github/workflows/cancel_on_pr_close.yml:40-67; .github/workflows/orchestrate_poll.yml:84-104; .github/workflows/mark-stable.yml:322-349,471-498; .github/workflows/comprehensive-test-and-release.yml:72-92,315-334`  
+  **Severity** — Medium  
+  **Category tag** — `consistency`  
+  **Description** — GitHub API retry wrappers vary materially across workflows: some wrappers fail open with empty output, some hard-error on the first non-rate-limit failure, and some implement custom rate-limit handling with different retry ceilings. The same API outage therefore produces different behavior depending on which workflow hits it.  
+  **Recommended fix** — Standardize on `scripts/gh_helpers.sh` (`gh_retry`, `_safe_gh_jq`, and related helpers) and keep workflow-local code limited to policy decisions, not transport/retry behavior.
+
+- **ID** — SHELL-001  
+  **File path** — `scripts/validate_process.sh:195-204`  
+  **Severity** — Low  
+  **Category tag** — `shellcheck`  
+  **Description** — Local `shellcheck -S warning` reports **SC2155** on `local msg="$1$(_tg_link_suffix)"`. Declaring and assigning in one statement can mask the command substitution’s exit status, so `_tg_link_suffix` failures are suppressed under `set -e`.  
+  **Recommended fix** — Split the statement into separate lines: `local msg` followed by `msg="$1$(_tg_link_suffix)"`, and keep the existing notification flow unchanged.
+
+- **ID** — DEAD-002  
+  **File path** — `scripts/review_run_reviewers.sh:129-133`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `probe_prompt` is declared in the local variable list but never assigned or read. Local shellcheck also flags it as **SC2034** (unused variable).  
+  **Recommended fix** — Remove `probe_prompt` from the declaration list, or wire it into the cache-probe path if the variable was meant to hold prompt contents rather than just the prompt file path.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | EXPR-001, EXPR-002 |
+| Medium | 9 | BUG-001, BUG-002, API-001, DUP-001, DUP-002, EXPR-003, EXPR-004, EXPR-005, CONSIST-001 |
+| Low | 4 | API-002, DEAD-001, SHELL-001, DEAD-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2 | Medium |
+| Code modularization | 4 | Large |
+| Expression size reduction | 4 | Large |
+| Medium/Low fixes | 6 | Medium |
