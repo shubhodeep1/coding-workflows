@@ -1571,6 +1571,117 @@ def test_codex_empty_output_streak_bail_and_flag() -> None:
 	)
 
 
+def _extract_announce_edit_regex() -> str:
+	"""Pull the live ANNOUNCE_EDIT_REGEX value from implement.yml.
+
+	Mirrors the workflow's own assignment: `ANNOUNCE_EDIT_REGEX='...'`
+	on a single line inside the "Run Codex implementation" step. Asserting
+	against the real string (not a copy) is what makes this a contract
+	test — a regex regression in the workflow trips the test.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	match = re.search(
+		r"^\s*ANNOUNCE_EDIT_REGEX='(?P<regex>[^']+)'\s*$",
+		codex_block,
+		re.MULTILINE,
+	)
+	assert match is not None, (
+		"ANNOUNCE_EDIT_REGEX must be defined as a single-quoted single-line "
+		"shell assignment inside the 'Run Codex implementation' step so the "
+		"contract test can extract its value verbatim"
+	)
+	return match.group("regex")
+
+
+def _grep_matches(regex: str, text: str) -> bool:
+	"""Return True iff `grep -iE <regex>` matches `text`.
+
+	Matches the workflow's actual matcher (`grep -qEi`) byte-for-byte so
+	any divergence between Python's `re` engine (no POSIX character
+	classes by default) and POSIX ERE doesn't bite. Stdin-fed so no temp
+	files leak.
+	"""
+	result = subprocess.run(
+		["grep", "-iE", regex],
+		input=text,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	# grep returns 0 on match, 1 on no-match, >1 on error.
+	assert result.returncode in (0, 1), (
+		f"grep error rc={result.returncode}: {result.stderr.strip()}"
+	)
+	return result.returncode == 0
+
+
+def test_announce_edit_regex_contract() -> None:
+	"""Pin PR #2196: ANNOUNCE_EDIT_REGEX must catch the stuck-intent
+	narration patterns observed across historical failure runs AND the
+	new patterns from fun-token-multi-chain issue #201, while leaving
+	benign control prose un-flagged.
+
+	The workflow logic at implement.yml:1361 / :1397 / :1434 only fires
+	this regex on attempts that already have an empty worktree delta
+	(or empty stdout), so false positives don't regress correctness —
+	but a false negative resets `empty_streak` to 0 and lets the agent
+	loop burn the full retry budget on identical no-op repetitions.
+	Run-25467038876-style failures (issue #201, all 5 attempts, 5+ min
+	wasted) regress this contract by exactly that mechanism.
+	"""
+	regex = _extract_announce_edit_regex()
+
+	# Strings the regex MUST match.
+	#
+	# Historical patterns (do not regress):
+	#   - bare apply_patch token, "applying the patch", `i'll apply`,
+	#     `will apply`, "patching `<path>`", "Applying the requested
+	#     overwrite to <path>" (PR #1906 / run 25223836137 / issue
+	#     #1909).
+	# New patterns from issue #201:
+	#   - "Applying the one-file edit now ..." (attempts 2 + 5)
+	#   - "Implementing the one-file cleanup now ..." (attempt 3)
+	#   - "Applying the planned one-file edit now ..." (attempt 4 —
+	#     matched the pre-PR-#2196 regex via the substring "applying
+	#     the plan", but listed for completeness so a future regex
+	#     reshuffle that drops "plan" doesn't regress this case).
+	must_match = [
+		"I'll apply_patch to fix this.",
+		"applying the patch now",
+		"applying a minimal change",
+		"patching `foo.py`",
+		"editing src/main.ts",
+		"I'll apply the patch",
+		"will apply the implementation",
+		"Applying the requested overwrite to tests/e2e_smoke_canary.txt now, with no other file changes.",
+		"Applying the one-file edit now by removing the redundant `FunOFT._debitView(...)` override in `contracts/FunOFT.sol`.",
+		"Implementing the one-file cleanup now by removing the redundant `_debitView(...)` override from `contracts/FunOFT.sol`, then I'll verify the diff landed.",
+		"Applying the planned one-file edit now by removing the redundant `_debitView(...)` override from `contracts/FunOFT.sol`, then I'll verify the diff landed.",
+		"Applying the one-file edit now by removing the redundant `_debitView(...)` override from `contracts/FunOFT.sol`, then verifying the diff landed.",
+	]
+	for s in must_match:
+		assert _grep_matches(regex, s), (
+			f"ANNOUNCE_EDIT_REGEX must match stuck-intent narration: {s!r}"
+		)
+
+	# Benign control prose that MUST NOT match. False positives on these
+	# would still be safe at the call sites (gated on empty-delta), but
+	# matching arbitrary non-edit-narration prose would mask genuine
+	# diagnostic signal in the workflow log, so the contract enforces
+	# minimum precision.
+	must_not_match = [
+		"The user is happy with the result.",
+		"This is a normal sentence with no edits announced.",
+		"codex",
+		"mcp startup: no servers",
+		"Reading prompt from stdin...",
+	]
+	for s in must_not_match:
+		assert not _grep_matches(regex, s), (
+			f"ANNOUNCE_EDIT_REGEX must not match benign prose: {s!r}"
+		)
+
+
 def test_salvage_branches_gate_on_substantive_changes() -> None:
 	"""Pin PR #2176: the empty-stdout and watchdog-kill salvage branches
 	must require a non-whitespace worktree change before declaring
