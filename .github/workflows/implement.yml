@@ -946,9 +946,13 @@ jobs:
             the UNATTENDED EXECUTION OVERRIDE block in your context — see its
             §3 ("If a file is missing: continue with available context, note
             the limitation. Never fabricate contents.") and §4 (Unattended
-            Decision Policy). Continue with the available context, record any
-            assumptions inline in your output, and never STOP/ASK on missing
-            context files.
+            Decision Policy). Continue with the available context and never
+            STOP/ASK on missing context files. If a non-obvious assumption is
+            required, encode it as a code comment in the file you're editing
+            (the assumption is then itself a repository change, consistent
+            with "Output ONLY repository changes" / "Your output should be
+            repository changes only" elsewhere in this prompt) — do not emit
+            assumptions as narrative output.
           {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md or codex_system_instructions.md.
 
@@ -1000,11 +1004,34 @@ jobs:
                 }
               }
               {
+                # Section end: peer header at same depth.
+                # Numbered-item end is gated: the body after the "1." prefix
+                # MUST look like a section TITLE, not a path entry. Plans
+                # written as "1. Files likely to change / 1. `src/foo.ts` /
+                # 2. `src/bar.ts`" must keep the section open through the
+                # numbered children — only "2. Functions/modules to
+                # implement" (a multi-word natural-language phrase) should
+                # close it. Heuristic: a numbered line is a section
+                # terminator if its body does NOT begin with a backtick AND
+                # its first whitespace-delimited token is not lower-case
+                # path-like (slash present, lower-case start).
                 end_match = 0
                 if (in_section && orig_line ~ /^[[:space:]]*\*\*[^*]+\*\*[[:space:]]*$/) end_match = 1
                 if (in_section && orig_line ~ /^[[:space:]]{0,3}#+[[:space:]]+[^[:space:]]/) end_match = 1
-                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[.][[:space:]]+[^[:space:]]/) end_match = 1
-                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+[^[:space:]]/) end_match = 1
+                numbered_peer = 0
+                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[.][[:space:]]+[^[:space:]]/) numbered_peer = 1
+                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+[^[:space:]]/) numbered_peer = 1
+                if (numbered_peer) {
+                  numbered_body = orig_line
+                  sub(/^[[:space:]]{0,3}[0-9]+[.][[:space:]]+/, "", numbered_body)
+                  sub(/^[[:space:]]{0,3}[0-9]+[)][[:space:]]+/, "", numbered_body)
+                  numbered_first = numbered_body
+                  sub(/[[:space:]].*/, "", numbered_first)
+                  is_path_entry = 0
+                  if (numbered_body ~ /^`/) is_path_entry = 1
+                  if (numbered_first ~ /^[a-z][A-Za-z0-9._/-]*\// && numbered_first ~ /\./) is_path_entry = 1
+                  if (!is_path_entry) end_match = 1
+                }
                 if (end_match) in_section = 0
               }
               in_section {
