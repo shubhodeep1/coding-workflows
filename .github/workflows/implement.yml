@@ -846,6 +846,8 @@ jobs:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
+          TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
+          TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
@@ -956,27 +958,81 @@ jobs:
           TARGETED_MAX_FILES="${TARGETED_FILE_CONTEXT_MAX_FILES:-10}"
           TARGETED_MAX_BYTES="${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
 
-          # Extract `backticked` paths under the "Files likely to change"
-          # markdown header. Section ends at the next bold header
-          # (`**...**` on its own line) or EOF. Reject absolute paths and
-          # parent-traversal tokens so a malformed plan can't escape the
-          # workspace.
+          # Extract paths from the plan's "Files likely to change" section.
+          # Accepts every section-start form the rest of the workflow already
+          # produces or accepts: bold (`**Files likely to change**`), ATX
+          # heading (`## Files likely to change`), numbered list
+          # (`1. Files likely to change` — the canonical mode-plan.txt form),
+          # plain heading (`Files to change`), and the `1)` numbered variant.
+          # The end of the section is the next peer header at the same depth.
+          # Inside the section, both backticked paths and bare path-like
+          # tokens on list-item lines are extracted; lexical filters reject
+          # absolute paths and parent-traversal tokens. (The follow-up
+          # symlink check below is what actually keeps a malformed plan
+          # from inlining files outside the workspace — the lexical filter
+          # alone is not sufficient.) mawk-compatible: each `if` test is
+          # one statement because mawk does not parse multi-line `if` heads.
           targeted_paths_raw="$(
             awk '
-              BEGIN { in_section = 0 }
-              /^\*\*Files likely to change\*\*[[:space:]]*$/ { in_section = 1; next }
-              in_section && /^\*\*[^*]+\*\*[[:space:]]*$/ { in_section = 0 }
+              {
+                orig_line = $0
+                lc = tolower(orig_line)
+                start_match = 0
+                if (lc ~ /^[[:space:]]{0,3}files[[:space:]]+[^\n]*change/) start_match = 1
+                if (lc ~ /^[[:space:]]{0,3}#+[[:space:]]+files[[:space:]]+[^\n]*change/) start_match = 1
+                if (lc ~ /^[[:space:]]{0,3}\*\*files[[:space:]]+[^\n]*change/) start_match = 1
+                if (lc ~ /^[[:space:]]{0,3}[0-9]+[.][[:space:]]+files[[:space:]]+[^\n]*change/) start_match = 1
+                if (lc ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+files[[:space:]]+[^\n]*change/) start_match = 1
+                if (start_match && !in_section) {
+                  in_section = 1
+                  next
+                }
+              }
+              {
+                end_match = 0
+                if (in_section && orig_line ~ /^[[:space:]]*\*\*[^*]+\*\*[[:space:]]*$/) end_match = 1
+                if (in_section && orig_line ~ /^[[:space:]]{0,3}#+[[:space:]]+[^[:space:]]/) end_match = 1
+                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[.][[:space:]]+[^[:space:]]/) end_match = 1
+                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+[^[:space:]]/) end_match = 1
+                if (end_match) in_section = 0
+              }
               in_section {
-                while (match($0, /`[^`]+`/)) {
-                  token = substr($0, RSTART + 1, RLENGTH - 2)
-                  $0 = substr($0, RSTART + RLENGTH)
-                  if (token ~ /^[A-Za-z0-9._\/-]+$/ && token !~ /^\// && token !~ /\.\./) {
+                tmp = orig_line
+                while (match(tmp, /`[^`]+`/)) {
+                  token = substr(tmp, RSTART + 1, RLENGTH - 2)
+                  tmp = substr(tmp, RSTART + RLENGTH)
+                  if (token ~ /^[A-Za-z0-9._/-]+$/ && token !~ /^\// && token !~ /\.\./) {
                     print token
+                  }
+                }
+                is_list_item = 0
+                if (orig_line ~ /^[[:space:]]*[-*+][[:space:]]+/) is_list_item = 1
+                if (orig_line ~ /^[[:space:]]*[0-9]+[.][[:space:]]+/) is_list_item = 1
+                if (orig_line ~ /^[[:space:]]*[0-9]+[)][[:space:]]+/) is_list_item = 1
+                if (is_list_item) {
+                  body = orig_line
+                  sub(/^[[:space:]]*[-*+][[:space:]]+/, "", body)
+                  sub(/^[[:space:]]*[0-9]+[.][[:space:]]+/, "", body)
+                  sub(/^[[:space:]]*[0-9]+[)][[:space:]]+/, "", body)
+                  n = split(body, words, /[[:space:]]+/)
+                  for (i = 1; i <= n; i++) {
+                    w = words[i]
+                    gsub(/^[`(\[<{"]+/, "", w)
+                    gsub(/[`)\],.;:!?>}"]+$/, "", w)
+                    if (w ~ /^[A-Za-z0-9._/-]+$/ && w ~ /\// && w !~ /^\// && w !~ /\.\./) {
+                      print w
+                    }
                   }
                 }
               }
             ' "${PLAN_FILE}" 2>/dev/null | awk '!seen[$0]++' || true
           )"
+
+          # Workspace-root anchor for the symlink safety check below.
+          # GITHUB_WORKSPACE is set by the runner; fall back to PWD locally.
+          # Resolve once so per-path realpath comparisons are fast and stable.
+          ws_root="${GITHUB_WORKSPACE:-${PWD}}"
+          ws_resolved="$(realpath -e -- "${ws_root}" 2>/dev/null || printf '%s' "${ws_root}")"
 
           inlined_count=0
           inlined_bytes=0
@@ -987,18 +1043,45 @@ jobs:
                 echo "::notice::Targeted file context: ${TARGETED_MAX_FILES}-file cap reached; skipping remaining plan files."
                 break
               fi
-              if [ ! -f "${path}" ]; then
+              if [ ! -e "${path}" ]; then
                 echo "::notice::Targeted file context: skipping plan file '${path}' (not present in worktree; codex will explore if needed)."
                 continue
               fi
-              fsize="$(wc -c < "${path}" 2>/dev/null || echo 0)"
+              # Symlink safety: resolve the path and confirm it stays under
+              # the workspace root. The lexical filters above only screen
+              # the plan-supplied STRING; a checked-in symlink whose name
+              # passes the filter could still point at /proc/self/environ
+              # or any other runner-local file, exfiltrating it into the
+              # prompt sent to OpenRouter. Reject anything that resolves
+              # outside ${ws_resolved}.
+              resolved_path="$(realpath -e -- "${path}" 2>/dev/null || true)"
+              if [ -z "${resolved_path}" ]; then
+                echo "::notice::Targeted file context: skipping plan file '${path}' (realpath failed; possible broken symlink)."
+                continue
+              fi
+              case "${resolved_path}/" in
+                "${ws_resolved}/"*) ;;
+                *)
+                  echo "::warning::Targeted file context: refusing plan file '${path}' — resolves to '${resolved_path}' outside workspace '${ws_resolved}'. Possible symlink escape attempt."
+                  continue
+                  ;;
+              esac
+              if [ ! -f "${resolved_path}" ]; then
+                echo "::notice::Targeted file context: skipping plan file '${path}' — resolves to non-regular file '${resolved_path}'."
+                continue
+              fi
+              fsize="$(wc -c < "${resolved_path}" 2>/dev/null || echo 0)"
               if [ "$((inlined_bytes + fsize))" -gt "${TARGETED_MAX_BYTES}" ]; then
                 echo "::notice::Targeted file context: ${TARGETED_MAX_BYTES}-byte cap would be exceeded by '${path}' (${fsize}B); skipping (already inlined ${inlined_bytes}B)."
                 continue
               fi
+              # Label with the plan-supplied path (what the model should
+              # apply_patch against) but read bytes from the resolved path
+              # so the symlink check above is the source of truth on what
+              # ends up in the prompt.
               {
                 printf -- '----- FILE: %s -----\n' "${path}"
-                cat "${path}"
+                cat "${resolved_path}"
                 printf '\n'
               } >> "${TARGETED_FILES_FILE}"
               inlined_count=$((inlined_count + 1))
