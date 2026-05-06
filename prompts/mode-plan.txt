@@ -19,8 +19,7 @@ Rules:
   questions in the mandatory `Q<ID>` / Choices format (see Mandatory Question
   Format below).
 - If a required input is external and non-synthesizable (branch name,
-  commit SHA, credential, external URL): emit exactly
-  `BLOCKED: <short reason>`.
+  commit SHA, credential, external URL): emit exactly `BLOCKED: <short reason>`.
 - Scope-too-large gate: if the honest estimate exceeds 60 minutes, do NOT
   emit a plan; emit exactly
   `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`.

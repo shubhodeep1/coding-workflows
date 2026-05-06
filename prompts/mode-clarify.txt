@@ -10,8 +10,7 @@ Rules:
 - Batch all blocking questions in one pass. Soft cap: 20 questions
   (highest-impact first).
 - If a required input is external and non-synthesizable by the auto-answerer
-  (branch name, commit SHA, credential, external URL): emit exactly
-  `BLOCKED: <short reason>` instead of `Q<ID>` choices.
+  (branch name, commit SHA, credential, external URL): emit exactly `BLOCKED: <short reason>` instead of `Q<ID>` choices.
 - If external APIs are needed, use provided docs/artefacts; if unavailable,
   ask rather than guess.
 - Do not write code or propose solutions.
