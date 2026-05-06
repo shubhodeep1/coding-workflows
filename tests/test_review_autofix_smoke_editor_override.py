@@ -388,9 +388,9 @@ def test_production_prompt_body_byte_identical_when_smoke_unset_or_no_bait() -> 
 			f"first round (Comment 1) or the heredoc structure has the "
 			f"$(if ...)-leaves-blank-line drift (Comment 2)."
 		)
-		assert body_prod.startswith("INPUT FILE CONTENTS"), (
-			f"Production editor prompt body must start with 'INPUT FILE CONTENTS' "
-			f"on line 1. Got first line: {body_prod.splitlines()[0]!r}. "
+		assert body_prod.startswith("PROMPT INJECTION GUARD"), (
+			f"Production editor prompt body must start with 'PROMPT INJECTION "
+			f"GUARD' on line 1. Got first line: {body_prod.splitlines()[0]!r}. "
 			f"A leading blank line indicates the $(if …) heredoc drift "
 			f"is back."
 		)

@@ -1226,3 +1226,158 @@ autofix_retrigger_has_inflight_peer()
 	fi
 	return 1
 }
+
+# ---------------------------------------------------------------
+# Prompt-input embedding helpers.
+#
+# Editor / reviewer / judge prompts that used to tell the model
+# "Read the following files: - $FOO" pay a per-file exec round-trip
+# (cat) that eats reasoning budget before the model can act.  The
+# helpers below let the prompt builder inline file contents directly
+# while enforcing two invariants the model cannot guarantee on its
+# own:
+#
+#   1. **Per-file cap** — never emit more than `byte_cap` bytes from
+#      a single file (default 100000).  For diff files the caller
+#      should pass a larger cap and `truncate_mode=diff`, which keeps
+#      the head of the file aligned to the previous `^diff --git`
+#      boundary so the model never sees a half-hunk.
+#   2. **Total-prompt budget** — across ALL `_embed_input_file`
+#      invocations in the current shell process the cumulative bytes
+#      stay under `_PROMPT_BUDGET_TOTAL_BYTES` (default 1200000 ≈
+#      300k tokens).  After the budget is exhausted later files are
+#      replaced with an explicit "(omitted — budget exhausted)"
+#      marker so the model knows context is incomplete.
+#
+# The budget tracker uses a state file under $TMPDIR so it survives
+# subshell invocations from $(...) command-substitution inside a
+# heredoc.  Callers should run `_init_prompt_budget` before assembling
+# the prompt and `_cleanup_prompt_budget` after the prompt is written.
+# ---------------------------------------------------------------
+
+# Default total prompt budget (bytes).  Set the env var BEFORE sourcing
+# gh_helpers.sh to override.
+: "${_PROMPT_BUDGET_TOTAL_BYTES:=1200000}"
+
+# Resolve a stable per-process state-file path.  $$ in a subshell is
+# the parent shell's PID, so all $(...) invocations under one parent
+# share the same file.
+_prompt_budget_state_file()
+{
+	printf '%s/_prompt_input_budget_state.%s\n' "${TMPDIR:-/tmp}" "$$"
+}
+
+# Initialise (or reset) the running-total state file.  Optionally
+# override the per-process total cap with the first argument.
+_init_prompt_budget()
+{
+	local _cap="${1:-${_PROMPT_BUDGET_TOTAL_BYTES}}"
+	local _state
+	_state="$(_prompt_budget_state_file)"
+	export _PROMPT_BUDGET_TOTAL_BYTES="${_cap}"
+	printf '0\n' > "${_state}" 2>/dev/null || true
+}
+
+# Remove the per-process state file.  Idempotent.
+_cleanup_prompt_budget()
+{
+	local _state
+	_state="$(_prompt_budget_state_file)"
+	rm -f "${_state}" 2>/dev/null || true
+}
+
+# _embed_input_file <path> [byte_cap] [truncate_mode]
+#
+#   byte_cap        — defaults to 100000.  Caller can pass a larger
+#                     value for the few files that genuinely need it
+#                     (diffs, reviewer bundles, comment dumps).
+#   truncate_mode   — `head` (default) or `diff`.  `diff` mode keeps
+#                     the file truncated at the last whole `^diff --git`
+#                     boundary that fits, so the model never sees a
+#                     half-hunk that would mis-scope its findings.
+#
+# Output is plain bytes safe to drop into a heredoc; no shell expansion
+# is performed on the file content.  When the per-file cap or the
+# global budget is hit, an explicit `[... TRUNCATED ...]` / `(omitted —
+# budget exhausted)` marker is emitted so the model knows the section
+# is incomplete instead of silently believing it saw everything.
+_embed_input_file()
+{
+	local _path="${1:-}"
+	local _cap="${2:-100000}"
+	local _mode="${3:-head}"
+	if [ -z "${_path}" ] || [ ! -e "${_path}" ]; then
+		printf '(missing)\n'
+		return 0
+	fi
+	if [ ! -s "${_path}" ]; then
+		printf '(empty)\n'
+		return 0
+	fi
+
+	# Honour the running total budget.  If we have no remaining
+	# budget at all, emit the omitted-marker and return.
+	local _state _used _budget_remaining _effective_cap
+	_state="$(_prompt_budget_state_file)"
+	_used=0
+	if [ -f "${_state}" ]; then
+		_used="$(cat "${_state}" 2>/dev/null)"
+		[ -z "${_used}" ] && _used=0
+	fi
+	_budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
+	if [ "${_budget_remaining}" -le 0 ]; then
+		printf '(omitted — total prompt input budget %d bytes exhausted; %d bytes already inlined)\n' \
+			"${_PROMPT_BUDGET_TOTAL_BYTES}" "${_used}"
+		return 0
+	fi
+
+	_effective_cap="${_cap}"
+	if [ "${_budget_remaining}" -lt "${_effective_cap}" ]; then
+		_effective_cap="${_budget_remaining}"
+	fi
+
+	local _size
+	_size="$(wc -c < "${_path}" 2>/dev/null | tr -d '[:space:]')"
+	[ -z "${_size}" ] && _size=0
+
+	local _emit_bytes
+	if [ "${_size}" -le "${_effective_cap}" ]; then
+		# Whole file fits; emit verbatim.  No need for a trailing newline:
+		# command substitution `$(...)` strips trailing newlines and the
+		# enclosing heredoc places its own \n after the substitution, so
+		# the closing fence always lands on its own line.
+		cat "${_path}"
+		_emit_bytes="${_size}"
+	else
+		# File would overflow the effective cap.  In `diff` mode, walk
+		# back from the cap to the last `^diff --git` boundary so the
+		# model never sees a half-hunk; in `head` mode just take the
+		# first _effective_cap bytes.  Either way emit an explicit
+		# truncation marker so the model knows the section is partial.
+		local _head_bytes="${_effective_cap}"
+		if [ "${_mode}" = "diff" ]; then
+			# Find the last `^diff --git` whose start-of-line lies <= cap.
+			# `grep -b` outputs `BYTE_OFFSET:LINE_CONTENT` (no line numbers).
+			# awk picks the largest byte offset still inside the cap; we
+			# skip offset 0 because truncating before the first hunk would
+			# emit nothing (head mode handles that case correctly).
+			local _boundary
+			_boundary="$(grep -bE '^diff --git ' "${_path}" 2>/dev/null \
+				| awk -F: -v cap="${_effective_cap}" \
+					'($1+0) > 0 && ($1+0) <= cap { last=$1+0 } END { print last+0 }')"
+			if [ -n "${_boundary}" ] && [ "${_boundary}" -gt 0 ]; then
+				_head_bytes="${_boundary}"
+			fi
+		fi
+		head -c "${_head_bytes}" "${_path}"
+		printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s) ...]\n' \
+			"${_size}" "${_head_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
+		_emit_bytes="${_head_bytes}"
+	fi
+
+	# Update running total.  Best-effort: if the state file write
+	# fails we still emitted the content (don't poison the prompt).
+	if [ -n "${_emit_bytes}" ] && [ "${_emit_bytes}" -gt 0 ] 2>/dev/null; then
+		printf '%s\n' "$(( _used + _emit_bytes ))" > "${_state}" 2>/dev/null || true
+	fi
+}
