@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file content completely violates the required three-line canary specification by using wrong field values and three extra lines.\n  WHY: All reviewers reported that issue #2168 requires exactly `status: ok`, `run_id: 25431185298`, and `updated-by: ai-pipeline`, while the current file has corrupted values and extra content that will fail the smoke gate; severity is taken as highest reported/implicit and all reviewers agree on the defect.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1 through 6 (entire file) | severity=high | confidence=5\n  PROBLEM: The file content is completely wrong \u2014 every line violates the linked issue specification.\n  WHY: The file must contain exactly three lines (`status: ok`, `run_id: 25431185298`, `updated-by: ai-pipeline`), but the current content has wrong values on lines 1-3, extra unauthorized lines 4-5, and a forbidden comment line 6, which will fail the smoke gate.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file content does not match the required three-line specification.\n  WHY: The current content contains incorrect values on lines 1-3 and extra unauthorized content on lines 4-6, so the canary validation will fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=5\n  PROBLEM: File content completely violates the issue specification.\n  WHY: The file must contain exactly three lines with the required values, but it currently has six lines, incorrect field values, and a comment line that violates the no-comments constraint.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The PR replaces the three-line canary file with six lines containing corrupted values and extraneous content.\n  WHY: The smoke-test validation harness expects an exact three-line content match, and the wrong field values plus the three additional lines will cause the canary check to fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file content) | severity=high | confidence=5\n  PROBLEM: File content completely mismatches the issue specification requiring exactly three lines: \"status: ok\", \"run_id: 25431185298\", \"updated-by: ai-pipeline\" with trailing newline and no extras.\n  WHY: Any consumer script or smoke test parsing this file expects precise three-line format and values; wrong values and extra lines (4,5,6) will cause parse failures, key mismatches, or validation errors in the E2E smoke gate.\n- tests/e2e_smoke_canary.txt:line 1 (\"status: BROKEN_BY_E2E_BAIT_25431185298\") | severity=high | confidence=5\n  PROBLEM: Incorrect status value.\n  WHY: Status checkers expect \"status: ok\"; this will fail equality checks in smoke validation scripts.\n- tests/e2e_smoke_canary.txt:line 2 (\"run_id: WRONG_VALUE_SHOULD_BE_25431185298\") | severity=high | confidence=5\n  PROBLEM: Incorrect run_id value.\n  WHY: Scripts validate against exact \"run_id: 25431185298\"; mismatch triggers failure in canary verification.\n- tests/e2e_smoke_canary.txt:line 3 (\"updated-by: e2e-bait-injector\") | severity=high | confidence=5\n  PROBLEM: Incorrect updated-by value.\n  WHY: Attribution checks expect \"updated-by: ai-pipeline\"; wrong value fails pipeline integrity assertions.\n- tests/e2e_smoke_canary.txt:lines 4-6 (\"extra: this line...\", \"also: another...\", \"# E2E_EDITOR_BAIT_...\") | severity=high | confidence=5\n  PROBLEM: Three extra lines beyond the required exactly three.\n  WHY: File length checks or line-based parsers will reject overlong files; comment and extras ignored or cause parse errors.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1 | severity=high | confidence=5\n  PROBLEM: status field has wrong value - `BROKEN_BY_E2E_BAIT_25431185298` instead of required `ok`\n  WHY: The E2E smoke test will fail because the status field does not match the expected value `ok`.\n- tests/e2e_smoke_canary.txt:2 | severity=high | confidence=5\n  PROBLEM: run_id field has wrong value - `WRONG_VALUE_SHOULD_BE_25431185298` instead of required `25431185298`\n  WHY: The run_id must be exactly `25431185298` per the linked issue spec; the current prefixed value breaks validation.\n- tests/e2e_smoke_canary.txt:3 | severity=high | confidence=5\n  PROBLEM: updated-by field has wrong value - `e2e-bait-injector` instead of required `ai-pipeline`\n  WHY: The linked issue explicitly requires `updated-by: ai-pipeline`, so the current value fails strict content validation.\n- tests/e2e_smoke_canary.txt:4-6 | severity=high | confidence=5\n  PROBLEM: File contains 3 extra lines beyond the required 3-line specification\n  WHY: The linked issue requires exactly three lines with no extra content, and lines 4-6 violate the strict line-count constraint.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2ba3c53a343eae0a986498b112ecd0b97faf568b2bebac598c45f24750366905",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2174,
+    "run_id": "25431458772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25431458772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260506111319_b8d195d0a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2174,
+    "run_id": "25431458772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-06T11:13:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
