@@ -443,7 +443,15 @@ jobs:
             fi
           done
 
-          for f in codex_system_instructions.md ai_pipeline.md; do
+          # unattended_llm_system_instructions.md staging note: the file
+          # is required by build_static_context.sh's implement branch to
+          # emit the UNATTENDED EXECUTION OVERRIDE block. Without it, the
+          # model sees only the STOP-and-ASK rules from
+          # codex_system_instructions.md / agents.md and no override
+          # context, which can drive the gpt-5.3-codex
+          # announce-without-emit failure mode. Stage it alongside the
+          # other system-instruction files.
+          for f in codex_system_instructions.md unattended_llm_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
@@ -1027,9 +1035,19 @@ jobs:
                   sub(/^[[:space:]]{0,3}[0-9]+[)][[:space:]]+/, "", numbered_body)
                   numbered_first = numbered_body
                   sub(/[[:space:]].*/, "", numbered_first)
+                  # is_path_entry test: a numbered child whose body looks
+                  # like a file path, not a section title.
+                  #   1) Body starts with a backtick — backticked path.
+                  #   2) First whitespace-token contains "/" AND ends with
+                  #      a file-extension dot-suffix (".ts", ".sol", etc.).
+                  # The extension-dot rule is case-agnostic, so plans that
+                  # use uppercase-starting paths like "1. API/foo.ts" are
+                  # recognised correctly. Section titles like
+                  # "2. Functions/modules to implement" do not end with a
+                  # dot-extension, so they still close the section.
                   is_path_entry = 0
                   if (numbered_body ~ /^`/) is_path_entry = 1
-                  if (numbered_first ~ /^[a-z][A-Za-z0-9._/-]*\// && numbered_first ~ /\./) is_path_entry = 1
+                  if (numbered_first ~ /\// && numbered_first ~ /\.[A-Za-z0-9]{1,8}$/) is_path_entry = 1
                   if (!is_path_entry) end_match = 1
                 }
                 if (end_match) in_section = 0

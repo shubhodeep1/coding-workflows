@@ -40,36 +40,108 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 
+_PARSER_ANCHOR_BEGIN = "targeted_paths_raw="
+_PARSER_AWK_BEGIN = "awk '"
+_PARSER_AWK_END = "\"${PLAN_FILE}\""
+
+
+def _extract_run_block(step_name: str) -> str:
+	"""Return the resolved bash body of a workflow step by name.
+
+	Parses YAML rather than scraping the text so the extraction is
+	robust against block-scalar reindentation, trailing-whitespace
+	tweaks, and other formatting changes that don't alter the shell
+	the runner executes.
+	"""
+	doc = yaml.safe_load(IMPLEMENT_WORKFLOW.read_text(encoding="utf-8"))
+	for job in doc["jobs"].values():
+		for step in job.get("steps", []):
+			if step.get("name") == step_name:
+				run = step.get("run", "")
+				if not run:
+					raise RuntimeError(
+						f"Step {step_name!r} has no 'run' body in implement.yml."
+					)
+				return run
+	raise RuntimeError(
+		f"Step {step_name!r} not found in implement.yml. Has it been "
+		"renamed? Update _extract_run_block accordingly."
+	)
+
 
 def _extract_parser_awk_source() -> str:
-	"""Pull the awk parser body out of the workflow YAML.
+	"""Pull the awk parser body out of the run block.
 
-	The parser is enclosed between
-	`targeted_paths_raw="$(` and `' "${PLAN_FILE}" 2>/dev/null | awk '!seen[$0]++' || true`
-	in the inline run block. We extract the awk script body so the
-	test runs the exact bytes the workflow runs.
+	The parser is the first awk invocation inside the
+	`targeted_paths_raw="$(` command substitution in the
+	"Run Codex implementation" step. We locate it by anchor-string
+	search rather than full regex so the extraction tolerates
+	whitespace, comment, and reformatting changes.
 	"""
-	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
-	# The awk source is bracketed by `awk '` and `' "${PLAN_FILE}"`.
-	# Use a non-greedy capture across newlines.
-	match = re.search(
-		r"targeted_paths_raw=\"\$\(\s*\n\s*awk '\n(?P<body>.*?)\n\s*' \"\$\{PLAN_FILE\}\"",
-		text,
-		flags=re.DOTALL,
-	)
-	if not match:
+	run = _extract_run_block("Run Codex implementation")
+
+	anchor_idx = run.find(_PARSER_ANCHOR_BEGIN)
+	if anchor_idx < 0:
 		raise RuntimeError(
-			"Could not locate targeted-file-context awk parser in implement.yml. "
-			"Has the parser been moved or refactored? Update "
+			f"Could not find {_PARSER_ANCHOR_BEGIN!r} in the "
+			"'Run Codex implementation' step. Has the targeted-file-context "
+			"block been removed or refactored? Update "
 			"_extract_parser_awk_source accordingly."
 		)
-	# Strip the YAML block-scalar indentation (10 leading spaces).
-	body = textwrap.dedent(match.group("body"))
+
+	awk_idx = run.find(_PARSER_AWK_BEGIN, anchor_idx)
+	if awk_idx < 0:
+		raise RuntimeError(
+			f"Could not find {_PARSER_AWK_BEGIN!r} after {_PARSER_ANCHOR_BEGIN!r} "
+			"in the 'Run Codex implementation' step. Has the awk parser "
+			"been moved out of inline shell? Update _extract_parser_awk_source."
+		)
+
+	# Body starts just after `awk '` (typically `awk '\n`).
+	body_start = awk_idx + len(_PARSER_AWK_BEGIN)
+
+	end_idx = run.find(_PARSER_AWK_END, body_start)
+	if end_idx < 0:
+		raise RuntimeError(
+			f"Could not find {_PARSER_AWK_END!r} closing the awk parser. "
+			"Update _extract_parser_awk_source."
+		)
+
+	# Trim back from end_idx to the closing `'` of the awk single-quoted
+	# string. The shell text between body_start and end_idx looks like:
+	#     <awk body>\n         '
+	# (the `'` closes the awk script, `${PLAN_FILE}` follows). Find the
+	# last `'` before end_idx.
+	close_quote_idx = run.rfind("'", body_start, end_idx)
+	if close_quote_idx < 0:
+		raise RuntimeError(
+			"Could not locate closing single-quote of the awk parser. "
+			"Update _extract_parser_awk_source."
+		)
+
+	body = run[body_start:close_quote_idx]
+	# Strip a leading newline if present (shell `awk '\n...\n'` form).
+	if body.startswith("\n"):
+		body = body[1:]
+	# Trim trailing whitespace before the closing quote.
+	body = body.rstrip()
+
+	# Sanity: the body MUST contain the section-start guard. If it does
+	# not, the extraction is wrong even if it returned non-empty.
+	if "files[[:space:]]+[^\\n]*change" not in body:
+		raise RuntimeError(
+			"Extracted awk body does not contain the expected section-start "
+			"regex anchor (`files...change`). Extraction is misaligned — "
+			"likely picked up a different awk invocation. Update the "
+			"extraction logic."
+		)
+
 	return body
 
 
@@ -186,6 +258,47 @@ def test_numbered_section_with_numbered_bare_children(tmp_path: Path) -> None:
 		"2. Functions/modules to implement\n"
 	)
 	assert _run_parser(plan, tmp_path) == ["src/bare/foo.ts", "src/bare/bar.ts"]
+
+
+def test_numbered_section_with_uppercase_bare_children(tmp_path: Path) -> None:
+	"""Plans that name uppercase-starting paths on numbered list items
+	(e.g. `1. API/util.ts`, `2. UI/Button.tsx`) must still be recognised
+	as path entries — the file-extension dot-suffix anchors the
+	disambiguation, so case-insensitive matching is correct.
+
+	Regression case for PR #2150 multi-reviewer consensus finding
+	(deepseek + minimax + moonshotai + x-ai + z-ai): the previous
+	`^[a-z]` heuristic rejected uppercase-starting bare paths and
+	silently terminated the section."""
+	plan = (
+		"1. Files likely to change\n"
+		"1. API/util.ts\n"
+		"2. UI/Button.tsx\n"
+		"3. Backend/handler.go\n"
+		"2. Functions/modules to implement\n"
+	)
+	assert _run_parser(plan, tmp_path) == [
+		"API/util.ts",
+		"UI/Button.tsx",
+		"Backend/handler.go",
+	]
+
+
+def test_numbered_section_with_mixed_case_backticked_children(tmp_path: Path) -> None:
+	"""Backtick-wrapped paths work regardless of starting case (the
+	body-starts-with-backtick rule fires before the extension rule)."""
+	plan = (
+		"**Files likely to change**\n"
+		"1. `API/util.ts`\n"
+		"2. `core/util.py`\n"
+		"3. `Backend/Handler.go`\n"
+		"**Functions**\n"
+	)
+	assert _run_parser(plan, tmp_path) == [
+		"API/util.ts",
+		"core/util.py",
+		"Backend/Handler.go",
+	]
 
 
 def test_atx_section_with_paren_numbered_children(tmp_path: Path) -> None:
