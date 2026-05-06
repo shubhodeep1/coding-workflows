@@ -32,6 +32,37 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
   }
 fi
 
+# Returns 0 iff the worktree carries a non-whitespace change vs HEAD —
+# either a tracked file with a `git diff -w --ignore-blank-lines HEAD`
+# hunk, or an untracked file containing at least one non-whitespace
+# byte. Used by the editor success path below so a trivial trailing-
+# newline / whitespace-only edit can't masquerade as a real fix and
+# get committed. Mirrors the salvage gate in implement.yml's retry
+# loop (PR #2176 — gpt-5.3-codex appended a lone `\n` to a contract
+# file in fun-token-multi-chain run 25436981639 issue 200 and the
+# implement workflow shipped a no-op PR; review_autofix has the same
+# exposure via the `_git_has_diff` check on line ~1071). Fail-open: if
+# a stat or grep probe fails for any reason other than "no match",
+# assume substantive so a flaky read can't discard real work.
+worktree_has_substantive_diff() {
+  if ! git diff --quiet -w --ignore-blank-lines HEAD 2>/dev/null; then
+    return 0
+  fi
+  local f grep_rc
+  while IFS= read -r f; do
+    [ -z "${f}" ] && continue
+    if [ ! -f "${f}" ]; then
+      return 0
+    fi
+    grep_rc=0
+    grep -q '[^[:space:]]' "${f}" 2>/dev/null || grep_rc=$?
+    if [ "${grep_rc}" != 1 ]; then
+      return 0
+    fi
+  done < <(git ls-files --others --exclude-standard 2>/dev/null)
+  return 1
+}
+
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -1066,16 +1097,18 @@ while [ "${attempt}" -le 3 ]; do
         fi
 
         if [ -n "${_claimed_changes}" ]; then
-          # Editor claims it made changes — verify git agrees.
+          # Editor claims it made changes — verify git agrees, and
+          # require the diff to be substantive (non-whitespace-only).
+          # A trailing-newline / whitespace-only edit must not pass as
+          # "changes persisted" — see worktree_has_substantive_diff
+          # comment for the failure mode this guards against.
           _git_has_diff=false
-          if ! git diff --quiet HEAD 2>/dev/null; then
-            _git_has_diff=true
-          elif [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+          if worktree_has_substantive_diff; then
             _git_has_diff=true
           fi
 
           if [ "${_git_has_diff}" = false ]; then
-            echo "::warning::Editor claimed changes but git shows no diff from HEAD on attempt ${attempt}. Editor tool calls likely failed to persist."
+            echo "::warning::Editor claimed changes but git shows no substantive diff from HEAD on attempt ${attempt}. Editor tool calls likely failed to persist or wrote only whitespace-only edits."
             echo "Claimed changes (attempt ${attempt}):"
             printf '%s\n' "${_claimed_changes}" | head -10
             cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}_changes_lost.txt" || true
@@ -1101,10 +1134,15 @@ while [ "${attempt}" -le 3 ]; do
           # working tree is clean, rewrite "Change status:" to
           # "- not-edited" so the authoritative signal agrees with reality.
           if [ -z "${_claimed_changes}" ]; then
+            # Treat whitespace-only diffs as "clean" for the
+            # narrative-vs-status normalisation: the narrative says
+            # "no changes" and the only worktree drift is
+            # whitespace, so the authoritative `Change status:` should
+            # be `not-edited`. Same substantive-change criterion as
+            # the EDITOR_CHANGES_LOST gate above so the two paths
+            # agree on what counts as a real edit.
             _norm_git_clean=true
-            if ! git diff --quiet HEAD 2>/dev/null; then
-              _norm_git_clean=false
-            elif [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+            if worktree_has_substantive_diff; then
               _norm_git_clean=false
             fi
             if [ "${_norm_git_clean}" = true ]; then
