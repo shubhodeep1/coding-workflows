@@ -251,15 +251,15 @@ def test_smoke_block_position_before_input_files() -> None:
 	"""
 	script = _editor_script_text()
 	override_idx = script.find("=== E2E SMOKE TEST OVERRIDE — READ FIRST ===")
-	# We want the LAST occurrence of `INPUT FILES\nRead the following`
-	# in the editor heredoc (there are unrelated ones elsewhere).
-	# Anchoring on `Read the following files:` from line 151 is
-	# specific enough.
-	input_files_idx = script.find("INPUT FILES\nRead the following files:")
+	# Anchor on the new INPUT FILE CONTENTS section header (replaced the
+	# earlier "INPUT FILES / Read the following files:" anti-pattern with
+	# embedded file contents to stop gpt-5.3-codex from burning its tool
+	# budget on exec reads — see PR linked in the section docstring).
+	input_files_idx = script.find("INPUT FILE CONTENTS")
 	assert override_idx != -1, "smoke override marker not found in script"
-	assert input_files_idx != -1, "INPUT FILES anchor not found in script"
+	assert input_files_idx != -1, "INPUT FILE CONTENTS anchor not found in script"
 	assert override_idx < input_files_idx, (
-		"Smoke override must appear BEFORE the INPUT FILES section "
+		"Smoke override must appear BEFORE the INPUT FILE CONTENTS section "
 		"of the editor prompt body so the directive is the first "
 		"role-relevant content the model encounters in the dynamic "
 		"prompt section."
@@ -298,6 +298,33 @@ def _render_editor_prompt_body_in(
 	)
 	for name in ("floor_tags.txt", "review_issues.txt", "ledger_status.txt"):
 		(runtime / name).touch()
+	# Populate every input artifact the heredoc passes to _embed_input_file
+	# with a recognisable sentinel.  This lets the body-rendering tests
+	# verify that (a) the embedding helper is actually invoked and (b)
+	# it emits the file content into the prompt body — without these
+	# fixtures the helper would emit "(empty)" markers and a regression
+	# in the inlining path could go undetected (Copilot review on PR #2149).
+	_input_fixtures = {
+		"pr_meta.json": (
+			'{"title":"E2E sentinel PR","body":"PR_META_SENTINEL_VALUE",'
+			'"state":"open"}\n'
+		),
+		"pr_diff.patch": "diff --git a/sentinel b/sentinel\nPR_DIFF_SENTINEL\n",
+		"last_run_diff.patch": "LAST_RUN_DIFF_SENTINEL\n",
+		"last_run_changed_files.txt": "LAST_RUN_CHANGED_SENTINEL\n",
+		"pr_changed_files.txt": "PR_CHANGED_SENTINEL\n",
+		"last_commit_stat.txt": "LAST_COMMIT_STAT_SENTINEL\n",
+		"reviewer_consensus.txt": "REVIEWER_CONSENSUS_SENTINEL\n",
+		"pr_all_comments_context.txt": "PR_ALL_COMMENTS_SENTINEL\n",
+		"pr_check_runs_context.txt": "PR_CHECK_RUNS_SENTINEL\n",
+		"symbol_diff_summary.txt": "SYMBOL_DIFF_SENTINEL\n",
+		"linked_issue_context.txt": "LINKED_ISSUE_SENTINEL\n",
+	}
+	for fname, contents in _input_fixtures.items():
+		(runtime / fname).write_text(contents, encoding="utf-8")
+	(runtime / "reviewer_bundle.txt").write_text(
+		"REVIEWER_BUNDLE_SENTINEL\n", encoding="utf-8"
+	)
 	body_file = runtime / "editor_prompt_body.txt"
 	env = os.environ.copy()
 	env.update({
@@ -337,7 +364,15 @@ def _render_editor_prompt_body_in(
 		i for i, ln in enumerate(lines)
 		if ln.startswith('} > "${EDITOR_PROMPT_BODY_FILE}"')
 	) + 1
-	block = "".join(lines[start:end])
+	# Source gh_helpers.sh in the subshell so the heredoc's
+	# $(_embed_input_file ...) / $(_init_prompt_budget) / $(_cleanup_prompt_budget)
+	# substitutions resolve to the production helpers — without this the
+	# fragment is missing those definitions and the body would render with
+	# empty inline sections, masking regressions in the embedding/budget
+	# logic (Copilot review on PR #2149).
+	helpers_path = REPO_ROOT / "scripts" / "gh_helpers.sh"
+	preamble = f'set -euo pipefail\nsource {helpers_path!s}\n'
+	block = preamble + "".join(lines[start:end])
 	subprocess.run(
 		["bash", "-c", block],
 		cwd=str(tmp_p),
@@ -388,12 +423,89 @@ def test_production_prompt_body_byte_identical_when_smoke_unset_or_no_bait() -> 
 			f"first round (Comment 1) or the heredoc structure has the "
 			f"$(if ...)-leaves-blank-line drift (Comment 2)."
 		)
-		assert body_prod.startswith("INPUT FILES\nRead the following files:"), (
-			f"Production editor prompt body must start with 'INPUT FILES' "
-			f"on line 1. Got first line: {body_prod.splitlines()[0]!r}. "
+		assert body_prod.startswith("PROMPT INJECTION GUARD"), (
+			f"Production editor prompt body must start with 'PROMPT INJECTION "
+			f"GUARD' on line 1. Got first line: {body_prod.splitlines()[0]!r}. "
 			f"A leading blank line indicates the $(if …) heredoc drift "
 			f"is back."
 		)
+
+
+def test_embedded_input_sections_carry_file_contents_and_untrusted_fences() -> None:
+	"""The inlining helpers MUST emit the actual fixture bytes into the
+	prompt body, and PR-author-controlled artifacts MUST be wrapped in
+	`=== BEGIN UNTRUSTED ... ===` fences.
+
+	Without this assertion the prompt-body byte-equality test passes even
+	when `_embed_input_file` / `_init_prompt_budget` are missing from the
+	subshell — the heredoc would render empty `$(…)` substitutions on both
+	sides and still hash-equal.  Copilot review on PR #2149 flagged that
+	gap; this test closes it by checking that recognisable sentinel bytes
+	from each fixture file land in the body, AND that PR_META_FILE and
+	LINKED_ISSUE_CONTEXT_FILE are surrounded by UNTRUSTED fences (a
+	regression to the pre-fix structure would inline those user-authored
+	bytes outside the fence and reopen the prompt-injection vector).
+	"""
+	import tempfile
+
+	clean_canary = "status: ok\nrun_id: 12345\nupdated-by: ai-pipeline\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_p = Path(tmp)
+		body, _ = _render_editor_prompt_body_in(
+			tmp_p, is_smoke=None, canary_contents=clean_canary
+		)
+
+	# Each fixture's recognisable sentinel must appear in the rendered
+	# body — confirms _embed_input_file actually ran and dumped the file.
+	expected_sentinels = (
+		"PR_META_SENTINEL_VALUE",
+		"PR_DIFF_SENTINEL",
+		"LAST_RUN_DIFF_SENTINEL",
+		"LAST_RUN_CHANGED_SENTINEL",
+		"PR_CHANGED_SENTINEL",
+		"LAST_COMMIT_STAT_SENTINEL",
+		"REVIEWER_CONSENSUS_SENTINEL",
+		"PR_ALL_COMMENTS_SENTINEL",
+		"PR_CHECK_RUNS_SENTINEL",
+		"SYMBOL_DIFF_SENTINEL",
+		"LINKED_ISSUE_SENTINEL",
+		"REVIEWER_BUNDLE_SENTINEL",
+	)
+	for sentinel in expected_sentinels:
+		assert sentinel in body, (
+			f"Inlined input fixture {sentinel!r} did not appear in the "
+			f"editor prompt body — _embed_input_file is not being called "
+			f"or is emitting empty output for that file.  This regresses "
+			f"the inlining contract that lets the editor skip exec-cat "
+			f"reads."
+		)
+
+	# PR-author-controlled artifacts MUST be wrapped in UNTRUSTED fences
+	# so the prompt-injection guard's contract holds for them too.
+	# Anchor on file-basename markers so the test isn't sensitive to
+	# absolute tempdir paths.
+	for label in (
+		"BEGIN UNTRUSTED",
+		"END UNTRUSTED",
+	):
+		count = body.count(label)
+		assert count >= 4, (
+			f"Expected at least 4 occurrences of {label!r} in the "
+			f"editor prompt body (PR_META_FILE + PR_ALL_COMMENTS + "
+			f"PR_CHECK_RUNS + LINKED_ISSUE_CONTEXT_FILE wraps), got "
+			f"{count}.  A drop below 4 means a previously-fenced "
+			f"user-authored artifact is now inlined as ordinary prompt "
+			f"text and prompt-injection content can steer the editor."
+		)
+	assert "BEGIN UNTRUSTED" in body and "pr_meta.json" in body, (
+		"PR_META_FILE (PR title / description) must be wrapped in an "
+		"UNTRUSTED fence — author-controlled prose."
+	)
+	assert "linked_issue_context.txt" in body, (
+		"LINKED_ISSUE_CONTEXT_FILE must be inlined; missing entirely "
+		"would mean the linked-issue body is no longer reaching the "
+		"editor."
+	)
 
 
 def test_smoke_override_renders_only_when_bait_present() -> None:
