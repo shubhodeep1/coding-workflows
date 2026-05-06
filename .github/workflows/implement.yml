@@ -985,8 +985,23 @@ jobs:
           # don't bloat the prompt past provider limits.
           TARGETED_FILES_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
           : > "${TARGETED_FILES_FILE}"
+          # Validate the repo-var-sourced caps before they reach numeric
+          # comparisons / arithmetic. Under `set -euo pipefail` a
+          # non-numeric value (typo, trailing whitespace, accidental
+          # quote) would make `[ -ge ]` or `$((...))` error out and
+          # abort the whole implement step — turning a config typo into
+          # a hard CI failure. Fall back to defaults with a `::warning::`
+          # so operators see the misconfig but the run still completes.
           TARGETED_MAX_FILES="${TARGETED_FILE_CONTEXT_MAX_FILES:-10}"
+          if ! [[ "${TARGETED_MAX_FILES}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Targeted file context: TARGETED_FILE_CONTEXT_MAX_FILES='${TARGETED_MAX_FILES}' is not a non-negative integer; falling back to default 10. Set vars.TARGETED_FILE_CONTEXT_MAX_FILES to a digits-only value (e.g. 10) to silence this warning."
+            TARGETED_MAX_FILES=10
+          fi
           TARGETED_MAX_BYTES="${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
+          if ! [[ "${TARGETED_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Targeted file context: TARGETED_FILE_CONTEXT_MAX_BYTES='${TARGETED_MAX_BYTES}' is not a non-negative integer; falling back to default 102400 (100KB). Set vars.TARGETED_FILE_CONTEXT_MAX_BYTES to a digits-only value (e.g. 102400) to silence this warning."
+            TARGETED_MAX_BYTES=102400
+          fi
 
           # Extract paths from the plan's "Files likely to change" section.
           # Accepts every section-start form the rest of the workflow already
