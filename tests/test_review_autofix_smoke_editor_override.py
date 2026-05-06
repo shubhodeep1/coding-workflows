@@ -251,15 +251,15 @@ def test_smoke_block_position_before_input_files() -> None:
 	"""
 	script = _editor_script_text()
 	override_idx = script.find("=== E2E SMOKE TEST OVERRIDE — READ FIRST ===")
-	# We want the LAST occurrence of `INPUT FILES\nRead the following`
-	# in the editor heredoc (there are unrelated ones elsewhere).
-	# Anchoring on `Read the following files:` from line 151 is
-	# specific enough.
-	input_files_idx = script.find("INPUT FILES\nRead the following files:")
+	# Anchor on the new INPUT FILE CONTENTS section header (replaced the
+	# earlier "INPUT FILES / Read the following files:" anti-pattern with
+	# embedded file contents to stop gpt-5.3-codex from burning its tool
+	# budget on exec reads — see PR linked in the section docstring).
+	input_files_idx = script.find("INPUT FILE CONTENTS")
 	assert override_idx != -1, "smoke override marker not found in script"
-	assert input_files_idx != -1, "INPUT FILES anchor not found in script"
+	assert input_files_idx != -1, "INPUT FILE CONTENTS anchor not found in script"
 	assert override_idx < input_files_idx, (
-		"Smoke override must appear BEFORE the INPUT FILES section "
+		"Smoke override must appear BEFORE the INPUT FILE CONTENTS section "
 		"of the editor prompt body so the directive is the first "
 		"role-relevant content the model encounters in the dynamic "
 		"prompt section."
@@ -388,8 +388,8 @@ def test_production_prompt_body_byte_identical_when_smoke_unset_or_no_bait() -> 
 			f"first round (Comment 1) or the heredoc structure has the "
 			f"$(if ...)-leaves-blank-line drift (Comment 2)."
 		)
-		assert body_prod.startswith("INPUT FILES\nRead the following files:"), (
-			f"Production editor prompt body must start with 'INPUT FILES' "
+		assert body_prod.startswith("INPUT FILE CONTENTS"), (
+			f"Production editor prompt body must start with 'INPUT FILE CONTENTS' "
 			f"on line 1. Got first line: {body_prod.splitlines()[0]!r}. "
 			f"A leading blank line indicates the $(if …) heredoc drift "
 			f"is back."

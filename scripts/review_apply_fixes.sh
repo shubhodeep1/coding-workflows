@@ -17,6 +17,41 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 
+# _embed_input_file <path> [byte_cap]
+#
+# Emits the file's content with explicit (empty)/(missing) markers so the
+# editor prompt can carry every workflow-generated artifact inline instead
+# of asking the model to exec `cat` on each one.  The cap defaults to 200000
+# bytes (~50k tokens) — files larger than the cap are truncated head-side
+# with an explicit marker so the model knows it's incomplete.  Output is
+# always plain bytes safe to drop into a heredoc; no expansion is performed
+# on the file content itself (stdin/stdout copy).
+_embed_input_file() {
+  local _path="${1:-}"
+  local _cap="${2:-200000}"
+  if [ -z "${_path}" ] || [ ! -e "${_path}" ]; then
+    printf '(missing)\n'
+    return 0
+  fi
+  if [ ! -s "${_path}" ]; then
+    printf '(empty)\n'
+    return 0
+  fi
+  local _size
+  _size="$(wc -c < "${_path}" 2>/dev/null | tr -d '[:space:]')"
+  if [ -z "${_size}" ]; then _size=0; fi
+  if [ "${_size}" -le "${_cap}" ]; then
+    cat "${_path}"
+    # Guarantee a trailing newline so the closing fence sits on its own line
+    # even when the source file lacks one (heredoc command-substitution
+    # strips trailing newlines from $(...) anyway).
+    printf '\n'
+  else
+    head -c "${_cap}" "${_path}"
+    printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above ...]\n' "${_size}" "${_cap}"
+  fi
+}
+
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -239,45 +274,86 @@ easier).
 __SMOKE_OVERRIDE__
   fi
   cat <<__EDITOR_PROMPT__
-INPUT FILES
-Read the following files:
-- ${PR_META_FILE}
-- ${PR_DIFF_FILE}
-- ${LAST_RUN_DIFF_FILE}
-- ${LAST_RUN_CHANGED_FILES_FILE}
-- ${PR_CHANGED_FILES_FILE}
-- ${LAST_COMMIT_STAT_FILE}
-- ${REVIEWER_CONSENSUS_FILE}
-- ${PR_ALL_COMMENTS_CONTEXT_FILE}
-- ${PR_CHECK_RUNS_CONTEXT_FILE} (failed / incomplete CI / lint check-runs on the PR head SHA)
-- ${SYMBOL_DIFF_SUMMARY_FILE} (symbol-level summary of what changed — read first for quick overview)
-- ${RUNTIME_DIR}/floor_tags.txt (optional; floor findings)
-- ${RUNTIME_DIR}/review_issues.txt (optional; parsed consolidator findings)
-- ${RUNTIME_DIR}/ledger_status.txt (optional; persistence lifecycle context)
-The patch (${PR_DIFF_FILE}) is the primary source of truth for what changed.
-Diff availability status for this run: HAS_PR_DIFF=${HAS_PR_DIFF}, SOURCE=${PR_DIFF_SOURCE}
-If HAS_PR_DIFF=false, the patch file contains placeholder context; prioritize LAST RUN DIFF, changed-files lists, and reviewer evidence.
-Use ${PR_META_FILE} to understand:
-- PR title
-- PR description
-- overall intent of the change
+INPUT FILE CONTENTS
+
+The workflow has pre-resolved every input artifact below.  All file contents
+are inlined directly in this prompt — you do NOT need to run shell commands
+to read them.  Use the file paths only when you need an addressable target
+for a write tool (apply_patch, etc.).  The patch (${PR_DIFF_FILE}) is the
+primary source of truth for what changed.  Diff availability status for this
+run: HAS_PR_DIFF=${HAS_PR_DIFF}, SOURCE=${PR_DIFF_SOURCE}.  If
+HAS_PR_DIFF=false, the patch section below carries placeholder context;
+prioritize LAST RUN DIFF, changed-files lists, and reviewer evidence.
+
+=== BEGIN ${PR_META_FILE} (PR title / description / overall intent) ===
+$(_embed_input_file "${PR_META_FILE}")
+=== END ${PR_META_FILE} ===
+
+=== BEGIN ${PR_DIFF_FILE} (primary source of truth for the PR change set) ===
+$(_embed_input_file "${PR_DIFF_FILE}")
+=== END ${PR_DIFF_FILE} ===
+
+=== BEGIN ${LAST_RUN_DIFF_FILE} (modifications introduced by the previous AI autofix run) ===
+$(_embed_input_file "${LAST_RUN_DIFF_FILE}")
+=== END ${LAST_RUN_DIFF_FILE} ===
+
+=== BEGIN ${LAST_RUN_CHANGED_FILES_FILE} (files modified by the most recent AI autofix run) ===
+$(_embed_input_file "${LAST_RUN_CHANGED_FILES_FILE}")
+=== END ${LAST_RUN_CHANGED_FILES_FILE} ===
+
+=== BEGIN ${PR_CHANGED_FILES_FILE} (files modified anywhere in the PR) ===
+$(_embed_input_file "${PR_CHANGED_FILES_FILE}")
+=== END ${PR_CHANGED_FILES_FILE} ===
+
+=== BEGIN ${LAST_COMMIT_STAT_FILE} (summary of the most recent commit) ===
+$(_embed_input_file "${LAST_COMMIT_STAT_FILE}")
+=== END ${LAST_COMMIT_STAT_FILE} ===
+
+=== BEGIN ${REVIEWER_CONSENSUS_FILE} (cross-reviewer consensus ledger — multi-reviewer findings are higher confidence) ===
+$(_embed_input_file "${REVIEWER_CONSENSUS_FILE}")
+=== END ${REVIEWER_CONSENSUS_FILE} ===
+
+=== BEGIN ${PR_ALL_COMMENTS_CONTEXT_FILE} (issue + review + inline-review comments; bot and human treated equally) ===
+$(_embed_input_file "${PR_ALL_COMMENTS_CONTEXT_FILE}")
+=== END ${PR_ALL_COMMENTS_CONTEXT_FILE} ===
+
+=== BEGIN ${PR_CHECK_RUNS_CONTEXT_FILE} (failed / incomplete CI / lint check-runs on the PR head SHA) ===
+$(_embed_input_file "${PR_CHECK_RUNS_CONTEXT_FILE}")
+=== END ${PR_CHECK_RUNS_CONTEXT_FILE} ===
+
+=== BEGIN ${SYMBOL_DIFF_SUMMARY_FILE} (symbol-level summary of what changed — quick overview before raw diffs) ===
+$(_embed_input_file "${SYMBOL_DIFF_SUMMARY_FILE}")
+=== END ${SYMBOL_DIFF_SUMMARY_FILE} ===
+
+=== BEGIN ${RUNTIME_DIR}/floor_tags.txt (optional; non-skippable floor findings) ===
+$(_embed_input_file "${RUNTIME_DIR}/floor_tags.txt")
+=== END ${RUNTIME_DIR}/floor_tags.txt ===
+
+=== BEGIN ${RUNTIME_DIR}/review_issues.txt (optional; parsed consolidator findings, advisory only) ===
+$(_embed_input_file "${RUNTIME_DIR}/review_issues.txt")
+=== END ${RUNTIME_DIR}/review_issues.txt ===
+
+=== BEGIN ${RUNTIME_DIR}/ledger_status.txt (optional; issue persistence history across iterations) ===
+$(_embed_input_file "${RUNTIME_DIR}/ledger_status.txt")
+=== END ${RUNTIME_DIR}/ledger_status.txt ===
+
+=== BEGIN ${RUNTIME_DIR}/reviewer_bundle.txt (authoritative aggregated reviewer outputs) ===
+$(_embed_input_file "${RUNTIME_DIR}/reviewer_bundle.txt")
+=== END ${RUNTIME_DIR}/reviewer_bundle.txt ===
 
 LINKED ISSUE (ORIGINAL TASK DESCRIPTION)
 $(if [ -s "${LINKED_ISSUE_CONTEXT_FILE:-}" ]; then
-  echo "The following file contains the original issue that triggered this PR."
-  echo "Use it to verify the PR fully implements the requested task and to judge"
-  echo "whether reviewer suggestions align with or contradict the original intent."
-  echo ""
-  echo "File: ${LINKED_ISSUE_CONTEXT_FILE}"
+  printf '%s\n' "The original issue that triggered this PR is inlined below — use it to verify the PR fully implements the requested task and to judge whether reviewer suggestions align with or contradict the original intent."
+  printf '\n=== BEGIN %s ===\n' "${LINKED_ISSUE_CONTEXT_FILE}"
+  _embed_input_file "${LINKED_ISSUE_CONTEXT_FILE}"
+  printf '=== END %s ===\n' "${LINKED_ISSUE_CONTEXT_FILE}"
 else
   echo "No linked issue context available for this PR."
 fi)
 
 REVIEWER INPUTS
 Multiple independent reviewer models have produced review reports.
-Reviewer artifacts are bundled into:
-${RUNTIME_DIR}/reviewer_bundle.txt
-You must read ${RUNTIME_DIR}/reviewer_bundle.txt and determine which issues are valid.
+The aggregated reviewer artifacts are inlined above as ${RUNTIME_DIR}/reviewer_bundle.txt — determine which issues are valid from that section.
 Treat reviewer reports as candidate findings.
 
 INPUT AUTHORITY CONTRACT
@@ -356,25 +432,20 @@ PRE-FIX PLANNING
 Fix every valid reviewer finding in one pass. Read all reviewer outputs, the consensus file, and PR comments; classify each finding as WILL_FIX, ALREADY_FIXED, or REJECT; then execute WILL_FIX items in priority order (CI failures → functional bugs → correctness → hardening). The goal is comprehensive coverage in a single pass so subsequent iterations find minimal remaining issues.
 
 REVIEWER CONSENSUS SIGNAL
-The reviewer consensus file consolidates all pass-2 reviewer findings into one
-ledger via a cheap summariser model (gpt-5.4-mini, none reasoning). It has:
+The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FILE}) consolidates all pass-2 reviewer findings into one ledger via a cheap summariser model (gpt-5.4-mini, none reasoning). It has:
 - a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
   (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
   confidence; a single slug ⇒ one reviewer only, potentially speculative),
 - per-reviewer "=== FINDINGS FROM <slug> ===" sections for traceability.
-File:
-${REVIEWER_CONSENSUS_FILE}
 Prioritize addressing findings flagged by multiple reviewers first.
 
 PR DISCUSSION COMMENT SIGNAL
-Review all entries in:
-${PR_ALL_COMMENTS_CONTEXT_FILE}
-This file includes both bot and human PR comments equally (issue comments, review bodies, and inline review comments).
+The PR discussion content is already inlined above as ${PR_ALL_COMMENTS_CONTEXT_FILE}.
+That section includes both bot and human PR comments equally (issue comments, review bodies, and inline review comments).
 
 CI / LINT CHECK-RUN FAILURES (HIGH PRIORITY — FIX EVERY RUN)
-File:
-${PR_CHECK_RUNS_CONTEXT_FILE}
-This file is a deterministic snapshot of failed and incomplete GitHub check-runs on the PR head SHA. When the header reports failed_count > 0, every listed failure is a confirmed defect produced by a real CI / lint / test job — not a speculative reviewer suggestion. Treat these failures as the highest-priority WILL_FIX items, ahead of reviewer findings, and address every one of them in this run.
+The CI / lint check-run snapshot is already inlined above as ${PR_CHECK_RUNS_CONTEXT_FILE}.
+That section is a deterministic snapshot of failed and incomplete GitHub check-runs on the PR head SHA. When the header reports failed_count > 0, every listed failure is a confirmed defect produced by a real CI / lint / test job — not a speculative reviewer suggestion. Treat these failures as the highest-priority WILL_FIX items, ahead of reviewer findings, and address every one of them in this run.
 
 For each failed entry:
 1. Read failed[i].name, failed[i].title, failed[i].summary, and failed[i].conclusion to identify the failing job and the kind of failure (lint, type-check, unit test, etc.).
@@ -410,14 +481,11 @@ Implement only suggestions that are concrete, correct, and compatible with the P
 Ignore suggestions that are incorrect, out-of-scope, or already satisfied.
 
 OPTIONAL CONTEXT
-If additional context is required to understand the issue, you may read:
-- referenced repository files
+The reviewer bundle, floor tags, parsed consolidator issues, and ledger status are all inlined above — no read step is required.
+If additional context is required beyond what is inlined, you may read:
+- referenced repository source files (the actual code being edited)
 - files imported by the changed code
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
-- reviewer bundle at ${RUNTIME_DIR}/reviewer_bundle.txt
-- floor tags at ${RUNTIME_DIR}/floor_tags.txt (when present)
-- parsed issue ledger status at ${RUNTIME_DIR}/ledger_status.txt (when present)
-- parsed consolidator issues at ${RUNTIME_DIR}/review_issues.txt (when present)
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
 The bug report may contain important context about the problem being fixed.
 
@@ -518,24 +586,8 @@ Large-scale refactoring is not.
 
 PREVIOUS AI RUN CONTEXT
 
-The workflow provides context describing the most recent AI autofix run.
-
-LAST RUN DIFF
-
-File:
-${LAST_RUN_DIFF_FILE}
-
-LAST RUN CHANGED FILES
-
-File:
-${LAST_RUN_CHANGED_FILES_FILE}
-
-LAST COMMIT CHANGE SUMMARY
-
-File:
-${LAST_COMMIT_STAT_FILE}
-
-These files describe the modifications introduced by the previous run.
+The previous-run context is already inlined above (LAST RUN DIFF as ${LAST_RUN_DIFF_FILE}, LAST RUN CHANGED FILES as ${LAST_RUN_CHANGED_FILES_FILE}, LAST COMMIT CHANGE SUMMARY as ${LAST_COMMIT_STAT_FILE}).
+Together those sections describe the modifications introduced by the previous AI autofix run.
 
 OSCILLATION GUARD
 
