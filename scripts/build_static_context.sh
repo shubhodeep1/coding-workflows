@@ -25,6 +25,10 @@
 #               ai_pipeline.md trimmed before Phase 3;
 #               README.md trimmed before "### 2. Create wrapper workflows".
 #   implement — codex sections 0-6 + section 9 (Code Style) + FINAL REMINDER;
+#               unattended_llm_system_instructions.md (full) — inlined as
+#               an EXPLICIT override of codex's STOP-and-ASK rules so the
+#               unattended-execution policy is concretely present, not
+#               only referenced by name from codex §2;
 #               ai_pipeline.md Shared Runtime + Phase 3 only;
 #               agents.md canonical + repo-local; README.md NOT included.
 #
@@ -140,6 +144,34 @@ case "${phase}" in
 			echo
 			awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
 			echo
+
+			# Inline the unattended-execution override. The implement phase
+			# runs non-interactively on a GitHub Actions runner; the model
+			# cannot ask the user a question. The static prefix above
+			# contains the PRE-TASK MANDATORY CONTEXT LOADING preamble
+			# ("STOP and ask using mandatory Q/A format" if agents.md /
+			# db/contracts/ are missing), §0 Prime Directive ("STOP. ASK.
+			# DO NOT PROCEED" on uncertainty), and FINAL REMINDER ("If
+			# uncertainty exists: ASK"). Without the override file inlined,
+			# the model sees only a NAME-reference at §2 to
+			# unattended_llm_system_instructions.md and must trust that
+			# pointer against three concrete "ASK" rules — empirically it
+			# does not, and on consumer repos that lack agents.md / a
+			# db/contracts/ tree (e.g. fun-token-multi-chain, run
+			# 25406869763 issue #195) the model enters an
+			# "I should ask but I am forbidden to ask" stuck state that
+			# manifests as narration-without-apply_patch, tripping the
+			# implement.yml empty_streak watchdog after 2 attempts.
+			# Inlining §0–§6 of the override here makes the
+			# "never ask, continue on missing files" policy CONCRETELY
+			# present in the same context window as the rules it overrides.
+			if [ -f unattended_llm_system_instructions.md ]; then
+				echo "=== UNATTENDED EXECUTION OVERRIDE (governs this run) ==="
+				echo "This run is non-interactive. The rules below OVERRIDE the corresponding sections of SYSTEM INSTRUCTIONS above for the duration of this run — specifically the PRE-TASK MANDATORY CONTEXT LOADING 'STOP and ask if missing' rule, §0 Prime Directive's 'STOP. ASK. DO NOT PROCEED', §2 Always-On Ask-First Mode, and the FINAL REMINDER's 'If uncertainty exists: ASK'."
+				echo
+				cat unattended_llm_system_instructions.md
+				echo
+			fi
 
 			echo "=== AI PIPELINE (implementation-trimmed) ==="
 			# Keep shared runtime behavior and implementation phase details only.

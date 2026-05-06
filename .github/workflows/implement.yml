@@ -938,6 +938,17 @@ jobs:
           Restrictions:
 
           - Do not ask clarification questions.
+          - Missing repo-level context files (`agents.md`, `db/contracts/*.yml`,
+            `README.md`, app-level `AGENTS.md`) are NOT blockers. The
+            "PRE-TASK MANDATORY CONTEXT LOADING" preamble in the system
+            instructions ("STOP and ask using mandatory Q/A format" when any
+            of those are missing) is OVERRIDDEN for this unattended run by
+            the UNATTENDED EXECUTION OVERRIDE block in your context — see its
+            §3 ("If a file is missing: continue with available context, note
+            the limitation. Never fabricate contents.") and §4 (Unattended
+            Decision Policy). Continue with the available context, record any
+            assumptions inline in your output, and never STOP/ASK on missing
+            context files.
           {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md or codex_system_instructions.md.
 
