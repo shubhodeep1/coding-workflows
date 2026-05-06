@@ -133,7 +133,7 @@ fi
 # notification steps (Telegram, labeling).
 # They are cleaned up in the final "Cleanup temporary artifacts" step.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-  for _artifact in pre_assembled_static.txt codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md; do
+  for _artifact in pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md; do
     if git ls-files --error-unmatch -- "${_artifact}" >/dev/null 2>&1; then
       continue
     fi

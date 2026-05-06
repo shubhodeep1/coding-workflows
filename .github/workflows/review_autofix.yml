@@ -97,8 +97,27 @@ env:
     qwen/qwen3.6-plus
     x-ai/grok-4.1-fast
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  # Reviewer is research-heavy (read PR diff + cross-check against repo
+  # state, emit grounded findings) → medium per the OpenAI prompt guide.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'medium' }}
+  REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}
+  # Pass-2 diff-size gate (review_run_reviewers.sh): when LAST_RUN_DIFF
+  # is "large" (≥ REVIEWER_PASS2_DIFF_LARGE_LOC added+removed lines, default
+  # 200) Pass 2 escalates to xhigh; otherwise it runs at medium. Per the
+  # OpenAI prompt guide for gpt-5.3-codex: "Use `high` or `xhigh` for
+  # hardest tasks." Small diffs don't benefit from xhigh and risk the
+  # over-think / empty-output failure mode documented at L1846 below.
+  # The operator override (THINKING_LEVEL_REVIEWER / smoke-set
+  # REVIEWER_REASONING_EFFORT) always wins over the gate.
+  REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
+  REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'medium' }}
+  REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
+  # Editor (codex apply-fixes loop) — a Switch-reasoning step later in
+  # this workflow already drops the editor's runtime reasoning to "low"
+  # (execution-heavy: apply known fixes). Keep this knob configurable
+  # for repos that want to override.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'medium' }}
+  EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
@@ -869,8 +888,8 @@ jobs:
             echo "SUPPORT_PROMPTS_DIR=${SUPPORT_PROMPTS_DIR}"
             echo "SUPPORT_AI_MEMORY_DIR=${SUPPORT_AI_MEMORY_DIR}"
             echo "IS_WORKFLOW_SOURCE_REPO=${IS_WORKFLOW_SOURCE_REPO}"
-            echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_llm_system_instructions.md"
-            echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/codex_system_instructions.md"
+            echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
+            echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
@@ -946,7 +965,7 @@ jobs:
             echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
           fi
 
-          for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
+          for f in unattended_system_instructions.md; do
             target_path="${SUPPORT_ROOT_DIR}/${f}"
             if [ ! -f "${target_path}" ]; then
               src=".codex-workflow-src/${f}"
@@ -1193,7 +1212,7 @@ jobs:
           set -euo pipefail
 
           if [ ! -s "${SUPPORT_INSTRUCTIONS_FILE}" ]; then
-            echo "Missing required unattended_llm_system_instructions.md"
+            echo "Missing required unattended_system_instructions.md"
             exit 1
           fi
 
@@ -1204,31 +1223,16 @@ jobs:
             echo "=== UNATTENDED SYSTEM INSTRUCTIONS ==="
             cat "${SUPPORT_INSTRUCTIONS_FILE}"
             echo
-            if [ -f "${SUPPORT_CODEX_INSTRUCTIONS_FILE}" ]; then
-              echo "=== CODEX SYSTEM INSTRUCTIONS (editor-trimmed) ==="
-              # Keep only the code style section.
-              awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}' "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
-              echo
-            fi
+            # Note: SUPPORT_INSTRUCTIONS_FILE and SUPPORT_CODEX_INSTRUCTIONS_FILE
+            # both now resolve to unattended_system_instructions.md, which
+            # already contains §11 Code Style. The previous "code-style-only"
+            # extraction block (`awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}'`)
+            # was keyed to the old codex_system_instructions.md numbering and
+            # would now silently emit an empty section against the new file's
+            # `## §11. Code Style` header. Removed because the cat above
+            # already includes that section in full.
             if [ -f "${SUPPORT_AGENTS_FILE}" ]; then
-              # agents.md is a verbatim copy of codex_system_instructions.md
-              # (same PRE-TASK MANDATORY CONTEXT LOADING preamble, same §0
-              # Prime Directive "STOP. ASK. DO NOT PROCEED", same §2
-              # Always-On Ask-First Mode, same FINAL REMINDER). For
-              # unattended runs those rules conflict with the
-              # UNATTENDED SYSTEM INSTRUCTIONS block above. Emit an
-              # explicit displacement note so the model treats the
-              # agents.md system-rules sections as overridden — without
-              # this the model can pattern-match the concrete "STOP and
-              # ASK" rules over the override and enter the
-              # narrate-without-edit stuck state that EDITOR_NOOP_SUSPICIOUS
-              # detects (see the same fix applied to implement.yml in
-              # this commit; analogous failure mechanism). agents.md's
-              # repo-specific guidance (Q-format, naming, contract paths,
-              # MongoDB rules, etc.) still applies.
               echo "=== AGENTS.MD ==="
-              echo "NOTE: agents.md reproduces codex_system_instructions.md's PRE-TASK MANDATORY CONTEXT LOADING preamble, §0 Prime Directive, §2 Always-On Ask-First Mode, and FINAL REMINDER verbatim. Those four sections are OVERRIDDEN for this unattended run by the UNATTENDED SYSTEM INSTRUCTIONS block at the top of this prompt — see its §0 (Execution Mode) and §3 (Mandatory Context Loading: 'If a file is missing: continue with available context'). agents.md's repo-specific guidance (custom Q-formats, naming conventions, contract paths, MongoDB rules, code-style §9, etc.) still applies; only its STOP-and-ASK directives are displaced."
-              echo
               cat "${SUPPORT_AGENTS_FILE}"
               echo
             fi

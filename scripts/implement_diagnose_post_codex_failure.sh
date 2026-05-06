@@ -18,7 +18,16 @@
 #   DEFAULT_BRANCH                    Passed in from ${{ github.event.repository.default_branch }}.
 #   ISSUE_NUMBER                      Source issue number (job-level env).
 #   RUNTIME_DIR                       Per-run scratch directory.
-#   MODEL_EDITOR                      codex model used for diagnosis.
+#   MODEL_DIAGNOSE                    codex model used for diagnosis (preferred).
+#                                     Defaults to openai/gpt-5.4 via implement.yml
+#                                     env. Falls back to MODEL_EDITOR for backward
+#                                     compatibility with older callers.
+#   MODEL_DIAGNOSE_REASONING_EFFORT   reasoning effort for the diagnose model.
+#                                     Defaults to "medium". Patched into
+#                                     ~/.codex/config.toml before invocation
+#                                     (codex exec does not accept a CLI flag).
+#   MODEL_EDITOR                      Fallback model when MODEL_DIAGNOSE is unset
+#                                     (legacy / consumer-repo flow).
 #   ISSUE_META_FILE                   Optional cached issue metadata JSON.
 #   ISSUE_BODY_FILE                   Optional cached issue body text.
 #   PR_BASE_BRANCH                    Target base branch (falls back to DEFAULT_BRANCH).
@@ -53,6 +62,55 @@ type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
 
 IMPLEMENT_DIAGNOSE_TIMEOUT_SEC=300
 TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE=20
+
+# Model selection: prefer MODEL_DIAGNOSE (gpt-5.4 by default — analysis,
+# not coding). Fall back to MODEL_EDITOR for legacy callers / consumer
+# repos that haven't bumped their workflow staging yet.
+DIAGNOSE_MODEL="${MODEL_DIAGNOSE:-${MODEL_EDITOR:-openai/gpt-5.4}}"
+DIAGNOSE_REASONING="${MODEL_DIAGNOSE_REASONING_EFFORT:-medium}"
+
+# Validate DIAGNOSE_REASONING against the known codex-CLI reasoning
+# levels. A typo (e.g. "MEDIUM" or "med" or "average") would silently
+# write an unknown value into ~/.codex/config.toml; codex would then
+# either ignore the key or error at parse time. Mirror the allow-list
+# in scripts/review_consolidate.sh.
+case "${DIAGNOSE_REASONING}" in
+  xhigh|high|medium|low|none) ;;
+  *)
+    echo "::warning::Invalid MODEL_DIAGNOSE_REASONING_EFFORT='${DIAGNOSE_REASONING}'. Falling back to 'medium'." >&2
+    DIAGNOSE_REASONING="medium"
+    ;;
+esac
+
+# Patch the diagnose reasoning effort into ~/.codex/config.toml so the
+# isolated diagnose call doesn't inherit the implement editor's
+# (typically medium-but-could-be-high) reasoning. codex exec doesn't
+# accept --reasoning-effort on the CLI; the config.toml key is the
+# only honored knob.
+#
+# Note: the codex-cli invocation below already passes `--model` on the
+# command line, so we only need to ensure model_reasoning_effort is
+# present and set to DIAGNOSE_REASONING. We never write a `model = ...`
+# line here — appending one when config.toml already has a different
+# `model = ...` would create duplicate TOML keys (which strict TOML
+# parsers reject as invalid).
+patch_diagnose_reasoning_into_config() {
+  local cfg="${HOME:-/root}/.codex/config.toml"
+  mkdir -p "$(dirname "${cfg}")"
+  if [ ! -f "${cfg}" ]; then
+    printf 'model_reasoning_effort = "%s"\n' "${DIAGNOSE_REASONING}" > "${cfg}"
+    return 0
+  fi
+  if grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
+    sed -i \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${DIAGNOSE_REASONING}\"/" \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${DIAGNOSE_REASONING}\"/" \
+      "${cfg}" || true
+  else
+    printf 'model_reasoning_effort = "%s"\n' "${DIAGNOSE_REASONING}" >> "${cfg}"
+  fi
+}
+patch_diagnose_reasoning_into_config
 
 echo "handled=false" >> "$GITHUB_OUTPUT"
 
@@ -380,7 +438,7 @@ PY
 }
 
 DIAGNOSE_SUCCESS=false
-if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex exec --model "${MODEL_EDITOR}" --full-auto \
+if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex exec --model "${DIAGNOSE_MODEL}" --full-auto \
   < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
   2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
   if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then

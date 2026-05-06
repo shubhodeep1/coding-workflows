@@ -6,8 +6,19 @@ review_log()
 	printf 'stage=consolidator %s\n' "$*" >&2
 }
 
-REVIEW_CONSOLIDATOR_MODEL="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4-mini}"
-REVIEW_CONSOLIDATOR_REASONING="${REVIEW_CONSOLIDATOR_REASONING:-none}"
+# Per the OpenAI prompt guide, consolidation/aggregation is a synthesis
+# task with a closed output contract. Model TIER is bumped from
+# gpt-5.4-mini to gpt-5.4 (full) to align with the guide's "synthesis
+# tasks benefit from the full model when prompts are well-engineered".
+# REASONING is intentionally kept at "low" — the input is already a
+# structured reviewer bundle and the output is a fixed-shape issue-block
+# format, so the consolidator is execution-heavy in practice (apply the
+# merge rule; emit blocks). Per the guide: "Start with `none` for
+# execution-heavy workloads… don't treat reasoning effort as the primary
+# way to improve quality; prompt fixes often recover more performance."
+# Override via env if a particular repo wants to escalate reasoning.
+REVIEW_CONSOLIDATOR_MODEL="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4}"
+REVIEW_CONSOLIDATOR_REASONING="${REVIEW_CONSOLIDATOR_REASONING:-low}"
 REVIEW_CONSOLIDATOR_TIMEOUT_SECS="${REVIEW_CONSOLIDATOR_TIMEOUT_SECS:-300}"
 REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT="${REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT:-16000}"
 
@@ -22,10 +33,10 @@ CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
 case "${REVIEW_CONSOLIDATOR_REASONING}" in
-	xhigh|high|medium|none) ;;
+	xhigh|high|medium|low|none) ;;
 	*)
-		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=none"
-		REVIEW_CONSOLIDATOR_REASONING="none"
+		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=low"
+		REVIEW_CONSOLIDATOR_REASONING="low"
 		;;
 esac
 

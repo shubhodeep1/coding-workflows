@@ -14,6 +14,16 @@ name: AI Implement
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'medium' }}
+  # MODEL_DIAGNOSE drives the post-Codex diagnose step
+  # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
+  # prompt guide that step is research/synthesis, not coding, so it
+  # defaults to gpt-5.4 rather than gpt-5.3-codex. Override via
+  # vars.WORKFLOW_DIAGNOSE_MODEL on a per-repo basis.
+  MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-5.4' }}
+  MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'medium' }}
+  # Repair phases are narrow execution-heavy tasks (apply a known fix to a
+  # known location). Per the guide we drop reasoning to low for them.
+  MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
@@ -443,15 +453,7 @@ jobs:
             fi
           done
 
-          # unattended_llm_system_instructions.md staging note: the file
-          # is required by build_static_context.sh's implement branch to
-          # emit the UNATTENDED EXECUTION OVERRIDE block. Without it, the
-          # model sees only the STOP-and-ASK rules from
-          # codex_system_instructions.md / agents.md and no override
-          # context, which can drive the gpt-5.3-codex
-          # announce-without-emit failure mode. Stage it alongside the
-          # other system-instruction files.
-          for f in codex_system_instructions.md unattended_llm_system_instructions.md ai_pipeline.md; do
+          for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
@@ -854,8 +856,6 @@ jobs:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
-          TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
-          TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
@@ -872,393 +872,49 @@ jobs:
 
           Your task is to implement the approved implementation plan.
 
-          IMPORTANT: The system instructions, AI pipeline spec, and agents.md are provided
-          ABOVE in this prompt. Do NOT read pre_assembled_static.txt or any of the individual
-          source files — they are already loaded.
+          Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
 
-          The implementation context (issue description, clarification answers, approved
-          plan, and comments) is provided BELOW at the end of this prompt — do NOT read
-          implementation_context.txt separately.
+          The system context (`unattended_system_instructions.md`) above already
+          defines the persistence rule, edit-tool discipline (apply_patch first,
+          fallbacks, the gpt-5.3-codex#11151 carve-out), no-revert /
+          no-destructive-git rules, and parallel-reads guidance. Apply them.
 
-          Implement the approved implementation plan. Modify only the files the plan requires; keep changes minimal and safe.
+          Efficiency:
+          - Aim to keep total tool calls (MCP + shell exec combined) under
+            TOOL_CALL_BUDGET. For large refactors that legitimately need more,
+            exceeding the budget is acceptable — it is a guideline, not a cap.
+          - Read targeted line ranges via the read tool when available; fall
+            back to shell only when the tool surface does not cover the case.
+            When you need multiple files, request them in parallel via the
+            read tool.
+          - Do not re-read the same file region; do not run `git diff` to
+            display your own changes at end of run (the CI pipeline handles
+            commit/diff reporting). Intermediate `git diff --stat` scoped to
+            the edited file is fine.
+          - Output repository changes only — no progress/status narration.
 
-          EFFICIENCY RULES (MANDATORY — reduces token waste):
-          - The files named in the approved plan's "Files likely to change" set
-            are already inlined verbatim under "=== TARGETED FILE CONTEXT ===" below.
-            Do NOT issue shell reads (`sed`, `cat`, `rg`, `head`, `awk`, ...) to
-            re-fetch THOSE files — jump straight to apply_patch using the inlined
-            contents as ground truth.
-          - When the plan does NOT contain a "Files likely to change" section, or
-            when no TARGETED FILE CONTEXT block appears below, targeted shell
-            discovery (`rg <symbol>`, `grep -n <pattern>`, `sed -n '<n>,<m>p'`) is
-            the right tool — use it, but request specific patterns / line ranges
-            rather than full-file sweeps. The restriction above is about avoiding
-            duplicate reads of files already inlined, not about banning shell
-            discovery in general.
-          - For ANY file not present in TARGETED FILE CONTEXT, request only the
-            specific line range you need. Do NOT read entire files speculatively,
-            and do NOT run repeated `rg`/`grep` sweeps to re-discover structure
-            the plan or a previous read already described.
-          - Never read the same file region twice. Plan your reads upfront.
-          - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
-            For large refactors that touch many files, exceeding the budget is acceptable —
-            the budget is a guideline to prevent waste, not a hard cap.
-          - Batch shell searches with && or ;.
-          - Do NOT run `git diff` to display your own changes at the end of the
-            run. The CI pipeline handles commit and diff reporting separately.
-            (Intermediate `git diff --stat` checks scoped to the edited file
-            during edit verification — see EDIT TOOL DISCIPLINE below — are
-            fine; this prohibition is about end-of-run change reporting only.)
-          - Do NOT emit progress/status messages. Output ONLY repository changes.
-
-          EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls):
-          - `apply_patch` is the preferred write tool for surgical edits to existing
-            source files (.sol, .ts, .py, .js, .go, .rs, .java, .json, etc.) — it
-            produces the cleanest diff and the smallest blast radius.
-          - If `apply_patch` does not land on a particular hunk, fall back to your
-            best judgment: a different `apply_patch` shape, a shell heredoc or
-            `printf` redirected to the target file for fully-specified
-            plain-text files (.txt, .csv, small data fixtures), or any other
-            write tool you have available. Pick whatever gets the bytes onto
-            disk this turn — what matters is that the file actually changes.
-          - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
-            source — they exit 0 even when the regex misses, leaving the
-            file unchanged. After ANY shell write, verify with
-            `git diff --stat` (scoped to the edited file as needed); if zero
-            lines changed, switch tools instead of retrying the same regex
-            shape.
-          - Returning an empty completion or a final assistant message that only
-            describes the fix ("I will apply_patch …", "applying the requested
-            edit now", "the resolution is straightforward") is a FAILURE. The
-            workflow's stuck-detection counts these as no-actionable-output and
-            bails after 2 consecutive attempts. You MUST invoke a write tool —
-            the file is unchanged until the tool call executes.
-          - Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
-            invocation without emitting the tool call on some inputs
-            (openai/codex#11151). The fallback paths above exist for that case.
-
-          CONFLICT DETECTION:
-          - Flag any factual conflicts between the implementation plan and the actual
-            codebase (e.g., a function name in the plan doesn't match the code, a file
-            path referenced in the plan doesn't exist, or an API signature differs).
-          - When a conflict is found, note it clearly in your output and proceed with the
-            codebase truth (not the plan's assumption).
+          Conflict detection: if the plan's facts conflict with the actual
+          codebase (function name mismatch, file path absent, API signature
+          differs), proceed with the codebase truth and note the conflict in
+          your output.
 
           Test verification:
-
-          - If `pytest` is not installed, install it via `pip install pytest` before running.
-          - When running `npm test`, treat "Missing script" errors as a pass (the project
-            has no tests defined), but treat any other test failure as a real error.
+          - If `pytest` is not installed, install it via `pip install pytest`.
+          - For `npm test`, treat "Missing script" errors as a pass; treat any
+            other test failure as a real error.
 
           Restrictions:
-
-          - Do not ask clarification questions.
-          - Missing repo-level context files (`agents.md`, `db/contracts/*.yml`,
-            `README.md`, app-level `AGENTS.md`) are NOT blockers. The
-            "PRE-TASK MANDATORY CONTEXT LOADING" preamble in the system
-            instructions ("STOP and ask using mandatory Q/A format" when any
-            of those are missing) is OVERRIDDEN for this unattended run by
-            the UNATTENDED EXECUTION OVERRIDE block in your context — see its
-            §3 ("If a file is missing: continue with available context, note
-            the limitation. Never fabricate contents.") and §4 (Unattended
-            Decision Policy). Continue with the available context and never
-            STOP/ASK on missing context files. If a non-obvious assumption is
-            required, encode it as a code comment in the file you're editing
-            (the assumption is then itself a repository change, consistent
-            with "Output ONLY repository changes" / "Your output should be
-            repository changes only" elsewhere in this prompt) — do not emit
-            assumptions as narrative output.
+          - Do not ask clarification questions (unattended runtime).
           {{WORKFLOW_EDIT_RESTRICTION}}
-          - Do not modify ai_pipeline.md or codex_system_instructions.md.
+          - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
 
-          Your output should be repository changes only.
+          Output: repository changes only.
           EOF
 
-          # Targeted file context: parse the approved plan's "Files likely to
-          # change" section, inline each named file's contents into the prompt
-          # so Codex can apply_patch without first issuing shell reads to
-          # discover their structure. This addresses the gpt-5.3-codex
-          # "announce-without-emit" failure mode (openai/codex#11151) where
-          # the agent burns its budget on rg/sed exploration of files the
-          # plan already named, then bails before invoking apply_patch.
-          # Bounded by file count + total bytes so large-refactor plans
-          # don't bloat the prompt past provider limits.
-          TARGETED_FILES_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
-          : > "${TARGETED_FILES_FILE}"
-          # Validate the repo-var-sourced caps before they reach numeric
-          # comparisons / arithmetic. Under `set -euo pipefail` a
-          # non-numeric value (typo, trailing whitespace, accidental
-          # quote) would make `[ -ge ]` or `$((...))` error out and
-          # abort the whole implement step — turning a config typo into
-          # a hard CI failure. Fall back to defaults with a `::warning::`
-          # so operators see the misconfig but the run still completes.
-          TARGETED_MAX_FILES="${TARGETED_FILE_CONTEXT_MAX_FILES:-10}"
-          if ! [[ "${TARGETED_MAX_FILES}" =~ ^[0-9]+$ ]]; then
-            echo "::warning::Targeted file context: TARGETED_FILE_CONTEXT_MAX_FILES='${TARGETED_MAX_FILES}' is not a non-negative integer; falling back to default 10. Set vars.TARGETED_FILE_CONTEXT_MAX_FILES to a digits-only value (e.g. 10) to silence this warning."
-            TARGETED_MAX_FILES=10
-          fi
-          TARGETED_MAX_BYTES="${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
-          if ! [[ "${TARGETED_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
-            echo "::warning::Targeted file context: TARGETED_FILE_CONTEXT_MAX_BYTES='${TARGETED_MAX_BYTES}' is not a non-negative integer; falling back to default 102400 (100KB). Set vars.TARGETED_FILE_CONTEXT_MAX_BYTES to a digits-only value (e.g. 102400) to silence this warning."
-            TARGETED_MAX_BYTES=102400
-          fi
-
-          # Extract paths from the plan's "Files likely to change" section.
-          # Accepts every section-start form the rest of the workflow already
-          # produces or accepts: bold (`**Files likely to change**`), ATX
-          # heading (`## Files likely to change`), numbered list
-          # (`1. Files likely to change` — the canonical mode-plan.txt form),
-          # plain heading (`Files to change`), and the `1)` numbered variant.
-          # The end of the section is the next peer header at the same depth.
-          # Inside the section, both backticked paths and bare path-like
-          # tokens on list-item lines are extracted; lexical filters reject
-          # absolute paths and parent-traversal tokens. (The follow-up
-          # symlink check below is what actually keeps a malformed plan
-          # from inlining files outside the workspace — the lexical filter
-          # alone is not sufficient.) mawk-compatible: each `if` test is
-          # one statement because mawk does not parse multi-line `if` heads.
-          targeted_paths_raw="$(
-            awk '
-              {
-                orig_line = $0
-                lc = tolower(orig_line)
-                start_match = 0
-                if (lc ~ /^[[:space:]]{0,3}files[[:space:]]+[^\n]*change/) start_match = 1
-                if (lc ~ /^[[:space:]]{0,3}#+[[:space:]]+files[[:space:]]+[^\n]*change/) start_match = 1
-                if (lc ~ /^[[:space:]]{0,3}\*\*files[[:space:]]+[^\n]*change/) start_match = 1
-                if (lc ~ /^[[:space:]]{0,3}[0-9]+[.][[:space:]]+files[[:space:]]+[^\n]*change/) start_match = 1
-                if (lc ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+files[[:space:]]+[^\n]*change/) start_match = 1
-                if (start_match && !in_section) {
-                  in_section = 1
-                  # Track ATX heading depth at section start so the
-                  # end-rule below can distinguish a peer-or-shallower
-                  # heading (which terminates the section) from a nested
-                  # subheading like "### Backend files" inside the
-                  # section (which must NOT terminate). For non-ATX
-                  # starts (bold, numbered, plain) leave depth=0 to
-                  # preserve the prior behaviour where any ATX heading
-                  # closes the section.
-                  section_start_depth = 0
-                  if (orig_line ~ /^[[:space:]]{0,3}#+[[:space:]]+/) {
-                    match(orig_line, /#+/)
-                    section_start_depth = RLENGTH
-                  }
-                  next
-                }
-              }
-              {
-                # Section end: peer header at same depth.
-                # ATX end is gated by section-start depth (tracked in
-                # section_start_depth at the section-start branch above):
-                # an ATX section like "## Files likely to change" closes
-                # only on a peer-or-shallower ATX heading ("## Functions",
-                # "# Anything"), NOT on a nested deeper heading like
-                # "### Backend files" inside the section. Non-ATX section
-                # starts (bold/numbered/plain) leave section_start_depth=0
-                # and any ATX heading still terminates them (current
-                # behaviour preserved).
-                # Numbered-item end is gated: the body after the "1."
-                # prefix MUST look like a section TITLE, not a path entry.
-                # Plans written as "1. Files likely to change /
-                # 1. `src/foo.ts` / 2. `src/bar.ts`" must keep the section
-                # open through the numbered children — only the next
-                # numbered title (multi-word natural-language phrase, like
-                # "2. Functions/modules to implement") should close it.
-                # is_path_entry rule: a numbered line is a path entry
-                # (= keep section open) if its body begins with a backtick
-                # OR its first whitespace-token contains "/" AND ends with
-                # a file-extension dot-suffix. Case-agnostic — handles
-                # both "1. src/foo.ts" and "1. API/Button.tsx".
-                end_match = 0
-                if (in_section && orig_line ~ /^[[:space:]]*\*\*[^*]+\*\*[[:space:]]*$/) end_match = 1
-                if (in_section && orig_line ~ /^[[:space:]]{0,3}#+[[:space:]]+[^[:space:]]/) {
-                  match(orig_line, /#+/)
-                  this_atx_depth = RLENGTH
-                  if (section_start_depth == 0 || this_atx_depth <= section_start_depth) end_match = 1
-                }
-                numbered_peer = 0
-                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[.][[:space:]]+[^[:space:]]/) numbered_peer = 1
-                if (in_section && orig_line ~ /^[[:space:]]{0,3}[0-9]+[)][[:space:]]+[^[:space:]]/) numbered_peer = 1
-                if (numbered_peer) {
-                  numbered_body = orig_line
-                  sub(/^[[:space:]]{0,3}[0-9]+[.][[:space:]]+/, "", numbered_body)
-                  sub(/^[[:space:]]{0,3}[0-9]+[)][[:space:]]+/, "", numbered_body)
-                  numbered_first = numbered_body
-                  sub(/[[:space:]].*/, "", numbered_first)
-                  # is_path_entry test: a numbered child whose body looks
-                  # like a file path, not a section title.
-                  #   1) Body starts with a backtick — backticked path.
-                  #   2) First whitespace-token contains "/" AND ends with
-                  #      a file-extension dot-suffix (".ts", ".sol", etc.).
-                  # The extension-dot rule is case-agnostic, so plans that
-                  # use uppercase-starting paths like "1. API/foo.ts" are
-                  # recognised correctly. Section titles like
-                  # "2. Functions/modules to implement" do not end with a
-                  # dot-extension, so they still close the section.
-                  is_path_entry = 0
-                  if (numbered_body ~ /^`/) is_path_entry = 1
-                  if (numbered_first ~ /\// && numbered_first ~ /\.[A-Za-z0-9]{1,8}$/) is_path_entry = 1
-                  if (!is_path_entry) end_match = 1
-                }
-                if (end_match) in_section = 0
-              }
-              in_section {
-                tmp = orig_line
-                while (match(tmp, /`[^`]+`/)) {
-                  token = substr(tmp, RSTART + 1, RLENGTH - 2)
-                  tmp = substr(tmp, RSTART + RLENGTH)
-                  if (token ~ /^[A-Za-z0-9._/-]+$/ && token !~ /^\// && token !~ /\.\./) {
-                    print token
-                  }
-                }
-                is_list_item = 0
-                if (orig_line ~ /^[[:space:]]*[-*+][[:space:]]+/) is_list_item = 1
-                if (orig_line ~ /^[[:space:]]*[0-9]+[.][[:space:]]+/) is_list_item = 1
-                if (orig_line ~ /^[[:space:]]*[0-9]+[)][[:space:]]+/) is_list_item = 1
-                if (is_list_item) {
-                  body = orig_line
-                  sub(/^[[:space:]]*[-*+][[:space:]]+/, "", body)
-                  sub(/^[[:space:]]*[0-9]+[.][[:space:]]+/, "", body)
-                  sub(/^[[:space:]]*[0-9]+[)][[:space:]]+/, "", body)
-                  n = split(body, words, /[[:space:]]+/)
-                  for (i = 1; i <= n; i++) {
-                    w = words[i]
-                    gsub(/^[`(\[<{"]+/, "", w)
-                    gsub(/[`)\],.;:!?>}"]+$/, "", w)
-                    if (w ~ /^[A-Za-z0-9._/-]+$/ && w ~ /\// && w !~ /^\// && w !~ /\.\./) {
-                      print w
-                    }
-                  }
-                }
-              }
-            ' "${PLAN_FILE}" 2>/dev/null | awk '!seen[$0]++' || true
-          )"
-
-          # Workspace-root anchor for the symlink safety check below.
-          # GITHUB_WORKSPACE is set by the runner; fall back to PWD locally.
-          # Resolve once so per-path realpath comparisons are fast and stable.
-          ws_root="${GITHUB_WORKSPACE:-${PWD}}"
-          ws_resolved="$(realpath -e -- "${ws_root}" 2>/dev/null || printf '%s' "${ws_root}")"
-
-          inlined_count=0
-          inlined_bytes=0
-          if [ -n "${targeted_paths_raw}" ]; then
-            while IFS= read -r path; do
-              # Defensive whitespace trim. The here-string below feeds
-              # `${targeted_paths_raw}` flush-left, but a future caller
-              # that builds the variable from a different source could
-              # leak indentation; trimming makes the loop tolerant of
-              # either input shape.
-              path="${path#"${path%%[![:space:]]*}"}"
-              path="${path%"${path##*[![:space:]]}"}"
-              [ -z "${path}" ] && continue
-              if [ "${inlined_count}" -ge "${TARGETED_MAX_FILES}" ]; then
-                echo "::notice::Targeted file context: ${TARGETED_MAX_FILES}-file cap reached; skipping remaining plan files."
-                break
-              fi
-              # Credential-bearing path denylist (defense in depth — the
-              # plan is LLM-produced and not fully trusted). Earlier in
-              # this workflow `git remote set-url origin
-              # "https://x-access-token:${GH_TOKEN}@..."` writes GH_PAT
-              # in plaintext into .git/config, and other dotfiles
-              # commonly hold secrets (.env, .npmrc, .pypirc,
-              # .netrc, etc.). Reject any plan-named path that
-              # resolves into one of these so a malformed or malicious
-              # plan cannot exfiltrate credentials into the prompt sent
-              # to OpenRouter. The check runs against both the
-              # plan-supplied STRING and (after realpath below) the
-              # resolved location — symlink-into-.git is also blocked.
-              denied_path=0
-              case "${path}" in
-                .git|.git/*|*/.git|*/.git/*) denied_path=1 ;;
-                .gitmodules|*/.gitmodules) denied_path=1 ;;
-                .env|.env.*|*/.env|*/.env.*) denied_path=1 ;;
-                .npmrc|*/.npmrc|.pypirc|*/.pypirc|.netrc|*/.netrc) denied_path=1 ;;
-                .ssh|.ssh/*|*/.ssh|*/.ssh/*) denied_path=1 ;;
-              esac
-              if [ "${denied_path}" -eq 1 ]; then
-                echo "::warning::Targeted file context: refusing plan file '${path}' (denylist: .git/*, .env*, .npmrc, .pypirc, .netrc, .ssh/* commonly contain credentials and must not enter the LLM prompt)."
-                continue
-              fi
-              if [ ! -e "${path}" ]; then
-                echo "::notice::Targeted file context: skipping plan file '${path}' (not present in worktree; codex will explore if needed)."
-                continue
-              fi
-              # Symlink safety: resolve the path and confirm it stays under
-              # the workspace root. The lexical filters above only screen
-              # the plan-supplied STRING; a checked-in symlink whose name
-              # passes the filter could still point at /proc/self/environ
-              # or any other runner-local file, exfiltrating it into the
-              # prompt sent to OpenRouter. Reject anything that resolves
-              # outside ${ws_resolved}.
-              resolved_path="$(realpath -e -- "${path}" 2>/dev/null || true)"
-              if [ -z "${resolved_path}" ]; then
-                echo "::notice::Targeted file context: skipping plan file '${path}' (realpath failed; possible broken symlink)."
-                continue
-              fi
-              case "${resolved_path}/" in
-                "${ws_resolved}/"*) ;;
-                *)
-                  echo "::warning::Targeted file context: refusing plan file '${path}' — resolves to '${resolved_path}' outside workspace '${ws_resolved}'. Possible symlink escape attempt."
-                  continue
-                  ;;
-              esac
-              # Resolved-path denylist (catches symlink-into-.git etc.).
-              # Mirrors the plan-string denylist above, run after symlink
-              # resolution so a checked-in symlink at, say, `notes.md ->
-              # .git/config` is also rejected.
-              denied_resolved=0
-              case "${resolved_path}/" in
-                "${ws_resolved}/.git/"*) denied_resolved=1 ;;
-                "${ws_resolved}/.ssh/"*) denied_resolved=1 ;;
-              esac
-              case "${resolved_path}" in
-                "${ws_resolved}/.gitmodules") denied_resolved=1 ;;
-                "${ws_resolved}/.env"|"${ws_resolved}/.env."*) denied_resolved=1 ;;
-                "${ws_resolved}/.npmrc"|"${ws_resolved}/.pypirc"|"${ws_resolved}/.netrc") denied_resolved=1 ;;
-              esac
-              if [ "${denied_resolved}" -eq 1 ]; then
-                echo "::warning::Targeted file context: refusing plan file '${path}' — resolves to credential-bearing path '${resolved_path}'. Possible symlink-into-secret attempt."
-                continue
-              fi
-              if [ ! -f "${resolved_path}" ]; then
-                echo "::notice::Targeted file context: skipping plan file '${path}' — resolves to non-regular file '${resolved_path}'."
-                continue
-              fi
-              fsize="$(wc -c < "${resolved_path}" 2>/dev/null || echo 0)"
-              if [ "$((inlined_bytes + fsize))" -gt "${TARGETED_MAX_BYTES}" ]; then
-                echo "::notice::Targeted file context: ${TARGETED_MAX_BYTES}-byte cap would be exceeded by '${path}' (${fsize}B); skipping (already inlined ${inlined_bytes}B)."
-                continue
-              fi
-              # Label with the plan-supplied path (what the model should
-              # apply_patch against) but read bytes from the resolved path
-              # so the symlink check above is the source of truth on what
-              # ends up in the prompt.
-              {
-                printf -- '----- FILE: %s -----\n' "${path}"
-                cat "${resolved_path}"
-                printf '\n'
-              } >> "${TARGETED_FILES_FILE}"
-              inlined_count=$((inlined_count + 1))
-              inlined_bytes=$((inlined_bytes + fsize))
-            done <<< "${targeted_paths_raw}"
-          fi
-
-          if [ "${inlined_count}" -gt 0 ]; then
-            echo "Targeted file context: inlined ${inlined_count} file(s), ${inlined_bytes} bytes from approved plan."
-          else
-            echo "Targeted file context: no plan files matched (plan may lack a 'Files likely to change' section, or all named paths were missing/over-cap)."
-          fi
-
-          # Build prompt: static context + instructions + targeted file
-          # contents + dynamic implementation context, all inlined so the
-          # model doesn't waste tool calls reading files.
-          # The static prefix (pre_assembled_static.txt) is identical across
-          # all runs, enabling LLM provider prompt-prefix caching. The
-          # targeted file block is appended AFTER the cacheable prefix and
-          # the rendered template so the cache hit on the prefix is preserved
-          # — the targeted block varies per plan and is never expected to be
-          # cache-hit material.
+          # Build prompt: static context + instructions + dynamic implementation context,
+          # all inlined so the model doesn't waste tool calls reading files.
+          # The static prefix (pre_assembled_static.txt) is identical across all
+          # runs, enabling LLM provider prompt-prefix caching.
           {
             cat ./pre_assembled_static.txt
             echo
@@ -1267,19 +923,6 @@ jobs:
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
-            if [ -s "${TARGETED_FILES_FILE}" ]; then
-              echo "=== TARGETED FILE CONTEXT ==="
-              echo "The files below are named in the approved plan's \"Files"
-              echo "likely to change\" section. Their full contents are inlined"
-              echo "here as ground truth. Use them directly with apply_patch —"
-              echo "do NOT issue shell reads to re-fetch them. If the plan also"
-              echo "names files that are absent here, they were missing from the"
-              echo "worktree or exceeded the inlining cap; only those may be read"
-              echo "via shell, and only with targeted line ranges."
-              echo
-              cat "${TARGETED_FILES_FILE}"
-              echo
-            fi
             echo "=== AI MEMORY CONTEXT ==="
             cat "${MEMORY_CONTEXT_FILE}"
             echo
@@ -1992,6 +1635,31 @@ jobs:
             exit 1
           fi
 
+          # Repair phases are narrow execution-heavy tasks (apply a known
+          # fix at a known location). Per the OpenAI prompt guide we drop
+          # reasoning to MODEL_REPAIR_REASONING_EFFORT (default "low") for
+          # them, distinct from the editor's MODEL_REASONING_EFFORT
+          # (default "medium"). Patch ~/.codex/config.toml in-place so
+          # `codex exec` honors it (the CLI has no --reasoning-effort
+          # flag). Validate against the known set first; fall back with a
+          # warning on a typo.
+          REPAIR_REASONING="${MODEL_REPAIR_REASONING_EFFORT:-low}"
+          case "${REPAIR_REASONING}" in
+            xhigh|high|medium|low|none) ;;
+            *)
+              echo "::warning::Invalid MODEL_REPAIR_REASONING_EFFORT='${REPAIR_REASONING}'. Falling back to 'low'."
+              REPAIR_REASONING="low"
+              ;;
+          esac
+          REPAIR_CODEX_CONFIG="${HOME:-/root}/.codex/config.toml"
+          if [ -f "${REPAIR_CODEX_CONFIG}" ] && grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${REPAIR_CODEX_CONFIG}"; then
+            sed -i \
+              -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${REPAIR_REASONING}\"/" \
+              -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${REPAIR_REASONING}\"/" \
+              "${REPAIR_CODEX_CONFIG}" || true
+            echo "Patched ~/.codex/config.toml: model_reasoning_effort=${REPAIR_REASONING} for repair phase."
+          fi
+
           : > "${INITIAL_CHANGED_FILE}"
           while IFS= read -r -d '' path; do
             printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
@@ -2375,9 +2043,9 @@ jobs:
           # the commit if either:
           #
           #   (a) any deletion touches the canonical workflow-source list
-          #       (agents.md, ai_pipeline.md, codex_system_instructions.md,
-          #        unattended_llm_system_instructions.md, prompts/**,
-          #        scripts/**, .github/ai/**) and ALLOW_WORKFLOW_EDITS is
+          #       (agents.md, ai_pipeline.md, unattended_system_instructions.md,
+          #        CLAUDE.md, prompts/**, scripts/**, .github/ai/**) and
+          #       ALLOW_WORKFLOW_EDITS is
           #       not set to 'true'. Even on self-repo runs, deleting any
           #       of these files is almost never what an issue asked for;
           #       legitimate workflow-editing issues must opt in.
@@ -2397,7 +2065,7 @@ jobs:
           deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
           if [ -n "${deleted_staged}" ]; then
             canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
-              | grep -E '^(agents\.md|ai_pipeline\.md|codex_system_instructions\.md|unattended_llm_system_instructions\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
+              | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
             threshold="${BULK_DELETE_THRESHOLD:-3}"
@@ -3491,6 +3159,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           JOB_STATUS: ${{ job.status }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Diagnose is research/synthesis (parse stderr+diff, emit JSON)
+          # rather than coding, so it runs on gpt-5.4 instead of
+          # gpt-5.3-codex. The script reads MODEL_DIAGNOSE first and
+          # falls back to MODEL_EDITOR for backward compatibility.
+          MODEL_DIAGNOSE: ${{ env.MODEL_DIAGNOSE }}
+          MODEL_DIAGNOSE_REASONING_EFFORT: ${{ env.MODEL_DIAGNOSE_REASONING_EFFORT }}
         run: |
           set -euo pipefail
           bash scripts/implement_diagnose_post_codex_failure.sh

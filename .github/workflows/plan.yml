@@ -39,7 +39,10 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       SKIP_PLAN: "false"
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
+      # Plan is research-heavy (read repo + clarify history + plan a
+      # ≤60-min implementation) → medium reasoning per the OpenAI guide.
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_PLAN || 'medium' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_PLAN || 'low' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
@@ -269,7 +272,7 @@ jobs:
             fi
           done
 
-          for f in codex_system_instructions.md ai_pipeline.md; do
+          for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
@@ -859,8 +862,9 @@ jobs:
           - If checked-out ref mismatches Integration branch metadata, emit exactly
             `BLOCKED: integration branch mismatch`.
           - If any answer is missing, contradictory, or unclear after best-effort interpretation,
-            do NOT guess: return clarification questions in the codex_system_instructions.md
-            mandatory Q<ID>/Choices format and state that clarification is required before planning.
+            do NOT guess: return clarification questions in the Q<ID>/Choices format defined in
+            prompts/mode-plan.txt ("Mandatory Question Format" section) and state that
+            clarification is required before planning.
           - Use repo documentation only; no external web searches.
           - If implementation requires calling external APIs/services, read their official API
             docs and include concrete endpoint/method/parameter details in the plan so the

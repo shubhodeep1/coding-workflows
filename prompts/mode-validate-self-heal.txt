@@ -1,13 +1,4 @@
-You are executing the VALIDATE-SELF-HEAL phase of the AI development pipeline.
-You are Codex v0.114.0 running in unattended CI mode.
-
-All context is inlined directly into the prompt for efficiency:
-- System instructions, AI pipeline spec, agents.md, and README.md appear above.
-- The four current validation prompt files and the failure context appear below.
-
-Do NOT read pre_assembled_static.txt, phase context files, or any other bundled context files.
-
-Your task: determine whether the validation failure was caused by a DEFECT IN ONE OF THE FOUR VALIDATION PROMPT FILES and, if so, emit a minimal unified diff against exactly one of those prompt files that would prevent the failure on a re-run. If the failure was caused by application code, real harness bugs the prompt could not reasonably avoid, or external/infeasible conditions, emit an empty patch.
+Role: validate-self-heal patch proposer. Goal: decide whether the validation failure was caused by a defect in one of the four validation prompt files and, if so, emit a minimal unified diff against exactly one of those files that would prevent the failure on a re-run. Otherwise, emit an empty patch.
 
 Hard constraints:
 - Self-heal is an OPT-IN behaviour. If the failure is not plausibly caused by wording/schema/guidance in a validation prompt, return an empty patch.
@@ -76,6 +67,6 @@ Rules for `target_prompt` and `patch`:
 
 Guard rails:
 - Never propose a patch that changes a JSON schema field name or type in the output contract of a validation prompt.
-- Never propose a patch that removes or weakens the "Do not read pre_assembled_static.txt" line or any "Hard constraints" block.
+- Never propose a patch that removes or weakens any "Hard constraints" block in a validation prompt.
 - Never propose a patch that claims to fix a failure you cannot explain with concrete evidence from the inputs.
 - If the prior self-heal attempt targeted the same prompt with a similar-looking hunk and the failure persists, return an empty patch — iterating on the same spot is unlikely to help.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the cacheable "static prefix" portion of the AI prompt.
+# Build the cacheable "static prefix" portion of the AI prompt for unattended
+# codex-cli phases.
 #
 # Splits prompt context into static (constant across runs) and dynamic
 # (per-issue) files. The static prefix is identical across all runs of a
@@ -11,33 +12,34 @@
 # via a tool call) to avoid wasting a tool call round-trip and the token
 # overhead of a tool response envelope.
 #
-# Phase-specific trimming (extracted from the previous inline implementations
-# in clarify.yml / plan.yml / implement.yml). plan and implement outputs are
-# byte-identical to their inline predecessors. clarify trims one fewer
-# section after a pre-existing inline-awk bug was fixed in this extraction
-# (the `^# Phase 2` anchor never matched the level-2 `## Phase 2` heading);
-# the rest of the clarify pipeline is unchanged from the inline form.
+# All three phases share the same shape: the full
+# unattended_system_instructions.md (already trimmed for unattended codex
+# use — no STOP-and-ASK rules, no FINAL REMINDER), plus a phase-trimmed
+# slice of ai_pipeline.md, plus agents.md, plus a README.md trim for
+# non-implement phases.
 #
-#   clarify   — codex sections 0-2 (through Ask-First) + FINAL REMINDER;
-#               ai_pipeline.md Phase 1 only;
-#               README.md trimmed before "### 2. Create wrapper workflows".
-#   plan      — codex sections 0-6 + FINAL REMINDER;
-#               ai_pipeline.md trimmed before Phase 3;
-#               README.md trimmed before "### 2. Create wrapper workflows".
-#   implement — codex sections 0-6 + section 9 (Code Style) + FINAL REMINDER;
-#               unattended_llm_system_instructions.md (full) — inlined as
-#               an EXPLICIT override of codex's STOP-and-ASK rules so the
-#               unattended-execution policy is concretely present, not
-#               only referenced by name from codex §2;
-#               ai_pipeline.md Shared Runtime + Phase 3 only;
-#               agents.md canonical + repo-local; README.md NOT included.
+# agents.md handling differs by phase:
+#   - clarify, plan: emit only the consumer repo's local agents.md
+#     (when present).
+#   - implement: emit the canonical agents_canonical.md staged from
+#     .codex-workflow-src (when "${RUNTIME_DIR}/agents_canonical.md" is
+#     present, i.e. the consumer-repo flow), followed by the consumer's
+#     local agents.md (when present). Both are emitted because the
+#     implement phase is the one that actually edits files and benefits
+#     from the canonical repo-architecture facts on top of the consumer's
+#     own.
+#
+# Phase-specific ai_pipeline.md trims:
+#   clarify   — Phase 1 only (stop at "## Phase 2").
+#   plan      — Phases 1+2 (stop at "## Phase 3").
+#   implement — Shared Runtime + Phase 3 (skip Failure Handling).
 #
 # Usage:
 #   build_static_context.sh <phase> <output-file>
 #
-# Inputs (read from CWD): codex_system_instructions.md, ai_pipeline.md,
+# Inputs (read from CWD): unattended_system_instructions.md, ai_pipeline.md,
 # agents.md, README.md. For the implement phase, also reads
-# "${RUNTIME_DIR}/agents_canonical.md" if present.
+# "${RUNTIME_DIR}/agents_canonical.md" if present (consumer-repo flow).
 
 set -euo pipefail
 
@@ -50,172 +52,26 @@ fi
 phase="$1"
 output="$2"
 
-if [ ! -f codex_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
-	echo "Missing required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md" >&2
+if [ ! -f unattended_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
+	echo "Missing required input file(s): unattended_system_instructions.md and/or ai_pipeline.md" >&2
 	exit 1
 fi
 
-case "${phase}" in
-	clarify)
-		{
-			echo "=== SYSTEM INSTRUCTIONS (clarification-trimmed) ==="
-			# Extract: header through end of section 2 (Ask-First Mode / question
-			# format). This includes the Prime Directive, Core Priorities, and
-			# the mandatory Q/A format — everything needed for clarification.
-			# Stop at section 3 ("## 3.") which begins execution-phase rules.
-			awk '/^## 3\. /{exit} {print}' codex_system_instructions.md
-			# Append the FINAL REMINDER since it reinforces ask-first behavior
-			echo
-			awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
-			echo
-			echo "=== AI PIPELINE (Phase 1 — Clarification) ==="
-			# Extract only the relevant sections: Overview, Commands, Phase 1,
-			# and Shared Runtime Behavior. Stop before the level-2 Phase 2
-			# heading. ai_pipeline.md uses "## Phase 2 — Planning"; the
-			# previous pattern `^# Phase 2` never matched the level-2
-			# heading, so this trim was a no-op and the clarify static
-			# context silently included Phase 2/3 content.
-			awk '/^## Phase 2/{exit} {print}' ai_pipeline.md
-			echo
-			if [ -f agents.md ]; then
-				echo "=== AGENTS.MD ==="
-				cat agents.md
-				echo
-			fi
-			if [ -f README.md ]; then
-				echo "=== README.MD (trimmed) ==="
-				# Include the overview/setup/conventions section but exclude
-				# the wrapper-workflow + automation runbooks that follow, which
-				# are irrelevant to clarification. The previous anchors
-				# (`### GitHub AI Automation` / `### Decimal128 switchover`) do
-				# not exist in the current README, so the awk ran to EOF and
-				# the trim was a no-op — the entire 1748-line README was
-				# bundled into the clarify static context. Switch to the same
-				# anchor the plan phase already uses.
-				awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
-				echo
-			fi
-			if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
-				echo "=== OVERFLOW REFERENCE ==="
-				echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
-				echo
-			fi
-		} > "${output}"
-		;;
-	plan)
-		{
-			echo "=== SYSTEM INSTRUCTIONS (planning-trimmed) ==="
-			# Include sections 0-6 + FINAL REMINDER; skip section 7+.
-			awk '/^## 7\./{exit} {print}' codex_system_instructions.md
-			echo
-			awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
-			echo
+emit_system_instructions() {
+	echo "=== SYSTEM INSTRUCTIONS (unattended) ==="
+	cat unattended_system_instructions.md
+	echo
+}
 
-			echo "=== AI PIPELINE (planning-trimmed) ==="
-			# Keep shared runtime + clarify/planning context; stop before phase 3.
-			awk '/^## Phase 3/{exit} {print}' ai_pipeline.md
-			echo
-
-			if [ -f agents.md ]; then
-				echo "=== AGENTS.MD ==="
-				cat agents.md
-				echo
-			fi
-			if [ -f README.md ]; then
-				echo "=== README.MD (trimmed) ==="
-				# Keep overview/variables; exclude wrapper/automation docs.
-				awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
-				echo
-			fi
-			if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
-				echo "=== OVERFLOW REFERENCE ==="
-				echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
-				echo
-			fi
-		} > "${output}"
-		;;
-	implement)
-		{
-			echo "=== SYSTEM INSTRUCTIONS (implementation-trimmed) ==="
-			# Include sections 0-6 + code style + FINAL REMINDER.
-			awk '/^## 7\./{exit} {print}' codex_system_instructions.md
-			echo
-			awk '/^## 9\. Code Style/,/^## 10\./{if ($0 ~ /^## 10\./) exit; print}' codex_system_instructions.md
-			echo
-			awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
-			echo
-
-			# Inline the unattended-execution override. The implement phase
-			# runs non-interactively on a GitHub Actions runner; the model
-			# cannot ask the user a question. The static prefix above
-			# contains the PRE-TASK MANDATORY CONTEXT LOADING preamble
-			# ("STOP and ask using mandatory Q/A format" if agents.md /
-			# db/contracts/ are missing), §0 Prime Directive ("STOP. ASK.
-			# DO NOT PROCEED" on uncertainty), and FINAL REMINDER ("If
-			# uncertainty exists: ASK"). Without the override file inlined,
-			# the model sees only a NAME-reference at §2 to
-			# unattended_llm_system_instructions.md and must trust that
-			# pointer against three concrete "ASK" rules — empirically it
-			# does not, and on consumer repos that lack agents.md / a
-			# db/contracts/ tree (e.g. fun-token-multi-chain, run
-			# 25406869763 issue #195) the model enters an
-			# "I should ask but I am forbidden to ask" stuck state that
-			# manifests as narration-without-apply_patch, tripping the
-			# implement.yml empty_streak watchdog after 2 attempts.
-			# Inlining §0–§6 of the override here makes the
-			# "never ask, continue on missing files" policy CONCRETELY
-			# present in the same context window as the rules it overrides.
-			if [ -f unattended_llm_system_instructions.md ]; then
-				echo "=== UNATTENDED EXECUTION OVERRIDE (governs this run) ==="
-				echo "This run is non-interactive. The rules below OVERRIDE the corresponding sections of SYSTEM INSTRUCTIONS above for the duration of this run — specifically the PRE-TASK MANDATORY CONTEXT LOADING 'STOP and ask if missing' rule, §0 Prime Directive's 'STOP. ASK. DO NOT PROCEED', §2 Always-On Ask-First Mode, and the FINAL REMINDER's 'If uncertainty exists: ASK'."
-				echo
-				cat unattended_llm_system_instructions.md
-				echo
-			else
-				# Loud signal: silent omission would leave the model with the
-				# original SYSTEM INSTRUCTIONS' STOP-and-ASK rules and no
-				# override context, reintroducing exactly the conflict this
-				# block is meant to resolve. Operators who see this warning
-				# should add unattended_llm_system_instructions.md to their
-				# consumer-repo wrapper-workflow staging step (the same step
-				# that already stages codex_system_instructions.md).
-				echo "::warning::build_static_context.sh: unattended_llm_system_instructions.md is missing from the working tree — the implement-phase static context will OMIT the UNATTENDED EXECUTION OVERRIDE block. This leaves the model with the original SYSTEM INSTRUCTIONS' STOP-and-ASK rules and no override context, which can drive the gpt-5.3-codex announce-without-emit failure mode. Stage the file alongside codex_system_instructions.md in your wrapper-workflow bootstrap." >&2
-			fi
-
-			echo "=== AI PIPELINE (implementation-trimmed) ==="
-			# Keep shared runtime behavior and implementation phase details only.
-			awk '
-				/^## Shared Runtime Behavior/{in_shared=1}
-				/^## Phase 1/{in_shared=0}
-				/^## Phase 3/{in_impl=1}
-				/^## Failure Handling/{in_impl=0}
-				{ if (in_shared || in_impl) print }
-			' ai_pipeline.md
-			echo
-
-			# Include agents.md context: canonical from coding-workflows plus
-			# the caller repo's own agents.md (if present). Both are included
-			# so the model has the full picture. Guard RUNTIME_DIR explicitly:
-			# a bare "${RUNTIME_DIR:-}/agents_canonical.md" would test
-			# "/agents_canonical.md" at filesystem root when unset, and the
-			# subsequent cat would trip set -u without a default.
-			#
-			# Both files are verbatim (or near-verbatim) copies of
-			# codex_system_instructions.md's PRE-TASK MANDATORY CONTEXT
-			# LOADING preamble, §0 Prime Directive, §2 Always-On Ask-First
-			# Mode, and FINAL REMINDER. For an unattended run those four
-			# sections conflict with the UNATTENDED EXECUTION OVERRIDE
-			# block above. Without an explicit displacement note the model
-			# can pattern-match the later concrete "STOP and ASK" rules
-			# over the override and re-enter the narrate-without-emit
-			# stuck state — same conflict structure that affected
-			# review_autofix.yml's editor static context. The displacement
-			# note is emitted ONCE before the agents.md cats and names
-			# the four overridden sections by title.
+emit_agents_md() {
+	# Implement phase: include canonical-from-coding-workflows agents_canonical.md
+	# (staged from .codex-workflow-src) followed by the consumer repo's own
+	# agents.md if present. Other phases just emit the local agents.md.
+	# Guard RUNTIME_DIR explicitly under set -u.
+	case "${phase}" in
+		implement)
 			if { [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; } || [ -f agents.md ]; then
 				echo "=== AGENTS.MD ==="
-				echo "NOTE: agents.md (and agents_canonical.md if present) reproduces codex_system_instructions.md's PRE-TASK MANDATORY CONTEXT LOADING preamble, §0 Prime Directive, §2 Always-On Ask-First Mode, and FINAL REMINDER. Those four sections are OVERRIDDEN for this unattended run by the UNATTENDED EXECUTION OVERRIDE block above — see its §0 (Execution Mode: 'Never ask for clarifications or stop due to ambiguity') and §3 (Mandatory Context Loading: 'If a file is missing: continue with available context'). agents.md's repo-specific guidance (custom Q-formats, naming conventions, contract paths, MongoDB rules, code-style conventions, etc.) still applies; only its STOP-and-ASK directives are displaced."
-				echo
 				if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; then
 					cat "${RUNTIME_DIR}/agents_canonical.md"
 					echo
@@ -226,11 +82,71 @@ case "${phase}" in
 					echo
 				fi
 			fi
-			if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
-				echo "=== OVERFLOW REFERENCE ==="
-				echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
+			;;
+		*)
+			if [ -f agents.md ]; then
+				echo "=== AGENTS.MD ==="
+				cat agents.md
 				echo
 			fi
+			;;
+	esac
+}
+
+emit_readme_trimmed() {
+	if [ -f README.md ]; then
+		echo "=== README.MD (trimmed) ==="
+		# Keep overview/setup/conventions; exclude wrapper-workflow + automation runbooks.
+		awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
+		echo
+	fi
+}
+
+emit_overflow_pointer() {
+	if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+		echo "=== OVERFLOW REFERENCE ==="
+		echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
+		echo
+	fi
+}
+
+case "${phase}" in
+	clarify)
+		{
+			emit_system_instructions
+			echo "=== AI PIPELINE (Phase 1 — Clarification) ==="
+			awk '/^## Phase 2/{exit} {print}' ai_pipeline.md
+			echo
+			emit_agents_md
+			emit_readme_trimmed
+			emit_overflow_pointer
+		} > "${output}"
+		;;
+	plan)
+		{
+			emit_system_instructions
+			echo "=== AI PIPELINE (planning-trimmed) ==="
+			awk '/^## Phase 3/{exit} {print}' ai_pipeline.md
+			echo
+			emit_agents_md
+			emit_readme_trimmed
+			emit_overflow_pointer
+		} > "${output}"
+		;;
+	implement)
+		{
+			emit_system_instructions
+			echo "=== AI PIPELINE (implementation-trimmed) ==="
+			awk '
+				/^## Shared Runtime Behavior/{in_shared=1}
+				/^## Phase 1/{in_shared=0}
+				/^## Phase 3/{in_impl=1}
+				/^## Failure Handling/{in_impl=0}
+				{ if (in_shared || in_impl) print }
+			' ai_pipeline.md
+			echo
+			emit_agents_md
+			emit_overflow_pointer
 		} > "${output}"
 		;;
 	*)

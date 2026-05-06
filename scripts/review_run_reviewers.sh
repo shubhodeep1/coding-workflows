@@ -1188,12 +1188,86 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   CROSS_POLLINATION_FILE="$(build_cross_pollination_summary "${PASS1_LEDGER_FILE}")"
   echo "Cross-pollination summary: $(wc -c < "${CROSS_POLLINATION_FILE}") bytes"
 
-  # ── PASS 2: deep review at full thinking, with cross-pollination ──
-  echo "=== PASS 2: Deep review (${REVIEWER_REASONING_EFFORT:-medium} reasoning) ==="
+  # ── PASS 2: deep review with cross-pollination ──
+  # Reasoning effort is gated on the size of LAST_RUN_DIFF_FILE (the
+  # "primary review target" — most recent AI-generated changes).
+  #
+  # Per the OpenAI prompt guide for gpt-5.3-codex:
+  #   "We recommend 'medium' reasoning effort as a good all-around interactive"
+  #   "Use `high` or `xhigh` for hardest tasks"
+  #   "Don't treat reasoning effort as the primary way to improve quality;
+  #    prompt fixes often recover more performance."
+  #
+  # A small diff (one-line tweak, narrow rename) does not benefit from
+  # xhigh — see the editor smoke history at review_autofix.yml:1846 where
+  # gpt-5.3-codex at xhigh on a one-line bait removal burned ~81k tokens
+  # across 6 attempts and produced 0 file changes. A large or cross-
+  # cutting diff (security-sensitive, schema migration, refactor) does
+  # benefit because Pass 2 has cross-pollination context from peer
+  # reviewers and is the last analysis step before the editor commits.
+  #
+  # Default threshold: REVIEWER_PASS2_DIFF_LARGE_LOC=200 (added + removed
+  # lines). Override per-repo via vars.REVIEWER_PASS2_DIFF_LARGE_LOC.
+  #
+  # Smoke runs override REVIEWER_REASONING_EFFORT=low explicitly (set in
+  # review_autofix.yml's "Detect smoke test" step) — the gate honours
+  # that override and never escalates on smoke runs.
+  PASS2_DIFF_LARGE_LOC="${REVIEWER_PASS2_DIFF_LARGE_LOC:-200}"
+  if ! [[ "${PASS2_DIFF_LARGE_LOC}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Invalid REVIEWER_PASS2_DIFF_LARGE_LOC='${PASS2_DIFF_LARGE_LOC}'. Falling back to 200."
+    PASS2_DIFF_LARGE_LOC=200
+  fi
+  PASS2_REASONING_SMALL="${REVIEWER_PASS2_REASONING_SMALL:-medium}"
+  PASS2_REASONING_LARGE="${REVIEWER_PASS2_REASONING_LARGE:-xhigh}"
+  case "${PASS2_REASONING_SMALL}" in xhigh|high|medium|low|none) ;; *)
+    echo "::warning::Invalid REVIEWER_PASS2_REASONING_SMALL='${PASS2_REASONING_SMALL}'. Falling back to medium."
+    PASS2_REASONING_SMALL="medium" ;;
+  esac
+  case "${PASS2_REASONING_LARGE}" in xhigh|high|medium|low|none) ;; *)
+    echo "::warning::Invalid REVIEWER_PASS2_REASONING_LARGE='${PASS2_REASONING_LARGE}'. Falling back to xhigh."
+    PASS2_REASONING_LARGE="xhigh" ;;
+  esac
+
+  # Count diff lines: added (^+) + removed (^-), excluding only the
+  # unified-diff file header lines (`+++ <path>` / `--- <path>`).
+  #
+  # Why awk and not `grep -c '^[+-][^+-]'`: that earlier shape
+  # undercounts content lines whose first character is itself `+` or
+  # `-`, e.g. a real added line `++foo` would not be counted because
+  # position 2 is `+` (matched by `[^+-]`). The file-header lines are
+  # specifically `+++ ` / `--- ` (three consecutive markers followed
+  # by a space + path) per the unified-diff format, so excluding only
+  # that exact shape avoids the under-count without false positives on
+  # content lines that legitimately start with `+++`/`---`.
+  #
+  # Tolerates missing / placeholder LAST_RUN_DIFF_FILE (returns 0).
+  if [ -s "${LAST_RUN_DIFF_FILE}" ]; then
+    PASS2_DIFF_LOC="$(awk '/^[+-]{3} / { next } /^[+-]/ { n++ } END { print n+0 }' "${LAST_RUN_DIFF_FILE}" 2>/dev/null || echo 0)"
+  else
+    PASS2_DIFF_LOC=0
+  fi
+  : "${PASS2_DIFF_LOC:=0}"
+
+  # Operator override always wins: if vars.THINKING_LEVEL_REVIEWER (which
+  # populates REVIEWER_REASONING_EFFORT) is set in repo vars, honour it.
+  # The implicit/default value is "medium" — use the diff-size gate only
+  # when the env is at the default; otherwise the operator's explicit
+  # choice (low for smoke, xhigh for forced-deep, etc.) is final.
+  if [ -n "${REVIEWER_REASONING_EFFORT:-}" ] && [ "${REVIEWER_REASONING_EFFORT}" != "medium" ]; then
+    PASS2_REASONING="${REVIEWER_REASONING_EFFORT}"
+    PASS2_GATE_NOTE="explicit override from REVIEWER_REASONING_EFFORT=${REVIEWER_REASONING_EFFORT}"
+  elif [ "${PASS2_DIFF_LOC}" -ge "${PASS2_DIFF_LARGE_LOC}" ]; then
+    PASS2_REASONING="${PASS2_REASONING_LARGE}"
+    PASS2_GATE_NOTE="diff is ${PASS2_DIFF_LOC} LOC ≥ ${PASS2_DIFF_LARGE_LOC} threshold → escalate"
+  else
+    PASS2_REASONING="${PASS2_REASONING_SMALL}"
+    PASS2_GATE_NOTE="diff is ${PASS2_DIFF_LOC} LOC < ${PASS2_DIFF_LARGE_LOC} threshold → keep default"
+  fi
+  echo "=== PASS 2: Deep review (${PASS2_REASONING} reasoning — ${PASS2_GATE_NOTE}) ==="
   PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
   assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"
 
-  pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "")"
+  pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "${PASS2_REASONING}")"
   echo "Pass 2 complete: ${pass2_successful} reviewers successful."
   reviewers_successful="${pass2_successful}"
 

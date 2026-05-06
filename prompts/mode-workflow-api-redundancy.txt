@@ -17,6 +17,7 @@ Pre-analysis context (read before emitting findings):
 - The in-progress report file supplied in the analysis context block. That file already contains a Deep Audit section with a `### Section 2: GitHub API Call Redundancy Audit` subsection. Read it first. For any consolidation or dead-call finding already raised there with a concrete fix, do NOT restate it — cross-reference its finding ID (e.g. `API-007`) and add only net-new detail (safety gating, alternate fix, or a clarification the downstream implement stage will need). Your role is to extend, not duplicate.
 
 Conservative safety bias:
+- Cite specific files, functions, and line numbers inline next to each finding. Never fabricate file paths, line numbers, function names, or quoted code lines.
 - You MUST tag every finding with exactly one of `SAFE_TO_MERGE`, `NEEDS_VERIFICATION`, or `RISKY_SKIP`.
 - Default to `NEEDS_VERIFICATION` when uncertain. Use `SAFE_TO_MERGE` only when all the following hold:
   - The two calls being merged target the same endpoint or a strict subset of fields, with identical pagination, identical ref/branch/state filters, and identical auth scope.

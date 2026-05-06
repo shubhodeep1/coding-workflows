@@ -47,8 +47,13 @@ name: AI Validate (Reusable)
         value: ${{ jobs.validate.outputs.metadata_file }}
 
 env:
+  # Validate-generate / validate-diagnose / validate-discover are gpt-5.4
+  # (research/synthesis); validate-fix-harness / validate-self-heal are
+  # codex (file edits) — those phases override MODEL_EDITOR locally if
+  # WORKFLOW_VALIDATE_FIX_MODEL is set.
   MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'medium' }}
+  MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
 jobs:
@@ -464,7 +469,7 @@ jobs:
             fi
           fi
 
-          for f in codex_system_instructions.md ai_pipeline.md; do
+          for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               copy_from_ref_or_local "${f}" "${f}"
             fi

@@ -75,7 +75,7 @@ Key properties:
 - One VPS + one registered runner gives "one job at a time" by construction. A shared `concurrency.group` declared by every migrated workflow protects the serialization invariant if a second runner is ever registered or a workflow is duplicated.
 - Each job runs in a fresh container. Three bind mounts every time:
   1. `$RUNNER_HOME/.codex` (whole directory, not just `auth.json` — Codex rewrites via atomic rename, which breaks single-file bind mounts) so token refresh persists across jobs.
-  2. `$GITHUB_WORKSPACE` → `/workspace` (set as `-w`) so `codex exec` reads/writes the checked-out repo, including all repo-local prompt and instruction assets (`CLAUDE.md`, `codex_system_instructions.md`, `unattended_llm_system_instructions.md`, `prompts/`, `.git/`, etc.). Existing prompt assembly is unchanged because the same paths exist inside the container.
+  2. `$GITHUB_WORKSPACE` → `/workspace` (set as `-w`) so `codex exec` reads/writes the checked-out repo, including all repo-local prompt and instruction assets (`CLAUDE.md`, `unattended_system_instructions.md`, `prompts/`, `.git/`, etc.). Existing prompt assembly is unchanged because the same paths exist inside the container.
   3. `$SSH_AUTH_SOCK` for git push/pull and any `ssh`-based MCP tools. `GH_TOKEN` is forwarded as env so `gh` works without re-auth.
 - Tier transitions happen inside the wrapper, transparent to the workflow.
 

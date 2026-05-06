@@ -1,8 +1,4 @@
-You are executing the STALL-RECOVERY JUDGE phase of the AI orchestration pipeline.
-
-A single issue has remained stalled in one phase long enough that deterministic
-recovery actions are no longer sufficient. Your task is to choose the next
-recovery action that best unblocks delivery while minimizing risk.
+Role: stall-recovery judge. Goal: a single issue has stalled in one phase long enough that deterministic recovery actions are no longer sufficient. Choose the next recovery action that best unblocks delivery while minimizing risk.
 
 Context provided in the prompt includes:
 - Issue metadata (issue number, local id, phase, stall minutes, recovery count)

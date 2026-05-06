@@ -21,7 +21,15 @@ name: AI Orchestrate (Reusable)
 
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
+  # Orchestrate (issue decomposition) is research-heavy → medium per
+  # the OpenAI prompt guide.
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'medium' }}
+  # gpt-5.4 paths default to low verbosity per agents.md model table.
+  # Output is structured JSON (`orchestrate_decomposition.v1` schema), which
+  # is not verbosity-sensitive — the schema controls shape regardless. Low
+  # keeps free-form text in `project_summary` / issue bodies concise and
+  # information-dense per the OpenAI prompt guide.
+  MODEL_VERBOSITY: ${{ vars.VERBOSITY_ORCHESTRATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
 jobs:
@@ -380,7 +388,7 @@ jobs:
             } > scripts/.gitignore
           fi
 
-          for f in codex_system_instructions.md ai_pipeline.md; do
+          for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
@@ -430,7 +438,7 @@ jobs:
 
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
+            cat unattended_system_instructions.md
             echo
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md

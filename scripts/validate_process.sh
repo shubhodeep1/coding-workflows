@@ -1923,9 +1923,9 @@ if is_tracking_run; then
 fi
 
 {
-  if [ -f codex_system_instructions.md ]; then
+  if [ -f unattended_system_instructions.md ]; then
     echo "=== SYSTEM INSTRUCTIONS ==="
-    cat codex_system_instructions.md
+    cat unattended_system_instructions.md
     echo
   fi
   if [ -f ai_pipeline.md ]; then
