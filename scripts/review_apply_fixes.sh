@@ -33,19 +33,24 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
 fi
 
 # Returns 0 iff the worktree carries a non-whitespace change vs HEAD —
-# either a tracked file with a `git diff -w --ignore-blank-lines HEAD`
-# hunk, or an untracked file containing at least one non-whitespace
-# byte. Used by the editor success path below so a trivial trailing-
-# newline / whitespace-only edit can't masquerade as a real fix and
-# get committed. Mirrors the salvage gate in implement.yml's retry
-# loop (PR #2176 — gpt-5.3-codex appended a lone `\n` to a contract
-# file in fun-token-multi-chain run 25436981639 issue 200 and the
-# implement workflow shipped a no-op PR; review_autofix has the same
-# exposure via the `_git_has_diff` check on line ~1071). Fail-open: if
-# a stat or grep probe fails for any reason other than "no match",
+# either a tracked file whose `git diff --ignore-space-at-eol
+# --ignore-blank-lines HEAD` shows a hunk, or an untracked file
+# containing at least one non-whitespace byte. Used by the editor
+# success path below so a trivial trailing-newline / whitespace-only
+# edit can't masquerade as a real fix and get committed. Mirrors the
+# salvage gate in implement.yml's retry loop (PR #2176 — gpt-5.3-codex
+# appended a lone `\n` to a contract file in fun-token-multi-chain run
+# 25436981639 issue 200 and the implement workflow shipped a no-op PR;
+# review_autofix has the same exposure via the `_git_has_diff` check
+# on line ~1071). The flag pair `--ignore-space-at-eol
+# --ignore-blank-lines` is deliberate: `-w` would also drop leading-
+# whitespace changes, which are semantic in Python/YAML/Makefiles, so
+# an editor that fixes a real bug via indentation-only edits would be
+# misclassified as trivial and the fix would be discarded. Fail-open:
+# if a stat or grep probe fails for any reason other than "no match",
 # assume substantive so a flaky read can't discard real work.
 worktree_has_substantive_diff() {
-  if ! git diff --quiet -w --ignore-blank-lines HEAD 2>/dev/null; then
+  if ! git diff --quiet --ignore-space-at-eol --ignore-blank-lines HEAD 2>/dev/null; then
     return 0
   fi
   local f grep_rc

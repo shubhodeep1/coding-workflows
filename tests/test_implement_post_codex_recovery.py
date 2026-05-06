@@ -1571,6 +1571,83 @@ def test_codex_empty_output_streak_bail_and_flag() -> None:
 	)
 
 
+def test_salvage_branches_gate_on_substantive_changes() -> None:
+	"""Pin PR #2176: the empty-stdout and watchdog-kill salvage branches
+	must require a non-whitespace worktree change before declaring
+	`implement_succeeded=true`. Without the gate, gpt-5.3-codex's
+	announce-without-emit failure mode (openai/codex#11151) ships a
+	no-op PR when the model writes only a trailing newline / blank
+	line — see fun-token-multi-chain run 25436981639 issue 200, where
+	`printf '\\n' >> contracts/FunOFTAdapter.sol` rode through the
+	cmd_rc==0+empty-stdout branch and the workflow opened PR #202
+	with `+` (one blank line) as the entire diff.
+
+	The flag pair `--ignore-space-at-eol --ignore-blank-lines` is
+	intentional and pinned: `-w` would also drop leading-whitespace
+	(indentation) changes, which are semantic in Python/YAML/Makefiles,
+	so an indentation-only fix would be misclassified as trivial and
+	the salvage branch would discard real work.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+
+	# Helper must be defined exactly once before the retry loop so it
+	# is in scope at both salvage call sites.
+	assert codex_block.count("delta_is_substantive() {") == 1, (
+		"`delta_is_substantive` helper must be defined exactly once in the "
+		"step (before the for-attempt loop) so both salvage branches see it"
+	)
+
+	# Both salvage branches must call the helper instead of the bare
+	# `[ -n "${codex_delta}" ]` check that PR #2176 replaced. The
+	# branch-message strings are also pinned so an accidental wording
+	# regression on the warning text fails this test loudly.
+	assert codex_block.count('if delta_is_substantive "${codex_delta}"; then') == 2, (
+		"both salvage branches (cmd_rc==0+empty-stdout AND watchdog-kill / "
+		"non-zero-exit) must gate `implement_succeeded=true` on "
+		"`delta_is_substantive` — a bare `[ -n \"${codex_delta}\" ]` would "
+		"accept any worktree change, including a `printf '\\n' >> file` "
+		"trailing-newline append (PR #2176 root cause)"
+	)
+	assert (
+		"Codex returned empty output on attempt ${attempt} and only made "
+		"whitespace-only worktree changes — refusing to salvage; treating as empty."
+	) in codex_block, (
+		"empty-stdout branch must emit a distinct warning when the "
+		"worktree delta is whitespace-only so the GHA log shows WHY the "
+		"loop continues retrying instead of breaking"
+	)
+	assert (
+		"Codex exited with code $cmd_rc on attempt ${attempt} and only made "
+		"whitespace-only worktree changes — refusing to salvage; treating as empty."
+	) in codex_block, (
+		"watchdog-kill / non-zero-exit branch must emit the symmetric "
+		"whitespace-only warning so a stuck-on-trivial-edits run is "
+		"diagnosable from the log alone"
+	)
+
+	# The flag pair `--ignore-space-at-eol --ignore-blank-lines` is the
+	# intentional choice (`-w` would discard semantic Python/YAML
+	# indentation changes). Lock it in so a regression to `-w` fails
+	# loudly and reviewers see why this matters.
+	assert "git diff --quiet --ignore-space-at-eol --ignore-blank-lines" in codex_block, (
+		"the substantive-change probe must use --ignore-space-at-eol + "
+		"--ignore-blank-lines, NOT -w. -w drops leading-whitespace diffs, "
+		"which are semantic in Python/YAML/Makefiles and would cause an "
+		"indentation-only fix to be misclassified as trivial and discarded"
+	)
+	assert " -w " not in (
+		"\n".join(
+			line for line in codex_block.splitlines()
+			if "git diff --quiet" in line and "ignore-blank-lines" in line
+		)
+	), (
+		"the substantive-change probe must not use `-w`; the indentation-"
+		"semantic regression case (Python dedent fixes scope, YAML re-"
+		"indent restructures keys) requires `--ignore-space-at-eol` to "
+		"keep semantic indentation changes substantive"
+	)
+
+
 def test_retry_nudge_includes_apply_patch_directive() -> None:
 	"""Pin Fix #4-generic: the retry preamble that fires when an
 	attempt produces no file changes must include actionable guidance

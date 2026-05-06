@@ -1028,11 +1028,15 @@ jobs:
           # salvage branch broke the loop at 2/5. The workflow then
           # committed the lone-newline diff and shipped PR #202 with zero
           # implementation of the issue's required guards or regression
-          # tests. `-w --ignore-blank-lines` together suppress in-line
-          # whitespace AND blank-line-only changes — `-w` alone still
-          # surfaces a `+` blank-line append. Fail-open (treat untracked
-          # files we can't stat as substantive) so a malformed porcelain
-          # line never silently discards real work.
+          # tests. `--ignore-space-at-eol --ignore-blank-lines` together
+          # suppress trailing-whitespace AND blank-line-only changes
+          # while keeping leading-whitespace (indentation) changes
+          # visible — `-w` would also drop indentation diffs, which are
+          # semantic in Python/YAML/Makefiles and would cause a real
+          # indentation-only fix to be misclassified as trivial. Fail-
+          # open (treat untracked files we can't stat as substantive)
+          # so a malformed porcelain line never silently discards real
+          # work.
           delta_is_substantive() {
             local delta="$1"
             [ -n "${delta}" ] || return 1
@@ -1067,8 +1071,8 @@ jobs:
                   case "${status}" in
                     R*|C*) path="${path##* -> }" ;;
                   esac
-                  if ! git diff --quiet -w --ignore-blank-lines -- "${path}" 2>/dev/null \
-                     || ! git diff --quiet -w --ignore-blank-lines --cached -- "${path}" 2>/dev/null; then
+                  if ! git diff --quiet --ignore-space-at-eol --ignore-blank-lines -- "${path}" 2>/dev/null \
+                     || ! git diff --quiet --ignore-space-at-eol --ignore-blank-lines --cached -- "${path}" 2>/dev/null; then
                     return 0
                   fi
                   ;;
