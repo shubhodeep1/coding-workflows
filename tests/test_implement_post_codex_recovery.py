@@ -1664,6 +1664,58 @@ def test_announce_edit_regex_contract() -> None:
 			f"ANNOUNCE_EDIT_REGEX must match stuck-intent narration: {s!r}"
 		)
 
+	# Minimal atomic must-match cases for each verb/noun added in PR #2196,
+	# so a future regression that removes one term from the alternation
+	# fails this test specifically (without relying on any of the long
+	# composite strings still passing through other subpatterns). Each
+	# case is the shortest narration that exercises exactly one new
+	# alternation: a `<gerund-verb> <noun>` for the wildcard-noun branch,
+	# and a `<gerund-verb> \`<path>\`` for the direct-path branch.
+	#
+	# Wildcard-noun branch — new gerund verbs, paired with each new noun.
+	new_verb_noun_must_match = [
+		# Verbs added to the wildcard-noun list.
+		"implementing the patch",
+		"removing the patch",
+		"deleting the patch",
+		"cleaning the patch",
+		# Nouns added to the wildcard-noun list (pair with one verb each).
+		"applying the cleanup",
+		"applying the removal",
+		"applying the deletion",
+		"applying the override",
+		"applying the file",
+	]
+	for s in new_verb_noun_must_match:
+		assert _grep_matches(regex, s), (
+			"ANNOUNCE_EDIT_REGEX must match minimal new-verb/new-noun "
+			f"combination: {s!r}"
+		)
+
+	# Direct-path branch — every gerund verb in the second alternation must
+	# match `<verb> <path-token>` and `<verb> \`<path-token>\``. The
+	# `cleaning` entry pins the post-claude-branch-review-#2196 fix that
+	# adds it to the direct-path list (it was added to the wildcard-noun
+	# list first and missed here, see consensus finding from 6/6 reviewers).
+	direct_path_must_match = [
+		"patching foo.py",
+		"editing foo.py",
+		"overwriting foo.py",
+		"rewriting foo.py",
+		"replacing foo.py",
+		"writing foo.py",
+		"implementing foo.py",
+		"removing foo.py",
+		"deleting foo.py",
+		"cleaning foo.py",
+		"cleaning `contracts/FunOFT.sol`",
+	]
+	for s in direct_path_must_match:
+		assert _grep_matches(regex, s), (
+			"ANNOUNCE_EDIT_REGEX direct-path branch must match minimal "
+			f"`<gerund> <path>` narration: {s!r}"
+		)
+
 	# Benign control prose that MUST NOT match. False positives on these
 	# would still be safe at the call sites (gated on empty-delta), but
 	# matching arbitrary non-edit-narration prose would mask genuine
