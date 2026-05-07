@@ -102,7 +102,7 @@ Key properties:
 3. **Codex CLI installation on the host**
    - Installed once on the VPS.
    - `codex login` performed once interactively as the `codex-runner` user to produce `$RUNNER_HOME/.codex/auth.json`.
-   - `$RUNNER_HOME/.codex/config.toml` with two profiles. **Note on model identifiers**: the Codex CLI direct provider takes OpenAI's bare model names (`gpt-5.4`, `the legacy editor default`); the OpenRouter provider takes prefixed slugs (`openai/gpt-5.4`, `openai/the legacy editor default`). The same logical model is therefore named differently per profile — match whichever convention the existing repo workflows already use for OpenRouter (typically `openai/<model>`, see README env defaults).
+   - `$RUNNER_HOME/.codex/config.toml` with two profiles. **Note on model identifiers**: the Codex CLI direct provider takes OpenAI's bare model names (`gpt-5.4`, `<legacy-model>`); the OpenRouter provider takes prefixed slugs (`openai/gpt-5.4`, `openai/<legacy-model>`). The same logical model is therefore named differently per profile — match whichever convention the existing repo workflows already use for OpenRouter (typically `openai/<model>`, see README env defaults).
      - default profile: ChatGPT sub auth, `model = "gpt-5.4"` (or current production choice), reasoning level matching today's setup.
      - `openrouter` profile: `base_url = "https://openrouter.ai/api/v1"`, `env_key = "OPENROUTER_API_KEY"`, `model = "openai/gpt-5.4"`.
 
