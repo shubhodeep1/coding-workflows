@@ -838,3 +838,172 @@ No `TODO`, `FIXME`, or `HACK` markers were present in the audited workflow/scrip
 | Code modularization | 10 | Large |
 | Expression size reduction | 6 | Large |
 | Medium/Low fixes | 7 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-07)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation can be implemented directly because the same data is fetched in the same code path with matching filters, retries, and failure semantics. `NEEDS_VERIFICATION` means the overlap is real, but a human or follow-up audit must confirm edge cases before changing behavior. `RISKY_SKIP` means the redundancy is visible, but the call sits in a retry/poll/race-sensitive path or another protected context where this pass does **not** authorize auto-implementation.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/issue_pr_status.yml:188-193` and `.github/workflows/issue_pr_status.yml:295-349`
+  - **Current call count** — `2` GraphQL calls on the normal `closingIssuesReferences` path before fallback
+  - **Proposed call count** — `1` GraphQL call on that path
+  - **Endpoint(s)** — GitHub GraphQL `/graphql` (`repository.pullRequest(number).closingIssuesReferences` and later aliased `issue(number: N)` lookups)
+  - **Evidence** — The first query discovers linked issue numbers, then the same step immediately rebuilds metadata for those same issue numbers via a second GraphQL query.
+    ```yaml
+    ISSUE_NUMBERS="$(gh_retry gh api graphql \
+      ...
+      -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+      --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+    ```
+    ```yaml
+    ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+    ...
+    ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+    ```
+    The second query exists only because the first query omits `labels` and `body`, even though the classification logic immediately consumes exactly those fields.
+  - **Proposed fix** — In the `Update linked issue labels when PR closes` step, extend the first `closingIssuesReferences` query to return `nodes { number labels(first: 50) { nodes { name } } body }`, compute `ISSUE_NUMBERS`, `TRACKING_ISSUES`, and `MANAGED_ISSUES` from that single payload, and keep a follow-up only for a branch-derived `BRANCH_ISSUE_NUMBER` that is not already present in the GraphQL response.
+  - **Safety rationale** — The overlap is strong and occurs in one workflow step, but the branch-name-derived issue union and fail-open fallback behavior mean equivalence is not fully provable from static reading alone.
+  - **Downstream signal** — Verify with sample PR-close events that branch-derived issue numbers are still classified correctly when they are absent from `closingIssuesReferences`, then replace the second GraphQL query.
+
+- **ID** — `MERGE-002`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `.github/workflows/cancel_on_pr_close.yml:68-89`
+  - **Current call count** — `2` paginated REST list calls
+  - **Proposed call count** — `1` broader list call, if manually approved
+  - **Endpoint(s)** — GitHub REST `GET /repos/{repo}/actions/runs`
+  - **Evidence** — The step issues the same paginated run-list call twice, differing only by `status=queued` vs `status=in_progress`.
+    ```bash
+    queued_runs_json="$(
+      _gh_retry gh api \
+        --method GET \
+        "repos/${REPOSITORY}/actions/runs" \
+        --paginate \
+        -f status=queued \
+        -f event=pull_request \
+        -f "branch=${PR_HEAD_REF}" \
+        -f per_page=100 \
+      | jq -s "${RUNS_JQ}"
+    )"
+    in_progress_runs_json="$(
+      _gh_retry gh api \
+        --method GET \
+        "repos/${REPOSITORY}/actions/runs" \
+        --paginate \
+        -f status=in_progress \
+        -f event=pull_request \
+        -f "branch=${PR_HEAD_REF}" \
+        -f per_page=100 \
+      | jq -s "${RUNS_JQ}"
+    )"
+    ```
+  - **Proposed fix** — Manual-only option: evaluate whether a single `actions/runs` fetch with the existing `branch` and `event` filters, followed by local `status` filtering, preserves the cancellation target set and payload bounds.
+  - **Safety rationale** — Both calls use `--paginate` inside a cancellation path, so merging them would change page-boundary and response-size semantics, which this audit must treat as `RISKY_SKIP`.
+  - **Downstream signal** — Do **not** auto-implement; manually test against branches with many completed `pull_request` runs to prove queued/in-progress runs are still discoverable within the fetched pages and that existing cancellation logs stay unchanged.
+
+- **ID** — `MERGE-003`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `scripts/orchestrate_poll_process.sh:176-183`, `scripts/orchestrate_poll_process.sh:3393-3394`, `scripts/orchestrate_poll_process.sh:3448-3450`, `scripts/orchestrate_poll_process.sh:3476-3479`, and `scripts/orchestrate_poll_process.sh:3499-3501`
+  - **Current call count** — `6` `GET /pulls/{final_pr}` reads on the existing-final-PR pre-merge path, before any failed-merge refresh
+  - **Proposed call count** — `2` on that path (`1` cached pre-merge snapshot + `1` post-merge refresh only if needed)
+  - **Endpoint(s)** — GitHub REST `GET /repos/{repo}/pulls/{pull_number}`
+  - **Evidence** — The final-merge path re-reads the same PR multiple times for adjacent fields, then `_pr_checks_completed` does another PR fetch because no head SHA is passed.
+    ```bash
+    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ...
+    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+    pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ```
+    ```bash
+    if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+      pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo "")"
+      head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' ...)"
+    fi
+    ```
+  - **Proposed fix** — Manual-only: in `finalize_integration_merge_if_needed()`, fetch one cached PR snapshot containing `.state`, `.mergeable`, `.merged_at`, and `.head.sha`, pass that `head.sha` into `_pr_checks_completed "${final_pr}" "${head_sha}"`, and only refresh the snapshot once after a failed merge attempt.
+  - **Safety rationale** — This code is inside `scripts/orchestrate_poll_process.sh` on a race-defensive merge/finalize path, which the audit contract explicitly marks as `RISKY_SKIP` for auto-consolidation.
+  - **Downstream signal** — Do **not** auto-implement; manual review must confirm unchanged behavior across mergeable=`true|false|null`, post-state-comment timing, and all existing `[final-merge]` decision branches.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/review_autofix.yml:1385-1445` and `.github/workflows/review_autofix.yml:1836-1840`
+  - **Current call count** — `1` linked-issues GraphQL fetch plus `1` later issue-title REST fetch on the smoke-detection path
+  - **Proposed call count** — `1` fetch on that path
+  - **Endpoint(s)** — GitHub GraphQL `/graphql` (`closingIssuesReferences.nodes { number title body }`) and GitHub REST `GET /repos/{repo}/issues/{issue_number}`
+  - **Evidence** — The metadata step already fetches linked issue titles and bodies, then `Detect smoke test and tune LLM settings` re-fetches the linked issue title via REST.
+    ```bash
+    if gh_retry "${_linked_tmp}" api graphql \
+      ...
+      -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+      --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+    ```
+    ```python
+    lines.append(f"Issue #{num}: {title}")
+    if body:
+        lines.append(body)
+    ```
+    ```bash
+    ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
+    if [ -n "${ISSUE_NUM:-}" ]; then
+      ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+    fi
+    ```
+  - **Proposed fix** — Extend `Collect PR metadata` to persist the machine-readable linked-issues payload to a durable file (for example `LINKED_ISSUES_DETAILS_FILE`), then update `Detect smoke test and tune LLM settings` to read linked issue titles from that cache first and fall back to `_safe_gh_jq` only when the earlier GraphQL fetch failed or produced no linked-issue details.
+  - **Safety rationale** — The data already exists earlier in the same job, but the later step’s regex-based fallback and the earlier step’s fail-open GraphQL behavior need explicit validation before the REST read can be removed.
+  - **Downstream signal** — Verify smoke detection on PRs where `closingIssuesReferences` is empty but the PR body regex still resolves an issue number; keep the REST fallback only for that verified miss path.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/issue_pr_status.yml:173-182` and `.github/workflows/issue_pr_status.yml:205-208`; caller context: `.github/workflows/internal-issue-pr-status.yml:3-12`, `workflow-templates/ai-issue-pr-status.yml:5-12`
+  - **Current call count** — `1` conditional PR fetch on the fallback branch
+  - **Proposed call count** — `0` for the in-repo wrapper callers
+  - **Endpoint(s)** — GitHub REST `GET /repos/{repo}/pulls/{pull_number}`
+  - **Evidence** — The reusable workflow already seeds `PR_TITLE` and `PR_BODY` from the `pull_request` event payload, but still contains a fallback API fetch that only runs if that combined string is blank.
+    ```yaml
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+      PR_MERGED: ${{ github.event.pull_request.merged }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body || '' }}
+    ```
+    ```bash
+    PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+    if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+      PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+    fi
+    ```
+    In this repository, both shipped wrappers invoke the reusable workflow from `pull_request: types: [closed]`, so the event already carries the PR payload the step consumes.
+  - **Proposed fix** — For the in-repo wrapper contract, remove the conditional `GET /pulls/{PR_NUMBER}` fallback and use `${PR_TITLE}` / `${PR_BODY}` only; if the reusable workflow still needs a non-event fallback for external callers, put that behind an explicit input/contract rather than an implicit hidden API read.
+  - **Safety rationale** — The call appears dead for the repository’s own wrappers, but the reusable workflow surface may still have external consumers or undocumented payload assumptions that need confirmation.
+  - **Downstream signal** — Confirm with sample `pull_request.closed` payloads and the intended `workflow_call` contract that `github.event.pull_request.title/body` are always populated for supported callers before deleting the fallback.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `NEEDS_VERIFICATION` — The cached `PR_META_FILE` overlap is real, but the later fallback paths span separate jobs/branches and should be switched only after confirming identical fail-open behavior.
+- BATCH-001: `NEEDS_VERIFICATION` — The per-issue label loop is a classic batching target, but the regex-derived fallback issue set needs runtime validation before replacing the current lookup path.
+- API-002: `NEEDS_VERIFICATION` — The later issue-body re-fetch clearly overlaps earlier orchestrator classification data, but the alert-suppression step should only be rewired after confirming the cached metadata is still in scope there.
+- API-003: `RISKY_SKIP` — This is a high-value redundancy, but it lives in a poll/race-sensitive release-gate wait loop where call-merging changes timing and observable diagnostics.
+- API-004: `RISKY_SKIP` — This is an explicit retry poller with fixed cadence, so changing the read pattern/backoff is manual-only.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-001, DEAD-API-001 |
+| RISKY_SKIP | 2 | MERGE-002, MERGE-003 |
+
+### Implement-Stage Handoff
+
+- No SAFE_TO_MERGE findings in this pass.
