@@ -512,10 +512,12 @@ _verify_fingerprints_soft() {
 # read them. RESOLVER_ALLOWLIST_FILE is the canonical in-scope list (one
 # path per line) populated by review_conflict_prepare.sh from
 # `git diff --name-only --diff-filter=U` plus any fingerprint-violation
-# expansions. The script's per-file cap skips big files (e.g. large
-# generated YAML) with a "read with read tool" marker so the model
-# fetches them properly. Fail-open: any error here continues the
-# resolver loop without the targeted-context block.
+# expansions. Files are processed in source order until the cumulative
+# byte budget (TARGETED_FILE_CONTEXT_MAX_BYTES) is exhausted; a file
+# that would overflow the remaining budget gets a "read with read tool"
+# marker so the model fetches it properly instead of seeing a misleading
+# head-truncated copy. Fail-open: any error here continues the resolver
+# loop without the targeted-context block.
 TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
 : > "${TARGETED_FILES_CONTEXT_FILE}"
 if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "scripts/targeted_file_context.py" ]; then

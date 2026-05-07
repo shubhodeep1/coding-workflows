@@ -86,11 +86,15 @@ Implementation Plan
 
 
 def test_extract_does_not_treat_path_bullets_as_section_headers() -> None:
-	"""A bullet like `- contracts/Foo.sol` (no number, no backticks)
-	must be extracted as a path, not interpreted as a section header
-	by SECTION_HEADER_RE matching the body 'contracts/Foo.sol'.
-	The BULLET_RE check fires before SECTION_HEADER_RE, so the bullet
-	wins. This test pins that ordering."""
+	"""A bullet like `- contracts/Foo.sol` (leading hyphen) must be
+	extracted as a path, not mistaken for a section header.
+	`extract_paths_from_plan()` checks SECTION_HEADER_RE before
+	BULLET_RE, but SECTION_HEADER_RE requires `[A-Za-z]` after the
+	optional numeric prefix — a leading `-` (or `*` / `+`) cannot
+	match, so bullet lines fall through to the BULLET_RE branch and
+	are extracted correctly. This test pins that the bullet character
+	classes don't accidentally collide with the section-label
+	alphabet."""
 	plan = """
 Files likely to change
 - contracts/Foo.sol
@@ -252,6 +256,27 @@ def test_disabled_by_zero_max_bytes() -> None:
 		)
 		assert "targeted context disabled" in context
 		assert "max_bytes=0" in context
+
+
+def test_paths_file_extracts_destination_from_rename_porcelain() -> None:
+	"""`git status --porcelain` rename / copy entries have the form
+	`R  old/path.py -> new/path.py`. The destination path is what's
+	on disk and what the editor will edit, so the parser must split
+	on ` -> ` and emit the post-rename name. Pinned by Copilot review
+	on PR #2241."""
+	with tempfile.TemporaryDirectory() as tmp:
+		paths_file = Path(tmp) / "paths.txt"
+		paths_file.write_text(
+			"R  scripts/old.sh -> scripts/new.sh\n"
+			"C  contracts/orig.sol -> contracts/copy.sol\n"
+			"M  no/rename.py\n",
+			encoding="utf-8",
+		)
+		assert parse_paths_file(str(paths_file)) == [
+			"scripts/new.sh",
+			"contracts/copy.sol",
+			"no/rename.py",
+		]
 
 
 def test_paths_file_strips_diff_a_b_prefixes() -> None:

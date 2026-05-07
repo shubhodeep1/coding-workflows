@@ -238,7 +238,9 @@ fi
 # previous autofix iteration — the next iteration usually touches
 # the same files when reviewers flag regressions on recent edits);
 # fall back to PR_CHANGED_FILES_FILE on the first iteration. Files
-# larger than the per-file cap get a "read with read tool" marker
+# are processed in source order until the cumulative byte budget
+# (TARGETED_FILE_CONTEXT_MAX_BYTES) is exhausted; a file that would
+# overflow the remaining budget gets a "read with read tool" marker
 # rather than a misleading head-truncated copy. Fail-open: any
 # script error falls through to an empty output, the rest of the
 # prompt build still works, and the editor falls back to read-then-
@@ -436,7 +438,7 @@ $(_embed_input_file "${PR_CHANGED_FILES_FILE}" 50000)
 $(_embed_input_file "${LAST_COMMIT_STAT_FILE}" 50000)
 === END ${LAST_COMMIT_STAT_FILE} ===
 
-$(_embed_input_file "${TARGETED_FILES_CONTEXT_FILE}" 200000)
+$(if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then _embed_input_file "${TARGETED_FILES_CONTEXT_FILE}" 200000; fi)
 
 === BEGIN ${REVIEWER_CONSENSUS_FILE} (cross-reviewer consensus ledger — multi-reviewer findings are higher confidence) ===
 $(_embed_input_file "${REVIEWER_CONSENSUS_FILE}" 150000)

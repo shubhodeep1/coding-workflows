@@ -173,7 +173,11 @@ def parse_paths_file(path_str: str) -> list[str]:
 
 	Lines starting with `+++ b/`, `--- a/`, ` `, `M `, `A `, `D `, etc.
 	(common diff/git porcelain prefixes) are tolerated by stripping the
-	leading marker. This lets callers pipe `git diff --name-only` or
+	leading marker. Rename / copy porcelain entries of the form
+	`R  old/path.py -> new/path.py` are split on ` -> ` and only the
+	destination path is emitted (the new file is the one the editor
+	would now operate on; the old path no longer exists in the
+	working tree). This lets callers pipe `git diff --name-only` or
 	`git status --porcelain` directly.
 	"""
 	found: list[str] = []
@@ -195,6 +199,12 @@ def parse_paths_file(path_str: str) -> list[str]:
 			candidate = line[3:].strip()
 		else:
 			candidate = stripped
+		# Rename / copy porcelain entries: take the destination path
+		# (the post-rename name is what's on disk and what the editor
+		# would touch). Applied before diff-prefix stripping so we
+		# don't get confused by patterns like `R  a/old -> b/new`.
+		if " -> " in candidate:
+			candidate = candidate.split(" -> ", 1)[1].strip()
 		# Strip diff prefixes if present. Order matters: longest first so
 		# `+++ b/foo` strips `+++ b/` (not just `+++ ` leaving `b/foo`).
 		# Includes plain `a/` / `b/` prefixes for `git diff` output that

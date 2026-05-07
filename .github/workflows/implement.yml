@@ -924,8 +924,9 @@ jobs:
             files are already loaded verbatim. Do not spend your first turn
             reading them again — apply the required edit to one of the
             inlined target files first, then verify the diff landed. Files
-            marked "too large to inline" must still be read with the read
-            tool; do not assume the truncated head is the relevant region.
+            marked `(NN bytes; would overflow total budget — read with
+            read tool)` are NOT inlined; you must read them with the read
+            tool before editing.
           - Aim to keep total tool calls (MCP + shell exec combined) under
             TOOL_CALL_BUDGET. For large refactors that legitimately need more,
             exceeding the budget is acceptable — it is a guideline, not a cap.
