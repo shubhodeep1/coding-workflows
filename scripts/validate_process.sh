@@ -1884,12 +1884,31 @@ mkdir -p ~/.codex
 # pre-seed (codex#14345 v0.113+ regression) and the elevated approval/
 # sandbox settings (GH runners are ephemeral, danger-full-access avoids
 # workspace-write apply_patch hangs in codex#19020 / #16643).
+#
+# Standalone-safety gate: this script supports a "Standalone validation
+# run" path (no tracking issue, possibly invoked outside GitHub-hosted
+# runners), so the elevated approval_policy / sandbox_mode are gated on
+# GITHUB_ACTIONS=true. On a developer's local machine the workspace is
+# NOT ephemeral and danger-full-access could let codex modify files
+# outside the repo — so we fall back to codex's standard workspace-write
+# defaults locally. Override with VALIDATE_FORCE_FULL_ACCESS=1 to opt in
+# explicitly when running locally on a known-safe sandbox.
 CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json"
 PROJECT_PATH="$(pwd)"
+if [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${VALIDATE_FORCE_FULL_ACCESS:-}" = "1" ]; then
+  _codex_approval_policy="never"
+  _codex_sandbox_mode="danger-full-access"
+else
+  # Local invocation: keep codex's standard workspace-write sandbox.
+  # approval_policy stays at codex default ("on-request") so the
+  # operator gets prompted before risky actions.
+  _codex_approval_policy="on-request"
+  _codex_sandbox_mode="workspace-write"
+fi
 {
   echo 'web_search = "live"'
-  echo 'approval_policy = "never"'
-  echo 'sandbox_mode = "danger-full-access"'
+  echo "approval_policy = \"${_codex_approval_policy}\""
+  echo "sandbox_mode = \"${_codex_sandbox_mode}\""
   echo 'model_provider = "openrouter"'
   echo "model = \"${MODEL_EDITOR}\""
   echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
