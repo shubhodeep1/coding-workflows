@@ -296,11 +296,13 @@ fi
 
 # Initialise the prompt-input running-budget tracker.  Keeps cumulative
 # bytes across every _embed_input_file invocation in the heredoc below
-# under _PROMPT_BUDGET_TOTAL_BYTES (default 1.2MB ≈ 300k tokens) so a
-# single oversized input artifact (e.g. a 500KB PR diff) can't blow
-# past the reviewer model's context window. The current default
-# gpt-5.4 has a 272k standard context (lower than the legacy
-# gpt-5.3-codex 400k); the budget is conservative for either model.
+# under _PROMPT_BUDGET_TOTAL_BYTES (default 800KB ≈ 200k tokens at
+# ~4 bytes/token) so a single oversized input artifact (e.g. a 500KB
+# PR diff) can't blow past the reviewer model's context window. The
+# current default gpt-5.4 has a 272k standard context (lower than the
+# legacy gpt-5.3-codex 400k); 200k of inputs leaves room for the
+# static prefix (~10k tokens) and response budget (~30k tokens)
+# within the 272k window.
 _init_prompt_budget
 cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__
 ${ITERATION_CONTEXT_BLOCK}

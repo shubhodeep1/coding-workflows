@@ -294,12 +294,13 @@ __SMOKE_OVERRIDE__
   fi
   # Initialise the prompt-input running-budget tracker.  Keeps the
   # cumulative bytes across every _embed_input_file invocation below
-  # under _PROMPT_BUDGET_TOTAL_BYTES (default 1.2MB ≈ 300k tokens) so
-  # a single oversized input artifact can't blow past the editor
-  # model's context window. The current default gpt-5.4 has a 272k
-  # standard context (lower than the legacy gpt-5.3-codex 400k), so
-  # the budget is conservative for either model. Cleaned up after the
-  # heredoc completes.
+  # under _PROMPT_BUDGET_TOTAL_BYTES (default 800KB ≈ 200k tokens at
+  # ~4 bytes/token) so a single oversized input artifact can't blow
+  # past the editor model's context window. The current default
+  # gpt-5.4 has a 272k standard context (lower than the legacy
+  # gpt-5.3-codex 400k); 200k of inputs leaves room for the static
+  # prefix (~10k tokens) and the response budget (~30k tokens) within
+  # the 272k window. Cleaned up after the heredoc completes.
   _init_prompt_budget
   # ── EDIT TOOL DISCIPLINE positioning — DO NOT HOIST ──
   # The heredoc below carries the EDIT TOOL DISCIPLINE rules in two

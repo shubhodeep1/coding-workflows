@@ -120,9 +120,10 @@ name, commit SHA, credential, or external URL), emit exactly
   regex shape.
 - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line source —
   they exit 0 even when the regex misses, leaving the file unchanged.
-- Default to ASCII when editing or creating files. Only introduce non-ASCII
-  characters when there is a clear justification (existing file already uses
-  them, prose containing names/quotes that require them, etc.).
+- Default to ASCII for new content unless the file already uses non-ASCII
+  characters or there is a clear justification (prose containing names/quotes
+  that require them, etc.). Preserve existing non-ASCII characters in files
+  you edit — do not opportunistically convert them to ASCII.
 - Read enough context before changing a file and batch logical edits together;
   avoid repeated micro-edits.
 
