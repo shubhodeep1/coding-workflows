@@ -1187,8 +1187,17 @@ jobs:
           else
             CATALOG_PATH="${GITHUB_WORKSPACE}/${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           fi
+          # See implement.yml's "Create Codex config" for the rationale on
+          # the trust pre-seed (codex#14345 v0.113+ regression) and the
+          # elevated approval/sandbox settings (GH runners are ephemeral,
+          # so danger-full-access is safe and avoids workspace-write
+          # apply_patch hangs in codex#19020 / #16643). model_catalog_json
+          # was already wired here.
+          PROJECT_PATH="$(pwd)"
           {
             echo 'web_search = "disabled"'
+            echo 'approval_policy = "never"'
+            echo 'sandbox_mode = "danger-full-access"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${MODEL_EDITOR}\""
               echo "model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\""
@@ -1207,6 +1216,9 @@ jobs:
             echo
             echo '[sandbox_workspace_write]'
             echo 'network_access = true'
+            echo
+            echo "[projects.\"${PROJECT_PATH}\"]"
+            echo 'trust_level = "trusted"'
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 

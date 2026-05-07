@@ -1880,9 +1880,16 @@ trap cleanup_runtime_containers EXIT
 # Setup Codex
 # ---------------------------------------------------------------
 mkdir -p ~/.codex
+# See implement.yml's "Create Codex config" for rationale on the trust
+# pre-seed (codex#14345 v0.113+ regression) and the elevated approval/
+# sandbox settings (GH runners are ephemeral, danger-full-access avoids
+# workspace-write apply_patch hangs in codex#19020 / #16643).
 CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json"
+PROJECT_PATH="$(pwd)"
 {
   echo 'web_search = "live"'
+  echo 'approval_policy = "never"'
+  echo 'sandbox_mode = "danger-full-access"'
   echo 'model_provider = "openrouter"'
   echo "model = \"${MODEL_EDITOR}\""
   echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
@@ -1903,6 +1910,9 @@ CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.
   echo
   echo '[sandbox_workspace_write]'
   echo 'network_access = true'
+  echo
+  echo "[projects.\"${PROJECT_PATH}\"]"
+  echo 'trust_level = "trusted"'
 } > ~/.codex/config.toml
 
 export PATH="${HOME}/.local/bin:${PATH}"

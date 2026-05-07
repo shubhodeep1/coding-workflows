@@ -706,11 +706,24 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
+          # See implement.yml's "Create Codex config" for the rationale on
+          # model_catalog_json (codex#11151 / PR #11238 offline fallback
+          # removal), the trust pre-seed (codex#14345 v0.113+ regression),
+          # and the elevated approval/sandbox settings (GH runners are
+          # ephemeral, so danger-full-access is safe and avoids
+          # workspace-write apply_patch hangs in codex#19020 / #16643).
+          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+          PROJECT_PATH="$(pwd)"
           {
             echo 'web_search = "live"'
+            echo 'approval_policy = "never"'
+            echo 'sandbox_mode = "danger-full-access"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${MODEL_EDITOR}\""
               echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            if [ -f "${CATALOG_PATH}" ]; then
+              echo "model_catalog_json = \"${CATALOG_PATH}\""
+            fi
             echo
             echo '[model_providers.openrouter]'
             echo 'name = "OpenRouter"'
@@ -723,6 +736,9 @@ jobs:
             echo
             echo '[sandbox_workspace_write]'
             echo 'network_access = true'
+            echo
+            echo "[projects.\"${PROJECT_PATH}\"]"
+            echo 'trust_level = "trusted"'
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 

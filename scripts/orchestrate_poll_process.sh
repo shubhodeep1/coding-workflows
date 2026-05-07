@@ -2678,10 +2678,18 @@ invoke_judge_for_integration_conflict() {
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
 
   # Ensure codex config exists — mirrors the review-blocked judge setup.
+  # See implement.yml's "Create Codex config" for the rationale on the
+  # trust pre-seed (codex#14345) and the elevated approval/sandbox
+  # settings (GH runners are ephemeral, danger-full-access is safe and
+  # avoids workspace-write apply_patch hangs).
   mkdir -p ~/.codex
   local catalog_path="$(pwd)/scripts/codex_model_catalog.json"
+  local project_path
+  project_path="$(pwd)"
   {
     echo 'web_search = "live"'
+    echo 'approval_policy = "never"'
+    echo 'sandbox_mode = "danger-full-access"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR:-openai/gpt-5.3-codex}\""
     echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
@@ -2700,6 +2708,9 @@ invoke_judge_for_integration_conflict() {
     echo
     echo '[sandbox_workspace_write]'
     echo 'network_access = true'
+    echo
+    echo "[projects.\"${project_path}\"]"
+    echo 'trust_level = "trusted"'
   } > ~/.codex/config.toml
 
   local prompt_file
@@ -5630,9 +5641,14 @@ invoke_stall_judge() {
   } > "${stall_judge_prompt_file}"
 
   mkdir -p ~/.codex
+  # See implement.yml's "Create Codex config" for rationale on
+  # trust pre-seed + elevated approval/sandbox.
   CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+  PROJECT_PATH="$(pwd)"
   {
     echo 'web_search = "live"'
+    echo 'approval_policy = "never"'
+    echo 'sandbox_mode = "danger-full-access"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
     echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
@@ -5651,6 +5667,9 @@ invoke_stall_judge() {
     echo
     echo '[sandbox_workspace_write]'
     echo 'network_access = true'
+    echo
+    echo "[projects.\"${PROJECT_PATH}\"]"
+    echo 'trust_level = "trusted"'
   } > ~/.codex/config.toml
 
   local judge_success="false"
@@ -8924,11 +8943,16 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   if [ "${ANY_REVIEW_BLOCKED}" = "true" ]; then
     echo "Detected review-blocked issues in wave ${CURRENT_WAVE}. Invoking judge to unblock..."
 
-    # Ensure codex config exists for the judge
+    # Ensure codex config exists for the judge.
+    # See implement.yml's "Create Codex config" for rationale on
+    # trust pre-seed + elevated approval/sandbox.
     mkdir -p ~/.codex
     CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+    PROJECT_PATH="$(pwd)"
     {
       echo 'web_search = "live"'
+      echo 'approval_policy = "never"'
+      echo 'sandbox_mode = "danger-full-access"'
       echo 'model_provider = "openrouter"'
       echo "model = \"${MODEL_EDITOR}\""
       echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
@@ -8947,6 +8971,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       echo
       echo '[sandbox_workspace_write]'
       echo 'network_access = true'
+      echo
+      echo "[projects.\"${PROJECT_PATH}\"]"
+      echo 'trust_level = "trusted"'
     } > ~/.codex/config.toml
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
@@ -10626,9 +10653,14 @@ Manual intervention required." >/dev/null
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
   echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-medium}"
+  # See implement.yml's "Create Codex config" for rationale on
+  # trust pre-seed + elevated approval/sandbox.
   CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+  PROJECT_PATH="$(pwd)"
   {
     echo 'web_search = "live"'
+    echo 'approval_policy = "never"'
+    echo 'sandbox_mode = "danger-full-access"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
     echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
@@ -10647,6 +10679,9 @@ Manual intervention required." >/dev/null
     echo
     echo '[sandbox_workspace_write]'
     echo 'network_access = true'
+    echo
+    echo "[projects.\"${PROJECT_PATH}\"]"
+    echo 'trust_level = "trusted"'
   } > ~/.codex/config.toml
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
