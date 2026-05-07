@@ -113,10 +113,19 @@ env:
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
   REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'medium' }}
   REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
-  # Editor (codex apply-fixes loop) — a Switch-reasoning step later in
-  # this workflow already drops the editor's runtime reasoning to "low"
-  # (execution-heavy: apply known fixes). Keep this knob configurable
-  # for repos that want to override.
+  # Editor (codex apply-fixes loop). Production and smoke both run at
+  # `medium` per the OpenAI gpt-5.4 prompt guide — see the smoke override
+  # block further down (search "REVIEWER_REASONING_EFFORT=low") for the
+  # rationale (legacy gpt-5.3-codex cycled through low/none/xhigh and all
+  # hit empty-output failure modes; medium was the last untried level
+  # and stuck). The "Switch reasoning effort for editor" step below
+  # re-patches the global ~/.codex/config.toml to EDITOR_REASONING_EFFORT
+  # before the editor's codex exec call. The prior value of that file is
+  # whatever the smoke block left in place ("low" on smoke, untouched
+  # `medium` from the initial write_codex_config.sh write on production)
+  # — the per-reviewer CODEX_HOME copies used during the reviewer passes
+  # are isolated and never read by the editor. Keep this knob
+  # configurable for repos that want to override.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'medium' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
@@ -134,7 +143,7 @@ env:
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
   # failure — job-level "Telegram failure" step surfaces the incident.
   XPOLL_SUMMARISER_MODEL: ${{ vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-5.4-mini' }}
-  XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'none' }}
+  XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'medium' }}
   XPOLL_SUMMARISER_LINES_PER_REVIEWER: ${{ vars.XPOLL_SUMMARISER_LINES_PER_REVIEWER || '160' }}
   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}
   XPOLL_SUMMARISER_MAX_INPUT_LINES: ${{ vars.XPOLL_SUMMARISER_MAX_INPUT_LINES || '3000' }}

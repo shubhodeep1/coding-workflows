@@ -698,17 +698,17 @@ jobs:
         run: |
           set -euo pipefail
           # Reasoning effort is hardcoded at "high" for deep-audit (was
-          # previously read from THINKING_LEVEL_ANALYSIS, which defaulted
-          # to "xhigh" and is still used by api-redundancy below). Run
-          # #25088541089 cancelled this job at 30m 16s on its prior 30m
-          # cap; xhigh reasoning over the audit's wide surface area
+          # previously read from THINKING_LEVEL_ANALYSIS, which is still
+          # consumed by the api-redundancy job below at default `high`).
+          # Run #25088541089 cancelled this job at 30m 16s on its prior
+          # 30m cap; xhigh reasoning over the audit's wide surface area
           # (~30 workflow files + scripts/, plus the full report file
           # concatenated as context) is the structural latency tax that
           # forced the 30m → 45m timeout bump in this same change set.
           # high gives ~30-50% per-pass latency cut with negligible
-          # impact on audit depth; xhigh remains available to
-          # api-redundancy via THINKING_LEVEL_ANALYSIS for callers
-          # that still need it. To override, edit this hardcoded value.
+          # impact on audit depth, and matches the OpenAI gpt-5.4 prompt
+          # guide ("reserve xhigh for long, agentic, reasoning-heavy
+          # tasks"). To override, edit this hardcoded value.
           # Codex config centralised in scripts/write_codex_config.sh —
           # see that script's header for the apply_patch / trust /
           # elevation rationale.
