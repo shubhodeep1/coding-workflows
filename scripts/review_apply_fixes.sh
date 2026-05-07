@@ -232,6 +232,37 @@ if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
   fi
 fi
 
+# Pre-load files the autofix editor is most likely to edit so the
+# editor's first turn is a write rather than a read. The strongest
+# signal is LAST_RUN_CHANGED_FILES_FILE (files modified by the
+# previous autofix iteration — the next iteration usually touches
+# the same files when reviewers flag regressions on recent edits);
+# fall back to PR_CHANGED_FILES_FILE on the first iteration. Files
+# larger than the per-file cap get a "read with read tool" marker
+# rather than a misleading head-truncated copy. Fail-open: any
+# script error falls through to an empty output, the rest of the
+# prompt build still works, and the editor falls back to read-then-
+# write behavior.
+TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+: > "${TARGETED_FILES_CONTEXT_FILE}"
+_targeted_paths_source=""
+if [ -s "${LAST_RUN_CHANGED_FILES_FILE:-}" ]; then
+  _targeted_paths_source="${LAST_RUN_CHANGED_FILES_FILE}"
+elif [ -s "${PR_CHANGED_FILES_FILE:-}" ]; then
+  _targeted_paths_source="${PR_CHANGED_FILES_FILE}"
+fi
+if [ -n "${_targeted_paths_source}" ]; then
+  python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py" \
+    --paths-file "${_targeted_paths_source}" \
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
+    --max-files "${TARGETED_FILE_CONTEXT_MAX_FILES:-10}" \
+    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
+    --max-file-bytes "${TARGETED_FILE_CONTEXT_MAX_FILE_BYTES:-51200}" \
+    --header-text "These files were modified by the previous autofix iteration (or by this PR overall, on the first iteration). Their current contents are inlined so you can apply reviewer findings without re-reading them. If a file is included verbatim below, prefer editing it directly over wide exploration. Files marked \"too large to inline\" must be read with the read tool — do not assume the truncated head is the relevant region." \
+    --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+    echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
+fi
+
 # Build the editor prompt body. The smoke override (when active) is
 # prepended OUTSIDE the main heredoc so non-smoke runs produce a
 # byte-identical body to the pre-#2086 implementation — keeps the
@@ -406,6 +437,8 @@ $(_embed_input_file "${PR_CHANGED_FILES_FILE}" 50000)
 === BEGIN ${LAST_COMMIT_STAT_FILE} (summary of the most recent commit) ===
 $(_embed_input_file "${LAST_COMMIT_STAT_FILE}" 50000)
 === END ${LAST_COMMIT_STAT_FILE} ===
+
+$(_embed_input_file "${TARGETED_FILES_CONTEXT_FILE}" 200000)
 
 === BEGIN ${REVIEWER_CONSENSUS_FILE} (cross-reviewer consensus ledger — multi-reviewer findings are higher confidence) ===
 $(_embed_input_file "${REVIEWER_CONSENSUS_FILE}" 150000)

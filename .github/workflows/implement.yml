@@ -403,7 +403,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh write_codex_config.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -889,6 +889,14 @@ jobs:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
+          # Targeted-file-context inlining (scripts/targeted_file_context.py).
+          # Pre-loads small target files named in the plan into the prompt so
+          # the editor's first turn is a write, not a read. Per-file cap
+          # avoids head-truncating big files (those get a "read with read
+          # tool" marker instead — see script docstring for the rationale).
+          TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
+          TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+          TARGETED_FILE_CONTEXT_MAX_FILE_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILE_BYTES || '51200' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
@@ -913,6 +921,12 @@ jobs:
           rules, and parallel-reads guidance. Apply them.
 
           Efficiency:
+          - If a `=== TARGETED FILE CONTEXT ===` block appears below, those
+            files are already loaded verbatim. Do not spend your first turn
+            reading them again — apply the required edit to one of the
+            inlined target files first, then verify the diff landed. Files
+            marked "too large to inline" must still be read with the read
+            tool; do not assume the truncated head is the relevant region.
           - Aim to keep total tool calls (MCP + shell exec combined) under
             TOOL_CALL_BUDGET. For large refactors that legitimately need more,
             exceeding the budget is acceptable — it is a guideline, not a cap.
@@ -952,10 +966,32 @@ jobs:
           Output: repository changes only.
           EOF
 
-          # Build prompt: static context + instructions + dynamic implementation context,
-          # all inlined so the model doesn't waste tool calls reading files.
-          # The static prefix (pre_assembled_static.txt) is identical across all
-          # runs, enabling LLM provider prompt-prefix caching.
+          # Pre-load files named in the plan's "Files likely to change"
+          # section so the editor's first turn is a write rather than a
+          # read. Files larger than TARGETED_FILE_CONTEXT_MAX_FILE_BYTES
+          # are not head-truncated — they get a "read with read tool"
+          # marker so the model knows to fetch them properly. Fail-open:
+          # script errors fall through to an empty output file, the
+          # rest of the prompt assembly still works, and the model
+          # falls back to the previous read-then-write behavior.
+          TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+          : > "${TARGETED_FILES_CONTEXT_FILE}"
+          if [ -s "${PLAN_FILE}" ]; then
+            python3 scripts/targeted_file_context.py \
+              --plan-file "${PLAN_FILE}" \
+              --repo-root "${GITHUB_WORKSPACE}" \
+              --max-files "${TARGETED_FILE_CONTEXT_MAX_FILES}" \
+              --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
+              --max-file-bytes "${TARGETED_FILE_CONTEXT_MAX_FILE_BYTES}" \
+              --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+              echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
+          fi
+
+          # Build prompt: static context + instructions + targeted file context +
+          # dynamic implementation context, all inlined so the model doesn't
+          # waste tool calls reading files. The static prefix
+          # (pre_assembled_static.txt) is identical across all runs, enabling
+          # LLM provider prompt-prefix caching.
           {
             cat ./pre_assembled_static.txt
             echo
@@ -964,6 +1000,10 @@ jobs:
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
+            if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
+              cat "${TARGETED_FILES_CONTEXT_FILE}"
+              echo
+            fi
             echo "=== AI MEMORY CONTEXT ==="
             cat "${MEMORY_CONTEXT_FILE}"
             echo

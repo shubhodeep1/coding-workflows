@@ -2865,6 +2865,7 @@ _refresh_integration_resolver_tooling() {
     "scripts/review_conflict_resolve.sh"
     "scripts/verify_integration_fingerprints.py"
     "scripts/check_resolver_diff.sh"
+    "scripts/targeted_file_context.py"
     "prompts/conflict-resolver.txt"
     "prompts/integration-sync-conflict-resolver.txt"
     "prompts/integration-sync-conflict-resolver-retry-prelude.txt"

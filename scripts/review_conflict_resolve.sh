@@ -507,6 +507,36 @@ _verify_fingerprints_soft() {
   fi
 }
 
+# Pre-load the conflicted files into the resolver prompt so the model
+# sees the actual conflict-marker bytes without spending a tool call to
+# read them. RESOLVER_ALLOWLIST_FILE is the canonical in-scope list (one
+# path per line) populated by review_conflict_prepare.sh from
+# `git diff --name-only --diff-filter=U` plus any fingerprint-violation
+# expansions. The script's per-file cap skips big files (e.g. large
+# generated YAML) with a "read with read tool" marker so the model
+# fetches them properly. Fail-open: any error here continues the
+# resolver loop without the targeted-context block.
+TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+: > "${TARGETED_FILES_CONTEXT_FILE}"
+if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "scripts/targeted_file_context.py" ]; then
+  python3 scripts/targeted_file_context.py \
+    --paths-file "${RESOLVER_ALLOWLIST_FILE}" \
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
+    --max-files "${TARGETED_FILE_CONTEXT_MAX_FILES:-10}" \
+    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
+    --max-file-bytes "${TARGETED_FILE_CONTEXT_MAX_FILE_BYTES:-51200}" \
+    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"too large to inline\" must be read with the read tool — do not assume the truncated head contains all the conflict markers." \
+    --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+    echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
+fi
+# Append the targeted-context block to the rendered prompt once, so
+# every retry (which copies CONFLICT_RESOLVER_PROMPT_FILE into
+# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it.
+if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
+  printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+  cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # On retries: restore the working tree to its post-merge-replay
