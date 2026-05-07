@@ -165,6 +165,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_JUDGE` | `medium` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
 | `THINKING_LEVEL_VALIDATE` | `medium` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
+| `MODEL_REASONING_EFFORT_DISCOVER` | `low` | validate | Per-phase override applied only to the validate-discover step (`.ai/validate.yml` hint generation), since discover is a narrow execution-heavy task. Patched into `~/.codex/config.toml` before the discover codex call and restored to `THINKING_LEVEL_VALIDATE` on both the normal exit path and the EXIT trap so abnormal exits cannot leak the override. Accepted values: `xhigh`, `high`, `medium`, `low` (`none` is rejected to match the catalog's advertised levels for the gpt-5.x family). |
 | `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | orchestrate_poll, review_autofix | Reasoning effort for the Codex-based merge conflict resolver (orchestrator integration-sync runs and review_autofix's post-editor resolver step) |
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 

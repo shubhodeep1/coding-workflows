@@ -1094,6 +1094,24 @@ cleanup_runtime_containers()
     && [ "${VALIDATION_COMPOSE_FILE}" != "validation/docker-compose.test.yml" ]; then
     docker compose -f "${VALIDATION_COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
   fi
+
+  # Restore the discover-phase reasoning override on abnormal exit
+  # (SIGINT/SIGTERM/timeout/unexpected error between the patch and the
+  # normal-path restore). Without this, the user's ~/.codex/config.toml
+  # can be left at the discover override level, leaking into subsequent
+  # codex invocations in the same environment. Idempotent: the
+  # normal-path restore at the bottom of the discover block flips
+  # _discover_reasoning_patched back to "false" so this branch is a
+  # no-op when reached after a clean restore.
+  if [ "${_discover_reasoning_patched:-false}" = "true" ] \
+    && [ -n "${_validate_codex_config:-}" ] \
+    && [ -f "${_validate_codex_config}" ]; then
+    sed -i \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      "${_validate_codex_config}" 2>/dev/null || true
+    _discover_reasoning_patched="false"
+  fi
 }
 
 ensure_validate_wrapper()
@@ -2179,6 +2197,9 @@ PY
     # scripts/review_conflict_resolve.sh.
     if grep -Eq "^model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"$" "${_validate_codex_config}"; then
       echo "Restored ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT} after discover phase."
+      # Clear the patched flag so the EXIT trap (cleanup_runtime_containers)
+      # treats this as already-restored and skips the redundant sed.
+      _discover_reasoning_patched="false"
     else
       echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\" line after discover; subsequent validate phases may run at the discover override level (${MODEL_REASONING_EFFORT_DISCOVER})."
     fi
