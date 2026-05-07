@@ -1030,7 +1030,7 @@ while [ "${attempt}" -le 3 ]; do
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   (
     trap '' PIPE
-    exec codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
+    exec codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
   ) > "${tmp_output}" &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"

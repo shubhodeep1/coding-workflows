@@ -632,7 +632,7 @@ jobs:
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify-respond attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+            if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify-respond succeeded on attempt ${attempt}."
                 break
@@ -692,8 +692,8 @@ jobs:
             } > "${RUNTIME_DIR}/critic_prompt.txt"
 
             CRITIC_MODEL="${MODEL_EDITOR}"
-            if cat "${RUNTIME_DIR}/critic_prompt.txt" | codex exec \
-              --model "${CRITIC_MODEL}" --ask-for-approval never --sandbox danger-full-access > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
+            if cat "${RUNTIME_DIR}/critic_prompt.txt" | codex --ask-for-approval never exec \
+              --model "${CRITIC_MODEL}" --sandbox danger-full-access > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
               if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
                 echo "::warning::Self-critique rejected the decision. Appending critique and re-running."
                 CRITIC_REASON="$(grep -A5 'REASON:' "${RUNTIME_DIR}/critic_output.txt" || echo "No reason provided")"
@@ -705,8 +705,8 @@ jobs:
                   echo "Revise your decisions to address this feedback."
                 } > "${CODEX_PROMPT_FILE}.v2"
 
-                if cat "${CODEX_PROMPT_FILE}.v2" | codex exec \
-                  --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                if cat "${CODEX_PROMPT_FILE}.v2" | codex --ask-for-approval never exec \
+                  --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   echo "Revised decision produced after self-critique."
                 else
                   echo "::warning::Revised Codex call failed; using original output."
