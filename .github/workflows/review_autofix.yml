@@ -120,6 +120,15 @@ env:
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'medium' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  # Targeted-file-context inlining limits — propagated to scripts/
+  # review_apply_fixes.sh (autofix editor) and scripts/review_conflict_resolve.sh
+  # (conflict resolver) via this workflow-level env block. Without these
+  # exports, the scripts' shell-level ${VAR:-DEFAULT} fallbacks fire and repo-
+  # variable overrides are silently ignored. See scripts/targeted_file_context.py
+  # docstring for the per-knob semantics. Defaults match implement.yml.
+  TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
+  TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+  TARGETED_FILE_CONTEXT_MAX_FILE_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILE_BYTES || '51200' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli

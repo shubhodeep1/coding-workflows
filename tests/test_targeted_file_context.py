@@ -58,6 +58,50 @@ def test_extract_handles_alternate_section_headers() -> None:
 		assert extract_paths_from_plan(plan) == ["src/foo.py", "src/bar.py"], header
 
 
+def test_extract_terminates_on_numbered_section_with_trailing_period() -> None:
+	"""The plan template at prompts/mode-plan.txt produces section
+	labels of the form `1. Files likely to change.` and
+	`2. Functions/modules to implement.` (numbered, trailing period).
+	The scan must terminate at the next numbered section header so
+	inline-backticked paths from implementation prose don't leak."""
+	plan = """
+Implementation Plan
+
+1. Files likely to change.
+- `contracts/FunOFTAdapter.sol`
+- `test/CrossChain.test.ts`
+
+2. Functions or modules to implement.
+- Edit `contracts/leaked.sol` to do X.
+- See `docs/leaked-too.md` for context.
+"""
+	assert extract_paths_from_plan(plan) == [
+		"contracts/FunOFTAdapter.sol",
+		"test/CrossChain.test.ts",
+	], (
+		"numbered section header with trailing period must terminate the "
+		"likely-files scan; otherwise contracts/leaked.sol and "
+		"docs/leaked-too.md leak from the implementation-notes section"
+	)
+
+
+def test_extract_does_not_treat_path_bullets_as_section_headers() -> None:
+	"""A bullet like `- contracts/Foo.sol` (no number, no backticks)
+	must be extracted as a path, not interpreted as a section header
+	by SECTION_HEADER_RE matching the body 'contracts/Foo.sol'.
+	The BULLET_RE check fires before SECTION_HEADER_RE, so the bullet
+	wins. This test pins that ordering."""
+	plan = """
+Files likely to change
+- contracts/Foo.sol
+- `contracts/Bar.sol`
+"""
+	assert extract_paths_from_plan(plan) == [
+		"contracts/Foo.sol",
+		"contracts/Bar.sol",
+	]
+
+
 def test_extract_terminates_on_markdown_heading() -> None:
 	"""Plans using `## Foo` ATX headings to introduce later sections must
 	terminate the likely-files scan; otherwise inline-backticked paths

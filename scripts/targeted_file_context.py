@@ -57,7 +57,18 @@ from typing import Iterable
 
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
-SECTION_HEADER_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?([A-Za-z][A-Za-z0-9 /_-]{2,})\s*:?[ \t]*$")
+# Section-label heuristic: short label-shaped phrase, optional leading
+# numeric prefix, optional trailing colon or period. The label body uses
+# a restricted alphabet (alphanum + space + `/` + `_` + `-`) which
+# excludes commas, backticks, and internal punctuation — so a sentence-
+# shaped numbered bullet like `3. Add validation, for edge cases.`
+# (comma) or `3. Edit \`foo.py\`` (backtick) cannot match. The plan
+# template's actual section labels (`Files likely to change.`,
+# `Functions or modules to implement.`) terminate with a period, hence
+# the `[.:]?` trailing-punct allowance — without it, the scan never
+# stops at the next section and inline-backticked paths from
+# implementation prose leak into the inlining set.
+SECTION_HEADER_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?([A-Za-z][A-Za-z0-9 /_-]{2,})\s*[.:]?\s*$")
 # Markdown ATX heading. Plans frequently use `## Functions or modules` after
 # the "Files likely to change" section; without this, the bullet scan would
 # leak inline-backticked paths from later sections (e.g. `docs/note.md`
