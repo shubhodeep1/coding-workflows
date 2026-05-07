@@ -27,20 +27,23 @@ Output is a bounded, line-numbered context block:
   ...
   --- END FILE: <rel> ---
 
-Bounds (all defensible defaults; override per caller):
+Bounds (defensible defaults; override per caller):
 
-  --max-files (default 10)        Hard cap on number of files inlined.
-  --max-bytes (default 102400)    Total bytes across all inlined files.
-  --max-file-bytes (default 51200)  Per-file cap. Files larger than this
-                                  are NOT head-truncated — they are
-                                  skipped with a "(too large to inline —
-                                  read with read tool)" marker. Stops the
-                                  budget from being burned on a misleading
-                                  head-truncated copy of a 500KB file
-                                  whose edit point is at the bottom.
-
-Files that would overflow the total --max-bytes after inclusion get the
-same too-large-to-inline marker rather than mid-file head-truncation.
+  --max-files (default 10)        Cap on number of files mentioned in the
+                                  block. Paths beyond this cap are not
+                                  silently dropped — they are listed at
+                                  the tail under a "Deferred (max_files
+                                  reached, read with read tool if needed)"
+                                  summary so the model knows the full set.
+  --max-bytes (default 102400)    Total bytes across all inlined files
+                                  (~25k tokens at ~4 b/t). A file that
+                                  would push the cumulative size over
+                                  this cap is NOT head-truncated — it
+                                  gets a "(would overflow total budget —
+                                  read with read tool)" marker so the
+                                  model uses its native targeted-read
+                                  flow instead of being misled by a
+                                  truncated head.
 
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
@@ -92,9 +95,9 @@ DEFAULT_HEADER_TEXT = (
 	"files as likely to be edited. Their current contents are inlined so you "
 	"can edit immediately without re-reading them. If a file is included "
 	"verbatim below, your first tool call should be a write to one of those "
-	"files unless the request is already satisfied. Files marked "
-	"\"too large to inline\" must be read with the read tool — do not assume "
-	"the truncated head is the relevant region."
+	"files unless the request is already satisfied. Files marked \"would "
+	"overflow total budget\" or listed under \"Deferred\" must be read with "
+	"the read tool — never assume their content is in this block."
 )
 
 
@@ -195,8 +198,11 @@ def parse_paths_file(path_str: str) -> list[str]:
 			candidate = line[3:].strip()
 		else:
 			candidate = stripped
-		# Strip diff prefixes like `a/` / `b/` if present.
-		for prefix in ("+++ b/", "--- a/", "+++ ", "--- "):
+		# Strip diff prefixes if present. Order matters: longest first so
+		# `+++ b/foo` strips `+++ b/` (not just `+++ ` leaving `b/foo`).
+		# Includes plain `a/` / `b/` prefixes for `git diff` output that
+		# was already split (no leading `+++` / `---` marker).
+		for prefix in ("+++ b/", "--- a/", "+++ ", "--- ", "a/", "b/"):
 			if candidate.startswith(prefix):
 				candidate = candidate[len(prefix):]
 				break
@@ -231,13 +237,14 @@ def emit_context(
 	repo_root: Path,
 	max_files: int,
 	max_bytes: int,
-	max_file_bytes: int,
 	header_text: str = DEFAULT_HEADER_TEXT,
 ) -> str:
 	output: list[str] = []
 	included = 0
+	inlined = 0
 	used_bytes = 0
 	skipped_too_large: list[tuple[str, int]] = []
+	deferred_count_overflow: list[str] = []
 
 	output.append("=== TARGETED FILE CONTEXT ===")
 	output.append(header_text)
@@ -251,36 +258,36 @@ def emit_context(
 
 	for rel in paths:
 		if included >= max_files:
-			break
+			# Past the count cap. Don't silently drop — collect for a
+			# tail summary so the model still sees that more files
+			# exist beyond the inlining set. Path-traversal check is
+			# applied here too so adversarial paths can't smuggle into
+			# the deferred summary either.
+			abs_path = (repo_root / rel).resolve()
+			try:
+				abs_path.relative_to(repo_root_resolved)
+			except ValueError:
+				continue
+			deferred_count_overflow.append(rel)
+			continue
 		abs_path = (repo_root / rel).resolve()
 		try:
 			abs_path.relative_to(repo_root_resolved)
 		except ValueError:
 			# Outside repo root — refuse silently. Caller's path source
-			# may include adversarial / typo paths.
+			# may include adversarial / typo paths from PR/issue bodies.
 			continue
 		if not abs_path.is_file():
 			output.extend([f"--- FILE: {rel} (missing) ---", ""])
 			included += 1
 			continue
 		raw_size = abs_path.stat().st_size
-		if raw_size > max_file_bytes:
-			# Per-file cap. Inlining a head-truncated copy of a big file
-			# is misleading — the edit target may live at the bottom of
-			# the file. Tell the model to read it normally instead.
-			output.extend([
-				f"--- FILE: {rel} ({raw_size} bytes; too large to inline — "
-				f"read with read tool, max_file_bytes={max_file_bytes}) ---",
-				"",
-			])
-			skipped_too_large.append((rel, raw_size))
-			included += 1
-			continue
 		if used_bytes + raw_size > max_bytes:
-			# Including this file would overflow the total budget.
-			# Same rationale as the per-file cap: a head-truncated
-			# tail-drop is misleading; better to tell the model to
-			# read it.
+			# Including this file would overflow the total budget. Mark
+			# rather than head-truncate — a truncated head of a 500KB
+			# file misleads the editor when the edit target lives at
+			# the bottom. Tell the model to read it normally with its
+			# read tool instead.
 			output.extend([
 				f"--- FILE: {rel} ({raw_size} bytes; would overflow total "
 				f"budget — read with read tool, max_bytes={max_bytes}, "
@@ -302,16 +309,39 @@ def emit_context(
 		output.append(f"--- END FILE: {rel} ---")
 		output.append("")
 		included += 1
+		inlined += 1
 
-	if included == 0:
+	if deferred_count_overflow:
+		# Tail summary for files we couldn't include because we hit
+		# max_files. Listed compactly so the model knows the full set
+		# without 50 separate marker blocks. Capped at 50 paths in the
+		# summary itself for prompt-budget hygiene; remainder is
+		# counted.
+		output.append(
+			f"Deferred (max_files={max_files} reached, read with read tool "
+			f"if needed):"
+		)
+		for rel in deferred_count_overflow[:50]:
+			output.append(f"  - {rel}")
+		if len(deferred_count_overflow) > 50:
+			output.append(f"  ... and {len(deferred_count_overflow) - 50} more")
+		output.append("")
+
+	if included == 0 and not deferred_count_overflow:
 		output.append("(no existing target files could be inlined)")
 	else:
-		summary = f"Included {included} target file(s), {used_bytes} byte(s) of source content."
+		summary = (
+			f"Included {included} entr{'y' if included == 1 else 'ies'} "
+			f"({inlined} inlined, {included - inlined} marker-only), "
+			f"{used_bytes} byte(s) of source content."
+		)
 		if skipped_too_large:
 			skipped_summary = ", ".join(f"{p} ({n} bytes)" for p, n in skipped_too_large[:5])
 			if len(skipped_too_large) > 5:
 				skipped_summary += f", +{len(skipped_too_large) - 5} more"
-			summary += f" Skipped (too large / would overflow): {skipped_summary}."
+			summary += f" Marker-only (would overflow): {skipped_summary}."
+		if deferred_count_overflow:
+			summary += f" Deferred (count cap): {len(deferred_count_overflow)} more."
 		output.append(summary)
 	return "\n".join(output) + "\n"
 
@@ -334,7 +364,6 @@ def main() -> int:
 	parser.add_argument("--repo-root", default=os.getcwd())
 	parser.add_argument("--max-files", type=positive_int, default=10)
 	parser.add_argument("--max-bytes", type=positive_int, default=102400)
-	parser.add_argument("--max-file-bytes", type=positive_int, default=51200)
 	parser.add_argument("--header-text", default=DEFAULT_HEADER_TEXT)
 	parser.add_argument("--output", required=True)
 	args = parser.parse_args()
@@ -364,7 +393,6 @@ def main() -> int:
 		Path(args.repo_root),
 		args.max_files,
 		args.max_bytes,
-		args.max_file_bytes,
 		args.header_text,
 	)
 	Path(args.output).write_text(context, encoding="utf-8")

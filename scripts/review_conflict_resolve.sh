@@ -524,8 +524,7 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "scripts/targeted_file_context.
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
     --max-files "${TARGETED_FILE_CONTEXT_MAX_FILES:-10}" \
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
-    --max-file-bytes "${TARGETED_FILE_CONTEXT_MAX_FILE_BYTES:-51200}" \
-    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"too large to inline\" must be read with the read tool — do not assume the truncated head contains all the conflict markers." \
+    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" or listed under \"Deferred\" must be read with the read tool — never assume their content is in this block." \
     --output "${TARGETED_FILES_CONTEXT_FILE}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi

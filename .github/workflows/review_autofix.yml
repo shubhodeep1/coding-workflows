@@ -128,7 +128,6 @@ env:
   # docstring for the per-knob semantics. Defaults match implement.yml.
   TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
-  TARGETED_FILE_CONTEXT_MAX_FILE_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILE_BYTES || '51200' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli

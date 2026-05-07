@@ -890,13 +890,13 @@ jobs:
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
           # Targeted-file-context inlining (scripts/targeted_file_context.py).
-          # Pre-loads small target files named in the plan into the prompt so
-          # the editor's first turn is a write, not a read. Per-file cap
-          # avoids head-truncating big files (those get a "read with read
-          # tool" marker instead — see script docstring for the rationale).
+          # Pre-loads target files named in the plan into the prompt so the
+          # editor's first turn is a write, not a read. Files that would
+          # overflow MAX_BYTES are NOT head-truncated — they get a "read with
+          # read tool" marker. Files past MAX_FILES are listed under a
+          # "Deferred" tail summary so the model still sees the full set.
           TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
           TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
-          TARGETED_FILE_CONTEXT_MAX_FILE_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILE_BYTES || '51200' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
@@ -968,12 +968,15 @@ jobs:
 
           # Pre-load files named in the plan's "Files likely to change"
           # section so the editor's first turn is a write rather than a
-          # read. Files larger than TARGETED_FILE_CONTEXT_MAX_FILE_BYTES
-          # are not head-truncated — they get a "read with read tool"
-          # marker so the model knows to fetch them properly. Fail-open:
-          # script errors fall through to an empty output file, the
-          # rest of the prompt assembly still works, and the model
-          # falls back to the previous read-then-write behavior.
+          # read. A file that would push the cumulative byte count over
+          # TARGETED_FILE_CONTEXT_MAX_BYTES is NOT head-truncated — it
+          # gets a "read with read tool" marker so the model uses its
+          # native read flow. Files past TARGETED_FILE_CONTEXT_MAX_FILES
+          # are listed under a "Deferred" tail summary so the model
+          # still sees the full set. Fail-open: script errors fall
+          # through to an empty output file, the rest of the prompt
+          # assembly still works, and the model falls back to the
+          # previous read-then-write behavior.
           TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
           : > "${TARGETED_FILES_CONTEXT_FILE}"
           if [ -s "${PLAN_FILE}" ]; then
@@ -982,7 +985,6 @@ jobs:
               --repo-root "${GITHUB_WORKSPACE}" \
               --max-files "${TARGETED_FILE_CONTEXT_MAX_FILES}" \
               --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
-              --max-file-bytes "${TARGETED_FILE_CONTEXT_MAX_FILE_BYTES}" \
               --output "${TARGETED_FILES_CONTEXT_FILE}" || \
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
           fi

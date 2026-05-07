@@ -42,7 +42,6 @@ env:
   # for per-knob semantics. Defaults match implement.yml / review_autofix.yml.
   TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
-  TARGETED_FILE_CONTEXT_MAX_FILE_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILE_BYTES || '51200' }}
 
 jobs:
   poll:

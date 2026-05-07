@@ -169,56 +169,26 @@ def test_emits_line_numbered_bounded_context() -> None:
 			root,
 			max_files=10,
 			max_bytes=1024,
-			max_file_bytes=1024,
 		)
 
 		assert "=== TARGETED FILE CONTEXT ===" in context
 		assert "--- FILE: contracts/FunOFT.sol" in context
 		assert "1\tline one" in context
 		assert "2\tline two" in context
-		assert "Included 1 target file(s)" in context
+		assert "Included 1 entry" in context
+		assert "1 inlined" in context
 
 
-def test_per_file_cap_skips_big_files_with_read_marker() -> None:
-	"""The whole point of the per-file cap: a 100KB file with a 50KB cap
-	should NOT get its first 50KB inlined (which would be misleading —
-	the edit point may live at the bottom). It should get a clear
-	"read with read tool" marker instead."""
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		(root / "big").mkdir()
-		big = root / "big" / "huge.py"
-		# 100KB content (exceeds 50KB cap)
-		big.write_text("x = 1\n" * 20000, encoding="utf-8")
-
-		context = emit_context(
-			["big/huge.py"],
-			root,
-			max_files=10,
-			max_bytes=1_000_000,
-			max_file_bytes=51_200,
-		)
-
-		# The big file gets a marker, NOT inlined content.
-		assert "too large to inline" in context
-		assert "read with read tool" in context
-		assert "max_file_bytes=51200" in context
-		# No "1\tx = 1" line-numbered content for it (since inlining was
-		# skipped). The marker line itself doesn't start with "1\t".
-		assert "1\tx = 1" not in context, (
-			"big file content must not be head-truncated and pasted — that "
-			"would mislead the editor into thinking it has the edit region "
-			"when the bottom of the file may carry the actual target"
-		)
-
-
-def test_total_budget_overflow_skips_with_marker() -> None:
-	"""A small file that fits the per-file cap but would overflow the
-	total budget gets the same marker — never head-truncated."""
+def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
+	"""A file that would push the cumulative byte count over MAX_BYTES
+	must NOT be head-truncated — that would mislead the editor when
+	the edit point lives at the bottom of the file. It gets a clear
+	"would overflow total budget" marker so the model uses its
+	native read tool instead."""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		# 30KB each (each fits under 51200 per-file cap)
+		# 30KB each
 		for name in ("a.py", "b.py", "c.py"):
 			(root / "src" / name).write_text("y = 1\n" * 6000, encoding="utf-8")
 
@@ -226,13 +196,51 @@ def test_total_budget_overflow_skips_with_marker() -> None:
 			["src/a.py", "src/b.py", "src/c.py"],
 			root,
 			max_files=10,
-			max_bytes=50_000,  # only ~1.5 of the 30KB files fit
-			max_file_bytes=51_200,
+			max_bytes=50_000,  # only ~1.5 files fit
 		)
 
-		# At least one file fully inlined, the rest get a "would overflow"
-		# marker rather than mid-file truncation.
+		# First file fully inlined, the rest get markers rather than
+		# mid-file truncation.
 		assert "would overflow total budget" in context
+		# Inlined-content sanity: the first file's `1\ty = 1` line is
+		# present (it was inlined). The other files' content is not.
+		assert "1\ty = 1" in context
+		# The marker line carries the budget context for the operator /
+		# model.
+		assert "max_bytes=50000" in context
+
+
+def test_files_past_max_files_emit_deferred_summary() -> None:
+	"""Files past MAX_FILES are NOT silently dropped — they appear in
+	a "Deferred (max_files=N reached, read with read tool if needed)"
+	tail summary so the model still sees the full set. Pinned by
+	claude-branch-review on PR #2241."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		# 5 small files, but max_files=2 — files 3-5 should be deferred.
+		for i in range(5):
+			(root / "src" / f"f{i}.py").write_text(f"# file {i}\n", encoding="utf-8")
+
+		context = emit_context(
+			[f"src/f{i}.py" for i in range(5)],
+			root,
+			max_files=2,
+			max_bytes=10_000,
+		)
+
+		# First two inlined.
+		assert "--- FILE: src/f0.py" in context
+		assert "--- FILE: src/f1.py" in context
+		# Last three deferred — listed compactly under a summary.
+		assert "Deferred (max_files=2 reached" in context
+		assert "src/f2.py" in context
+		assert "src/f3.py" in context
+		assert "src/f4.py" in context
+		# But their content is NOT inlined.
+		assert "# file 2" not in context
+		assert "# file 3" not in context
+		assert "# file 4" not in context
 
 
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
@@ -245,7 +253,6 @@ def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
 			root,
 			max_files=10,
 			max_bytes=1024,
-			max_file_bytes=1024,
 		)
 		# good/file.py doesn't exist either, but it's a valid intra-repo
 		# path. No file content from outside the repo should appear.
@@ -259,7 +266,6 @@ def test_missing_input_emits_safe_empty_block() -> None:
 			Path(tmp),
 			max_files=10,
 			max_bytes=1024,
-			max_file_bytes=1024,
 		)
 		assert "=== TARGETED FILE CONTEXT ===" in context
 		assert "(no existing target files could be inlined)" in context
@@ -272,9 +278,33 @@ def test_disabled_by_zero_limits() -> None:
 			Path(tmp),
 			max_files=0,
 			max_bytes=1024,
-			max_file_bytes=1024,
 		)
 		assert "targeted context disabled by limits" in context
+
+
+def test_paths_file_strips_diff_a_b_prefixes() -> None:
+	"""parse_paths_file should accept `git diff` output that uses
+	`a/` and `b/` prefixes (raw or with `+++ ` / `--- `). Pinned by
+	Copilot review on PR #2241."""
+	with tempfile.TemporaryDirectory() as tmp:
+		paths_file = Path(tmp) / "paths.txt"
+		paths_file.write_text(
+			"+++ b/scripts/foo.sh\n"
+			"--- a/scripts/foo.sh\n"
+			"a/scripts/bar.py\n"
+			"b/scripts/baz.py\n"
+			"plain/path/already.md\n",
+			encoding="utf-8",
+		)
+		# Both `a/` and `b/` prefixes stripped so the same file isn't
+		# double-counted, and no spurious `b/scripts/foo.sh` entries
+		# leak through.
+		assert parse_paths_file(str(paths_file)) == [
+			"scripts/foo.sh",
+			"scripts/bar.py",
+			"scripts/baz.py",
+			"plain/path/already.md",
+		]
 
 
 def main() -> int:

@@ -257,8 +257,7 @@ if [ -n "${_targeted_paths_source}" ]; then
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
     --max-files "${TARGETED_FILE_CONTEXT_MAX_FILES:-10}" \
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
-    --max-file-bytes "${TARGETED_FILE_CONTEXT_MAX_FILE_BYTES:-51200}" \
-    --header-text "These files were modified by the previous autofix iteration (or by this PR overall, on the first iteration). Their current contents are inlined so you can apply reviewer findings without re-reading them. If a file is included verbatim below, prefer editing it directly over wide exploration. Files marked \"too large to inline\" must be read with the read tool — do not assume the truncated head is the relevant region." \
+    --header-text "These files were modified by the previous autofix iteration (or by this PR overall, on the first iteration). Their current contents are inlined so you can apply reviewer findings without re-reading them. If a file is included verbatim below, prefer editing it directly over wide exploration. Files marked \"would overflow total budget\" or listed under \"Deferred\" must be read with the read tool — never assume their content is in this block." \
     --output "${TARGETED_FILES_CONTEXT_FILE}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
