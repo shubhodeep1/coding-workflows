@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What part of this repository should be improved?\nChoices:\nA. A specific workflow file under `.github/workflows/` (please name it) (RECOMMENDED)\nB. A specific script under `scripts/` (please name it)\nC. Repository documentation or configuration files\nD. Multiple specific files/components (please list them)\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix a bug or broken behavior (RECOMMENDED)\nB. Improve reliability / reduce flaky behavior\nC. Improve performance / reduce API calls / reduce runtime\nD. Improve readability / maintainability only\nE. Add or change functionality\nQ3. What concrete outcome should count as \u201cbetter\u201d?\nChoices:\nA. A specific current problem should stop happening (describe the current vs expected behavior) (RECOMMENDED)\nB. A specific workflow/job should become faster or more reliable (name the workflow/job and the metric if known)\nC. A specific new behavior should exist (describe it)\nD. A specific error/log/CI failure should be eliminated (paste the exact message if available)\nQ4. How should the change be scoped?\nChoices:\nA. Minimal targeted fix only; avoid unrelated refactors (RECOMMENDED)\nB. Small local cleanup is OK if needed to support the fix\nC. Broader refactor is desired if it materially improves the area\nQ5. Do you have any concrete example, failing run, issue number, PR, or file path that shows the problem?\nChoices:\nA. Yes \u2014 I will provide the exact workflow/script/file path or failing run/PR/issue reference (RECOMMENDED)\nB. No concrete example, but I can describe the bad behavior in detail\nC. No additional context available",
+  "fingerprint": "a8b116838c55112d1b0fd5aeec45edd55e6827fba14cf23c2c3152adbe65f874",
+  "lineage": {
+    "issue_number": 2223,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25477691521",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25477691521",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260507052808_bd9832fc2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2223,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25477691521"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2223 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-07T05:28:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
