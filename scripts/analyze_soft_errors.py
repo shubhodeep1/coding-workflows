@@ -5,7 +5,8 @@ Fetches logs from one or more workflow runs, filters them to high-signal lines
 (warnings, retries, rate-limit recoveries, codex fallbacks, summariser hard
 fails, etc.), truncates each run's log to fit the analyser model's context
 window, then asks an OpenRouter chat model (default openai/gpt-5.4-mini at
-none reasoning) to produce a short markdown report enumerating soft errors.
+medium reasoning per the OpenAI gpt-5.4 prompt guide for cross-run log
+triage) to produce a short markdown report enumerating soft errors.
 
 The analyser is non-blocking: if OpenRouter call fails or any run's logs are
 unreachable, the script writes a stub report rather than exiting non-zero, so
@@ -348,7 +349,7 @@ def main() -> int:
 	)
 	parser.add_argument(
 		"--reasoning",
-		default=os.environ.get("LOG_ANALYZER_REASONING", "none"),
+		default=os.environ.get("LOG_ANALYZER_REASONING", "medium"),
 	)
 	parser.add_argument(
 		"--output",

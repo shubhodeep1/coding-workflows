@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Consolidate N reviewer outputs from one review pass into a single findings
-# ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: none).
+# ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: medium).
 #
 # Invoked twice per review run:
 #   --prefix pass1  --output ${CROSS_POLLINATION_FILE}  → feeds pass-2 reviewers
@@ -23,7 +23,7 @@
 #   SUPPORT_SCRIPTS_DIR               helper scripts (for gh_helpers.sh)
 #   CODEX_HOME                        shared codex home (source of config.toml)
 #   XPOLL_SUMMARISER_MODEL            default: openai/gpt-5.4-mini
-#   XPOLL_SUMMARISER_REASONING        default: none
+#   XPOLL_SUMMARISER_REASONING        default: medium
 #   XPOLL_SUMMARISER_LINES_PER_REVIEWER  target lines per reviewer section (default 160)
 #   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS   per-attempt timeout (default 2400)
 #   XPOLL_SUMMARISER_MAX_INPUT_LINES     pre-truncate per-reviewer input above this (default 3000)
@@ -60,7 +60,7 @@ fi
 : "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
 
 SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.4-mini}"
-SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-none}"
+SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-medium}"
 SUMMARISER_TARGET_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"
 SUMMARISER_CALL_TIMEOUT="${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS:-2400}"
 SUMMARISER_MAX_INPUT_LINES="${XPOLL_SUMMARISER_MAX_INPUT_LINES:-3000}"
@@ -192,7 +192,7 @@ PROMPT_HEADER
 
 echo "summariser (${PREFIX}): ${n_reviewers} input(s); target_lines=${target_lines}; prompt_bytes=$(wc -c < "${prompt_file}")"
 
-# ── Isolated CODEX_HOME with gpt-5.4-mini + none reasoning ───────────────
+# ── Isolated CODEX_HOME with gpt-5.4-mini + medium reasoning ────────────
 # Mirrors the reviewer pattern at scripts/review_run_reviewers.sh:906-1024:
 # copy the base CODEX_HOME, then sed-patch model_reasoning_effort in the
 # config.toml so the editor's shared CODEX_HOME is NEVER mutated.

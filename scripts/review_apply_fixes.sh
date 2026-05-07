@@ -563,7 +563,7 @@ PRE-FIX PLANNING
 Fix every valid reviewer finding in one pass. Read all reviewer outputs, the consensus file, and PR comments; classify each finding as WILL_FIX, ALREADY_FIXED, or REJECT; then execute WILL_FIX items in priority order (CI failures → functional bugs → correctness → hardening). The goal is comprehensive coverage in a single pass so subsequent iterations find minimal remaining issues.
 
 REVIEWER CONSENSUS SIGNAL
-The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FILE}) consolidates all pass-2 reviewer findings into one ledger via a cheap summariser model (gpt-5.4-mini, none reasoning). It has:
+The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FILE}) consolidates all pass-2 reviewer findings into one ledger via a cheap summariser model (gpt-5.4-mini, medium reasoning). It has:
 - a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
   (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
   confidence; a single slug ⇒ one reviewer only, potentially speculative),

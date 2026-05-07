@@ -71,7 +71,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
 | workflow audit | `openai/gpt-5.4` | `high` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` |
 | workflow api-redundancy | `openai/gpt-5.4` | `high` (default of `THINKING_LEVEL_ANALYSIS`) | `low` |
 | workflow log summary | `openai/gpt-5.4-mini` | default | `low` |
-| reviewer consensus summariser | `openai/gpt-5.4-mini` | `none` (`XPOLL_SUMMARISER_REASONING`) | `low` |
+| reviewer consensus summariser | `openai/gpt-5.4-mini` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` |
 
 Every editor / reviewer / resolver phase now defaults to `openai/gpt-5.4`.
 The previous split that routed patch-heavy phases to `openai/gpt-5.3-codex`

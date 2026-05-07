@@ -1181,9 +1181,10 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   fi
 
   # ── Consolidate all pass-1 reviewer outputs into one ledger ──
-  # One codex-cli call (gpt-5.4-mini, none reasoning) produces a consensus
-  # ledger + per-reviewer sections. Retries 3×; hard-fails the workflow on
-  # final failure (triggers job-level Telegram failure alert).
+  # One codex-cli call (gpt-5.4-mini, medium reasoning by default — see
+  # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
+  # sections. Retries 3×; hard-fails the workflow on final failure
+  # (triggers job-level Telegram failure alert).
   PASS1_LEDGER_FILE="${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt"
   bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
   echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
