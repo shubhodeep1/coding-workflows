@@ -58,6 +58,11 @@ from typing import Iterable
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
 SECTION_HEADER_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?([A-Za-z][A-Za-z0-9 /_-]{2,})\s*:?[ \t]*$")
+# Markdown ATX heading. Plans frequently use `## Functions or modules` after
+# the "Files likely to change" section; without this, the bullet scan would
+# leak inline-backticked paths from later sections (e.g. `docs/note.md`
+# mentioned in implementation prose) into the inlining set.
+MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 LIKELY_HEADER_RE = re.compile(
 	r"files?\s+(?:likely|expected|to)\s+(?:to\s+)?(?:change|modify|edit)"
 	r"|files?\s+to\s+(?:change|modify|edit)",
@@ -117,6 +122,13 @@ def extract_paths_from_plan(plan_text: str) -> list[str]:
 		if not line.strip():
 			# Blank lines are common inside markdown lists; keep scanning.
 			continue
+
+		# Markdown ATX headings (## Foo) terminate the section. Without this
+		# check the scan would leak inline-backticked paths from later
+		# sections like "## Functions or modules to implement" into the
+		# inlining set.
+		if MARKDOWN_HEADING_RE.match(line) and not LIKELY_HEADER_RE.search(line):
+			break
 
 		# Numbered markdown section headers such as "2. Functions or modules"
 		# also look like ordered-list bullets. Treat them as headers before
