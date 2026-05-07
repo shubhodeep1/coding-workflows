@@ -527,7 +527,7 @@ MANDATORY ACTIONS for this run:
    files (printf 'status: ok\nrun_id: <HEAD-side run_id>\nupdated-by: ai-pipeline\n' > tests/e2e_smoke_canary.txt).
    Do not wait for additional context, do not ask for clarification,
    do not defer to a future iteration. (Background: under the legacy
-   the legacy editor default the editor reliably no-opped on this trivial
+   editor default, the editor reliably no-opped on this trivial
    fixture when forced through apply_patch — see openai/codex#11151 —
    so the printf escape hatch exists for that case and remains
    available regardless of model.)

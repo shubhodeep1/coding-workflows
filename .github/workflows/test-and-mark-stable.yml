@@ -4137,10 +4137,16 @@ jobs:
       # emission failure shared by both gpt-5.4 and gpt-5.3-codex —
       # the alt-canary stopped distinguishing them. Operators who want
       # to pin the canary to a non-OpenAI provider for cross-provider
-      # coverage can set the repo var `ALT_EDITOR_MODEL` to e.g.
-      # `anthropic/claude-sonnet-4-6` (must appear in
-      # scripts/codex_model_catalog.json). Keep this default in sync
-      # with the production default in implement.yml's MODEL_EDITOR.
+      # coverage can set the repo var `ALT_EDITOR_MODEL` to any
+      # catalog-listed non-OpenAI slug (e.g. one of the priority-10
+      # entries in scripts/codex_model_catalog.json — minimax/...,
+      # google/..., qwen/..., deepseek/..., moonshotai/..., etc.).
+      # Adding the chosen slug to the catalog is recommended so codex
+      # can register `apply_patch_tool_type` for it; the validation
+      # step below only emits a `::warning::` and proceeds when the
+      # slug is missing (codex falls back to bundled metadata, but
+      # reliability degrades). Keep this default in sync with the
+      # production default in implement.yml's MODEL_EDITOR.
       ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.4' }}
     steps:
       # Required for the run-soft-error-analyzer composite action below.

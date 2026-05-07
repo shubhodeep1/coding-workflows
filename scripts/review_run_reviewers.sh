@@ -300,7 +300,7 @@ fi
 # ~4 bytes/token) so a single oversized input artifact (e.g. a 500KB
 # PR diff) can't blow past the reviewer model's context window. The
 # current default gpt-5.4 has a 272k standard context (lower than the
-# legacy the legacy editor default 400k); 200k of inputs leaves room for the
+# legacy editor default's 400k); 200k of inputs leaves room for the
 # static prefix (~10k tokens) and response budget (~30k tokens)
 # within the 272k window.
 _init_prompt_budget

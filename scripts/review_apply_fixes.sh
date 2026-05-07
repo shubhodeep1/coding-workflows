@@ -39,7 +39,7 @@ fi
 # success path below so a trivial trailing-newline / whitespace-only
 # edit can't masquerade as a real fix and get committed. Mirrors the
 # salvage gate in implement.yml's retry loop (PR #2176 — under the
-# legacy the legacy editor default the editor appended a lone `\n` to a
+# legacy editor default, the editor appended a lone `\n` to a
 # contract file in fun-token-multi-chain run 25436981639 issue 200 and
 # the implement workflow shipped a no-op PR; review_autofix has the
 # same exposure via the `_git_has_diff` check inside the
@@ -297,7 +297,7 @@ MANDATORY ACTIONS for this run:
    (`# E2E_EDITOR_BAIT_<run_id>:`) as a fallback. Restoring the file is
    a deterministic edit — do not wait for additional context, do not
    ask for clarification, do not defer to a future iteration.
-   (Background: under the legacy editor default the editor
+   (Background: under the legacy editor default, the editor
    reliably no-opped on this trivial fixture when forced through
    apply_patch — see openai/codex#11151 — so the printf escape hatch
    exists for that case and remains available regardless of model.)

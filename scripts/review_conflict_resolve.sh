@@ -567,7 +567,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   fi
 
   tmp_output="$(mktemp)"
-  if ! codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access "$(cat "${_effective_prompt_file}")" > "${tmp_output}"; then
+  # Pass the prompt via stdin (consistent with every other codex
+  # invocation in this repo) rather than as a single positional argv
+  # string. The `"$(cat …)"` shape risks ARG_MAX truncation on large
+  # prompts (Linux default is ~2 MiB but environment varies) and drops
+  # trailing newlines from command substitution. stdin redirection has
+  # neither failure mode and matches the codex CLI's default `[PROMPT]`
+  # contract: "If not provided as an argument (or if `-` is used),
+  # instructions are read from stdin".
+  if ! codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}"; then
     rm -f "${tmp_output}"
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       echo "Conflict resolver failed after retries."
