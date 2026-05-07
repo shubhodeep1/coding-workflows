@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of this repository should be improved?\nChoices:\nA. A specific workflow file under `.github/workflows/` (please name it) (RECOMMENDED)\nB. A specific script/helper file under `scripts/` (please name it) (RECOMMENDED)\nC. Repo documentation only (`README.md`, runbooks, or similar)\nD. A broader pipeline phase (clarify / plan / implement / review / orchestrate / validate), and the agent should identify the exact files\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix a bug or broken behavior (RECOMMENDED)\nB. Add a new capability\nC. Improve reliability/safety without changing user-facing behavior\nD. Improve readability/maintainability only\nQ3. How should success be judged for this issue?\nChoices:\nA. Match a specific expected behavior/output you describe (RECOMMENDED)\nB. Resolve a known failure message, log symptom, or flaky workflow run\nC. Apply a general cleanup/refinement in the named area, using conservative defaults if no exact bug is known",
+  "fingerprint": "8570dfea934b324dc223e4ec53d93c683f3f7ba1ff2144bcf493170a9b626b42",
+  "lineage": {
+    "issue_number": 2211,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25474658278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25474658278",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260507033712_1887924d48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2211,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25474658278"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2211 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-07T03:37:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
