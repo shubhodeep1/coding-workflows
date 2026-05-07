@@ -47,6 +47,19 @@ name: Test & Mark Stable Release
         required: false
         type: number
         default: 30
+      plan_timeout:
+        description: >
+          Max minutes of *inactivity* for Phase 2 (Wait for plan). Higher
+          default than `phase_timeout` because the plan trigger relies on
+          GitHub `issue_comment` event delivery — observed to lag up to
+          ~38 min in the wild (run 25477674617). The timer still resets
+          on any detected progress (label/comment/plan-run changes), so
+          a healthy plan completes well before the cap. Falls back to
+          `phase_timeout` when unset, so existing dispatchers that only
+          override `phase_timeout` keep the previous behaviour.
+        required: false
+        type: number
+        default: 60
       review_timeout:
         description: >
           Max minutes of *inactivity* before the review & autofix phase
@@ -308,6 +321,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
+      PLAN_PHASE_TIMEOUT: ${{ inputs.plan_timeout || inputs.phase_timeout || 60 }}
       REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 30 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
@@ -569,8 +583,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "Waiting for plan to finish on issue #${ISSUE_NUMBER}..."
-          echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
-          INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
+          echo "Inactivity timeout: ${PLAN_PHASE_TIMEOUT} minutes"
+          INACTIVITY_LIMIT=$((PLAN_PHASE_TIMEOUT * 60))
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
@@ -708,7 +722,7 @@ jobs:
 
             # Inactivity timeout
             if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
-              echo "::error::Plan phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
+              echo "::error::Plan phase stalled — no activity for ${PLAN_PHASE_TIMEOUT} minutes"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
             fi
