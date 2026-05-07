@@ -399,13 +399,17 @@ def test_no_codex_exec_site_places_ask_for_approval_after_exec() -> None:
 	"""
 	# `git grep -P -z` does NOT span lines (the -z flag controls output
 	# delimiter, not record boundary), so we read the relevant files
-	# directly and run a multi-line regex over each. The pattern matches
-	# `<prefix> exec` followed by an optional `\<newline><indent>` line
-	# continuation, then `--model ...` containing `--ask-for-approval`
-	# before the next newline (or before the next backslash-continued
-	# logical line ends).
-	pat = re.compile(
-		r'(codex|"\$\{codex_bin\}") exec\s+(\\\n\s+)?--model[^\n]*--ask-for-approval',
+	# directly. Step 1 normalises shell line-continuations
+	# (`\<newline><indent>` → single space) so a single multi-line codex
+	# invocation collapses into one logical line. Step 2 runs a simple
+	# regex over each logical line: any `<prefix> exec` followed by
+	# `--ask-for-approval` BEFORE the next newline is a bug, regardless
+	# of where `--model` (or any other flag) sits in between. This
+	# catches both same-line regressions and multi-line continuations
+	# where `--ask-for-approval` lands on a later `\`-continued line.
+	# Catches the `--ask-for-approval` BEFORE `--model` ordering too.
+	bad = re.compile(
+		r'(?:codex|"\$\{codex_bin\}") exec[^\n]*--ask-for-approval',
 	)
 	scan_dirs = [
 		REPO_ROOT / ".github" / "workflows",
@@ -423,12 +427,39 @@ def test_no_codex_exec_site_places_ask_for_approval_after_exec() -> None:
 				continue
 			if path.suffix not in (".sh", ".yml", ".yaml"):
 				continue
-			text = path.read_text()
-			for m in pat.finditer(text):
-				line_no = text.count("\n", 0, m.start()) + 1
-				snippet = m.group(0).replace("\n", "\\n")
+			raw = path.read_text(encoding="utf-8")
+			# Map each char position in the normalised text back to a
+			# physical line in the original file so error messages cite
+			# the actual file:line of the broken `exec` token.
+			normalised_chars: list[str] = []
+			origin_line: list[int] = []
+			line_no = 1
+			i = 0
+			while i < len(raw):
+				ch = raw[i]
+				if ch == "\\" and i + 1 < len(raw) and raw[i + 1] == "\n":
+					# Line continuation: collapse `\<newline><indent>`
+					# into a single space, advance past the indent.
+					normalised_chars.append(" ")
+					origin_line.append(line_no)
+					line_no += 1
+					i += 2
+					while i < len(raw) and raw[i] in (" ", "\t"):
+						i += 1
+					continue
+				normalised_chars.append(ch)
+				origin_line.append(line_no)
+				if ch == "\n":
+					line_no += 1
+				i += 1
+			normalised = "".join(normalised_chars)
+			for m in bad.finditer(normalised):
+				phys_line = origin_line[m.start()] if m.start() < len(origin_line) else line_no
+				snippet = m.group(0)
+				if len(snippet) > 200:
+					snippet = snippet[:200] + "..."
 				rel = path.relative_to(REPO_ROOT)
-				offenders.append(f"{rel}:{line_no}: {snippet}")
+				offenders.append(f"{rel}:{phys_line}: {snippet}")
 	assert not offenders, (
 		"`--ask-for-approval` is a TOP-LEVEL Codex flag and must precede "
 		"the `exec` subcommand on Codex CLI v0.114.0+, otherwise the "
