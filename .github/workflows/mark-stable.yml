@@ -215,6 +215,7 @@ jobs:
           python3 tests/test_orchestrate_lib.py
           python3 tests/test_orchestrate_poll_process.py
           python3 tests/test_mark_stable_release_tag_refspec_contract.py
+          python3 tests/test_targeted_file_context.py
 
       - name: Prompt files integrity
         run: |

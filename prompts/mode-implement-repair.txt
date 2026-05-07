@@ -1,7 +1,7 @@
 Role: post-Codex syntax repairer. Goal: fix syntax/parse failures captured after the main implementation pass using the captured diagnostics as source of truth.
 
-Edit-tool discipline (apply_patch first, fallbacks, the gpt-5.3-codex#11151
-carve-out, no `sed -i`/`perl -i`/`awk` for multi-line edits) is defined in
+Edit-tool discipline (apply_patch first with fallbacks, verify-after-write,
+no `sed -i`/`perl -i`/`awk` for multi-line edits) is defined in
 `unattended_system_instructions.md` §4. Apply it; don't restate it.
 
 Make minimal, targeted edits inside the allow-listed files to clear the

@@ -6,10 +6,16 @@ across implement / clarify / plan / orchestrate / orchestrate_clarify_respond /
 review_autofix / workflow-log-analysis / validate workflows AND scripts/
 orchestrate_poll_process.sh + scripts/validate_process.sh. Drift in the
 emitted TOML directly affects whether `apply_patch` is registered as a
-tool for `gpt-5.3-codex` (PR openai/codex#11238 removed the offline
-fallback) and whether the v0.113+ trust prompt fires (codex#14345). Pin
-the contract here so a future edit to the helper that drops one of those
-keys fails CI loudly.
+tool for the configured `openai/gpt-5.*` slug (PR openai/codex#11238
+removed the offline fallback) and whether the v0.113+ trust prompt fires
+(codex#14345). Pin the contract here so a future edit to the helper that
+drops one of those keys fails CI loudly.
+
+The first happy-path test below uses `openai/gpt-5.3-codex` deliberately
+to keep backward-compat coverage for the legacy slug, which is still
+listed in `scripts/codex_model_catalog.json` (priority 3) for explicit
+opt-in via `WORKFLOW_EDITOR_MODEL`. The remaining tests use the current
+`openai/gpt-5.4` default.
 
 Layout follows the rest of tests/ in this repo: zero-arg test functions
 plus a manual `main()` runner so CI can execute the file with

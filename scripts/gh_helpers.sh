@@ -1244,8 +1244,12 @@ autofix_retrigger_has_inflight_peer()
 #      boundary so the model never sees a half-hunk.
 #   2. **Total-prompt budget** — across ALL `_embed_input_file`
 #      invocations in the current shell process the cumulative bytes
-#      stay under `_PROMPT_BUDGET_TOTAL_BYTES` (default 1200000 ≈
-#      300k tokens).  After the budget is exhausted later files are
+#      stay under `_PROMPT_BUDGET_TOTAL_BYTES` (default 800000 ≈
+#      200k tokens at ~4 bytes/token).  Sized to fit comfortably
+#      within the gpt-5.4 standard context window (272k tokens) once
+#      the static prefix (system instructions / agents / pipeline
+#      doc, ~10k tokens) and the response budget (~30k tokens) are
+#      subtracted.  After the budget is exhausted later files are
 #      replaced with an explicit "(omitted — budget exhausted)"
 #      marker so the model knows context is incomplete.
 #
@@ -1256,8 +1260,10 @@ autofix_retrigger_has_inflight_peer()
 # ---------------------------------------------------------------
 
 # Default total prompt budget (bytes).  Set the env var BEFORE sourcing
-# gh_helpers.sh to override.
-: "${_PROMPT_BUDGET_TOTAL_BYTES:=1200000}"
+# gh_helpers.sh to override.  See header comment above for the sizing
+# rationale (200k tokens within gpt-5.4's 272k context window after
+# static prefix + response budget).
+: "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
 
 # Resolve a stable per-process state-file path.  $$ in a subshell is
 # the parent shell's PID, so all $(...) invocations under one parent

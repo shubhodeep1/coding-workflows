@@ -96,7 +96,7 @@ env:
     z-ai/glm-5
     qwen/qwen3.6-plus
     x-ai/grok-4.1-fast
-  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   # Reviewer is research-heavy (read PR diff + cross-check against repo
   # state, emit grounded findings) → medium per the OpenAI prompt guide.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'medium' }}
@@ -104,9 +104,10 @@ env:
   # Pass-2 diff-size gate (review_run_reviewers.sh): when LAST_RUN_DIFF
   # is "large" (≥ REVIEWER_PASS2_DIFF_LARGE_LOC added+removed lines, default
   # 200) Pass 2 escalates to xhigh; otherwise it runs at medium. Per the
-  # OpenAI prompt guide for gpt-5.3-codex: "Use `high` or `xhigh` for
-  # hardest tasks." Small diffs don't benefit from xhigh and risk the
-  # over-think / empty-output failure mode documented at L1846 below.
+  # OpenAI gpt-5.4 prompt guide: reserve `xhigh` for "long, agentic,
+  # reasoning-heavy tasks" and start with `medium` or `high` otherwise.
+  # Small diffs don't benefit from xhigh and risk the over-think /
+  # empty-output failure mode documented at L1846 below.
   # The operator override (THINKING_LEVEL_REVIEWER / smoke-set
   # REVIEWER_REASONING_EFFORT) always wins over the gate.
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
@@ -119,6 +120,14 @@ env:
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'medium' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  # Targeted-file-context inlining limit — propagated to scripts/
+  # review_apply_fixes.sh (autofix editor) and scripts/review_conflict_resolve.sh
+  # (conflict resolver) via this workflow-level env block. Without this
+  # export, the scripts' shell-level ${VAR:-DEFAULT} fallback fires and
+  # repo-variable overrides are silently ignored. See
+  # scripts/targeted_file_context.py docstring for semantics. Set to 0
+  # to disable inlining entirely. Default matches implement.yml.
+  TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli
@@ -893,7 +902,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh write_codex_config.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -1847,7 +1856,11 @@ jobs:
             # Reasoning overrides for smoke runs.
             # Reviewers are pinned to low; editor is pinned to medium.
             #
-            # History of reasoning levels on smoke runs (editor):
+            # History of reasoning levels on smoke runs (editor). The runs
+            # cited below predate the gpt-5.4 cutover and were observed on
+            # the legacy gpt-5.3-codex default; the rationale (medium beats
+            # extremes for execution-heavy editing tasks) still stands per
+            # the gpt-5.4 prompt guide:
             #   low  → run 25254574828: OSCILLATION GUARD activated because the
             #           bait commit appeared in LAST_RUN_DIFF (since fixed at
             #           L2249-2260 to only walk [ai-autofix] commits — bait
@@ -2704,17 +2717,18 @@ jobs:
           echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
           # Enable reasoning summaries for the editor so the model is forced to
           # externalize its decision tokens. Investigation of run #25115530167
-          # found gpt-5.3-codex @ xhigh + summaries=none can complete a session
-          # with empty stdout: it reasons silently, decides not to call
-          # apply_patch, and the session ends cleanly with 0 bytes output
-          # (no stderr error, no SIGTERM). Setting summaries to "auto" forces
-          # at least a brief externalized rationale on every turn — gives
-          # us diagnostic visibility AND nudges the model toward emitting
+          # (legacy gpt-5.3-codex default) found that @ xhigh + summaries=none
+          # can complete a session with empty stdout: the model reasons silently,
+          # decides not to call apply_patch, and the session ends cleanly with
+          # 0 bytes output (no stderr error, no SIGTERM). Setting summaries to
+          # "auto" forces at least a brief externalized rationale on every turn —
+          # gives us diagnostic visibility AND nudges the model toward emitting
           # a final assistant message instead of silent termination. The
           # field name `model_reasoning_summary` mirrors the Codex CLI
-          # convention used by `model_reasoning_effort`; the catalog
-          # at scripts/codex_model_catalog.json confirms gpt-5.3-codex
-          # supports it (`default_reasoning_summary: "auto"`).
+          # convention used by `model_reasoning_effort`; the catalog at
+          # scripts/codex_model_catalog.json confirms both gpt-5.4 (current
+          # default) and gpt-5.3-codex (legacy / opt-in) advertise
+          # `default_reasoning_summary: "auto"`.
           if grep -q "^model_reasoning_summary = " ~/.codex/config.toml; then
             sed -i "s/^model_reasoning_summary = \".*\"/model_reasoning_summary = \"auto\"/" ~/.codex/config.toml
           else
@@ -3629,8 +3643,9 @@ jobs:
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
           # the single-line bait removal completes deterministically. That
           # patches ~/.codex/config.toml, which the conflict resolver below
-          # would otherwise inherit. With reasoning=none gpt-5.3-codex hits
-          # the same empty-stdout failure mode documented on the editor step
+          # would otherwise inherit. With reasoning=none the legacy
+          # gpt-5.3-codex default hit an empty-stdout failure mode on this
+          # fixture (documented on the editor step
           # ("Switch reasoning effort for editor"): it runs one read tool
           # call, exits cleanly with rc=0 and zero stdout, and the retry
           # loop bails after MAX_ATTEMPTS with no edits. Observed on PR
@@ -4763,10 +4778,11 @@ jobs:
         # Mirrors the failure-log capture pattern PR #1940 added for
         # implement.yml. The gate is broader than a plain failure() ||
         # cancelled() because review_autofix is fail-open on editor
-        # empty-output: when gpt-5.3-codex completes with 0-byte stdout
+        # empty-output: when the editor model completes with 0-byte stdout
         # (no apply_patch invocation, no final assistant summary — see
         # the comment in the "Switch reasoning effort for editor" step
-        # documenting run #25115530167) the job posts the noop-comment
+        # documenting run #25115530167 on the legacy gpt-5.3-codex
+        # default) the job posts the noop-comment
         # path and exits success(), so we'd miss exactly the case this
         # artifact exists for. EDITOR_NOOP_SUSPICIOUS and
         # EDITOR_CHANGES_LOST are the two existing flags that mark

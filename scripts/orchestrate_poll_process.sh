@@ -2681,7 +2681,7 @@ invoke_judge_for_integration_conflict() {
   # Centralised in scripts/write_codex_config.sh — see that script's
   # header for the apply_patch / trust / elevation rationale.
   bash scripts/write_codex_config.sh \
-    --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" \
+    --model "${MODEL_EDITOR:-openai/gpt-5.4}" \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
 
   local prompt_file
@@ -2792,7 +2792,7 @@ invoke_judge_for_integration_conflict() {
     echo "   short diagnosis in the commit message."
   } > "${prompt_file}"
 
-  if cat "${prompt_file}" | codex --ask-for-approval never exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+  if cat "${prompt_file}" | codex --ask-for-approval never exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
     return 0
@@ -2865,6 +2865,7 @@ _refresh_integration_resolver_tooling() {
     "scripts/review_conflict_resolve.sh"
     "scripts/verify_integration_fingerprints.py"
     "scripts/check_resolver_diff.sh"
+    "scripts/targeted_file_context.py"
     "prompts/conflict-resolver.txt"
     "prompts/integration-sync-conflict-resolver.txt"
     "prompts/integration-sync-conflict-resolver-retry-prelude.txt"

@@ -56,18 +56,25 @@ Phases of the unattended pipeline (each is a separate workflow file under
 | clarify, clarify-respond | `openai/gpt-5.4` | `low` | `low` |
 | plan | `openai/gpt-5.4` | `medium` | `low` |
 | orchestrate (decompose), judge | `openai/gpt-5.4` | `medium` | `low` |
-| implement (main editor) | `openai/gpt-5.3-codex` | `medium` (smoke: `low`) | default |
-| implement-repair, implement-repair-syntax | `openai/gpt-5.3-codex` | `low` | default |
+| implement (main editor) | `openai/gpt-5.4` | `medium` (smoke: `low`) | default |
+| implement-repair, implement-repair-syntax | `openai/gpt-5.4` | `low` | default |
 | implement-diagnose | `openai/gpt-5.4` | `medium` | `low` |
-| review autofix editor | `openai/gpt-5.3-codex` | `medium` (smoke: `medium`) | default |
-| review autofix reviewers (pass 1) | `openai/gpt-5.3-codex` | `medium` (hardcoded; smoke: `medium`) | `low` |
-| review autofix reviewers (pass 2) | `openai/gpt-5.3-codex` | `medium` if `LAST_RUN_DIFF < 200 LOC`, `xhigh` otherwise (smoke: `low`); operator override wins | `low` |
+| review autofix editor | `openai/gpt-5.4` | `medium` (smoke: `medium`) | default |
+| review autofix reviewers (pass 1) | `openai/gpt-5.4` | `medium` (hardcoded; smoke: `medium`) | `low` |
+| review autofix reviewers (pass 2) | `openai/gpt-5.4` | `medium` if `LAST_RUN_DIFF < 200 LOC`, `xhigh` otherwise (smoke: `low`); operator override wins | `low` |
 | review consolidator | `openai/gpt-5.4` | `low` | `low` |
-| conflict resolver | `openai/gpt-5.3-codex` | `medium` (decoupled from smoke) | default |
+| conflict resolver | `openai/gpt-5.4` | `medium` (decoupled from smoke) | default |
 | validate generate, diagnose, discover | `openai/gpt-5.4` | `medium` (discover: `low`) | `low` |
-| validate fix-harness, self-heal | `openai/gpt-5.3-codex` | `medium` | default |
+| validate fix-harness, self-heal | `openai/gpt-5.4` | `medium` | default |
 | workflow log analysis, audit, api-redundancy | `openai/gpt-5.4` | `medium` (audit: `high`) | `low` |
 | workflow log summary | `openai/gpt-5.4-mini` | default | `low` |
+
+Every editor / reviewer / resolver phase now defaults to `openai/gpt-5.4`.
+The previous split that routed patch-heavy phases to `openai/gpt-5.3-codex`
+was retired after the model's announce-without-emit regression
+(openai/codex#11151) drove repeat no-edit failures. `gpt-5.3-codex` is
+still listed in `scripts/codex_model_catalog.json` (priority 3) for
+explicit opt-in via `WORKFLOW_EDITOR_MODEL`.
 
 The reviewer-only multi-model run (claude-branch-review) uses third-party
 models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,

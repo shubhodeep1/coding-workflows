@@ -36,8 +36,8 @@ Rules:
 - Do not modify GitHub workflow files except when resolving merge conflicts.
 - Do not access the network.
 
-Edit-tool discipline (apply_patch first, fallbacks, no `sed -i`/`perl -i`/
-`awk` for multi-line edits, the gpt-5.3-codex#11151 carve-out) is defined in
+Edit-tool discipline (apply_patch first with fallbacks, verify-after-write,
+no `sed -i`/`perl -i`/`awk` for multi-line edits) is defined in
 `unattended_system_instructions.md` §4. Apply it; don't restate it.
 
 Note: "Do not generate patches" above means do not output a textual unified-

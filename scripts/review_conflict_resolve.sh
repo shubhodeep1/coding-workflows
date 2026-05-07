@@ -280,9 +280,10 @@ RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt
 # instructing the model to apply_patch on tests/e2e_smoke_canary.txt
 # (keep HEAD `run_id:`, drop the `alt-<run_id>` bait line). PR #2112 /
 # run 25370025320 confirmed the override is rendered correctly but
-# gpt-5.3-codex still hits the documented empty-stdout failure mode on
-# this trivial fixture (3 attempts, all reading the file then exiting
-# with 0 bytes on stdout, no apply_patch invoked, retry loop bails).
+# the legacy gpt-5.3-codex default still hit the documented empty-stdout
+# failure mode on this trivial fixture (3 attempts, all reading the file
+# then exiting with 0 bytes on stdout, no apply_patch invoked, retry
+# loop bails). Kept as defense-in-depth on the gpt-5.4 default.
 #
 # Apply the override's specified resolution deterministically before
 # entering the codex loop, gated on (a) IS_SMOKE_TEST=true, (b) the
@@ -314,7 +315,7 @@ if [ "${IS_SMOKE_TEST:-false}" = "true" ] \
     ' "${_smoke_canary}" > "${_smoke_resolved_tmp}" \
        && ! grep -qE '^(<<<<<<< |=======$|>>>>>>> )' "${_smoke_resolved_tmp}"; then
       mv "${_smoke_resolved_tmp}" "${_smoke_canary}"
-      echo "Smoke fixture: applied deterministic resolution to ${_smoke_canary} before codex resolver loop (kept HEAD-side run_id: line, dropped origin/main alt- bait; mirrors PR #2095 override directive). gpt-5.3-codex's documented empty-stdout failure mode on this fixture would otherwise exhaust MAX_ATTEMPTS without committing."
+      echo "Smoke fixture: applied deterministic resolution to ${_smoke_canary} before codex resolver loop (kept HEAD-side run_id: line, dropped origin/main alt- bait; mirrors PR #2095 override directive). Empty-stdout failure mode on this fixture (documented under the legacy gpt-5.3-codex default, openai/codex#11151) would otherwise exhaust MAX_ATTEMPTS without committing."
     else
       rm -f "${_smoke_resolved_tmp}"
       echo "::warning::Smoke fixture: deterministic resolution of ${_smoke_canary} did not produce a marker-free file; falling back to model-driven resolution."
@@ -506,6 +507,36 @@ _verify_fingerprints_soft() {
   fi
 }
 
+# Pre-load the conflicted files into the resolver prompt so the model
+# sees the actual conflict-marker bytes without spending a tool call to
+# read them. RESOLVER_ALLOWLIST_FILE is the canonical in-scope list (one
+# path per line) populated by review_conflict_prepare.sh from
+# `git diff --name-only --diff-filter=U` plus any fingerprint-violation
+# expansions. Files are processed in source order until the cumulative
+# byte budget (TARGETED_FILE_CONTEXT_MAX_BYTES) is exhausted; a file
+# that would overflow the remaining budget gets a "read with read tool"
+# marker so the model fetches it properly instead of seeing a misleading
+# head-truncated copy. Fail-open: any error here continues the resolver
+# loop without the targeted-context block.
+TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+: > "${TARGETED_FILES_CONTEXT_FILE}"
+if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "scripts/targeted_file_context.py" ]; then
+  python3 scripts/targeted_file_context.py \
+    --paths-file "${RESOLVER_ALLOWLIST_FILE}" \
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
+    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
+    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block." \
+    --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+    echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
+fi
+# Append the targeted-context block to the rendered prompt once, so
+# every retry (which copies CONFLICT_RESOLVER_PROMPT_FILE into
+# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it.
+if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
+  printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+  cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # On retries: restore the working tree to its post-merge-replay
@@ -547,10 +578,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     continue
   fi
   # Empty stdout is no longer treated as a hard failure on its own.
-  # gpt-5.3-codex sometimes invokes apply_patch tool calls without
-  # emitting any final assistant text (PR #2086 documents the same
-  # signature on the editor side; PR #2112 / run 25370025320 hit it on
-  # the resolver side after PR #2095's override was already in place).
+  # The editor model can invoke apply_patch tool calls without emitting
+  # any final assistant text (PR #2086 documents the same signature on
+  # the editor side; PR #2112 / run 25370025320 hit it on the resolver
+  # side under the legacy gpt-5.3-codex default after PR #2095's
+  # override was already in place).
   # Working-tree state is the source of truth: if the soft-validation
   # gates pass (no residual markers, fingerprints satisfied) the
   # resolution is real regardless of an empty summary, and if they
