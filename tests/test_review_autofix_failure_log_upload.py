@@ -7,7 +7,7 @@ test_failure_log_artifact_upload_contract for the parallel steps added to
 the editor empty-output failure mode).
 
 Why a literal contract test:
-- review_autofix is fail-open on editor empty-output. When gpt-5.3-codex
+- review_autofix is fail-open on editor empty-output. When the legacy editor default
   completes with 0-byte stdout the job exits success() and the only
   remaining trace of the failure is whatever the staging step copied
   before the cleanup step's rm -rf. A rename of the gate, artifact name,
@@ -63,7 +63,7 @@ def test_review_autofix_failure_log_artifact_upload_contract() -> None:
 
 	The artifact captures per-attempt editor stdout/stderr (the only
 	place the OpenRouter response / finish_reason / tool-router rejection
-	surfaces for the gpt-5.3-codex empty-output failure documented in
+	surfaces for the legacy editor default empty-output failure documented in
 	scripts/review_apply_fixes.sh:947–951 and the workflow's own
 	"Switch reasoning effort for editor" step), the editor / reviewer /
 	conflict-resolver prompts and summaries, the advisory editor inputs

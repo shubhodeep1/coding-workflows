@@ -280,7 +280,7 @@ RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt
 # instructing the model to apply_patch on tests/e2e_smoke_canary.txt
 # (keep HEAD `run_id:`, drop the `alt-<run_id>` bait line). PR #2112 /
 # run 25370025320 confirmed the override is rendered correctly but
-# the legacy gpt-5.3-codex default still hit the documented empty-stdout
+# the legacy editor default still hit the documented empty-stdout
 # failure mode on this trivial fixture (3 attempts, all reading the file
 # then exiting with 0 bytes on stdout, no apply_patch invoked, retry
 # loop bails). Kept as defense-in-depth on the gpt-5.4 default.
@@ -315,7 +315,7 @@ if [ "${IS_SMOKE_TEST:-false}" = "true" ] \
     ' "${_smoke_canary}" > "${_smoke_resolved_tmp}" \
        && ! grep -qE '^(<<<<<<< |=======$|>>>>>>> )' "${_smoke_resolved_tmp}"; then
       mv "${_smoke_resolved_tmp}" "${_smoke_canary}"
-      echo "Smoke fixture: applied deterministic resolution to ${_smoke_canary} before codex resolver loop (kept HEAD-side run_id: line, dropped origin/main alt- bait; mirrors PR #2095 override directive). Empty-stdout failure mode on this fixture (documented under the legacy gpt-5.3-codex default, openai/codex#11151) would otherwise exhaust MAX_ATTEMPTS without committing."
+      echo "Smoke fixture: applied deterministic resolution to ${_smoke_canary} before codex resolver loop (kept HEAD-side run_id: line, dropped origin/main alt- bait; mirrors PR #2095 override directive). Empty-stdout failure mode on this fixture (documented under the legacy editor default, openai/codex#11151) would otherwise exhaust MAX_ATTEMPTS without committing."
     else
       rm -f "${_smoke_resolved_tmp}"
       echo "::warning::Smoke fixture: deterministic resolution of ${_smoke_canary} did not produce a marker-free file; falling back to model-driven resolution."
@@ -567,7 +567,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   fi
 
   tmp_output="$(mktemp)"
-  if ! codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access "$(cat "${_effective_prompt_file}")" > "${tmp_output}"; then
+  # Pass the prompt via stdin (consistent with every other codex
+  # invocation in this repo) rather than as a single positional argv
+  # string. The `"$(cat …)"` shape risks ARG_MAX truncation on large
+  # prompts (Linux default is ~2 MiB but environment varies) and drops
+  # trailing newlines from command substitution. stdin redirection has
+  # neither failure mode and matches the codex CLI's default `[PROMPT]`
+  # contract: "If not provided as an argument (or if `-` is used),
+  # instructions are read from stdin".
+  if ! codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}"; then
     rm -f "${tmp_output}"
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       echo "Conflict resolver failed after retries."
@@ -581,7 +589,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # The editor model can invoke apply_patch tool calls without emitting
   # any final assistant text (PR #2086 documents the same signature on
   # the editor side; PR #2112 / run 25370025320 hit it on the resolver
-  # side under the legacy gpt-5.3-codex default after PR #2095's
+  # side under the legacy editor default after PR #2095's
   # override was already in place).
   # Working-tree state is the source of truth: if the soft-validation
   # gates pass (no residual markers, fingerprints satisfied) the

@@ -147,8 +147,8 @@ EOF
   fi
   export CODEX_HOME="${probe_home}"
 
-  codex --ask-for-approval never exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
-  codex --ask-for-approval never exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
+  codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
+  codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
 
   normalize_openrouter_usage "${probe_log_one}" "1" "${probe_model}" || true
   normalize_openrouter_usage "${probe_log_two}" "2" "${probe_model}" || true
@@ -300,7 +300,7 @@ fi
 # ~4 bytes/token) so a single oversized input artifact (e.g. a 500KB
 # PR diff) can't blow past the reviewer model's context window. The
 # current default gpt-5.4 has a 272k standard context (lower than the
-# legacy gpt-5.3-codex 400k); 200k of inputs leaves room for the
+# legacy editor default's 400k); 200k of inputs leaves room for the
 # static prefix (~10k tokens) and response budget (~30k tokens)
 # within the 272k window.
 _init_prompt_budget
@@ -958,7 +958,7 @@ run_reviewer() {
       # Reviewers must not mutate the workspace: writes here pollute the pre-editor
       # snapshot used by review_autofix.yml's touched-file detector (comm -13 safety
       # union) and cause EDITOR_CHANGES_LOST false positives.
-      exec "${codex_bin}" --ask-for-approval never exec --model "${model}" --sandbox read-only < "${prompt_file}"
+      exec "${codex_bin}" --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${model}" --sandbox read-only < "${prompt_file}"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename
@@ -1206,7 +1206,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   #
   # A small diff (one-line tweak, narrow rename) does not benefit from
   # xhigh — see the editor smoke history at review_autofix.yml:1846 where
-  # the legacy gpt-5.3-codex default at xhigh on a one-line bait removal
+  # the legacy editor default at xhigh on a one-line bait removal
   # burned ~81k tokens across 6 attempts and produced 0 file changes. A
   # large or cross-cutting diff (security-sensitive, schema migration,
   # refactor) does benefit because Pass 2 has cross-pollination context

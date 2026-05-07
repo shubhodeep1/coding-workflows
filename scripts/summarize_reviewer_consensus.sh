@@ -304,7 +304,7 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	last_rc=0
 	CODEX_HOME="${summariser_codex_home}" \
 		timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
-		"${codex_bin}" --ask-for-approval never exec --model "${SUMMARISER_MODEL}" --sandbox read-only < "${prompt_file}" \
+		"${codex_bin}" --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${SUMMARISER_MODEL}" --sandbox read-only < "${prompt_file}" \
 		> "${tmp_stdout}" 2> "${tmp_stderr}" \
 		|| last_rc=$?
 

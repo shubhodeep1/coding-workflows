@@ -1755,10 +1755,10 @@ def test_announce_edit_regex_contract() -> None:
 def test_salvage_branches_gate_on_substantive_changes() -> None:
 	"""Pin PR #2176: the empty-stdout and watchdog-kill salvage branches
 	must require a non-whitespace worktree change before declaring
-	`implement_succeeded=true`. Without the gate, gpt-5.3-codex's
-	announce-without-emit failure mode (openai/codex#11151) ships a
-	no-op PR when the model writes only a trailing newline / blank
-	line — see fun-token-multi-chain run 25436981639 issue 200, where
+	`implement_succeeded=true`. Without the gate, the announce-without-
+	emit failure mode (openai/codex#11151) ships a no-op PR when the
+	model writes only a trailing newline / blank line — see fun-token-
+	multi-chain run 25436981639 issue 200, where
 	`printf '\\n' >> contracts/FunOFTAdapter.sol` rode through the
 	cmd_rc==0+empty-stdout branch and the workflow opened PR #202
 	with `+` (one blank line) as the entire diff.
@@ -2368,14 +2368,14 @@ def test_alt_model_smoke_override_parses_valid_body() -> None:
 		"Update canary file.\n\n"
 		"## Constraints\n"
 		"- Only modify `tests/e2e_smoke_canary.txt`.\n"
-		"- Note: this run uses `openai/gpt-5.3-codex` as the editor model override."
+		"- Note: this run uses `anthropic/claude-sonnet-4-6` as the editor model override."
 	)
 	exports = _run_smoke_detection_step(
 		issue_title="[E2E Smoke Test alt-model] update canary (run 123)",
 		issue_body=body,
 	)
 	assert exports.get("IS_SMOKE_TEST") == "true"
-	assert exports.get("MODEL_EDITOR") == "openai/gpt-5.3-codex", (
+	assert exports.get("MODEL_EDITOR") == "anthropic/claude-sonnet-4-6", (
 		"alt-model override must propagate from issue body to MODEL_EDITOR; "
 		f"got exports={exports}"
 	)
@@ -2388,7 +2388,7 @@ def test_alt_model_override_inert_on_regular_smoke_title() -> None:
 	job and the alt-model variant.
 	"""
 
-	body = "Note: this run uses `openai/gpt-5.3-codex` as the editor model override."
+	body = "Note: this run uses `anthropic/claude-sonnet-4-6` as the editor model override."
 	exports = _run_smoke_detection_step(
 		issue_title="[E2E Smoke Test] update canary",
 		issue_body=body,

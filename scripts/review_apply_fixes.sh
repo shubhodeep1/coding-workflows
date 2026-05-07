@@ -39,7 +39,7 @@ fi
 # success path below so a trivial trailing-newline / whitespace-only
 # edit can't masquerade as a real fix and get committed. Mirrors the
 # salvage gate in implement.yml's retry loop (PR #2176 — under the
-# legacy gpt-5.3-codex default the editor appended a lone `\n` to a
+# legacy editor default, the editor appended a lone `\n` to a
 # contract file in fun-token-multi-chain run 25436981639 issue 200 and
 # the implement workflow shipped a no-op PR; review_autofix has the
 # same exposure via the `_git_has_diff` check inside the
@@ -297,7 +297,7 @@ MANDATORY ACTIONS for this run:
    (`# E2E_EDITOR_BAIT_<run_id>:`) as a fallback. Restoring the file is
    a deterministic edit — do not wait for additional context, do not
    ask for clarification, do not defer to a future iteration.
-   (Background: under the legacy gpt-5.3-codex default the editor
+   (Background: under the legacy editor default, the editor
    reliably no-opped on this trivial fixture when forced through
    apply_patch — see openai/codex#11151 — so the printf escape hatch
    exists for that case and remains available regardless of model.)
@@ -329,7 +329,7 @@ __SMOKE_OVERRIDE__
   # ~4 bytes/token) so a single oversized input artifact can't blow
   # past the editor model's context window. The current default
   # gpt-5.4 has a 272k standard context (lower than the legacy
-  # gpt-5.3-codex 400k); 200k of inputs leaves room for the static
+  # the legacy editor default 400k); 200k of inputs leaves room for the static
   # prefix (~10k tokens) and the response budget (~30k tokens) within
   # the 272k window. Cleaned up after the heredoc completes.
   _init_prompt_budget
@@ -348,7 +348,7 @@ __SMOKE_OVERRIDE__
   #
   #   - The tail copy provides recency reinforcement so the discipline
   #     stays close to the focused output cue. Under the legacy
-  #     gpt-5.3-codex default, hoisting either copy to win cache hits
+  #     the legacy editor default, hoisting either copy to win cache hits
   #     produced the 6/6 empty-output autofix failure on
   #     fun-token-multi-chain run 25437168681 (PR #2176 root cause).
   #     Even on the current gpt-5.4 default the tail position keeps
@@ -860,7 +860,7 @@ rm -f "${EDITOR_SUMMARY_FILE}"
 # PR #2086 added a smoke-only override block instructing the editor to
 # restore tests/e2e_smoke_canary.txt to the linked-issue spec. PR #2113
 # added the resolver-side analog and confirmed (under the legacy
-# gpt-5.3-codex default) that the model still hit the documented
+# the legacy editor default) that the model still hit the documented
 # empty-stdout failure mode on this trivial fixture even with the
 # override rendered correctly (see openai/codex#11151 — the 5.3-codex
 # slug doesn't get matched into the apply_patch-providing branch in
@@ -1046,7 +1046,7 @@ while [ "${attempt}" -le 3 ]; do
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   (
     trap '' PIPE
-    exec codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
+    exec codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
   ) > "${tmp_output}" &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"

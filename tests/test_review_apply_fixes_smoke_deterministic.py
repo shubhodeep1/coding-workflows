@@ -4,7 +4,7 @@
 PR #2086 added a smoke-only override block to the editor prompt
 instructing the model to restore tests/e2e_smoke_canary.txt to the
 linked-issue spec; PR #2113 added the resolver-side analog. Run
-25370115370 confirmed gpt-5.3-codex still hits the empty-stdout
+25370115370 confirmed the legacy editor default still hit the empty-stdout
 failure mode on the editor side: only the consolidator (a different
 model — gpt-5.4-mini at reasoning=none) actually wrote the file via
 `printf >`, and only because its config.toml inherited a

@@ -143,7 +143,7 @@ cmd_rc=0
 
 if ! CODEX_HOME="${consolidator_codex_home}" \
 	timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
-	"${codex_bin}" --ask-for-approval never exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --sandbox danger-full-access \
+	"${codex_bin}" --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --sandbox danger-full-access \
 	< "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 	cmd_rc=$?
 fi

@@ -3,7 +3,7 @@
 
 The smoke fixture appends a single bait line to tests/e2e_smoke_canary.txt
 and expects review_autofix.yml's editor (currently `openai/gpt-5.4`;
-historically observed below on the legacy `openai/gpt-5.3-codex` default)
+historically observed below on the legacy editor default)
 to remove it via apply_patch. Across runs 25305535590 / 25308327160 /
 25310399716 the editor consistently completed with 0-byte stdout — no
 apply_patch invocation, no final assistant summary — because the
@@ -92,7 +92,7 @@ def test_smoke_detect_exports_is_smoke_test_env() -> None:
 		"Smoke-detect step must export IS_SMOKE_TEST=true so "
 		"scripts/review_apply_fixes.sh can render the smoke-only "
 		"editor prompt block. Without this export the smoke fixture "
-		"keeps hitting gpt-5.3-codex's empty-output failure mode."
+		"keeps hitting the legacy editor default's empty-output failure mode."
 	)
 	assert 'if [ "$IS_SMOKE" = "true" ]' in step_text, (
 		"Smoke-detect step must keep the IS_SMOKE conditional — the "
@@ -192,7 +192,7 @@ def test_editor_script_contains_smoke_only_block() -> None:
 	# test, but the load-bearing phrases must remain.
 	#
 	# History: PR #2086 originally mandated `apply_patch`, but
-	# openai/codex#11151 documents that the gpt-5.3-codex slug doesn't
+	# openai/codex#11151 documents that the legacy editor slug doesn't
 	# get matched into the apply_patch-providing branch in codex's
 	# offline model_info fallback, so the directive could not be
 	# satisfied even when the model wanted to. The override now allows
@@ -207,7 +207,7 @@ def test_editor_script_contains_smoke_only_block() -> None:
 	)
 	assert "apply_patch" in script and "printf" in script, (
 		"Smoke override must offer both apply_patch and a printf shell "
-		"write as acceptable means — gpt-5.3-codex flakes on the "
+		"write as acceptable means — the legacy editor default flaked on the "
 		"former (openai/codex#11151) but reliably executes the latter."
 	)
 	assert "Do NOT exit without writing the file" in script, (
@@ -255,7 +255,7 @@ def test_smoke_block_position_before_input_files() -> None:
 	override_idx = script.find("=== E2E SMOKE TEST OVERRIDE — READ FIRST ===")
 	# Anchor on the new INPUT FILE CONTENTS section header (replaced the
 	# earlier "INPUT FILES / Read the following files:" anti-pattern with
-	# embedded file contents to stop gpt-5.3-codex from burning its tool
+	# embedded file contents to stop the legacy editor default from burning its tool
 	# budget on exec reads — see PR linked in the section docstring).
 	input_files_idx = script.find("INPUT FILE CONTENTS")
 	assert override_idx != -1, "smoke override marker not found in script"

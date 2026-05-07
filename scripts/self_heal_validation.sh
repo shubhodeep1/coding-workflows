@@ -152,7 +152,7 @@ fi
 SELF_HEAL_LLM_SUCCESS=false
 for _llm_attempt in 1 2; do
 	echo "self-heal: LLM call attempt ${_llm_attempt}/2" >> "${SELF_HEAL_LOG_FILE}"
-	if cat "${SELF_HEAL_PROMPT_FILE}" | codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"; then
+	if cat "${SELF_HEAL_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"; then
 		# Extract the last JSON object that contains a "target_prompt" key.
 		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
 		# (the earlier brace-depth counter mis-handled JSON strings that

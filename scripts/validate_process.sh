@@ -2044,7 +2044,7 @@ else
     DISCOVER_ATTEMPTS_USED="${attempt}"
     echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
     set +e
-    cat "${DISCOVER_PROMPT_FILE}" | codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
+    cat "${DISCOVER_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
     DISCOVER_EXIT=$?
     set -e
 
@@ -2707,7 +2707,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DIAGNOSE_ATTEMPTS_USED="${attempt}"
   echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
   set +e
-  cat "${DIAGNOSE_PROMPT_FILE}" | codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+  cat "${DIAGNOSE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
   DIAGNOSE_EXIT=$?
   set -e
 

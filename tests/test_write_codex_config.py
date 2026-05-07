@@ -11,11 +11,11 @@ removed the offline fallback) and whether the v0.113+ trust prompt fires
 (codex#14345). Pin the contract here so a future edit to the helper that
 drops one of those keys fails CI loudly.
 
-The first happy-path test below uses `openai/gpt-5.3-codex` deliberately
-to keep backward-compat coverage for the legacy slug, which is still
-listed in `scripts/codex_model_catalog.json` (priority 3) for explicit
-opt-in via `WORKFLOW_EDITOR_MODEL`. The remaining tests use the current
-`openai/gpt-5.4` default.
+All tests use the current `openai/gpt-5.4` default. The legacy
+`openai/gpt-5.3-codex` slug was retired from the catalog after the
+2026-05-07 12:41 / 12:42 E2E smoke runs confirmed it shared the same
+announce-without-emit failure mode as gpt-5.4 (so the alt-model canary
+was no longer informative). See PR #2241 for the gpt-5.4 cutover.
 
 Layout follows the rest of tests/ in this repo: zero-arg test functions
 plus a manual `main()` runner so CI can execute the file with
@@ -63,9 +63,14 @@ def test_helper_emits_apply_patch_keys_under_github_actions() -> None:
 	  - [projects."<workdir>"] trust_level = "trusted"
 	  - approval_policy = "never"
 	  - sandbox_mode = "danger-full-access"
+	  - model_verbosity = "high"
+	  - include_apply_patch_tool = true
 	plus the static [model_providers.openrouter] / [sandbox_workspace_write]
-	blocks. These four keys are the load-bearing fix for the recurring
-	"codex narrates apply_patch but never invokes it" failure.
+	blocks. The first four keys are the load-bearing fix for the recurring
+	"codex narrates apply_patch but never invokes it" failure (PR #2196).
+	The last two were added after the 2026-05-07 12:41 smoke runs showed
+	gpt-5.4 reproducing the same announce-without-emit pattern that
+	gpt-5.3-codex hit (logs at L4031–L5031 / L3847–L4810 in that run).
 	"""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
@@ -76,7 +81,7 @@ def test_helper_emits_apply_patch_keys_under_github_actions() -> None:
 		project.mkdir()
 		result = _run(
 			[
-				"--model", "openai/gpt-5.3-codex",
+				"--model", "openai/gpt-5.4",
 				"--reasoning", "medium",
 				"--catalog-path", str(catalog),
 				"--project-path", str(project),
@@ -89,8 +94,10 @@ def test_helper_emits_apply_patch_keys_under_github_actions() -> None:
 		assert 'approval_policy = "never"' in body, body
 		assert 'sandbox_mode = "danger-full-access"' in body, body
 		assert 'model_provider = "openrouter"' in body, body
-		assert 'model = "openai/gpt-5.3-codex"' in body, body
+		assert 'model = "openai/gpt-5.4"' in body, body
 		assert 'model_reasoning_effort = "medium"' in body, body
+		assert 'model_verbosity = "high"' in body, body
+		assert 'include_apply_patch_tool = true' in body, body
 		assert f'model_catalog_json = "{catalog}"' in body, body
 		assert "[model_providers.openrouter]" in body, body
 		assert "[sandbox_workspace_write]" in body, body
