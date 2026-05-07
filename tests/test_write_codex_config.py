@@ -318,6 +318,64 @@ def test_helper_quotes_project_path_with_spaces() -> None:
 		)
 
 
+def test_no_codex_exec_site_uses_deprecated_full_auto_flag() -> None:
+	"""Guard against re-introduction of `--full-auto` on any `codex exec`
+	site in this repo.
+
+	Per OpenAI's Codex CLI reference, `--full-auto` is a deprecated
+	compatibility shim that forces `--sandbox workspace-write` — exactly
+	the mode that triggers the apply_patch hangs / sandbox-refresh
+	failures (codex#19020 / #16643) the elevated config in this helper
+	is supposed to escape. CLI flags override config.toml, so passing
+	`--full-auto` silently re-clamps `sandbox_mode` back to
+	`workspace-write` regardless of what this helper writes.
+
+	Run 25470900024's implement banner showed `sandbox: workspace-write`
+	despite PR #2196's config setting `sandbox_mode = "danger-full-access"`
+	— the codex_exec sites still passed `--full-auto` until the swap to
+	`--ask-for-approval never --sandbox danger-full-access`.
+
+	Two scripts intentionally use `--sandbox read-only` and are
+	exempted: review_run_reviewers.sh (reviewers must not mutate the
+	tree) and summarize_reviewer_consensus.sh (consolidator likewise).
+	"""
+	import subprocess
+
+	result = subprocess.run(
+		[
+			"git", "-C", str(REPO_ROOT), "grep", "-n", "--",
+			"--full-auto",
+			"--",
+			".github/workflows/",
+			"scripts/",
+		],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	# git grep returns 1 when no matches found — that's the success case
+	# for this guard. rc=0 means at least one offending site exists.
+	if result.returncode == 0:
+		# Filter out the historical-context comment in write_codex_config.sh
+		# (the script's docstring intentionally mentions the deprecated
+		# flag to document why we moved away from it).
+		offenders = [
+			line for line in result.stdout.splitlines()
+			if not line.startswith("scripts/write_codex_config.sh:")
+		]
+		assert not offenders, (
+			"`--full-auto` is deprecated and forces sandbox=workspace-write, "
+			"defeating the elevated config write_codex_config.sh produces. "
+			"Use `--ask-for-approval never --sandbox danger-full-access` "
+			"instead. Offending sites:\n  " + "\n  ".join(offenders)
+		)
+	else:
+		assert result.returncode == 1, (
+			f"git grep exited unexpectedly (rc={result.returncode}); "
+			f"stderr={result.stderr!r}"
+		)
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

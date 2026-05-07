@@ -5,15 +5,21 @@
 # duplicated the same TOML-emit block (~25 lines × 9 sites). The block is
 # load-bearing: it wires `model_catalog_json` so codex can resolve
 # `apply_patch_tool_type = "freeform"` for our `openai/gpt-5.*` slugs
-# (PR openai/codex#11238 removed the offline fallback), pre-trusts the
+# (PR openai/codex#11238 removed the offline fallback) and pre-trusts the
 # working directory to bypass the v0.113+ trust prompt
-# (codex#14345 / #14547 / #14599), and sets approval/sandbox to the
-# repo-policy elevated defaults (codex#19020 / #16643 — danger-full-access
-# is required to avoid workspace-write apply_patch hangs / sandbox-refresh
-# failures, and is safe under the repo policy that codex only runs on
-# ephemeral GH-hosted runners). Drift across the 9 inline copies is the
-# kind of regression Copilot's review comment on PR #2196 warned about,
-# so every caller now invokes this helper instead.
+# (codex#14345 / #14547 / #14599). It also writes approval/sandbox to
+# the repo-policy elevated defaults (codex#19020 / #16643 —
+# danger-full-access is required to avoid workspace-write apply_patch
+# hangs / sandbox-refresh failures, and is safe under the repo policy
+# that codex only runs on ephemeral GH-hosted runners), but this is
+# defence-in-depth only: every `codex exec` site in this repo now also
+# passes `--ask-for-approval never --sandbox danger-full-access`
+# explicitly, because CLI flags override config.toml (PR #2196 wrote the
+# config but kept `--full-auto`, which silently re-forced
+# sandbox=workspace-write at runtime — see run 25470900024 banner).
+# Drift across the 9 inline copies is the kind of regression Copilot's
+# review comment on PR #2196 warned about, so every caller now invokes
+# this helper instead.
 #
 # Usage:
 #   bash scripts/write_codex_config.sh \

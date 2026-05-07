@@ -2304,6 +2304,135 @@ def test_failure_log_artifact_upload_contract() -> None:
 	)
 
 
+def _run_smoke_detection_step(
+	*,
+	issue_title: str,
+	issue_body: str,
+	default_model: str = "openai/gpt-5.3-codex",
+) -> dict[str, str]:
+	"""Run the implement.yml "Detect smoke test ..." step in isolation
+	and return the GITHUB_ENV exports it produced.
+
+	Mirrors the helper pattern used elsewhere in this file: extract the
+	`run:` block from the workflow, render the GitHub expressions out,
+	and execute under bash with the env vars the real job would have
+	set in earlier steps.
+	"""
+
+	script = _render_github_expressions(_extract_run_script("Detect smoke test and silence Telegram alerts"))
+	with tempfile.TemporaryDirectory(prefix="test_smoke_") as tmp:
+		tmp_path = Path(tmp)
+		github_env = tmp_path / "github_env"
+		github_env.write_text("", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"ISSUE_TITLE": issue_title,
+				"ISSUE_BODY": issue_body,
+				"MODEL_EDITOR": default_model,
+				"SKIP_IMPLEMENT": "false",
+				"GITHUB_ENV": str(github_env),
+			}
+		)
+		proc = _run_shell_script(script, cwd=tmp_path, env=env)
+		assert proc.returncode == 0, (
+			"smoke detection step failed:\n"
+			f"stdout:\n{proc.stdout}\n"
+			f"stderr:\n{proc.stderr}\n"
+		)
+		return _parse_github_output(github_env)
+
+
+def test_alt_model_smoke_override_parses_valid_body() -> None:
+	"""[E2E Smoke Test alt-model] title + valid Note line → MODEL_EDITOR
+	overridden to the model named in the issue body.
+
+	Closes the propagation gap acknowledged in PR #1913 body and never
+	wired since PR #1841 introduced e2e-alt-model-test.
+	"""
+
+	body = (
+		"## Task\n"
+		"Update canary file.\n\n"
+		"## Constraints\n"
+		"- Only modify `tests/e2e_smoke_canary.txt`.\n"
+		"- Note: this run uses `openai/gpt-5.4` as the editor model override."
+	)
+	exports = _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test alt-model] update canary (run 123)",
+		issue_body=body,
+	)
+	assert exports.get("IS_SMOKE_TEST") == "true"
+	assert exports.get("MODEL_EDITOR") == "openai/gpt-5.4", (
+		"alt-model override must propagate from issue body to MODEL_EDITOR; "
+		f"got exports={exports}"
+	)
+
+
+def test_alt_model_override_inert_on_regular_smoke_title() -> None:
+	"""Regular [E2E Smoke Test] (no alt-model sub-tag) leaves MODEL_EDITOR
+	at the workflow-level default — even when the body carries a
+	"this run uses ..." line. Prevents drift between the regular smoke
+	job and the alt-model variant.
+	"""
+
+	body = "Note: this run uses `openai/gpt-5.4` as the editor model override."
+	exports = _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test] update canary",
+		issue_body=body,
+	)
+	assert exports.get("IS_SMOKE_TEST") == "true"
+	assert "MODEL_EDITOR" not in exports, (
+		"Regular smoke title must not trigger MODEL_EDITOR override; "
+		f"got exports={exports}"
+	)
+
+
+def test_alt_model_override_inert_on_production_title() -> None:
+	"""Production issue (no smoke title at all) cannot smuggle a model
+	override via its body. Trust-boundary check — the body is
+	user-controlled, so the gate must be the title.
+	"""
+
+	body = "Note: this run uses `evil/model` as the editor model override."
+	exports = _run_smoke_detection_step(
+		issue_title="Add a feature to the repo",
+		issue_body=body,
+	)
+	assert "IS_SMOKE_TEST" not in exports
+	assert "MODEL_EDITOR" not in exports, (
+		"Production title must never accept body-supplied MODEL_EDITOR; "
+		f"got exports={exports}"
+	)
+
+
+def test_alt_model_override_falls_back_on_malformed_body() -> None:
+	"""Alt-model title with a body that fails the shape regex (shell
+	metacharacters, missing slash, oversized) leaves MODEL_EDITOR alone
+	rather than failing the implement run. Fail-open behaviour matches
+	the dispatcher's own validation in test-and-mark-stable.yml.
+	"""
+
+	cases = [
+		# Shell injection attempt — backtick token contains spaces / ;
+		"Note: this run uses `evil; rm -rf /` as the editor model override.",
+		# No slash → shape regex rejects
+		"Note: this run uses `badmodel` as the editor model override.",
+		# No Note line at all
+		"Just a plain body without the override directive.",
+	]
+	for body in cases:
+		exports = _run_smoke_detection_step(
+			issue_title="[E2E Smoke Test alt-model] update canary",
+			issue_body=body,
+		)
+		assert exports.get("IS_SMOKE_TEST") == "true"
+		assert "MODEL_EDITOR" not in exports, (
+			f"Malformed alt-model body must fall through to default MODEL_EDITOR; "
+			f"body={body!r}, exports={exports}"
+		)
+
+
 def test_review_pipeline_integration_chain_module_runs_clean() -> None:
 	integration_test = REPO_ROOT / "tests" / "test_review_pipeline_integration.py"
 	env = os.environ.copy()
