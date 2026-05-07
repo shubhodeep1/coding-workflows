@@ -579,7 +579,17 @@ jobs:
           # skip-merge job in review_autofix.yml will otherwise enable
           # auto-merge before the e2e gate's bait-injection phase has
           # a chance to push (race observed in run 25150961704).
-          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+          # Match both the regular fixture title `[E2E Smoke Test]` and
+          # the alt-model variant `[E2E Smoke Test alt-model]`. The
+          # original `\[E2E Smoke Test\]` pattern (literal `]` after
+          # `Test`) silently never matched the alt-model title, so the
+          # alt-model implement never silenced Telegram, never set
+          # IS_SMOKE_TEST, and never reached the alt-model override
+          # branch added below. Use `\[E2E Smoke Test\b` so any token
+          # boundary after `Test` (closing bracket, space + sub-tag, …)
+          # qualifies; AI issue titles in production never start with
+          # `[E2E Smoke Test`, so broadening is safe.
+          if echo "${ISSUE_TITLE}" | grep -qiE '\[E2E Smoke Test\b'; then
             echo "🔬 Smoke test detected — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
             echo "IS_SMOKE_TEST=true" >> "$GITHUB_ENV"
@@ -592,6 +602,38 @@ jobs:
             # default is none and matches what the regular path uses, so
             # any breakage on the smoke fixture is also visible to real
             # implements rather than masked by a smoke-only override.
+            #
+            # Alt-model variant override. The e2e-alt-model-test job in
+            # test-and-mark-stable.yml advertises an alternate editor
+            # model in the issue body via a literal:
+            #   - Note: this run uses `<provider>/<model>` as the editor model override.
+            # Neither workflow_call, internal-implement.yml, nor the
+            # WORKFLOW_EDITOR_MODEL repo var actually propagates that
+            # override into this run (gap acknowledged in PR #1913 body
+            # and never closed since PR #1841 introduced the test). Parse
+            # it here and override MODEL_EDITOR for this job only — gated
+            # on the more specific [E2E Smoke Test alt-model] sub-tag so a
+            # real issue body can never smuggle an override into a
+            # production implement.
+            #
+            # TRUST BOUNDARY: ISSUE_BODY is user-controlled. Validate the
+            # extracted token against the same shape regex the dispatcher
+            # enforces (test-and-mark-stable.yml: ALT_EDITOR_MODEL
+            # validation) and the same 128-char length cap before
+            # exporting. Fail-open on parse failure: a malformed body
+            # falls back to the workflow-level default MODEL_EDITOR
+            # rather than failing the implement.
+            if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test alt-model\]'; then
+              alt_model="$(printf '%s' "${ISSUE_BODY}" | grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
+              if [ -n "${alt_model:-}" ] \
+                  && [ "${#alt_model}" -le 128 ] \
+                  && printf '%s' "${alt_model}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+                echo "🧪 Alt-model smoke override: MODEL_EDITOR=${alt_model}"
+                echo "MODEL_EDITOR=${alt_model}" >> "$GITHUB_ENV"
+              else
+                echo "::warning::Alt-model smoke title detected but model override unparseable from body (got '${alt_model:-<empty>}'); falling back to workflow-level MODEL_EDITOR='${MODEL_EDITOR}'."
+              fi
+            fi
           fi
 
       - name: Fetch issue comments

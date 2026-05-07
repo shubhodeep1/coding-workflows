@@ -4090,9 +4090,19 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
-      # Override exposed for the e2e dispatch path; consumed by
-      # internal-implement.yml via the WORKFLOW_EDITOR_MODEL repo var.
-      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'anthropic/claude-sonnet-4-6' }}
+      # Override propagated to the implement run via the issue body's
+      # "Note: this run uses `<provider>/<model>` …" line, which the
+      # implement workflow's "Detect smoke test" step parses when the
+      # title contains [E2E Smoke Test alt-model]. The
+      # WORKFLOW_EDITOR_MODEL repo-var path was the original intent
+      # (PR #1841) but never wired through (gap acknowledged in PR
+      # #1913 body); body-parsing is the cheaper closure since the
+      # override is already documented for operators reading the issue.
+      # Default model must appear in scripts/codex_model_catalog.json
+      # so PR #2196's apply_patch_tool_type registration covers it
+      # (anthropic/claude-sonnet-4-6 was never in the catalog, so even
+      # a wired override would have failed apply_patch invocation).
+      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.4' }}
     steps:
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)
