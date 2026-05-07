@@ -893,7 +893,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh write_codex_config.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -1180,46 +1180,29 @@ jobs:
       - name: Create Codex config
         run: |
           set -euo pipefail
-          mkdir -p ~/.codex
           # Compute absolute CATALOG_PATH correctly whether SUPPORT_SCRIPTS_DIR is absolute or relative
           if [[ "${SUPPORT_SCRIPTS_DIR}" = /* ]]; then
             CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           else
             CATALOG_PATH="${GITHUB_WORKSPACE}/${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           fi
-          # See implement.yml's "Create Codex config" for the rationale on
-          # the trust pre-seed (codex#14345 v0.113+ regression) and the
-          # elevated approval/sandbox settings (GH runners are ephemeral,
-          # so danger-full-access is safe and avoids workspace-write
-          # apply_patch hangs in codex#19020 / #16643). model_catalog_json
-          # was already wired here.
-          PROJECT_PATH="$(pwd)"
-          {
-            echo 'web_search = "disabled"'
-            echo 'approval_policy = "never"'
-            echo 'sandbox_mode = "danger-full-access"'
-            echo 'model_provider = "openrouter"'
-            echo "model = \"${MODEL_EDITOR}\""
-              echo "model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\""
-            if [ -f "${CATALOG_PATH}" ]; then
-              echo "model_catalog_json = \"${CATALOG_PATH}\""
-            fi
-            echo
-            echo '[model_providers.openrouter]'
-            echo 'name = "OpenRouter"'
-            echo 'base_url = "https://openrouter.ai/api/v1"'
-            echo 'env_key = "OPENROUTER_API_KEY"'
-            echo 'wire_api = "responses"'
-            echo 'stream_idle_timeout_ms = 600000'
-            echo 'stream_max_retries = 5'
-            echo 'request_max_retries = 3'
-            echo
-            echo '[sandbox_workspace_write]'
-            echo 'network_access = true'
-            echo
-            echo "[projects.\"${PROJECT_PATH}\"]"
-            echo 'trust_level = "trusted"'
-          } > ~/.codex/config.toml
+          # The shared writer lives next to the catalog under
+          # SUPPORT_SCRIPTS_DIR (the runtime-fetched workflow-source
+          # tree), not under repo-root scripts/, because review_autofix
+          # runs in consumer-repo checkouts and the support tree is
+          # the only place the helper is guaranteed to exist.
+          if [[ "${SUPPORT_SCRIPTS_DIR}" = /* ]]; then
+            WRITE_CODEX_CONFIG="${SUPPORT_SCRIPTS_DIR}/write_codex_config.sh"
+          else
+            WRITE_CODEX_CONFIG="${GITHUB_WORKSPACE}/${SUPPORT_SCRIPTS_DIR}/write_codex_config.sh"
+          fi
+          # See scripts/write_codex_config.sh for the apply_patch /
+          # trust / elevation rationale.
+          bash "${WRITE_CODEX_CONFIG}" \
+            --model "${MODEL_EDITOR}" \
+            --reasoning "${REVIEWER_REASONING_EFFORT}" \
+            --web-search disabled \
+            --catalog-path "${CATALOG_PATH}"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Pre-assemble static context (cacheable across runs)

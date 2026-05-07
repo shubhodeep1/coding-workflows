@@ -1879,60 +1879,18 @@ trap cleanup_runtime_containers EXIT
 # ---------------------------------------------------------------
 # Setup Codex
 # ---------------------------------------------------------------
-mkdir -p ~/.codex
-# See implement.yml's "Create Codex config" for rationale on the trust
-# pre-seed (codex#14345 v0.113+ regression) and the elevated approval/
-# sandbox settings (GH runners are ephemeral, danger-full-access avoids
-# workspace-write apply_patch hangs in codex#19020 / #16643).
-#
-# Standalone-safety gate: this script supports a "Standalone validation
-# run" path (no tracking issue, possibly invoked outside GitHub-hosted
-# runners), so the elevated approval_policy / sandbox_mode are gated on
-# GITHUB_ACTIONS=true. On a developer's local machine the workspace is
-# NOT ephemeral and danger-full-access could let codex modify files
-# outside the repo — so we fall back to codex's standard workspace-write
-# defaults locally. Override with VALIDATE_FORCE_FULL_ACCESS=1 to opt in
-# explicitly when running locally on a known-safe sandbox.
-CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json"
-PROJECT_PATH="$(pwd)"
-if [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${VALIDATE_FORCE_FULL_ACCESS:-}" = "1" ]; then
-  _codex_approval_policy="never"
-  _codex_sandbox_mode="danger-full-access"
-else
-  # Local invocation: keep codex's standard workspace-write sandbox.
-  # approval_policy stays at codex default ("on-request") so the
-  # operator gets prompted before risky actions.
-  _codex_approval_policy="on-request"
-  _codex_sandbox_mode="workspace-write"
-fi
-{
-  echo 'web_search = "live"'
-  echo "approval_policy = \"${_codex_approval_policy}\""
-  echo "sandbox_mode = \"${_codex_sandbox_mode}\""
-  echo 'model_provider = "openrouter"'
-  echo "model = \"${MODEL_EDITOR}\""
-  echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
-  if [ -f "${CATALOG_PATH}" ]; then
-    echo "model_catalog_json = \"${CATALOG_PATH}\""
-  else
-    echo "::warning::Codex model catalog not found at ${CATALOG_PATH}" >&2
-  fi
-  echo
-  echo '[model_providers.openrouter]'
-  echo 'name = "OpenRouter"'
-  echo 'base_url = "https://openrouter.ai/api/v1"'
-  echo 'env_key = "OPENROUTER_API_KEY"'
-  echo 'wire_api = "responses"'
-  echo 'stream_idle_timeout_ms = 600000'
-  echo 'stream_max_retries = 5'
-  echo 'request_max_retries = 3'
-  echo
-  echo '[sandbox_workspace_write]'
-  echo 'network_access = true'
-  echo
-  echo "[projects.\"${PROJECT_PATH}\"]"
-  echo 'trust_level = "trusted"'
-} > ~/.codex/config.toml
+# Centralised in scripts/write_codex_config.sh — its `--allow-elevation
+# auto` default already implements the standalone-safety gate this
+# script needs (elevate iff GITHUB_ACTIONS=true OR
+# VALIDATE_FORCE_FULL_ACCESS=1, otherwise keep codex's safer
+# workspace-write/on-request defaults). Catalog path is script-relative
+# so a "Standalone validation run" without a fetched scripts/ tree
+# still picks up the catalog shipped next to validate_process.sh.
+_validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "${_validate_script_dir}/write_codex_config.sh" \
+  --model "${MODEL_EDITOR}" \
+  --reasoning "${MODEL_REASONING_EFFORT}" \
+  --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
 
 export PATH="${HOME}/.local/bin:${PATH}"
 

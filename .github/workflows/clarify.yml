@@ -215,7 +215,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -480,41 +480,12 @@ jobs:
         if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
-          mkdir -p ~/.codex
-          # See implement.yml's "Create Codex config" for the rationale on
-          # model_catalog_json (codex#11151 / PR #11238 offline fallback
-          # removal), the trust pre-seed (codex#14345 v0.113+ regression),
-          # and the elevated approval/sandbox settings (GH runners are
-          # ephemeral, so danger-full-access is safe and avoids
-          # workspace-write apply_patch hangs in codex#19020 / #16643).
-          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
-          PROJECT_PATH="$(pwd)"
-          {
-            echo 'web_search = "live"'
-            echo 'approval_policy = "never"'
-            echo 'sandbox_mode = "danger-full-access"'
-            echo 'model_provider = "openrouter"'
-            echo "model = \"${MODEL_EDITOR}\""
-            echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
-            if [ -f "${CATALOG_PATH}" ]; then
-              echo "model_catalog_json = \"${CATALOG_PATH}\""
-            fi
-            echo
-            echo '[model_providers.openrouter]'
-            echo 'name = "OpenRouter"'
-            echo 'base_url = "https://openrouter.ai/api/v1"'
-            echo 'env_key = "OPENROUTER_API_KEY"'
-            echo 'wire_api = "responses"'
-            echo 'stream_idle_timeout_ms = 600000'
-            echo 'stream_max_retries = 5'
-            echo 'request_max_retries = 3'
-            echo
-            echo '[sandbox_workspace_write]'
-            echo 'network_access = true'
-            echo
-            echo "[projects.\"${PROJECT_PATH}\"]"
-            echo 'trust_level = "trusted"'
-          } > ~/.codex/config.toml
+          # Centralised in scripts/write_codex_config.sh — see that
+          # script's header for the apply_patch / trust / elevation
+          # rationale.
+          bash scripts/write_codex_config.sh \
+            --model "${MODEL_EDITOR}" \
+            --reasoning "${MODEL_REASONING_EFFORT}"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Pre-assemble static context (cacheable across runs)

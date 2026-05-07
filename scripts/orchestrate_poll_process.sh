@@ -2678,40 +2678,11 @@ invoke_judge_for_integration_conflict() {
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
 
   # Ensure codex config exists — mirrors the review-blocked judge setup.
-  # See implement.yml's "Create Codex config" for the rationale on the
-  # trust pre-seed (codex#14345) and the elevated approval/sandbox
-  # settings (GH runners are ephemeral, danger-full-access is safe and
-  # avoids workspace-write apply_patch hangs).
-  mkdir -p ~/.codex
-  local catalog_path="$(pwd)/scripts/codex_model_catalog.json"
-  local project_path
-  project_path="$(pwd)"
-  {
-    echo 'web_search = "live"'
-    echo 'approval_policy = "never"'
-    echo 'sandbox_mode = "danger-full-access"'
-    echo 'model_provider = "openrouter"'
-    echo "model = \"${MODEL_EDITOR:-openai/gpt-5.3-codex}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
-    if [ -f "${catalog_path}" ]; then
-      echo "model_catalog_json = \"${catalog_path}\""
-    fi
-    echo
-    echo '[model_providers.openrouter]'
-    echo 'name = "OpenRouter"'
-    echo 'base_url = "https://openrouter.ai/api/v1"'
-    echo 'env_key = "OPENROUTER_API_KEY"'
-    echo 'wire_api = "responses"'
-    echo 'stream_idle_timeout_ms = 600000'
-    echo 'stream_max_retries = 5'
-    echo 'request_max_retries = 3'
-    echo
-    echo '[sandbox_workspace_write]'
-    echo 'network_access = true'
-    echo
-    echo "[projects.\"${project_path}\"]"
-    echo 'trust_level = "trusted"'
-  } > ~/.codex/config.toml
+  # Centralised in scripts/write_codex_config.sh — see that script's
+  # header for the apply_patch / trust / elevation rationale.
+  bash scripts/write_codex_config.sh \
+    --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" \
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
 
   local prompt_file
   local output_file
@@ -5640,37 +5611,10 @@ invoke_stall_judge() {
     echo "${diagnostics}"
   } > "${stall_judge_prompt_file}"
 
-  mkdir -p ~/.codex
-  # See implement.yml's "Create Codex config" for rationale on
-  # trust pre-seed + elevated approval/sandbox.
-  CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
-  PROJECT_PATH="$(pwd)"
-  {
-    echo 'web_search = "live"'
-    echo 'approval_policy = "never"'
-    echo 'sandbox_mode = "danger-full-access"'
-    echo 'model_provider = "openrouter"'
-    echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
-    if [ -f "${CATALOG_PATH}" ]; then
-      echo "model_catalog_json = \"${CATALOG_PATH}\""
-    fi
-    echo
-    echo '[model_providers.openrouter]'
-    echo 'name = "OpenRouter"'
-    echo 'base_url = "https://openrouter.ai/api/v1"'
-    echo 'env_key = "OPENROUTER_API_KEY"'
-    echo 'wire_api = "responses"'
-    echo 'stream_idle_timeout_ms = 600000'
-    echo 'stream_max_retries = 5'
-    echo 'request_max_retries = 3'
-    echo
-    echo '[sandbox_workspace_write]'
-    echo 'network_access = true'
-    echo
-    echo "[projects.\"${PROJECT_PATH}\"]"
-    echo 'trust_level = "trusted"'
-  } > ~/.codex/config.toml
+  # Centralised in scripts/write_codex_config.sh.
+  bash scripts/write_codex_config.sh \
+    --model "${MODEL_EDITOR}" \
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
 
   local judge_success="false"
   local attempt
@@ -8944,37 +8888,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     echo "Detected review-blocked issues in wave ${CURRENT_WAVE}. Invoking judge to unblock..."
 
     # Ensure codex config exists for the judge.
-    # See implement.yml's "Create Codex config" for rationale on
-    # trust pre-seed + elevated approval/sandbox.
-    mkdir -p ~/.codex
-    CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
-    PROJECT_PATH="$(pwd)"
-    {
-      echo 'web_search = "live"'
-      echo 'approval_policy = "never"'
-      echo 'sandbox_mode = "danger-full-access"'
-      echo 'model_provider = "openrouter"'
-      echo "model = \"${MODEL_EDITOR}\""
-      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
-      if [ -f "${CATALOG_PATH}" ]; then
-        echo "model_catalog_json = \"${CATALOG_PATH}\""
-      fi
-      echo
-      echo '[model_providers.openrouter]'
-      echo 'name = "OpenRouter"'
-      echo 'base_url = "https://openrouter.ai/api/v1"'
-      echo 'env_key = "OPENROUTER_API_KEY"'
-      echo 'wire_api = "responses"'
-      echo 'stream_idle_timeout_ms = 600000'
-      echo 'stream_max_retries = 5'
-      echo 'request_max_retries = 3'
-      echo
-      echo '[sandbox_workspace_write]'
-      echo 'network_access = true'
-      echo
-      echo "[projects.\"${PROJECT_PATH}\"]"
-      echo 'trust_level = "trusted"'
-    } > ~/.codex/config.toml
+    # Centralised in scripts/write_codex_config.sh.
+    bash scripts/write_codex_config.sh \
+      --model "${MODEL_EDITOR}" \
+      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
@@ -10653,36 +10570,10 @@ Manual intervention required." >/dev/null
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
   echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-medium}"
-  # See implement.yml's "Create Codex config" for rationale on
-  # trust pre-seed + elevated approval/sandbox.
-  CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
-  PROJECT_PATH="$(pwd)"
-  {
-    echo 'web_search = "live"'
-    echo 'approval_policy = "never"'
-    echo 'sandbox_mode = "danger-full-access"'
-    echo 'model_provider = "openrouter"'
-    echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-medium}\""
-    if [ -f "${CATALOG_PATH}" ]; then
-      echo "model_catalog_json = \"${CATALOG_PATH}\""
-    fi
-    echo
-    echo '[model_providers.openrouter]'
-    echo 'name = "OpenRouter"'
-    echo 'base_url = "https://openrouter.ai/api/v1"'
-    echo 'env_key = "OPENROUTER_API_KEY"'
-    echo 'wire_api = "responses"'
-    echo 'stream_idle_timeout_ms = 600000'
-    echo 'stream_max_retries = 5'
-    echo 'request_max_retries = 3'
-    echo
-    echo '[sandbox_workspace_write]'
-    echo 'network_access = true'
-    echo
-    echo "[projects.\"${PROJECT_PATH}\"]"
-    echo 'trust_level = "trusted"'
-  } > ~/.codex/config.toml
+  # Centralised in scripts/write_codex_config.sh.
+  bash scripts/write_codex_config.sh \
+    --model "${MODEL_EDITOR}" \
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
     continue

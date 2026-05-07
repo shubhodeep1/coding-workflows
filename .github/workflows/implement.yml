@@ -402,7 +402,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -803,55 +803,15 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          mkdir -p ~/.codex
-          # Catalog wiring: PR #11238 (rust-v0.114.0) removed codex's offline
-          # model_info fallback. Without `model_catalog_json` pointing at our
-          # local catalog, `gpt-5.3-codex` does not get its
-          # `apply_patch_tool_type = "freeform"` registered, so the model can
-          # narrate "Applying the patch" without actually invoking apply_patch
-          # (the tool isn't in the request's tool list). See codex#11151,
-          # codex#17517, and the issue-#201 implement run that wasted 5/5
-          # attempts on announce-without-emit narration.
-          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
-          # Pre-trust the working directory: codex v0.113+ added a
-          # per-directory trust prompt that fires even under
-          # `--full-auto`/`--dangerously-bypass-approvals-and-sandbox` (see
-          # codex#14345). Pre-seeding `[projects.<workdir>]` with
-          # `trust_level = "trusted"` is the only documented bypass for
-          # exec-mode runs that have no TTY. GH runners are ephemeral and
-          # carry no sensitive state, so trusting the workdir is safe.
-          PROJECT_PATH="$(pwd)"
-          {
-            echo 'web_search = "disabled"'
-            # Belt-and-braces with the `--full-auto` CLI flag, plus
-            # `sandbox_mode = "danger-full-access"` per repo policy:
-            # GH runners are ephemeral, no sensitive state on disk, so
-            # full-access avoids the workspace-write `apply_patch` hangs
-            # (codex#19020) and any sandbox-refresh failures (codex#16643).
-            echo 'approval_policy = "never"'
-            echo 'sandbox_mode = "danger-full-access"'
-            echo 'model_provider = "openrouter"'
-            echo "model = \"${MODEL_EDITOR}\""
-            echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
-            if [ -f "${CATALOG_PATH}" ]; then
-              echo "model_catalog_json = \"${CATALOG_PATH}\""
-            fi
-            echo
-            echo '[model_providers.openrouter]'
-            echo 'name = "OpenRouter"'
-            echo 'base_url = "https://openrouter.ai/api/v1"'
-            echo 'env_key = "OPENROUTER_API_KEY"'
-            echo 'wire_api = "responses"'
-            echo 'stream_idle_timeout_ms = 600000'
-            echo 'stream_max_retries = 5'
-            echo 'request_max_retries = 3'
-            echo
-            echo '[sandbox_workspace_write]'
-            echo 'network_access = true'
-            echo
-            echo "[projects.\"${PROJECT_PATH}\"]"
-            echo 'trust_level = "trusted"'
-          } > ~/.codex/config.toml
+          # Centralised in scripts/write_codex_config.sh — wires the
+          # apply_patch fix (model_catalog_json), the v0.113+ trust pre-
+          # seed, and the elevated approval/sandbox combo at one place
+          # so the 9 codex-config sites can't drift. See that script's
+          # header comment for the full upstream-bug context.
+          bash scripts/write_codex_config.sh \
+            --model "${MODEL_EDITOR}" \
+            --reasoning "${MODEL_REASONING_EFFORT}" \
+            --web-search disabled
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
           # MCP server configuration is managed in ~/.codex/config.toml.
