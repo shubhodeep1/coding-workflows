@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: File content does not match the linked issue #2213 specification; it should contain exactly `status: ok`, `run_id: 25474642232`, and `updated-by: ai-pipeline` with a trailing newline, but the current file has wrong values and extra lines.\n  WHY: Every reviewer reports the same root cause: byte-for-byte/line-exact validation against the exact three-line spec will fail because all three required fields are incorrect and there are additional unauthorized lines.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1 | severity=high | confidence=5\n  PROBLEM: The status field contains bait text `status: BROKEN_BY_E2E_BAIT_25474642232` instead of the required `status: ok` per issue #2213 specification.\n  WHY: The E2E smoke-test gate performs byte-for-byte comparison against the spec template; the mismatch causes immediate assertion failure and blocks pipeline advancement.\n- tests/e2e_smoke_canary.txt:2 | severity=high | confidence=5\n  PROBLEM: The run_id field contains bait text `run_id: WRONG_VALUE_SHOULD_BE_25474642232` instead of the required `run_id: 25474642232` per issue #2213 specification.\n  WHY: Pipeline log analysis and run correlation scripts parse this field and will fail the equality check against the expected value.\n- tests/e2e_smoke_canary.txt:3 | severity=high | confidence=5\n  PROBLEM: The updated-by field contains bait text `updated-by: e2e-bait-injector` instead of the required `updated-by: ai-pipeline` per issue #2213 specification.\n  WHY: Audit trail and telemetry consumers expect this identifier; the mismatch breaks attribution and fails the smoke gate.\n- tests/e2e_smoke_canary.txt:4-6 | severity=high | confidence=5\n  PROBLEM: Three extra lines are present that are not in the specification. Issue #2213 requires exactly three lines, no more, no less. The extra lines are: `extra: this line violates the issue spec`, `also: another line that must be removed`, and a bait comment `# E2E_EDITOR_BAIT_25474642232: canary corrupted; restore to linked issue spec (smoke gate)`.\n  WHY: Downstream consumers expecting a strict 3-line structure will encounter parse errors or content-length mismatches; any byte-for-byte or line-count validator will fail.\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The entire file content is corrupt. The specification requires exactly these three lines with a trailing newline: `status: ok`, `run_id: 25474642232`, `updated-by: ai-pipeline`. The current 6-line file has wrong values for every field and contains three spurious extra lines.\n  WHY: This is the E2E smoke canary \u2014 a precise signal file. No line in the current output matches the spec, so every consumption path (status gate, run correlation, audit attribution, format validation) fails.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file content does not match the linked issue #2213 specification. The issue explicitly requires exactly three lines: `status: ok`, `run_id: 25474642232`, and `updated-by: ai-pipeline`.\n  WHY: Current file content has wrong field values and extra lines, so the E2E smoke-test verification that performs byte-for-byte equality against the exact three-line specification will fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File content completely violates the issue specification. The file contains 6 lines with incorrect values and extra content, but the issue requires exactly 3 lines with specific values.\n  WHY: The E2E smoke test gate performs byte-for-byte comparison against the specification. Any deviation causes validation failure.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File content does not match the exact specification from linked issue #2213. The file must contain exactly three lines (`status: ok`, `run_id: 25474642232`, `updated-by: ai-pipeline`) with a trailing newline. Instead, it contains six lines with deliberately corrupted values.\n  WHY: The E2E smoke canary is consumed by downstream validation logic that asserts exact byte-for-byte content (or strict field-level parsing); every deviation causes the smoke gate assertion to fail, blocking pipeline advancement.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File content does not match exact specification from linked issue #2213; contains incorrect values for status, run_id, updated-by and three extra unauthorized lines instead of precisely three lines with trailing newline.\n  WHY: E2E smoke test validation performs byte-for-byte or line-exact match against the issue spec; mismatch causes assertion failure, blocking pipeline gates that read/parse this canary for status confirmation, run correlation, and attribution.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File content does not match the linked issue #2213 specification. The issue requires exactly three lines with specific values, but the file contains incorrect values and three extra lines.\n  WHY: Any E2E smoke-test validation that parses this canary file expects byte-for-byte equality with the specification. The wrong values and extra content will cause assertion failures, blocking pipeline advancement.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "70323b07c1a9cdcfe3110f5d82e6a540977d413d25d71a49e94272bdf9355ce8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2218,
+    "run_id": "25474879472",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25474879472",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260507035952_03ecdb27e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2218,
+    "run_id": "25474879472"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-07T03:59:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
