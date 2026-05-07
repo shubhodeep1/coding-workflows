@@ -1336,7 +1336,7 @@ jobs:
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
             (
-              exec codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${PROMPT_FILE_TO_USE}"
+              exec codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${PROMPT_FILE_TO_USE}"
             ) > "${CODEX_OUTPUT_FILE}" 2> >(
               while IFS= read -r line || [ -n "$line" ]; do
                 printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
@@ -1904,7 +1904,7 @@ jobs:
 
             REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
             REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
-            if ! codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
+            if ! codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               continue
             fi
@@ -3117,7 +3117,7 @@ jobs:
 
           for _summary_attempt in 1 2 3; do
             cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" \
-              | codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${ISSUE_SUMMARY_FILE}" || true
+              | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${ISSUE_SUMMARY_FILE}" || true
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
               break

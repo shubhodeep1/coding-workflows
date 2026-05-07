@@ -571,7 +571,7 @@ jobs:
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
             attempt_ok=0
-            if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+            if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
                 last_status="empty output"

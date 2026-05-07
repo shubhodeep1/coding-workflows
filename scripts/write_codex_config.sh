@@ -221,6 +221,26 @@ trap 'rm -f "${_tmp_path}"' EXIT
 	printf 'model_provider = "openrouter"\n'
 	printf 'model = "%s"\n' "${_model}"
 	printf 'model_reasoning_effort = "%s"\n' "${_reasoning}"
+	# model_verbosity: emitted unconditionally. For models with
+	# `support_verbosity = true` in the catalog (gpt-5.4 family) this
+	# routes through the OpenAI Responses API as the `verbosity`
+	# request field. For models with `support_verbosity = false`
+	# codex CLI logs `model_verbosity is set but ignored as the model
+	# does not support verbosity` and continues — harmless. We set
+	# `high` here because the announce-without-emit failure mode
+	# observed in the implement / review_autofix smoke runs (logs at
+	# 2026-05-07 12:41 / 12:42) was the model emitting a reasoning
+	# trace and exiting without a tool call; high verbosity pushes
+	# the model toward emitting the assistant message + tool call
+	# rather than stopping after reasoning.
+	printf 'model_verbosity = "high"\n'
+	# include_apply_patch_tool: emitted unconditionally. Forces the
+	# apply_patch tool surface to be wired even when the catalog
+	# `apply_patch_tool_type` resolution path falls back. Belt-and-
+	# suspenders against the upstream codex#11151 announce-without-
+	# emit failure mode where the model has the verb but not the
+	# tool surface.
+	printf 'include_apply_patch_tool = true\n'
 	if [ -f "${_catalog_path}" ]; then
 		printf 'model_catalog_json = "%s"\n' "${_catalog_path}"
 	else
