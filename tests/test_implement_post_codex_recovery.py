@@ -1843,10 +1843,22 @@ def test_retry_nudge_includes_apply_patch_directive() -> None:
 		"tool — `sed`/`grep` shell-out workarounds routinely fail "
 		"shell quoting on literal special chars and waste the attempt"
 	)
-	assert "edit" in codex_block and "before expanding scope" in codex_block, (
-		"retry preamble must constrain the model to apply edits before "
-		"expanding scope, since the bitsafe.io / tele-funtoken-msg-scoring "
-		"failure mode was the model spending the full budget on recon"
+	assert "Pick the single file you understand best" in codex_block, (
+		"retry preamble must instruct the model to pick a single file and "
+		"edit it before expanding scope, since the bitsafe.io / "
+		"tele-funtoken-msg-scoring failure mode was the model spending the "
+		"full budget on recon"
+	)
+	assert "before expanding scope" in codex_block, (
+		"retry preamble must explicitly bound recon — the 'before expanding "
+		"scope' clause is the constraint that prevents wide reads ahead of "
+		"the first successful write"
+	)
+	assert "git diff --stat" in codex_block, (
+		"retry preamble must point the model at `git diff --stat` as the "
+		"verification step so it confirms the write tool actually landed "
+		"before continuing — the announce-without-emit failure mode burns "
+		"the budget when the model trusts its own narrative"
 	)
 
 
