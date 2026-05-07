@@ -875,3 +875,151 @@ No `TODO`, `FIXME`, or `HACK` markers were present in the audited `.github/workf
 | Code modularization | 8 | Large |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 6 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-07)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven equivalent enough for direct implementation without changing semantics; `NEEDS_VERIFICATION` means the overlap is plausible but a human must verify freshness, failure-path, or contract assumptions first; `RISKY_SKIP` means the overlap exists, but the call sits in a polling/recovery/race-sensitive path where auto-consolidation is not authorized.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `scripts/orchestrate_poll_process.sh:3390-3399`, `scripts/orchestrate_poll_process.sh:3445-3457`, `scripts/orchestrate_poll_process.sh:3499-3507`
+  - **Current call count** — Up to **8** reads of `GET /repos/{owner}/{repo}/pulls/{final_pr}` in one `finalize_integration_merge_if_needed()` pass (2 + 3 + 3 field-specific reads across three checkpoints).
+  - **Proposed call count** — **3** reads total, one JSON fetch per checkpoint.
+  - **Endpoint(s)** — GitHub REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+  - **Evidence**
+    ```bash
+    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ```
+    ```bash
+    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+    pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ```
+    ```bash
+    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+    pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ```
+  - **Proposed fix** — In `scripts/orchestrate_poll_process.sh::finalize_integration_merge_if_needed()`, replace each per-field cluster with one `_pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" || echo '{}')"` and parse `.state`, `.mergeable`, and `.merged_at` locally.
+  - **Safety rationale** — This is inside `orchestrate_poll_process.sh`’s final-merge/race-defense path, which is explicitly a `RISKY_SKIP` zone under the audit rules.
+  - **Downstream signal** — Do not auto-implement; manual review must confirm that collapsing the field reads preserves current retry timing, race handling, and log semantics in the final-merge loop.
+
+- **ID** — `MERGE-002`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:2782-2791` (candidate loop), with an in-file one-call pattern already present at `.github/workflows/test-and-mark-stable.yml:3362-3365`
+  - **Current call count** — **2** calls per poll iteration.
+  - **Proposed call count** — **1** call per poll iteration.
+  - **Endpoint(s)** — GitHub REST `GET /repos/{owner}/{repo}/actions/runs/{run_id}`
+  - **Evidence**
+    ```bash
+    EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+      --jq '.status // ""' 2>/dev/null || echo "")
+    EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+      --jq '.conclusion // ""' 2>/dev/null || echo "")
+    ```
+    The same workflow already uses the consolidated pattern elsewhere:
+    ```bash
+    JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+    STATUS=$(echo "${JSON}" | jq -r '.status // ""')
+    CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
+    ```
+  - **Proposed fix** — In the cancel-on-close wait loop, fetch `{status, conclusion}` once per iteration and parse both fields locally, matching the later loops already used in the same workflow.
+  - **Safety rationale** — The call is inside a polling loop, which is an explicit `RISKY_SKIP` trigger.
+  - **Downstream signal** — Do not auto-implement; manual review must confirm the one-call rewrite preserves poll cadence, timeout behavior, and any downstream grep-dependent log output.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/implement.yml:63-86`, `.github/workflows/implement.yml:532-545`
+  - **Current call count** — **2** reads of the same issue payload before implementation context assembly.
+  - **Proposed call count** — **1** read.
+  - **Endpoint(s)** — GitHub REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence**
+    ```bash
+    ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+    ```
+    ```bash
+    gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+    ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+    ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+    ```
+  - **Proposed fix** — Extend `Precheck approval phase label` to persist the full issue JSON to `${ISSUE_META_FILE}` while still extracting state/labels for the early gate, then have `Fetch issue metadata` reuse that file instead of re-fetching.
+  - **Safety rationale** — The endpoint and auth scope match exactly, but the reads are in different workflow steps, so freshness between the early gate and later context build must be verified before collapsing them.
+  - **Downstream signal** — Verify that no step between the precheck and metadata-fetch stages depends on seeing a later edit to the issue body/title/labels; if not, persist the first payload as `ISSUE_META_FILE` and remove the second fetch.
+
+- **ID** — `REUSE-002`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/clarify.yml:380-410`, with downstream consumption at `.github/workflows/clarify.yml:485-495`
+  - **Current call count** — **2** comment fetches when `SEMANTIC_CACHE_BACKEND != none`.
+  - **Proposed call count** — **1** comment fetch in the semantic-cache-enabled branch.
+  - **Endpoint(s)** — GitHub REST `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`
+  - **Evidence**
+    ```bash
+    gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+    ```
+    ```bash
+    if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+      | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+    ```
+    `ISSUE_COMMENTS_FILE` is later the source of prompt comments:
+    ```bash
+    jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+    ```
+  - **Proposed fix** — In `Fetch issue comments`, when semantic cache is enabled, do one paginated fetch to a temp JSON file, derive `${THREAD_HISTORY_FILE}` from the full set, and derive `${ISSUE_COMMENTS_FILE}` locally from the same JSON while preserving the current bounded-context contract.
+  - **Safety rationale** — The second call is a strict superset fetch, but pagination and prompt-bounding semantics differ, so the consolidation cannot be marked safe without verification.
+  - **Downstream signal** — Verify that clarify intentionally wants a bounded comment slice for prompts while semantic-cache canonicalization wants full history; if that contract holds, replace the dual fetch with one paginated fetch plus local slicing.
+
+- **ID** — `REUSE-003`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — producer at `.github/workflows/review_autofix.yml:1355-1369`; late fallback readers at `.github/workflows/review_autofix.yml:3771-3778`, `.github/workflows/review_autofix.yml:3892-3899`, `.github/workflows/review_autofix.yml:4626-4633`
+  - **Current call count** — **1** guaranteed PR fetch in `Collect PR metadata`, plus **1** extra `/pulls/{PR_NUMBER}` fallback on each late terminal path where `${PR_META_FILE}` is treated as unavailable.
+  - **Proposed call count** — **1** guaranteed PR fetch, **0** late-path re-fetches after verification.
+  - **Endpoint(s)** — GitHub REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+  - **Evidence**
+    ```bash
+    gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+    jq '{
+      title: (.title // ""),
+      body: (.body // ""),
+      baseRefName: (.base.ref // ""),
+      headRefName: (.head.ref // ""),
+      headRepoFullName: (.head.repo.full_name // "")
+    }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+    ```
+    Late-path fallbacks repeat the same PR title/body read:
+    ```bash
+    PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+    if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+      PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+    fi
+    ```
+  - **Proposed fix** — Treat `${PR_META_FILE}` as the sole in-job source for PR title/body in the three late linked-issue fallback blocks, and remove the second-stage `/pulls/${PR_NUMBER}` fetches once file-availability is verified.
+  - **Safety rationale** — The data is already materialized in the same job, but these are success/failure tail paths, so the defensive fallback cannot be removed without verifying that `Collect PR metadata` always ran and produced a valid file on every reachable path.
+  - **Downstream signal** — Audit every path that can reach the three late linked-issue blocks and confirm `${PR_META_FILE}` is always present and parseable there; only then delete the late `/pulls/${PR_NUMBER}` fallbacks.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- `BATCH-001`: `NEEDS_VERIFICATION` — agreed in principle, but `scripts/gh_helpers.sh::gh_pr_with_all_comments()` currently emits `meta/comments/review_comments` and not a normalized `reviews` array, so `PR_REVIEWS_FILE` consumers must be audited or the helper extended first.
+- `API-001`: `NEEDS_VERIFICATION` — agreed; the reuse opportunity is real, but it spans separate workflow steps, so the earlier classification output must be exported reliably before the later per-issue REST lookups are removed.
+- `BATCH-002`: `RISKY_SKIP` — agreed on overlap, but it lives in `scripts/orchestrate_poll_process.sh` and touches paginated/race-defensive poller logic, so it is not authorized for unattended auto-implementation.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
