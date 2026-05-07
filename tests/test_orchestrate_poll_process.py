@@ -270,7 +270,15 @@ def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	assert 'JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))' in script
 	# No adaptive downgrade — configured effort is used as-is for all cycles.
 	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE' not in script
-	assert 'model_reasoning_effort = \\"${MODEL_REASONING_EFFORT_JUDGE:-medium}\\"' in script
+	# Per PR #2196 the codex config is written via the shared helper
+	# scripts/write_codex_config.sh; the configured judge reasoning
+	# effort flows through the helper's --reasoning arg (which becomes
+	# `model_reasoning_effort = "..."` in the emitted TOML — see
+	# tests/test_write_codex_config.py for that contract). Pin the
+	# call-site shape so an accidental refactor that drops the
+	# `${MODEL_REASONING_EFFORT_JUDGE:-medium}` substitution and silently
+	# swaps in another env var is caught here.
+	assert '--reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"' in script
 
 
 def _base_state(status: str = "in_progress") -> dict:

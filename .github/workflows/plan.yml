@@ -243,7 +243,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh; do
+          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -255,6 +255,24 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          # Stage codex_model_catalog.json so scripts/write_codex_config.sh
+          # can wire `model_catalog_json` and codex registers
+          # `apply_patch_tool_type = "freeform"` for our `openai/gpt-5.*`
+          # slugs (PR openai/codex#11238 removed the offline fallback so
+          # this catalog file is the only path that registers the tool).
+          # Mirrors the staging block in implement.yml so plan.yml's
+          # codex calls aren't stuck in announce-without-emit mode.
+          catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
+            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
+          fi
+          if [ -f "${catalog_src}" ]; then
+            install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
+            _fetched_scripts+=(codex_model_catalog.json)
+          else
+            echo "::warning::Codex model catalog not found in ${SCRIPT_REF}/main; apply_patch may not be registered for non-built-in models"
+          fi
 
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -705,25 +723,12 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         run: |
           set -euo pipefail
-          mkdir -p ~/.codex
-          {
-            echo 'web_search = "live"'
-            echo 'model_provider = "openrouter"'
-            echo "model = \"${MODEL_EDITOR}\""
-              echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
-            echo
-            echo '[model_providers.openrouter]'
-            echo 'name = "OpenRouter"'
-            echo 'base_url = "https://openrouter.ai/api/v1"'
-            echo 'env_key = "OPENROUTER_API_KEY"'
-            echo 'wire_api = "responses"'
-            echo 'stream_idle_timeout_ms = 600000'
-            echo 'stream_max_retries = 5'
-            echo 'request_max_retries = 3'
-            echo
-            echo '[sandbox_workspace_write]'
-            echo 'network_access = true'
-          } > ~/.codex/config.toml
+          # Centralised in scripts/write_codex_config.sh — see that
+          # script's header for the apply_patch / trust / elevation
+          # rationale.
+          bash scripts/write_codex_config.sh \
+            --model "${MODEL_EDITOR}" \
+            --reasoning "${MODEL_REASONING_EFFORT}"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Post progress signal (setup complete)

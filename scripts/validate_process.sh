@@ -1879,31 +1879,18 @@ trap cleanup_runtime_containers EXIT
 # ---------------------------------------------------------------
 # Setup Codex
 # ---------------------------------------------------------------
-mkdir -p ~/.codex
-CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json"
-{
-  echo 'web_search = "live"'
-  echo 'model_provider = "openrouter"'
-  echo "model = \"${MODEL_EDITOR}\""
-  echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
-  if [ -f "${CATALOG_PATH}" ]; then
-    echo "model_catalog_json = \"${CATALOG_PATH}\""
-  else
-    echo "::warning::Codex model catalog not found at ${CATALOG_PATH}" >&2
-  fi
-  echo
-  echo '[model_providers.openrouter]'
-  echo 'name = "OpenRouter"'
-  echo 'base_url = "https://openrouter.ai/api/v1"'
-  echo 'env_key = "OPENROUTER_API_KEY"'
-  echo 'wire_api = "responses"'
-  echo 'stream_idle_timeout_ms = 600000'
-  echo 'stream_max_retries = 5'
-  echo 'request_max_retries = 3'
-  echo
-  echo '[sandbox_workspace_write]'
-  echo 'network_access = true'
-} > ~/.codex/config.toml
+# Centralised in scripts/write_codex_config.sh — its `--allow-elevation
+# auto` default already implements the standalone-safety gate this
+# script needs (elevate iff GITHUB_ACTIONS=true OR
+# VALIDATE_FORCE_FULL_ACCESS=1, otherwise keep codex's safer
+# workspace-write/on-request defaults). Catalog path is script-relative
+# so a "Standalone validation run" without a fetched scripts/ tree
+# still picks up the catalog shipped next to validate_process.sh.
+_validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "${_validate_script_dir}/write_codex_config.sh" \
+  --model "${MODEL_EDITOR}" \
+  --reasoning "${MODEL_REASONING_EFFORT}" \
+  --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
 
 export PATH="${HOME}/.local/bin:${PATH}"
 

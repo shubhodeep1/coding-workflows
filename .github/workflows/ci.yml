@@ -160,6 +160,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
+      - name: Codex config writer contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_write_codex_config.py
+
       - name: Review autofix failure-log upload contract test
         run: |
           set -euo pipefail

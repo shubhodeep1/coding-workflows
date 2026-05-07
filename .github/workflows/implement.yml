@@ -402,7 +402,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -803,25 +803,15 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          mkdir -p ~/.codex
-          {
-            echo 'web_search = "disabled"'
-            echo 'model_provider = "openrouter"'
-            echo "model = \"${MODEL_EDITOR}\""
-            echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
-            echo
-            echo '[model_providers.openrouter]'
-            echo 'name = "OpenRouter"'
-            echo 'base_url = "https://openrouter.ai/api/v1"'
-            echo 'env_key = "OPENROUTER_API_KEY"'
-            echo 'wire_api = "responses"'
-            echo 'stream_idle_timeout_ms = 600000'
-            echo 'stream_max_retries = 5'
-            echo 'request_max_retries = 3'
-            echo
-            echo '[sandbox_workspace_write]'
-            echo 'network_access = true'
-          } > ~/.codex/config.toml
+          # Centralised in scripts/write_codex_config.sh — wires the
+          # apply_patch fix (model_catalog_json), the v0.113+ trust pre-
+          # seed, and the elevated approval/sandbox combo at one place
+          # so the 9 codex-config sites can't drift. See that script's
+          # header comment for the full upstream-bug context.
+          bash scripts/write_codex_config.sh \
+            --model "${MODEL_EDITOR}" \
+            --reasoning "${MODEL_REASONING_EFFORT}" \
+            --web-search disabled
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
           # MCP server configuration is managed in ~/.codex/config.toml.
@@ -1046,11 +1036,25 @@ jobs:
           # Likewise the verb list in the `i'll/will (now |…)` clauses
           # now includes `overwrite|rewrite|replace`, and the
           # `patching|editing` gerund pattern now includes
-          # `overwriting|rewriting|replacing|writing`. False positives
-          # don't regress correctness: the regex only fires on already-
-          # empty-delta attempts, so broadening strictly increases
-          # recall on a path that's already a confirmed no-op.
-          ANNOUNCE_EDIT_REGEX='(apply_patch|applying (a |an |the |this |requested |first |minimal |approved |implementation |new |my |our |proposed )*(patch|edit|implementation|change|fix|plan|update|modification|overwrite|rewrite|replacement)|(patching|editing|overwriting|rewriting|replacing|writing) `?[A-Za-z0-9_./-]+|i.?ll (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace)|will (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace))'
+          # `overwriting|rewriting|replacing|writing`.
+          #
+          # Determiner list and gerund coverage extended for run with
+          # issue #201 (5/5 attempts wasted: "Applying the one-file
+          # edit now by removing the redundant `_debitView(...)`
+          # override" and "Implementing the one-file cleanup now"
+          # both produced no file changes but the regex missed them
+          # because "one-file" is not in the determiner enum and
+          # "implementing"/"removing" were not in either verb list).
+          # The fix replaces the closed determiner enum with a bounded
+          # word-token wildcard (up to 6 intervening tokens between
+          # the gerund verb and the noun) and extends the gerund verb
+          # list with `implementing|removing|deleting|cleaning` and
+          # the noun list with `cleanup|removal|deletion|override|file`.
+          # False positives don't regress correctness: the regex only
+          # fires on already-empty-delta attempts, so broadening
+          # strictly increases recall on a path that's already a
+          # confirmed no-op.
+          ANNOUNCE_EDIT_REGEX='(apply_patch|(applying|implementing|patching|editing|overwriting|rewriting|replacing|writing|removing|deleting|cleaning) ([^[:space:]]+[[:space:]]+){0,6}(patch|edit|implementation|change|fix|plan|update|modification|overwrite|rewrite|replacement|cleanup|removal|deletion|override|file)|(patching|editing|overwriting|rewriting|replacing|writing|implementing|removing|deleting|cleaning) `?[A-Za-z0-9_./-]+|i.?ll (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace)|will (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace))'
 
           # Salvage gate. Returns 0 iff at least one path in the porcelain
           # delta passed in carries a non-whitespace change vs HEAD/index
