@@ -30,7 +30,30 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
 fi
 
 MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.4}"
-MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-none}"
+# Per the OpenAI gpt-5.4 prompt guide, validate generate / diagnose /
+# fix-harness / self-heal are research/synthesis tasks → `medium` is the
+# right default. Earlier revisions defaulted to `none`, which (a) is not
+# in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
+# for the gpt-5.x family, and (b) silently differed from `validate.yml`'s
+# workflow-level `THINKING_LEVEL_VALIDATE || 'medium'`. CI runs were
+# unaffected (the workflow exports the env), but standalone / local
+# invocations now match CI behaviour.
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-medium}"
+# Discover is a low-volume execution-heavy task (read repo metadata,
+# emit `.ai/validate.yml` hints) → drop reasoning to `low` per the
+# OpenAI guide. Mirrors the per-phase pattern used in implement.yml
+# (MODEL_REPAIR_REASONING_EFFORT, MODEL_DIAGNOSE_REASONING_EFFORT).
+# The discover step temporarily patches ~/.codex/config.toml before its
+# codex exec call and restores `MODEL_REASONING_EFFORT` after — see the
+# "Validation hint discovery attempt" loop further down.
+MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-low}"
+case "${MODEL_REASONING_EFFORT_DISCOVER}" in
+  xhigh|high|medium|low|none) ;;
+  *)
+    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'low'."
+    MODEL_REASONING_EFFORT_DISCOVER="low"
+    ;;
+esac
 # Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)
 # see it even when the caller relied on our default fallback. In CI the workflow
 # env: block already exports MODEL_EDITOR, but standalone/local invocations
@@ -2037,6 +2060,22 @@ else
     echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
   } > "${DISCOVER_PROMPT_FILE}"
 
+  # Discover-only reasoning override. Patch ~/.codex/config.toml to the
+  # discover-specific level (default `low`) before the codex loop, then
+  # restore `MODEL_REASONING_EFFORT` after. Matches the per-phase pattern
+  # in implement.yml (MODEL_REPAIR_REASONING_EFFORT) and aligns the
+  # runtime behaviour with the documented `agents.md` model table.
+  _validate_codex_config="${HOME:-/root}/.codex/config.toml"
+  _discover_reasoning_patched="false"
+  if [ -f "${_validate_codex_config}" ] && grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${_validate_codex_config}"; then
+    sed -i \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"/" \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"/" \
+      "${_validate_codex_config}" || true
+    _discover_reasoning_patched="true"
+    echo "Patched ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT_DISCOVER} for discover phase."
+  fi
+
   DISCOVER_SUCCESS=false
   DISCOVER_FAILURE_MODE=""
   DISCOVER_ATTEMPTS_USED=0
@@ -2108,6 +2147,17 @@ PY
       sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
     fi
   done
+
+  # Restore the workflow-level reasoning effort so the subsequent
+  # generate / diagnose / fix-harness phases run at MODEL_REASONING_EFFORT
+  # (default `medium`) rather than inheriting the discover-only override.
+  if [ "${_discover_reasoning_patched}" = "true" ] && [ -f "${_validate_codex_config}" ]; then
+    sed -i \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      "${_validate_codex_config}" || true
+    echo "Restored ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT} after discover phase."
+  fi
 
   if [ "${DISCOVER_SUCCESS}" != "true" ]; then
     echo "::warning::Validation hint discovery exhausted ${DISCOVER_ATTEMPTS_USED} attempt(s) (mode=${DISCOVER_FAILURE_MODE:-unknown}); continuing without discovered hints." >&2

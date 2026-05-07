@@ -56,18 +56,22 @@ Phases of the unattended pipeline (each is a separate workflow file under
 | clarify, clarify-respond | `openai/gpt-5.4` | `low` | `low` |
 | plan | `openai/gpt-5.4` | `medium` | `low` |
 | orchestrate (decompose), judge | `openai/gpt-5.4` | `medium` | `low` |
-| implement (main editor) | `openai/gpt-5.4` | `medium` (smoke: `low`) | default |
+| implement (main editor) | `openai/gpt-5.4` | `medium` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | default |
 | implement-repair, implement-repair-syntax | `openai/gpt-5.4` | `low` | default |
 | implement-diagnose | `openai/gpt-5.4` | `medium` | `low` |
 | review autofix editor | `openai/gpt-5.4` | `medium` (smoke: `medium`) | default |
-| review autofix reviewers (pass 1) | `openai/gpt-5.4` | `medium` (hardcoded; smoke: `medium`) | `low` |
+| review autofix reviewers (pass 1) | `openai/gpt-5.4` | `medium` (hardcoded; smoke: `low` — shared with pass 2 via `REVIEWER_REASONING_EFFORT`) | `low` |
 | review autofix reviewers (pass 2) | `openai/gpt-5.4` | `medium` if `LAST_RUN_DIFF < 200 LOC`, `xhigh` otherwise (smoke: `low`); operator override wins | `low` |
 | review consolidator | `openai/gpt-5.4` | `low` | `low` |
-| conflict resolver | `openai/gpt-5.4` | `medium` (decoupled from smoke) | default |
-| validate generate, diagnose, discover | `openai/gpt-5.4` | `medium` (discover: `low`) | `low` |
+| conflict resolver | `openai/gpt-5.4` | `medium` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh\|high\|medium\|none` only — `low` is rejected) | default |
+| validate generate, diagnose | `openai/gpt-5.4` | `medium` | `low` |
+| validate discover | `openai/gpt-5.4` | `low` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` |
 | validate fix-harness, self-heal | `openai/gpt-5.4` | `medium` | default |
-| workflow log analysis, audit, api-redundancy | `openai/gpt-5.4` | `medium` (audit: `high`) | `low` |
+| workflow log analyze | `openai/gpt-5.4` | `medium` | `low` |
+| workflow audit | `openai/gpt-5.4` | `high` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` |
+| workflow api-redundancy | `openai/gpt-5.4` | `high` (default of `THINKING_LEVEL_ANALYSIS`) | `low` |
 | workflow log summary | `openai/gpt-5.4-mini` | default | `low` |
+| reviewer consensus summariser | `openai/gpt-5.4-mini` | `none` (`XPOLL_SUMMARISER_REASONING`) | `low` |
 
 Every editor / reviewer / resolver phase now defaults to `openai/gpt-5.4`.
 The previous split that routed patch-heavy phases to `openai/gpt-5.3-codex`

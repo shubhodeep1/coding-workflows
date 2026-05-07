@@ -113,10 +113,15 @@ env:
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
   REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'medium' }}
   REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
-  # Editor (codex apply-fixes loop) — a Switch-reasoning step later in
-  # this workflow already drops the editor's runtime reasoning to "low"
-  # (execution-heavy: apply known fixes). Keep this knob configurable
-  # for repos that want to override.
+  # Editor (codex apply-fixes loop). Production and smoke both run at
+  # `medium` per the OpenAI gpt-5.4 prompt guide — see the smoke override
+  # block further down (search "REVIEWER_REASONING_EFFORT=low") for the
+  # rationale (legacy gpt-5.3-codex cycled through low/none/xhigh and all
+  # hit empty-output failure modes; medium was the last untried level
+  # and stuck). The "Switch reasoning effort for editor" step below
+  # re-patches ~/.codex/config.toml from the reviewer's pass-time level
+  # to whatever EDITOR_REASONING_EFFORT resolves to at job time.
+  # Keep this knob configurable for repos that want to override.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'medium' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
