@@ -58,7 +58,7 @@ def _install_mock_codex(mock_bin_dir: Path, *, consolidator_fixture: str | None)
 	# Scan every arg for `exec` rather than checking $1, since the
 	# canonical Codex CLI v0.114.0+ invocation places `--ask-for-approval`
 	# (a top-level flag) before the `exec` subcommand:
-	#     codex --ask-for-approval never exec --model X --sandbox Y
+	#     codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model X --sandbox Y
 	# Anchoring on $1 would only match the legacy form (broken on
 	# v0.114.0+) and silently mis-mock the production layout.
 	codex_script.write_text(

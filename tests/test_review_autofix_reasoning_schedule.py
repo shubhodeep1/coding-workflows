@@ -5,7 +5,7 @@ The cycle-based schedule machinery (REVIEW_REASONING_SCHEDULE,
 REVIEW_AUTODOWNGRADE_DISABLED) has been removed. Non-smoke-test runs use
 the configured THINKING_LEVEL_* for every cycle. Smoke test runs override
 reviewer reasoning to ``low`` and editor reasoning to ``medium`` (split
-introduced after run 25308327160 showed gpt-5.3-codex at reasoning=low
+introduced after run 25308327160 showed the legacy editor default at reasoning=low
 produces empty output — same failure mode as reasoning=none).
 """
 

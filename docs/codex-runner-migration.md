@@ -6,7 +6,7 @@
 
 ## Why
 
-Current setup pays OpenRouter rates on every CI request. Heavy use of `gpt-5.3-codex` and `gpt-5.4` makes this the dominant AI cost line. OpenAI's own Codex CLI bundles GPT-5.x usage into a flat ChatGPT Plus/Pro subscription, which is cheaper at our volume — provided we can fit within the sub's serialization rules and rate windows.
+Current setup pays OpenRouter rates on every CI request. Heavy use of `the legacy editor default` and `gpt-5.4` makes this the dominant AI cost line. OpenAI's own Codex CLI bundles GPT-5.x usage into a flat ChatGPT Plus/Pro subscription, which is cheaper at our volume — provided we can fit within the sub's serialization rules and rate windows.
 
 OpenRouter (the existing path) becomes the fallback tier rather than disappearing entirely, because:
 
@@ -102,7 +102,7 @@ Key properties:
 3. **Codex CLI installation on the host**
    - Installed once on the VPS.
    - `codex login` performed once interactively as the `codex-runner` user to produce `$RUNNER_HOME/.codex/auth.json`.
-   - `$RUNNER_HOME/.codex/config.toml` with two profiles. **Note on model identifiers**: the Codex CLI direct provider takes OpenAI's bare model names (`gpt-5.4`, `gpt-5.3-codex`); the OpenRouter provider takes prefixed slugs (`openai/gpt-5.4`, `openai/gpt-5.3-codex`). The same logical model is therefore named differently per profile — match whichever convention the existing repo workflows already use for OpenRouter (typically `openai/<model>`, see README env defaults).
+   - `$RUNNER_HOME/.codex/config.toml` with two profiles. **Note on model identifiers**: the Codex CLI direct provider takes OpenAI's bare model names (`gpt-5.4`, `the legacy editor default`); the OpenRouter provider takes prefixed slugs (`openai/gpt-5.4`, `openai/the legacy editor default`). The same logical model is therefore named differently per profile — match whichever convention the existing repo workflows already use for OpenRouter (typically `openai/<model>`, see README env defaults).
      - default profile: ChatGPT sub auth, `model = "gpt-5.4"` (or current production choice), reasoning level matching today's setup.
      - `openrouter` profile: `base_url = "https://openrouter.ai/api/v1"`, `env_key = "OPENROUTER_API_KEY"`, `model = "openai/gpt-5.4"`.
 

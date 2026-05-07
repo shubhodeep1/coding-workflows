@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Inline likely-to-be-edited files into the Codex prompt as a "first turn"
-reference so the editor doesn't waste budget reading them.
+"""Inline likely-to-be-edited files into the Codex prompt as a reference
+block so the editor doesn't waste budget reading them.
 
 This helper supports three input modes (mix-and-match — paths from each
 source are unioned, preserving first-seen order):
@@ -16,16 +16,42 @@ source are unioned, preserving first-seen order):
                          file list).
   --paths "a,b,c"        Comma-separated explicit paths (shell-friendly).
 
-Output is a bounded, line-numbered context block:
+Output is a bounded, unnumbered context block:
 
   === TARGETED FILE CONTEXT ===
   <header text — overridable via --header-text>
 
   --- FILE: <rel> (<bytes> bytes) ---
-  1\t<line 1>
-  2\t<line 2>
+  <line 1>
+  <line 2>
   ...
   --- END FILE: <rel> ---
+
+The 2026-05-07 12:41 / 12:42 E2E smoke runs and the follow-up ablation
+suite identified two prompt-side amplifiers of the OpenRouter Responses
++ Codex tool-call-emission failure (resolved separately by flipping
+`apply_patch_tool_type: freeform → function` for OpenAI slugs in
+scripts/codex_model_catalog.json):
+
+  1. The previous header text said "your first tool call should be a
+     write to one of those files unless the request is already
+     satisfied". The conditional ("unless already satisfied") combined
+     with the imperative ("first tool call should be a write") biased
+     the model toward apply_patch on small inlined files; through
+     OpenRouter the call collapsed into reasoning without an emitted
+     tool. The replacement wording presents the inlined files as
+     reference material and does not prescribe a tool choice.
+  2. Line-numbering small fully-inlined files added prompt tokens
+     without adding signal — the model can read unnumbered content
+     fine, and the numbered-prefix shape is the apply_patch context
+     format that biased the failure path. Fully inlined files now
+     emit verbatim; line numbers are dropped.
+
+For fully specified plain-text overwrites (.txt / .csv / .md) the
+header explicitly allows a shell `printf` / heredoc write as the
+preferred path — those are the file shapes where apply_patch's
+diff-context tax adds zero value. Code files keep the model's normal
+edit-tool choice.
 
 Bounds (defensible default; override per caller):
 
@@ -53,7 +79,6 @@ import argparse
 import os
 import re
 from pathlib import Path
-from typing import Iterable
 
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
@@ -89,13 +114,21 @@ SAFE_EXTENSIONS = {
 
 DEFAULT_HEADER_TEXT = (
 	"The approved plan / autofix-finding / conflict-marker scan named these "
-	"files as likely to be edited. Their current contents are inlined so you "
-	"can edit immediately without re-reading them. If a file is included "
-	"verbatim below, your first tool call should be a write to one of those "
-	"files unless the request is already satisfied. Files marked \"would "
+	"files as likely to be edited. Their current contents are provided below "
+	"for reference so you do not need to re-read them. Files marked \"would "
 	"overflow total budget\" must be read with the read tool — never assume "
-	"their content is in this block."
+	"their content is in this block. For fully specified plain-text "
+	"overwrites (.txt / .csv / .md), a shell `printf` or heredoc write is "
+	"acceptable and often simpler than a patch."
 )
+
+# Plain-text file extensions where a shell `printf` / heredoc write is
+# typically simpler and lower-risk than a patch-based write tool. The
+# per-file FILE marker hints at this for these extensions so the editor
+# has the suggestion adjacent to the file content rather than only in
+# the header (which can scroll off the model's effective attention on
+# long prompts).
+PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 
 
 def is_probable_path(value: str) -> bool:
@@ -232,13 +265,6 @@ def parse_paths_arg(arg: str) -> list[str]:
 	return found
 
 
-def iter_line_numbered(text: str) -> Iterable[str]:
-	lines = text.splitlines()
-	width = max(1, len(str(len(lines))))
-	for index, line in enumerate(lines, start=1):
-		yield f"{index:>{width}}\t{line}"
-
-
 def emit_context(
 	paths: list[str],
 	repo_root: Path,
@@ -296,8 +322,26 @@ def emit_context(
 			continue
 		text = raw.decode("utf-8", errors="replace")
 		used_bytes += len(raw)
-		output.append(f"--- FILE: {rel} ({len(raw)} bytes) ---")
-		output.extend(iter_line_numbered(text))
+		# Plain-text small files (.txt / .csv / .md) get a per-file hint
+		# that a shell `printf` / heredoc write is acceptable. This was
+		# load-bearing in the 2026-05-07 ablation suite — the per-file
+		# marker reaches the model even when the header scrolls past the
+		# attention window on long prompts. Code files keep the bare
+		# header and the model's normal edit-tool choice.
+		ext = abs_path.suffix.lower()
+		if ext in PLAIN_TEXT_HINT_EXTENSIONS:
+			output.append(
+				f"--- FILE: {rel} ({len(raw)} bytes; plain-text — for a "
+				f"fully specified overwrite, `printf ... > {rel}` or a "
+				f"heredoc write is acceptable) ---"
+			)
+		else:
+			output.append(f"--- FILE: {rel} ({len(raw)} bytes) ---")
+		# Unnumbered: emit the file content verbatim. Line numbers were
+		# the apply_patch context shape and biased the OpenRouter +
+		# OpenAI-slug failure path; the model reads unnumbered content
+		# fine.
+		output.extend(text.splitlines())
 		output.append(f"--- END FILE: {rel} ---")
 		output.append("")
 		included += 1

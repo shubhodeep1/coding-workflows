@@ -1858,7 +1858,7 @@ jobs:
             #
             # History of reasoning levels on smoke runs (editor). The runs
             # cited below predate the gpt-5.4 cutover and were observed on
-            # the legacy gpt-5.3-codex default; the rationale (medium beats
+            # the legacy editor default; the rationale (medium beats
             # extremes for execution-heavy editing tasks) still stands per
             # the gpt-5.4 prompt guide:
             #   low  → run 25254574828: OSCILLATION GUARD activated because the
@@ -1868,14 +1868,14 @@ jobs:
             #   xhigh → run 25249170035 / PR #1982: budget burns on tool calls +
             #           reasoning summaries, editor exits rc=0 with 0 file changes
             #           (6 attempts, all empty, ~81k tokens on attempt 1).
-            #   none  → run 25305535590: gpt-5.3-codex at reasoning=none runs one
+            #   none  → run 25305535590: the legacy editor default at reasoning=none runs one
             #           read tool call, exits cleanly rc=0 with empty stdout, and
             #           the in-step retry loop bails after MAX_ATTEMPTS with no
             #           edits (same failure mode as the conflict resolver at none,
             #           documented at the "Resolve merge conflicts" step below).
             #           Reviewer manifest validation then fails because the editor
             #           lists aggregate files instead of individual reviewer files.
-            #   low   → run 25308327160 (gate run 25308071039): gpt-5.3-codex at
+            #   low   → run 25308327160 (gate run 25308071039): the legacy editor default at
             #           reasoning=low also exits rc=0 with empty stdout on all
             #           3 attempts per round (same failure mode as none — pattern
             #           extends across both none and low for this model+task).
@@ -2717,7 +2717,7 @@ jobs:
           echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
           # Enable reasoning summaries for the editor so the model is forced to
           # externalize its decision tokens. Investigation of run #25115530167
-          # (legacy gpt-5.3-codex default) found that @ xhigh + summaries=none
+          # (the legacy editor default) found that @ xhigh + summaries=none
           # can complete a session with empty stdout: the model reasons silently,
           # decides not to call apply_patch, and the session ends cleanly with
           # 0 bytes output (no stderr error, no SIGTERM). Setting summaries to
@@ -2727,7 +2727,7 @@ jobs:
           # field name `model_reasoning_summary` mirrors the Codex CLI
           # convention used by `model_reasoning_effort`; the catalog at
           # scripts/codex_model_catalog.json confirms both gpt-5.4 (current
-          # default) and gpt-5.3-codex (legacy / opt-in) advertise
+          # default) and the legacy editor default advertise
           # `default_reasoning_summary: "auto"`.
           if grep -q "^model_reasoning_summary = " ~/.codex/config.toml; then
             sed -i "s/^model_reasoning_summary = \".*\"/model_reasoning_summary = \"auto\"/" ~/.codex/config.toml
@@ -3644,7 +3644,7 @@ jobs:
           # the single-line bait removal completes deterministically. That
           # patches ~/.codex/config.toml, which the conflict resolver below
           # would otherwise inherit. With reasoning=none the legacy
-          # gpt-5.3-codex default hit an empty-stdout failure mode on this
+          # the legacy editor default hit an empty-stdout failure mode on this
           # fixture (documented on the editor step
           # ("Switch reasoning effort for editor"): it runs one read tool
           # call, exits cleanly with rc=0 and zero stdout, and the retry
@@ -4781,7 +4781,7 @@ jobs:
         # empty-output: when the editor model completes with 0-byte stdout
         # (no apply_patch invocation, no final assistant summary — see
         # the comment in the "Switch reasoning effort for editor" step
-        # documenting run #25115530167 on the legacy gpt-5.3-codex
+        # documenting run #25115530167 on the legacy editor
         # default) the job posts the noop-comment
         # path and exits success(), so we'd miss exactly the case this
         # artifact exists for. EDITOR_NOOP_SUSPICIOUS and

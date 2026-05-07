@@ -2,7 +2,7 @@
 """Contract tests for the resolver-side smoke-fixture deterministic fallback.
 
 PR #2095 added a smoke-only override block to the conflict-resolver
-prompt, but PR #2112 / run 25370025320 confirmed gpt-5.3-codex still
+prompt, but PR #2112 / run 25370025320 confirmed the legacy editor default still
 hits the documented empty-stdout failure mode on the trivial canary
 conflict even with the override rendered correctly: 3 attempts, all
 reading tests/e2e_smoke_canary.txt then exiting cleanly with 0 bytes

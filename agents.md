@@ -70,11 +70,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
 | workflow log summary | `openai/gpt-5.4-mini` | default | `low` |
 
 Every editor / reviewer / resolver phase now defaults to `openai/gpt-5.4`.
-The previous split that routed patch-heavy phases to `openai/gpt-5.3-codex`
-was retired after the model's announce-without-emit regression
-(openai/codex#11151) drove repeat no-edit failures. `gpt-5.3-codex` is
-still listed in `scripts/codex_model_catalog.json` (priority 3) for
-explicit opt-in via `WORKFLOW_EDITOR_MODEL`.
+The previous legacy editor split (patch-heavy phases on a separate older
+slug) was retired after the announce-without-emit regression
+(openai/codex#11151) drove repeat no-edit failures. The 2026-05-07
+ablation suite then identified the underlying root cause as
+`apply_patch_tool_type: "freeform"` on the OpenRouter Responses path
+(see the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
+`function`).
 
 The reviewer-only multi-model run (claude-branch-review) uses third-party
 models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,

@@ -352,7 +352,7 @@
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
       "default_verbosity": "medium",
-      "apply_patch_tool_type": "freeform",
+      "apply_patch_tool_type": "function",
       "truncation_policy": {"mode": "tokens", "limit": 272000},
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,

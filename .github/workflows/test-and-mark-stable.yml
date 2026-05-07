@@ -4129,14 +4129,19 @@ jobs:
       # (anthropic/claude-sonnet-4-6 was never in the catalog, so even
       # a wired override would have failed apply_patch invocation).
       #
-      # Default is openai/gpt-5.3-codex — the legacy editor slug, kept
-      # in the catalog at priority 3 (PR #2241) for explicit opt-in.
-      # Pinning the alt-model canary to a different model than the
-      # production WORKFLOW_EDITOR_MODEL default (openai/gpt-5.4) is
-      # the whole point of this job: model-coupling regressions surface
-      # before stable is tagged. README "Variables" table tracks both
-      # defaults — keep them in sync if either flips.
-      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+      # Default is openai/gpt-5.4 — the same slug as the production
+      # WORKFLOW_EDITOR_MODEL default. The previous canary
+      # (openai/gpt-5.3-codex) was retired after the 2026-05-07
+      # ablation suite identified `apply_patch_tool_type: "freeform"`
+      # on the OpenRouter Responses path as the underlying tool-call-
+      # emission failure shared by both gpt-5.4 and gpt-5.3-codex —
+      # the alt-canary stopped distinguishing them. Operators who want
+      # to pin the canary to a non-OpenAI provider for cross-provider
+      # coverage can set the repo var `ALT_EDITOR_MODEL` to e.g.
+      # `anthropic/claude-sonnet-4-6` (must appear in
+      # scripts/codex_model_catalog.json). Keep this default in sync
+      # with the production default in implement.yml's MODEL_EDITOR.
+      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.4' }}
     steps:
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)

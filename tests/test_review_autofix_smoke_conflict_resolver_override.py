@@ -5,17 +5,17 @@ The smoke fixture lands a conflicting one-line edit on `main` so a
 `git merge --no-ff origin/main` over the smoke PR's HEAD leaves Git
 merge conflict markers in tests/e2e_smoke_canary.txt. review_autofix.yml's
 conflict-resolver step (currently `openai/gpt-5.4`; observed below on
-the legacy `openai/gpt-5.3-codex` default) is then expected to remove
+the legacy editor default) is then expected to remove
 the markers and keep the HEAD-side `run_id:` value.
 
 On run 25324565713 / PR #2094 the resolver hit the documented
-gpt-5.3-codex empty-stdout failure mode in all 3 retry attempts: each
+the legacy editor default's empty-stdout failure mode in all 3 retry attempts: each
 codex exec read the file, then exited cleanly with 0 bytes on stdout,
 the soft-validation marker scan never ran, and the
 [ai-merge-resolve] commit was aborted. PR #2059 had already pinned
 the resolver to medium reasoning to prevent the editor's
 reasoning=none/low override from starving it, but at medium reasoning
-the legacy gpt-5.3-codex default still hit the failure mode on the
+the legacy editor default still hit the failure mode on the
 trivial canary conflict — the pattern PR #2086 documented (and fixed
 for the editor) on the same model on the same fixture. The override
 is kept as defense-in-depth on the gpt-5.4 default.
@@ -106,7 +106,7 @@ def test_smoke_detect_exports_is_smoke_test_env() -> None:
 		"review_autofix.yml's smoke-detect step must export IS_SMOKE_TEST=true "
 		"so scripts/review_conflict_prepare.sh can render the smoke-only "
 		"conflict-resolver prompt block. Without this export the resolver "
-		"keeps hitting gpt-5.3-codex's empty-output failure mode on canary "
+		"keeps hitting the legacy editor default's empty-output failure mode on canary "
 		"conflicts (run 25324565713)."
 	)
 	assert 'if [ "$IS_SMOKE" = "true" ]' in step_text, (
@@ -184,7 +184,7 @@ def test_prepare_script_contains_smoke_only_block() -> None:
 	# phrases must remain.
 	#
 	# History: PR #2095 originally mandated `apply_patch`, but
-	# openai/codex#11151 documents that the gpt-5.3-codex slug doesn't
+	# openai/codex#11151 documents that the legacy editor slug doesn't
 	# get matched into the apply_patch-providing branch in codex's
 	# offline model_info fallback, so the directive could not be
 	# satisfied even when the model wanted to. The override now allows
@@ -199,7 +199,7 @@ def test_prepare_script_contains_smoke_only_block() -> None:
 	)
 	assert "apply_patch" in script and "printf" in script, (
 		"Smoke override must offer both apply_patch and a printf shell "
-		"write as acceptable means — gpt-5.3-codex flakes on the "
+		"write as acceptable means — the legacy editor default flaked on the "
 		"former (openai/codex#11151) but reliably executes the latter."
 	)
 	assert "Do NOT exit without writing the file" in script, (
@@ -410,7 +410,7 @@ def test_smoke_override_renders_only_when_canary_has_markers() -> None:
 		)
 		assert "apply_patch" in body_with_markers and "printf" in body_with_markers, (
 			"Override must mention both apply_patch and the printf shell "
-			"escape hatch in the rendered output — gpt-5.3-codex needs "
+			"escape hatch in the rendered output — the legacy editor default needed "
 			"the latter when the apply_patch tool is unavailable on its "
 			"slug (openai/codex#11151)."
 		)

@@ -161,7 +161,14 @@ def test_paths_arg_dedups_and_orders() -> None:
 	assert parse_paths_arg("a/x.py , b/y.py , a/x.py") == ["a/x.py", "b/y.py"]
 
 
-def test_emits_line_numbered_bounded_context() -> None:
+def test_emits_unnumbered_bounded_context() -> None:
+	"""Fully-inlined files emit verbatim content (no line-number prefixes).
+
+	Line-numbering was an apply_patch context-format echo and biased the
+	OpenRouter Responses + OpenAI-slug failure path identified in the
+	2026-05-07 ablation suite. Unnumbered content reads fine for the
+	model and removes the bias.
+	"""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "contracts").mkdir()
@@ -176,10 +183,70 @@ def test_emits_line_numbered_bounded_context() -> None:
 
 		assert "=== TARGETED FILE CONTEXT ===" in context
 		assert "--- FILE: contracts/FunOFT.sol" in context
-		assert "1\tline one" in context
-		assert "2\tline two" in context
+		# Unnumbered content: the file lines appear verbatim, NOT with
+		# `1\t` / `2\t` prefixes.
+		assert "\nline one\n" in context
+		assert "\nline two\n" in context
+		assert "1\tline one" not in context
+		assert "2\tline two" not in context
 		assert "Included 1 entry" in context
 		assert "1 inlined" in context
+
+
+def test_header_does_not_prescribe_first_tool_call() -> None:
+	"""Header MUST NOT tell the model "your first tool call should be a
+	write" or use the "unless the request is already satisfied" hedge.
+
+	Both phrasings biased the OpenRouter Responses + OpenAI-slug
+	apply_patch path into reasoning-without-emit on the 2026-05-07 12:41
+	smoke runs. The replacement wording presents inlined files as
+	reference material and lets the model choose its own tool flow.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "tests").mkdir()
+		(root / "tests" / "smoke.txt").write_text("status: ok\n", encoding="utf-8")
+		context = emit_context(["tests/smoke.txt"], root, max_bytes=1024)
+		assert "=== TARGETED FILE CONTEXT ===" in context
+		assert "first tool call" not in context.lower()
+		assert "unless the request is already satisfied" not in context.lower()
+		assert "for reference" in context.lower()
+
+
+def test_plain_text_hint_on_per_file_marker() -> None:
+	"""Plain-text small files (.txt / .csv / .md) get a per-file FILE
+	marker hint that a shell `printf` / heredoc write is acceptable.
+
+	The 2026-05-07 ablation showed the f06 unnumbered + shell-nudge
+	combo flips OpenRouter from fail to pass on the smoke canary. The
+	per-file marker keeps the hint adjacent to the file content, so it
+	survives even when the header scrolls past attention on long
+	prompts. Code files (.py / .ts / .sol / etc.) stay on the bare
+	marker so the model's normal edit-tool choice is not perturbed.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "tests").mkdir()
+		(root / "tests" / "smoke.txt").write_text("status: ok\n", encoding="utf-8")
+		(root / "tests" / "fixtures.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+		(root / "docs").mkdir()
+		(root / "docs" / "note.md").write_text("# heading\n", encoding="utf-8")
+		(root / "src").mkdir()
+		(root / "src" / "lib.py").write_text("x = 1\n", encoding="utf-8")
+
+		context = emit_context(
+			["tests/smoke.txt", "tests/fixtures.csv", "docs/note.md", "src/lib.py"],
+			root,
+			max_bytes=4096,
+		)
+
+		# Plain-text extensions: marker carries the printf hint.
+		assert "printf ... > tests/smoke.txt" in context
+		assert "printf ... > tests/fixtures.csv" in context
+		assert "printf ... > docs/note.md" in context
+		# Code file: marker is bare, no hint.
+		assert "--- FILE: src/lib.py (6 bytes) ---" in context
+		assert "printf ... > src/lib.py" not in context
 
 
 def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
@@ -208,9 +275,12 @@ def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
 		# First file fully inlined, the rest get markers rather than
 		# mid-file truncation.
 		assert "would overflow total budget" in context
-		# Inlined-content sanity: the first file's `1\ty = 1` line is
-		# present (it was inlined). The other files' content is not.
-		assert "1\ty = 1" in context
+		# Inlined-content sanity: the first file's `y = 1` content is
+		# present verbatim (unnumbered). The other files' content is not.
+		assert "\ny = 1\n" in context
+		# Line-numbered prefix MUST NOT appear — fully-inlined files
+		# emit verbatim content (see test_emits_unnumbered_bounded_context).
+		assert "1\ty = 1" not in context
 		# The marker line carries the budget context for the operator /
 		# model.
 		assert "max_bytes=50000" in context

@@ -243,7 +243,7 @@ so each new stage can be turned off independently without touching code.
 |---|---|---|
 | `MAX_AUTOFIX_ITERATIONS` | `3` | `review_autofix.yml` iteration loop |
 | `MAX_REVIEW_BLOCKED_RETRIES` | `2` | `review_rb_judge.sh` |
-| `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.3-codex` | Editor invocation |
+| `WORKFLOW_EDITOR_MODEL` | `openai/the legacy editor default` | Editor invocation |
 | `ENABLE_REVIEWER_TWO_PASS` | `true` | Reviewer two-pass structure |
 | `REVIEW_PR_STATE_POLL_INTERVAL_SECS` | `10` | Reviewer watchdog cadence |
 

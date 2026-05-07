@@ -599,7 +599,7 @@ jobs:
             # between low and xhigh; both directions hit different
             # manifestations of upstream Codex CLI / OpenRouter flakiness
             # (low → unprefixed MCP calls; xhigh → announce-without-invoke
-            # patterns) on the legacy gpt-5.3-codex default. The current
+            # patterns) on the legacy editor default. The current
             # default (gpt-5.4) is steadier across reasoning levels but the
             # rationale stands: keep smoke and production on the same knobs
             # so any breakage on the smoke fixture is also visible to real
@@ -1116,7 +1116,7 @@ jobs:
           # below so a trivial trailing-newline / whitespace-only edit can't
           # masquerade as partial implementation work and short-circuit the
           # retry loop. Run b3f07ad7-4d9f-56b2-923f-aa222a1ab049 issue 200
-          # (legacy gpt-5.3-codex default, before the gpt-5.4 cutover):
+          # (the legacy editor default, before the gpt-5.4 cutover):
           # the editor announced an apply_patch in attempt 1, then on
           # attempt 2 ran `printf '\n' >> contracts/FunOFTAdapter.sol`,
           # exited with empty stdout, and the cmd_rc==0 + empty-stdout

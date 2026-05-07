@@ -438,7 +438,7 @@ PY
 }
 
 DIAGNOSE_SUCCESS=false
-if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never exec --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
+if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
   < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
   2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
   if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then
