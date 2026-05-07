@@ -428,3 +428,131 @@ Ranked by expected failure-rate/rerun-rate reduction.
 | OpenRouter cache probe logs | Present in `review_autofix` `25493479038`, but numeric cache/token fields were `na` |
 | File-based cache issue | Prior `validate` run `25480631539` was reported with restore miss + save-path validation error |
 | Conclusion | Cache appears enabled but is not yet measurable enough to optimize confidently |
+
+## Deep Audit — Workflows & Scripts (2026-05-07)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path** — `.github/workflows/cancel_on_pr_close.yml:15-18,55-89; .github/workflows/internal-cancel-on-pr-close.yml:3-14`
+- **Severity** — High
+- **Category tag** — `bug`
+- **Description** — The reusable workflow reads `PR_NUMBER` and `PR_HEAD_REF` from `github.event.pull_request.*` even though it is declared only under `workflow_call`, and the wrapper that invokes it via `uses:` passes no inputs at all. The callee then immediately uses those env vars to build the cancellation query and log output. If the `workflow_call` payload does not hydrate `github.event.pull_request` for the callee, both values become empty and the workflow either does nothing or queries the wrong run set. `[NEEDS VERIFICATION]`
+- **Recommended fix** — Add explicit `workflow_call.inputs` such as `pr_number` and `pr_head_ref` to `cancel_on_pr_close.yml`, pass them from `internal-cancel-on-pr-close.yml` using `${{ github.event.pull_request.number }}` and `${{ github.event.pull_request.head.ref }}`, and change the callee to read `inputs.pr_number` / `inputs.pr_head_ref`. Also fail fast with a clear warning if either input is blank.
+
+#### SHELL-001
+- **File path** — `.github/workflows/validation-refresh.yml:147-174`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — The failure-notification step runs under `set -euo pipefail`, but its raw Telegram `curl -sS ... > /dev/null` has no `|| true`/warning fallback. A transient Telegram/network error therefore turns a best-effort notification into a second hard failure on the already-failing path. This differs from the repo’s other raw Telegram fallbacks, which explicitly degrade with `|| echo "::warning::..."` instead of aborting the step.
+- **Recommended fix** — Make the send best-effort: either route through `scripts/tg_helpers.sh` or append `|| echo "::warning::Telegram send failed"` so the job preserves the original failure as the primary signal.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+> The generic polling waste already described in the in-progress report is not repeated here. The findings below are additional, line-specific candidates.
+
+#### API-001
+- **File path** — `scripts/orchestrate_poll_process.sh:3390-3502`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The final-merge path re-fetches the same PR resource up to 8 times in one execution path: 2 single-field calls at `3394-3395`, 3 more at `3449-3451`, and 3 more after the merge attempt at `3500-3502`. Current call count: **up to 8 REST calls** for one PR. Proposed call count after fix: **2 REST calls** total (one full PR JSON fetch before merge decisions, one refresh after the merge attempt). This is especially wasteful because the same script already contains iteration-scoped PR JSON reuse patterns at `6555-6561` and `6779-6782`.
+- **Recommended fix** — Reuse the existing cached-JSON pattern already present in this script: fetch `repos/${GITHUB_REPOSITORY}/pulls/${final_pr}` once into `pr_json`, derive `.state`, `.mergeable`, and `.merged_at` with local `jq`, and refresh only once after `gh pr merge`. If desired, extract a small helper like `_load_pr_merge_state <pr_number>` returning one cached JSON blob per phase.
+
+#### BATCH-001
+- **File path** — `.github/workflows/review_autofix.yml:1364-1399,1572-1579`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — `Collect PR metadata` performs **5 logical GitHub fetches** before the diff step: one PR fetch, three paginated comment/review fetches, and one GraphQL linked-issues fetch, followed by `gh pr diff` as a separate call. Because pagination can expand, the real call count can be higher than 5. Current call count: **5 API fetches + 1 diff command**. Proposed call count after fix: **1 batched API fetch + 1 diff command** if the existing GraphQL helper is extended to include linked issues, or **2 API fetches + 1 diff** without that extension. The repo already has a batching helper for this exact shape in `scripts/gh_helpers.sh:734-860` (`gh_pr_with_all_comments`).
+- **Recommended fix** — Replace the step’s separate PR/comments/reviews/review-comments fetches with `gh_pr_with_all_comments`, and extend that helper’s GraphQL query to also emit `closingIssuesReferences`. That would collapse the metadata portion into one reusable helper call while keeping `gh pr diff` separate. Reuse the existing REST fallback in `scripts/gh_helpers.sh:700-731` for pagination/error parity.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/review_autofix.yml:591-608,3742-3781,3869-3902,4612-4633; scripts/label_helpers.sh:102-197`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — `review_autofix.yml` embeds four separate fallback implementations of `gh_retry`, `ensure_label_exists`, and `set_issue_phase_label_resilient`. The workflow itself acknowledges the drift risk at `610-615` (“must stay in lockstep with the catalog”), while the canonical implementation already exists in `scripts/label_helpers.sh`. The duplicates are not identical: some only create one label, some hardcode generic defaults, and some omit the PUT-based phase-label replacement logic from the canonical helper.
+- **Recommended fix** — Make one shared module own this behavior. Preferred owner: `scripts/label_helpers.sh` with the existing signatures `ensure_label_exists <label_name> [repo]` and `set_issue_phase_label_resilient <issue_number> <target_label> [repo]`. Update the four `review_autofix` call sites to source that module consistently; if lightweight bootstrap is the concern, ship a minimal sourced copy with the support-file fetch rather than keeping four inline forks.
+
+#### DUP-002
+- **File path** — `.github/workflows/issue_pr_status.yml:195-210; .github/workflows/review_autofix.yml:3786-3794,3907-3914,4641-4648; scripts/review_rb_judge.sh:153-156`
+- **Severity** — High
+- **Category tag** — `duplication`
+- **Description** — The repo now has multiple near-duplicate “linked issue fallback” regex implementations with **different semantics**. `issue_pr_status.yml` explicitly narrowed its fallback to closing references only and documents why bare prose references like `issue #N` or `issues/N` must not trigger issue transitions. But the copies in `review_autofix.yml` and `review_rb_judge.sh` still accept bare `issues/N` and `issue #N`. That leaves conflicting definitions of “linked issue” across the pipeline, so late-stage labels like `ai:ready-to-merge` or `ai:review-blocked` can still be applied based on documentation-only mentions.
+- **Recommended fix** — Centralize the parser in a shared helper, e.g. `scripts/linked_issue_helpers.sh`, with a function such as `extract_closing_issue_numbers_from_text <repo> <text> [mode=closing-only]`. Make `closing-only` the default, and update `issue_pr_status`, `review_autofix`, and `review_rb_judge` to call the helper instead of maintaining divergent regexes.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1201-1585`
+- **Severity** — High
+- **Category tag** — `expression-limit`
+- **Description** — The `Phase 4: Wait for review & autofix to complete` `run:` block contains `${{ }}` interpolations and measures **23,500 characters**, which is already **2,500 characters over** GitHub Actions’ 21,000-character expression cap for interpolated `run:` bodies. Estimated headroom remaining: **-2,500 chars**.
+- **Recommended fix** — Extract the phase logic to an external script under `scripts/` and pass only the needed env vars/inputs from YAML. If extraction is not feasible, split the block into multiple smaller steps before any further edits land.
+
+#### EXPR-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1671-2076`
+- **Severity** — High
+- **Category tag** — `expression-limit`
+- **Description** — The `Phase 4b: Verify editor restored canary (pytest + retry)` `run:` block contains `${{ }}` interpolations and measures **21,289 characters**, leaving only **-289 characters** of headroom against the 21,000-character limit. This is effectively at failure threshold already.
+- **Recommended fix** — Move the pytest/retry body into a checked-in script and keep the workflow step as a thin wrapper. As a fallback, split verification, retry setup, and result handling into separate steps.
+
+#### EXPR-003
+- **File path** — `.github/workflows/review_autofix.yml:1279-1601`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — `Collect PR metadata` contains `${{ }}` interpolations and measures **16,438 characters**, leaving **4,562 characters** of headroom. The block is also structurally dense: retry helpers, GraphQL, multiple REST fetches, and two inline Python programs all live in one interpolated step, so normal maintenance can push it toward the hard limit quickly.
+- **Recommended fix** — Extract metadata collection into an external script, ideally alongside the existing `scripts/gh_helpers.sh` helpers, or split the step into smaller fetch/build/diff stages.
+
+#### EXPR-004
+- **File path** — `.github/workflows/validate.yml:188-481`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — `Fetch workflow support files` contains `${{ }}` interpolations and measures **16,513 characters**, leaving **4,487 characters** of headroom. This block is already in the risk band and is large enough that another inline helper or heredoc could push it toward runner rejection.
+- **Recommended fix** — Move the support-file fetch/install logic into a script under `scripts/` and keep YAML responsible only for wiring env vars and artifacts.
+
+#### EXPR-005
+- **File path** — `.github/workflows/orchestrate_clarify_respond.yml:799-1082`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — `Parse and post answer` contains `${{ }}` interpolations and measures **15,141 characters**, leaving **5,859 characters** of headroom. It is below the hard cap but already above the repo’s requested 15,000-character medium-risk threshold.
+- **Recommended fix** — Extract the parsing/posting logic into a dedicated script, or move large inline string/template fragments out of the workflow and into files read at runtime.
+
+- **Overall workflow file-size note** — No workflow exceeds the 800 KB warning threshold. The largest audited files are `review_autofix.yml` at **280,439 chars** and `test-and-mark-stable.yml` at **261,915 chars**, both well below the 1 MB workflow file limit.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001
+- **File path** — `scripts/orchestrate_poll_process.sh:4748-4754`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `read_standalone_state_json()` appears to be unused in repository code. A repo-wide symbol search excluding `analysis/` found only the definition, while the live standalone-state paths parse cached comment JSON directly and pass cached `state_comment_id` into `write_standalone_state_json()` instead (for example around `6398-6459` and `6653-6670`). `[NEEDS VERIFICATION]`
+- **Recommended fix** — Verify that no external harness sources this function. If none does, remove it. If a wrapper is still desired, convert one real caller to it so the read path is exercised and documented.
+
+#### CONSIST-001
+- **File path** — `.github/workflows/issue_pr_status.yml:531-537; .github/workflows/update_workflows.yml:451-457; .github/workflows/validation-refresh.yml:158-174; .github/workflows/test-and-mark-stable.yml:5030-5034; .github/workflows/implement.yml:2380-2384,2508-2512; scripts/tg_helpers.sh:103-129,214-220`
+- **Severity** — Low
+- **Category tag** — `consistency`
+- **Description** — Telegram delivery is implemented inconsistently across the repo. Several workflows still hand-roll raw `curl` sends, while the repo already has centralized helpers that prepend severity, resolve chat IDs, and support tracked message cleanup. One workflow (`validation-refresh.yml:158-174`) even documents a custom reason for bypassing the helper, which is a sign the helper API is missing an intentional escape hatch rather than a sign that ad hoc `curl` should remain scattered.
+- **Recommended fix** — Extend `scripts/tg_helpers.sh` with one explicit API for the exceptional case, e.g. `tg_send_msg_unfiltered <msg> <level> [chat_id]` or a third `force` parameter on `tg_send_msg`. Then migrate the listed workflows to that helper so Telegram formatting, filtering, and failure handling live in one module.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 4 | BUG-001, DUP-002, EXPR-001, EXPR-002 |
+| Medium | 6 | API-001, BATCH-001, DUP-001, EXPR-003, EXPR-004, EXPR-005 |
+| Low | 3 | SHELL-001, DEAD-001, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 5 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 4 | Large |
+| Expression size reduction | 4 | Large |
+| Medium/Low fixes | 6 | Small |
