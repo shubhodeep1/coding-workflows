@@ -167,7 +167,6 @@ def test_emits_line_numbered_bounded_context() -> None:
 		context = emit_context(
 			["contracts/FunOFT.sol"],
 			root,
-			max_files=10,
 			max_bytes=1024,
 		)
 
@@ -184,18 +183,21 @@ def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
 	must NOT be head-truncated — that would mislead the editor when
 	the edit point lives at the bottom of the file. It gets a clear
 	"would overflow total budget" marker so the model uses its
-	native read tool instead."""
+	native read tool instead.
+
+	Every path the caller passes is reported (inlined or marker) —
+	there is no separate file-count cap, so a long path list never
+	"silently drops" entries past some N."""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		# 30KB each
-		for name in ("a.py", "b.py", "c.py"):
+		# 30KB each, 4 files
+		for name in ("a.py", "b.py", "c.py", "d.py"):
 			(root / "src" / name).write_text("y = 1\n" * 6000, encoding="utf-8")
 
 		context = emit_context(
-			["src/a.py", "src/b.py", "src/c.py"],
+			["src/a.py", "src/b.py", "src/c.py", "src/d.py"],
 			root,
-			max_files=10,
 			max_bytes=50_000,  # only ~1.5 files fit
 		)
 
@@ -208,39 +210,9 @@ def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
 		# The marker line carries the budget context for the operator /
 		# model.
 		assert "max_bytes=50000" in context
-
-
-def test_files_past_max_files_emit_deferred_summary() -> None:
-	"""Files past MAX_FILES are NOT silently dropped — they appear in
-	a "Deferred (max_files=N reached, read with read tool if needed)"
-	tail summary so the model still sees the full set. Pinned by
-	claude-branch-review on PR #2241."""
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		(root / "src").mkdir()
-		# 5 small files, but max_files=2 — files 3-5 should be deferred.
-		for i in range(5):
-			(root / "src" / f"f{i}.py").write_text(f"# file {i}\n", encoding="utf-8")
-
-		context = emit_context(
-			[f"src/f{i}.py" for i in range(5)],
-			root,
-			max_files=2,
-			max_bytes=10_000,
-		)
-
-		# First two inlined.
-		assert "--- FILE: src/f0.py" in context
-		assert "--- FILE: src/f1.py" in context
-		# Last three deferred — listed compactly under a summary.
-		assert "Deferred (max_files=2 reached" in context
-		assert "src/f2.py" in context
-		assert "src/f3.py" in context
-		assert "src/f4.py" in context
-		# But their content is NOT inlined.
-		assert "# file 2" not in context
-		assert "# file 3" not in context
-		assert "# file 4" not in context
+		# Every path appears (inlined or marker) — no silent drops.
+		for name in ("src/a.py", "src/b.py", "src/c.py", "src/d.py"):
+			assert name in context, f"path {name} missing from output"
 
 
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
@@ -251,7 +223,6 @@ def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
 		context = emit_context(
 			["../secret.txt", "/etc/passwd", "good/file.py"],
 			root,
-			max_files=10,
 			max_bytes=1024,
 		)
 		# good/file.py doesn't exist either, but it's a valid intra-repo
@@ -264,22 +235,23 @@ def test_missing_input_emits_safe_empty_block() -> None:
 		context = emit_context(
 			[],
 			Path(tmp),
-			max_files=10,
 			max_bytes=1024,
 		)
 		assert "=== TARGETED FILE CONTEXT ===" in context
 		assert "(no existing target files could be inlined)" in context
 
 
-def test_disabled_by_zero_limits() -> None:
+def test_disabled_by_zero_max_bytes() -> None:
+	"""Set max_bytes=0 to disable inlining entirely — block becomes a
+	single-line "(disabled)" marker."""
 	with tempfile.TemporaryDirectory() as tmp:
 		context = emit_context(
 			["whatever"],
 			Path(tmp),
-			max_files=0,
-			max_bytes=1024,
+			max_bytes=0,
 		)
-		assert "targeted context disabled by limits" in context
+		assert "targeted context disabled" in context
+		assert "max_bytes=0" in context
 
 
 def test_paths_file_strips_diff_a_b_prefixes() -> None:

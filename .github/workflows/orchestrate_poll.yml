@@ -34,13 +34,12 @@ env:
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'medium' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
-  # Targeted-file-context inlining limits — propagated to
+  # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver
-  # path) via this workflow-level env block. Without these exports, the
-  # script's shell-level ${VAR:-DEFAULT} fallbacks fire and repo-variable
+  # path) via this workflow-level env block. Without this export, the
+  # script's shell-level ${VAR:-DEFAULT} fallback fires and repo-variable
   # overrides are silently ignored. See scripts/targeted_file_context.py
-  # for per-knob semantics. Defaults match implement.yml / review_autofix.yml.
-  TARGETED_FILE_CONTEXT_MAX_FILES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_FILES || '10' }}
+  # for semantics. Default matches implement.yml / review_autofix.yml.
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
 
 jobs:

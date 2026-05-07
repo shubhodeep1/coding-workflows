@@ -27,14 +27,8 @@ Output is a bounded, line-numbered context block:
   ...
   --- END FILE: <rel> ---
 
-Bounds (defensible defaults; override per caller):
+Bounds (defensible default; override per caller):
 
-  --max-files (default 10)        Cap on number of files mentioned in the
-                                  block. Paths beyond this cap are not
-                                  silently dropped — they are listed at
-                                  the tail under a "Deferred (max_files
-                                  reached, read with read tool if needed)"
-                                  summary so the model knows the full set.
   --max-bytes (default 102400)    Total bytes across all inlined files
                                   (~25k tokens at ~4 b/t). A file that
                                   would push the cumulative size over
@@ -43,7 +37,10 @@ Bounds (defensible defaults; override per caller):
                                   read with read tool)" marker so the
                                   model uses its native targeted-read
                                   flow instead of being misled by a
-                                  truncated head.
+                                  truncated head. There is no separate
+                                  file-count cap: every path the caller
+                                  passes is reported, either inlined or
+                                  as a marker.
 
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
@@ -96,8 +93,8 @@ DEFAULT_HEADER_TEXT = (
 	"can edit immediately without re-reading them. If a file is included "
 	"verbatim below, your first tool call should be a write to one of those "
 	"files unless the request is already satisfied. Files marked \"would "
-	"overflow total budget\" or listed under \"Deferred\" must be read with "
-	"the read tool — never assume their content is in this block."
+	"overflow total budget\" must be read with the read tool — never assume "
+	"their content is in this block."
 )
 
 
@@ -235,7 +232,6 @@ def iter_line_numbered(text: str) -> Iterable[str]:
 def emit_context(
 	paths: list[str],
 	repo_root: Path,
-	max_files: int,
 	max_bytes: int,
 	header_text: str = DEFAULT_HEADER_TEXT,
 ) -> str:
@@ -244,32 +240,18 @@ def emit_context(
 	inlined = 0
 	used_bytes = 0
 	skipped_too_large: list[tuple[str, int]] = []
-	deferred_count_overflow: list[str] = []
 
 	output.append("=== TARGETED FILE CONTEXT ===")
 	output.append(header_text)
 	output.append("")
 
-	if max_files <= 0 or max_bytes <= 0:
-		output.append(f"(targeted context disabled by limits: max_files={max_files}, max_bytes={max_bytes})")
+	if max_bytes <= 0:
+		output.append(f"(targeted context disabled: max_bytes={max_bytes})")
 		return "\n".join(output) + "\n"
 
 	repo_root_resolved = repo_root.resolve()
 
 	for rel in paths:
-		if included >= max_files:
-			# Past the count cap. Don't silently drop — collect for a
-			# tail summary so the model still sees that more files
-			# exist beyond the inlining set. Path-traversal check is
-			# applied here too so adversarial paths can't smuggle into
-			# the deferred summary either.
-			abs_path = (repo_root / rel).resolve()
-			try:
-				abs_path.relative_to(repo_root_resolved)
-			except ValueError:
-				continue
-			deferred_count_overflow.append(rel)
-			continue
 		abs_path = (repo_root / rel).resolve()
 		try:
 			abs_path.relative_to(repo_root_resolved)
@@ -311,23 +293,7 @@ def emit_context(
 		included += 1
 		inlined += 1
 
-	if deferred_count_overflow:
-		# Tail summary for files we couldn't include because we hit
-		# max_files. Listed compactly so the model knows the full set
-		# without 50 separate marker blocks. Capped at 50 paths in the
-		# summary itself for prompt-budget hygiene; remainder is
-		# counted.
-		output.append(
-			f"Deferred (max_files={max_files} reached, read with read tool "
-			f"if needed):"
-		)
-		for rel in deferred_count_overflow[:50]:
-			output.append(f"  - {rel}")
-		if len(deferred_count_overflow) > 50:
-			output.append(f"  ... and {len(deferred_count_overflow) - 50} more")
-		output.append("")
-
-	if included == 0 and not deferred_count_overflow:
+	if included == 0:
 		output.append("(no existing target files could be inlined)")
 	else:
 		summary = (
@@ -340,8 +306,6 @@ def emit_context(
 			if len(skipped_too_large) > 5:
 				skipped_summary += f", +{len(skipped_too_large) - 5} more"
 			summary += f" Marker-only (would overflow): {skipped_summary}."
-		if deferred_count_overflow:
-			summary += f" Deferred (count cap): {len(deferred_count_overflow)} more."
 		output.append(summary)
 	return "\n".join(output) + "\n"
 
@@ -362,7 +326,6 @@ def main() -> int:
 	parser.add_argument("--paths-file", default=None, help="newline-separated path list")
 	parser.add_argument("--paths", default=None, help="comma-separated paths")
 	parser.add_argument("--repo-root", default=os.getcwd())
-	parser.add_argument("--max-files", type=positive_int, default=10)
 	parser.add_argument("--max-bytes", type=positive_int, default=102400)
 	parser.add_argument("--header-text", default=DEFAULT_HEADER_TEXT)
 	parser.add_argument("--output", required=True)
@@ -391,7 +354,6 @@ def main() -> int:
 	context = emit_context(
 		merged,
 		Path(args.repo_root),
-		args.max_files,
 		args.max_bytes,
 		args.header_text,
 	)
