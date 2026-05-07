@@ -2171,7 +2171,17 @@ PY
       -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
       -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
       "${_validate_codex_config}" || true
-    echo "Restored ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT} after discover phase."
+    # Verify the restore landed before logging success. Without this
+    # check, a silent sed failure would leave subsequent generate /
+    # diagnose / fix-harness phases running at the discover override
+    # level while the log claimed restoration succeeded. Mirrors the
+    # post-edit verification on the patch side above and the pattern in
+    # scripts/review_conflict_resolve.sh.
+    if grep -Eq "^model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"$" "${_validate_codex_config}"; then
+      echo "Restored ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT} after discover phase."
+    else
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\" line after discover; subsequent validate phases may run at the discover override level (${MODEL_REASONING_EFFORT_DISCOVER})."
+    fi
   fi
 
   if [ "${DISCOVER_SUCCESS}" != "true" ]; then
