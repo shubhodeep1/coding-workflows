@@ -2792,7 +2792,7 @@ invoke_judge_for_integration_conflict() {
     echo "   short diagnosis in the commit message."
   } > "${prompt_file}"
 
-  if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --full-auto > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+  if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --ask-for-approval never --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
     return 0
@@ -5622,7 +5622,7 @@ invoke_stall_judge() {
     if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
       printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
     else
-      codex exec --model "${MODEL_EDITOR}" --full-auto < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+      codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
     fi
     if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
       judge_success="true"
@@ -9354,7 +9354,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_SUCCESS=false
       for attempt in 1 2; do
         echo "  Review-blocked judge attempt ${attempt}/2..."
-        cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+        cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
         if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
           RB_JUDGE_SUCCESS=true
           break
@@ -10747,7 +10747,7 @@ ${PR_DIFF}
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
       JUDGE_SUCCESS=true
       break

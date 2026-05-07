@@ -1062,7 +1062,7 @@ jobs:
           # (a) when stdout has content but the worktree delta is empty
           # (cmd_rc==0 + non-empty stdout branch), and (b)/(c) when stdout
           # is empty but the per-attempt stderr log carries the same
-          # announce-edit narrative — Codex CLI in --full-auto exec mode
+          # announce-edit narrative — Codex CLI in exec mode
           # streams agent narrative on stderr and only emits the final
           # assistant message on stdout, so a model that announces the
           # edit and then exits without calling apply_patch leaves stdout
@@ -1339,7 +1339,7 @@ jobs:
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
             (
-              exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${PROMPT_FILE_TO_USE}"
+              exec codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access < "${PROMPT_FILE_TO_USE}"
             ) > "${CODEX_OUTPUT_FILE}" 2> >(
               while IFS= read -r line || [ -n "$line" ]; do
                 printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
@@ -1431,7 +1431,7 @@ jobs:
                 # operator in the workflow log) without ever invoking
                 # apply_patch — the same failure mode the stdout branch
                 # detects above, just with the narrative on a different
-                # stream. Codex CLI in --full-auto exec mode streams
+                # stream. Codex CLI in exec mode streams
                 # agent narrative on stderr and only writes the final
                 # assistant message on stdout, so a model that exits
                 # after one announce-and-tool-call sequence leaves
@@ -1491,7 +1491,7 @@ jobs:
             # Fix #1: detect Codex's `request_user_input is not supported in
             # exec mode` error path. The CLI emits this to stderr (codex_log)
             # when the model decides it needs to ask the user a clarifying
-            # question — but in --full-auto / exec mode the request is
+            # question — but in exec mode (no TTY) the request is
             # rejected with code=-32000 and Codex bails with an empty
             # CODEX_OUTPUT_FILE. Retrying with the same prompt cannot fix an
             # ambiguity the model wanted to ask about; the previous run on
@@ -1907,7 +1907,7 @@ jobs:
 
             REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
             REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
-            if ! codex exec --model "${MODEL_EDITOR}" --full-auto < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
+            if ! codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               continue
             fi
@@ -3120,7 +3120,7 @@ jobs:
 
           for _summary_attempt in 1 2 3; do
             cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" \
-              | codex exec --model "${MODEL_EDITOR}" --full-auto > "${ISSUE_SUMMARY_FILE}" || true
+              | codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access > "${ISSUE_SUMMARY_FILE}" || true
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
               break

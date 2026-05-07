@@ -470,7 +470,7 @@ jobs:
           for attempt in $(seq 1 "${max_attempts}"); do
             analyze_attempts_used="${attempt}"
             set +e
-            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${REPORT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --ask-for-approval never --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${REPORT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
             ANALYZE_EXIT=$?
             set -e
             if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
@@ -830,7 +830,7 @@ jobs:
           AUDIT_EXIT=0
           for attempt in $(seq 1 "${max_attempts}"); do
             set +e
-            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --ask-for-approval never --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
             AUDIT_EXIT=$?
             set -e
             if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
@@ -1145,7 +1145,7 @@ jobs:
           API_EXIT=0
           for attempt in $(seq 1 "${max_attempts}"); do
             set +e
-            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --ask-for-approval never --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
             API_EXIT=$?
             set -e
             if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then

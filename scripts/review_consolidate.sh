@@ -143,7 +143,7 @@ cmd_rc=0
 
 if ! CODEX_HOME="${consolidator_codex_home}" \
 	timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
-	"${codex_bin}" exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto \
+	"${codex_bin}" exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --ask-for-approval never --sandbox danger-full-access \
 	< "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 	cmd_rc=$?
 fi
