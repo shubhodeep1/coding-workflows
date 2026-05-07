@@ -148,6 +148,37 @@ if [ -z "${_config_path}" ]; then
 	_config_path="${HOME:-/root}/.codex/config.toml"
 fi
 
+# Reject project paths containing characters that would need TOML
+# basic-string escaping (double-quote, backslash, control bytes incl.
+# newline/CR/tab/etc.). The emitted `[projects."<path>"]` header uses
+# raw substitution — a stray `"` would close the key string early and
+# corrupt the config; a newline would break the header onto two lines
+# and codex would re-prompt for trust on the next run (defeating the
+# whole purpose of the pre-seed). Codex matches the trust path strictly
+# (no globs — see openai/codex#14599), so silently quoting/escaping
+# would also break the bypass even if the TOML itself stayed valid.
+# Fail loudly instead — every legitimate caller passes either `$(pwd)`
+# from a hosted runner (no such characters) or a script-relative
+# constant, so this guard only fires when something has already gone
+# very wrong.
+case "${_project_path}" in
+	*$'\n'*|*$'\r'*|*$'\t'*|*\"*|*\\*)
+		echo "::error::write_codex_config.sh: --project-path contains characters that would require TOML escaping (quote/backslash/newline/CR/tab); refusing to emit a malformed [projects.\"...\"] header. Path: ${_project_path}" >&2
+		exit 2
+		;;
+esac
+# Also reject any other ASCII control byte (0x00–0x1F minus the three
+# above, plus 0x7F DEL). A bash `case` glob can't express ranges
+# portably, so use a Python-free shell check via `printf | LC_ALL=C tr`.
+if printf '%s' "${_project_path}" | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+	| { read -r _printable_only || true; [ "${_printable_only}" = "${_project_path}" ]; } \
+	; then
+	:
+else
+	echo "::error::write_codex_config.sh: --project-path contains ASCII control bytes; refusing to emit a malformed [projects.\"...\"] header. Path: ${_project_path}" >&2
+	exit 2
+fi
+
 # Decide approval/sandbox based on elevation policy. The "auto" branch
 # matches the contract documented above the script: GH-hosted runners
 # (or an explicit force override) get the elevated combo; everything else
