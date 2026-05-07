@@ -55,13 +55,19 @@ def _install_mock_codex(mock_bin_dir: Path, *, consolidator_fixture: str | None)
 		shutil.copy2(FIXTURES / consolidator_fixture, output_file)
 
 	codex_script = mock_bin_dir / "codex"
+	# Scan every arg for `exec` rather than checking $1, since the
+	# canonical Codex CLI v0.114.0+ invocation places `--ask-for-approval`
+	# (a top-level flag) before the `exec` subcommand:
+	#     codex --ask-for-approval never exec --model X --sandbox Y
+	# Anchoring on $1 would only match the legacy form (broken on
+	# v0.114.0+) and silently mis-mock the production layout.
 	codex_script.write_text(
 		"#!/usr/bin/env bash\n"
 		"set -euo pipefail\n\n"
-		"if [ \"${1:-}\" != \"exec\" ]; then\n"
-		"\techo \"mock-codex supports only exec\" >&2\n"
-		"\texit 2\n"
-		"fi\n"
+		"case \" $* \" in\n"
+		"\t*\" exec \"*) ;;\n"
+		"\t*) echo \"mock-codex supports only exec\" >&2; exit 2 ;;\n"
+		"esac\n"
 		"if [ -n \"${MOCK_CODEX_OUTPUT_FILE:-}\" ] && [ -f \"${MOCK_CODEX_OUTPUT_FILE}\" ]; then\n"
 		"\tcat \"${MOCK_CODEX_OUTPUT_FILE}\"\n"
 		"fi\n",

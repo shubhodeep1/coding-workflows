@@ -376,6 +376,100 @@ def test_no_codex_exec_site_uses_deprecated_full_auto_flag() -> None:
 		)
 
 
+def test_no_codex_exec_site_places_ask_for_approval_after_exec() -> None:
+	"""Guard against re-introduction of the v0.114.0 flag-position regression.
+
+	Codex CLI v0.114.0 enforces flag positioning strictly: `--ask-for-approval`
+	is a TOP-LEVEL flag (must precede the `exec` subcommand). PR #2205 placed
+	`--ask-for-approval never --sandbox danger-full-access` AFTER `exec` across
+	24 codex invocation sites, which the parser rejects with:
+
+	    error: unexpected argument '--ask-for-approval' found
+	    Usage: codex exec --model <MODEL> [PROMPT]
+
+	This took down orchestrator/clarify/implement/plan/validate workflows in
+	one bulk edit. A grep guard here would have caught the regression before
+	the PR landed.
+
+	The valid layout is:
+	    codex --ask-for-approval never exec --model X --sandbox Y
+	The invalid layout is:
+	    codex exec --model X --ask-for-approval never --sandbox Y
+	    codex exec ... \\<newline>... --ask-for-approval never ... (multi-line)
+	"""
+	# `git grep -P -z` does NOT span lines (the -z flag controls output
+	# delimiter, not record boundary), so we read the relevant files
+	# directly. Step 1 normalises shell line-continuations
+	# (`\<newline><indent>` → single space) so a single multi-line codex
+	# invocation collapses into one logical line. Step 2 runs a simple
+	# regex over each logical line: any `<prefix> exec` followed by
+	# `--ask-for-approval` BEFORE the next newline is a bug, regardless
+	# of where `--model` (or any other flag) sits in between. This
+	# catches both same-line regressions and multi-line continuations
+	# where `--ask-for-approval` lands on a later `\`-continued line.
+	# Catches the `--ask-for-approval` BEFORE `--model` ordering too.
+	bad = re.compile(
+		r'(?:codex|"\$\{codex_bin\}") exec[^\n]*--ask-for-approval',
+	)
+	scan_dirs = [
+		REPO_ROOT / ".github" / "workflows",
+		REPO_ROOT / "scripts",
+	]
+	# write_codex_config.sh's docstring intentionally mentions the bad
+	# pattern in prose to document why we moved away from it.
+	exempt = {REPO_ROOT / "scripts" / "write_codex_config.sh"}
+	offenders: list[str] = []
+	for d in scan_dirs:
+		for path in sorted(d.rglob("*")):
+			if not path.is_file():
+				continue
+			if path in exempt:
+				continue
+			if path.suffix not in (".sh", ".yml", ".yaml"):
+				continue
+			raw = path.read_text(encoding="utf-8")
+			# Map each char position in the normalised text back to a
+			# physical line in the original file so error messages cite
+			# the actual file:line of the broken `exec` token.
+			normalised_chars: list[str] = []
+			origin_line: list[int] = []
+			line_no = 1
+			i = 0
+			while i < len(raw):
+				ch = raw[i]
+				if ch == "\\" and i + 1 < len(raw) and raw[i + 1] == "\n":
+					# Line continuation: collapse `\<newline><indent>`
+					# into a single space, advance past the indent.
+					normalised_chars.append(" ")
+					origin_line.append(line_no)
+					line_no += 1
+					i += 2
+					while i < len(raw) and raw[i] in (" ", "\t"):
+						i += 1
+					continue
+				normalised_chars.append(ch)
+				origin_line.append(line_no)
+				if ch == "\n":
+					line_no += 1
+				i += 1
+			normalised = "".join(normalised_chars)
+			for m in bad.finditer(normalised):
+				phys_line = origin_line[m.start()] if m.start() < len(origin_line) else line_no
+				snippet = m.group(0)
+				if len(snippet) > 200:
+					snippet = snippet[:200] + "..."
+				rel = path.relative_to(REPO_ROOT)
+				offenders.append(f"{rel}:{phys_line}: {snippet}")
+	assert not offenders, (
+		"`--ask-for-approval` is a TOP-LEVEL Codex flag and must precede "
+		"the `exec` subcommand on Codex CLI v0.114.0+, otherwise the "
+		"parser rejects the invocation with `unexpected argument "
+		"'--ask-for-approval' found`. Use the layout `codex "
+		"--ask-for-approval never exec --model X --sandbox Y`. "
+		"Offending sites:\n  " + "\n  ".join(offenders)
+	)
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

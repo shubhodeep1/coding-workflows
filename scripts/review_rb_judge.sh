@@ -520,7 +520,7 @@ case "${RB_ACTION}" in
         sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${JUDGE_REASONING_EFFORT}\"/" "${HOME}/.codex/config.toml"
       fi
 
-      if codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
+      if codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
         echo "Fix codex completed."
       else
         echo "::warning::Fix codex failed for PR #${PR_NUMBER}."

@@ -536,7 +536,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   fi
 
   tmp_output="$(mktemp)"
-  if ! codex exec --model "${MODEL_EDITOR}" --ask-for-approval never --sandbox danger-full-access "$(cat "${_effective_prompt_file}")" > "${tmp_output}"; then
+  if ! codex --ask-for-approval never exec --model "${MODEL_EDITOR}" --sandbox danger-full-access "$(cat "${_effective_prompt_file}")" > "${tmp_output}"; then
     rm -f "${tmp_output}"
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       echo "Conflict resolver failed after retries."
