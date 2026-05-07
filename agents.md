@@ -60,7 +60,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
 | implement-repair, implement-repair-syntax | `openai/gpt-5.4` | `low` | default |
 | implement-diagnose | `openai/gpt-5.4` | `medium` | `low` |
 | review autofix editor | `openai/gpt-5.4` | `medium` (smoke: `medium`) | default |
-| review autofix reviewers (pass 1) | `openai/gpt-5.4` | `medium` (hardcoded; smoke: `low` — shared with pass 2 via `REVIEWER_REASONING_EFFORT`) | `low` |
+| review autofix reviewers (pass 1) | `openai/gpt-5.4` | `medium` (hardcoded at the `run_reviewer_pass ... "medium"` callsite in `scripts/review_run_reviewers.sh:1173`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
 | review autofix reviewers (pass 2) | `openai/gpt-5.4` | `medium` if `LAST_RUN_DIFF < 200 LOC`, `xhigh` otherwise (smoke: `low`); operator override wins | `low` |
 | review consolidator | `openai/gpt-5.4` | `low` | `low` |
 | conflict resolver | `openai/gpt-5.4` | `medium` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh\|high\|medium\|none` only — `low` is rejected) | default |

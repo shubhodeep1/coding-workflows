@@ -47,8 +47,13 @@ MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-medium}"
 # codex exec call and restores `MODEL_REASONING_EFFORT` after — see the
 # "Validation hint discovery attempt" loop further down.
 MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-low}"
+# `none` is intentionally rejected here: the parent MODEL_REASONING_EFFORT
+# rationale above cites the catalog (`scripts/codex_model_catalog.json`)
+# not advertising `none` for the gpt-5.x family, so accepting it for the
+# per-phase override would be inconsistent. To use `none` everywhere,
+# update the catalog first.
 case "${MODEL_REASONING_EFFORT_DISCOVER}" in
-  xhigh|high|medium|low|none) ;;
+  xhigh|high|medium|low) ;;
   *)
     echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'low'."
     MODEL_REASONING_EFFORT_DISCOVER="low"
@@ -2072,8 +2077,18 @@ else
       -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"/" \
       -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"/" \
       "${_validate_codex_config}" || true
-    _discover_reasoning_patched="true"
-    echo "Patched ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT_DISCOVER} for discover phase."
+    # Verify the patch landed before claiming success / setting the
+    # restore flag. A silent sed failure (permissions, unexpected config
+    # shape, BSD sed argument differences in standalone runs) would
+    # otherwise leave discover running at the previous reasoning level
+    # while the log claims the override took effect. Mirrors the
+    # post-edit verification pattern in scripts/review_conflict_resolve.sh.
+    if grep -Eq "^model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"$" "${_validate_codex_config}"; then
+      _discover_reasoning_patched="true"
+      echo "Patched ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT_DISCOVER} for discover phase."
+    else
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\" line; discover phase will run at the prior reasoning level (no restore needed)."
+    fi
   fi
 
   DISCOVER_SUCCESS=false
