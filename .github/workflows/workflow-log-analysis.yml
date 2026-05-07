@@ -638,7 +638,16 @@ jobs:
     # tripped. 45m absorbs the observed margin and leaves room for slow
     # codex calls without changing the watcher's overall ceiling beyond
     # what test-and-mark-stable.yml already accommodates.
-    timeout-minutes: 45
+    # Bumped 45 → 75 after run #25474659590 cancelled at 45m 16s on
+    # deep-audit. Recent successful single-attempt durations (jobs API)
+    # were 14–27m; in that run, codex attempt 1 ran ~24m and failed
+    # validation (empty stdout / non-zero exit), forcing a retry that
+    # was then killed by the 45m cap mid-attempt-2. 75m fits the full
+    # MAX_CODEX_ATTEMPTS=3 ladder at the observed worst-case ~25m per
+    # attempt plus the 10s/20s exponential backoff. Cascade bumped the
+    # orphan-watcher step timeout (205 → 235m) and in-script DEADLINE
+    # (12000 → 13800s) in test-and-mark-stable.yml.
+    timeout-minutes: 75
     outputs:
       audit_status: ${{ steps.audit.outputs.audit_status }}
     env:
