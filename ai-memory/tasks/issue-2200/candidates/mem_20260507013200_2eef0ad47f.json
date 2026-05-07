@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E Orchestrate Smoke 25470780569\",\"issues\":[{\"id\":\"issue-1-canary-a\",\"title\":\"Update tests/e2e_smoke_canary.txt for decompose smoke run 25470780569\",\"priority\":1},{\"id\":\"issue-2-canary-b\",\"title\":\"Update tests/e2e_smoke_canary_b.txt for decompose smoke run 25470780569\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "2559b60c153143d9c70f751a13ac9a72faf36d94f7afa8472da8c8478e084bc1",
+  "lineage": {
+    "issue_number": 2200,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25470796473",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25470796473",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260507013200_2eef0ad47f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2200,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25470796473"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E Orchestrate Smoke 25470780569' into 2 issues (tracking #2200)",
+  "timestamps": {
+    "created_at": "2026-05-07T01:32:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
