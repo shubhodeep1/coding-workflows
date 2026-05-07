@@ -1596,10 +1596,13 @@ def _extract_announce_edit_regex() -> str:
 def _grep_matches(regex: str, text: str) -> bool:
 	"""Return True iff `grep -iE <regex>` matches `text`.
 
-	Matches the workflow's actual matcher (`grep -qEi`) byte-for-byte so
-	any divergence between Python's `re` engine (no POSIX character
-	classes by default) and POSIX ERE doesn't bite. Stdin-fed so no temp
-	files leak.
+	Uses the same POSIX ERE engine the workflow's matcher (`grep -qEi`)
+	runs against, so any divergence between Python's `re` engine (no
+	POSIX character classes by default) and POSIX ERE doesn't bite.
+	The workflow uses `-q` for silent match-only; this test omits `-q`
+	because we still want grep to surface stderr on engine errors via
+	`capture_output=True`. Match/no-match is decided by exit code in
+	either form. Stdin-fed so no temp files leak.
 	"""
 	result = subprocess.run(
 		["grep", "-iE", regex],
@@ -1727,6 +1730,21 @@ def test_announce_edit_regex_contract() -> None:
 		"codex",
 		"mcp startup: no servers",
 		"Reading prompt from stdin...",
+		# Substring-collision controls. The nouns added in PR #2196
+		# (`override`, `file`, `cleanup`, `removal`, `deletion`) are not
+		# word-anchored in the regex (consistent with PR #1906's existing
+		# unanchored nouns like `change`/`edit`/`implementation`), so a
+		# few specific spelling collisions are worth pinning so a future
+		# refactor that DOES add anchors doesn't silently change behavior:
+		#   - "profile" contains "file" but only as a non-prefix substring
+		#     (the regex's `(noun)` alternation tries each alternative
+		#     anchored at the position immediately after the consumed
+		#     space-delimited tokens, not floating mid-word).
+		#   - "overridden" does not start with "override" (`overridd...`
+		#     vs `overrid...e`) so it is not a prefix and does not match.
+		# Both verified to currently NOT match; the test pins that.
+		"applying the profile",
+		"applying the overridden behavior",
 	]
 	for s in must_not_match:
 		assert not _grep_matches(regex, s), (
