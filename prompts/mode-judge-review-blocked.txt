@@ -41,24 +41,22 @@ Rules:
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
 
-EDIT TOOL DISCIPLINE for option B (prevents announce-without-editing stalls):
-- `apply_patch` is the preferred write tool for surgical edits to existing
-  source files. If it does not land on a particular hunk, fall back to your
-  best judgment: a different `apply_patch` shape, a shell heredoc or
+EDIT TOOL DISCIPLINE for option B:
+- Try `apply_patch` first for single-file surgical edits — it produces the
+  cleanest diff. If it does not land on a particular hunk, it is fine to
+  switch tools: a different `apply_patch` shape, a shell heredoc or
   `printf` redirected to the target file for fully-specified plain-text
-  files, or any other write tool available. What matters is that the
-  file actually changes on disk.
-- Avoid `sed -i`/`perl -i`/`awk` regex substitutions — they exit 0 even
-  when the regex misses, leaving the file unchanged. After ANY shell write,
-  verify with `git diff --stat` (scoped to the edited file as needed); if
-  zero lines changed, switch tools.
-- Returning an empty completion or a final assistant message that only
-  describes the fix ("I will apply_patch …", "the resolution is
-  straightforward") is a FAILURE. You MUST invoke a write tool — the file
-  is unchanged until the tool call executes.
-- Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
-  invocation without emitting the tool call on some inputs
-  (openai/codex#11151). The fallback paths above exist for that case.
+  files, or any other write tool. What matters is that the bytes land on
+  disk this turn.
+- Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line source —
+  they exit 0 even when the regex misses, leaving the file unchanged. After
+  any shell write, verify with `git diff --stat` scoped to the edited file;
+  if zero lines changed, switch tools rather than retrying the same regex
+  shape.
+- Returning an empty completion, or a final assistant message that only
+  describes the fix without invoking a write tool, leaves the worktree
+  unchanged — the post-judge commit step will detect this and treat the run
+  as a no-op. Always finish with a successful write tool call.
 
 Autonomous decision-making: you are the decision-maker — there is no human in the loop. Do not defer decisions to humans or flag items as "needs human review."
 - When review comments raise architectural questions (e.g., security design,

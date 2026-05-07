@@ -440,7 +440,7 @@ def _run_diagnose_step(
 			"GITHUB_SERVER_URL": "https://github.com",
 			"JOB_STATUS": "failure",
 			"DEFAULT_BRANCH": "main",
-			"MODEL_EDITOR": "openai/gpt-5.3-codex",
+			"MODEL_EDITOR": "openai/gpt-5.4",
 			"PR_BASE_BRANCH": "orchestrator/project-829",
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"IMPLEMENT_DIAGNOSE_PROMPT_FILE": str(prompt_file),
@@ -1843,7 +1843,7 @@ def test_retry_nudge_includes_apply_patch_directive() -> None:
 		"tool — `sed`/`grep` shell-out workarounds routinely fail "
 		"shell quoting on literal special chars and waste the attempt"
 	)
-	assert "Do NOT read additional files until your first" in codex_block, (
+	assert "edit" in codex_block and "before expanding scope" in codex_block, (
 		"retry preamble must constrain the model to apply edits before "
 		"expanding scope, since the bitsafe.io / tele-funtoken-msg-scoring "
 		"failure mode was the model spending the full budget on recon"
@@ -2308,7 +2308,7 @@ def _run_smoke_detection_step(
 	*,
 	issue_title: str,
 	issue_body: str,
-	default_model: str = "openai/gpt-5.3-codex",
+	default_model: str = "openai/gpt-5.4",
 ) -> dict[str, str]:
 	"""Run the implement.yml "Detect smoke test ..." step in isolation
 	and return the GITHUB_ENV exports it produced.
@@ -2356,14 +2356,14 @@ def test_alt_model_smoke_override_parses_valid_body() -> None:
 		"Update canary file.\n\n"
 		"## Constraints\n"
 		"- Only modify `tests/e2e_smoke_canary.txt`.\n"
-		"- Note: this run uses `openai/gpt-5.4` as the editor model override."
+		"- Note: this run uses `openai/gpt-5.3-codex` as the editor model override."
 	)
 	exports = _run_smoke_detection_step(
 		issue_title="[E2E Smoke Test alt-model] update canary (run 123)",
 		issue_body=body,
 	)
 	assert exports.get("IS_SMOKE_TEST") == "true"
-	assert exports.get("MODEL_EDITOR") == "openai/gpt-5.4", (
+	assert exports.get("MODEL_EDITOR") == "openai/gpt-5.3-codex", (
 		"alt-model override must propagate from issue body to MODEL_EDITOR; "
 		f"got exports={exports}"
 	)
@@ -2376,7 +2376,7 @@ def test_alt_model_override_inert_on_regular_smoke_title() -> None:
 	job and the alt-model variant.
 	"""
 
-	body = "Note: this run uses `openai/gpt-5.4` as the editor model override."
+	body = "Note: this run uses `openai/gpt-5.3-codex` as the editor model override."
 	exports = _run_smoke_detection_step(
 		issue_title="[E2E Smoke Test] update canary",
 		issue_body=body,

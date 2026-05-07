@@ -29,7 +29,7 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
   TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
 fi
 
-MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.3-codex}"
+MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.4}"
 MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-none}"
 # Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)
 # see it even when the caller relied on our default fallback. In CI the workflow

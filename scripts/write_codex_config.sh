@@ -23,7 +23,7 @@
 #
 # Usage:
 #   bash scripts/write_codex_config.sh \
-#     --model openai/gpt-5.3-codex \
+#     --model openai/gpt-5.4 \
 #     --reasoning medium \
 #     [--web-search live|disabled] \
 #     [--catalog-path /abs/path/to/codex_model_catalog.json] \

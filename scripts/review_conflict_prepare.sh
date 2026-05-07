@@ -467,12 +467,13 @@ PROMPT_TPL="${PROMPT_TPL}" \
 #
 # Background: PR #2059 pinned the resolver to medium reasoning so the
 # editor's reasoning=none/low smoke override couldn't starve it, but
-# even at medium gpt-5.3-codex still hits the documented empty-stdout
-# failure mode on the smoke-fixture canary conflict (run
-# 25324565713 / PR #2094: 3 codex attempts, all reading the file then
-# exiting cleanly with 0 bytes on stdout, retry loop bails out at
-# MAX_ATTEMPTS, [ai-merge-resolve] commit aborted). Same signature
-# the editor step exhibits without #2086's override.
+# even at medium the legacy gpt-5.3-codex default still hit the
+# documented empty-stdout failure mode on the smoke-fixture canary
+# conflict (run 25324565713 / PR #2094: 3 codex attempts, all reading
+# the file then exiting cleanly with 0 bytes on stdout, retry loop
+# bails out at MAX_ATTEMPTS, [ai-merge-resolve] commit aborted). Same
+# signature the editor step exhibits without #2086's override. The
+# override is kept as defense-in-depth on the gpt-5.4 default.
 #
 # Gate is conditional on (a) IS_SMOKE_TEST=true (set by the smoke
 # detect step in review_autofix.yml when the PR carries the
@@ -525,10 +526,11 @@ MANDATORY ACTIONS for this run:
    write also works and is often more reliable on tiny fully-specified
    files (printf 'status: ok\nrun_id: <HEAD-side run_id>\nupdated-by: ai-pipeline\n' > tests/e2e_smoke_canary.txt).
    Do not wait for additional context, do not ask for clarification,
-   do not defer to a future iteration. (Background: gpt-5.3-codex
-   reliably no-ops on this trivial fixture when forced through
-   apply_patch — see openai/codex#11151 — so the printf escape hatch
-   exists for that case.)
+   do not defer to a future iteration. (Background: under the legacy
+   gpt-5.3-codex default the editor reliably no-opped on this trivial
+   fixture when forced through apply_patch — see openai/codex#11151 —
+   so the printf escape hatch exists for that case and remains
+   available regardless of model.)
 2. Do NOT exit without writing the file. Returning an empty
    completion / a final assistant message that only describes the fix
    ("I will apply_patch ..." / "the resolution is straightforward")

@@ -38,11 +38,12 @@ fi
 # containing at least one non-whitespace byte. Used by the editor
 # success path below so a trivial trailing-newline / whitespace-only
 # edit can't masquerade as a real fix and get committed. Mirrors the
-# salvage gate in implement.yml's retry loop (PR #2176 — gpt-5.3-codex
-# appended a lone `\n` to a contract file in fun-token-multi-chain run
-# 25436981639 issue 200 and the implement workflow shipped a no-op PR;
-# review_autofix has the same exposure via the `_git_has_diff` check
-# inside the EDITOR_CHANGES_LOST gate further down in this file).
+# salvage gate in implement.yml's retry loop (PR #2176 — under the
+# legacy gpt-5.3-codex default the editor appended a lone `\n` to a
+# contract file in fun-token-multi-chain run 25436981639 issue 200 and
+# the implement workflow shipped a no-op PR; review_autofix has the
+# same exposure via the `_git_has_diff` check inside the
+# EDITOR_CHANGES_LOST gate further down in this file).
 # The flag pair `--ignore-space-at-eol
 # --ignore-blank-lines` is deliberate: `-w` would also drop leading-
 # whitespace changes, which are semantic in Python/YAML/Makefiles, so
@@ -265,9 +266,10 @@ MANDATORY ACTIONS for this run:
    (`# E2E_EDITOR_BAIT_<run_id>:`) as a fallback. Restoring the file is
    a deterministic edit — do not wait for additional context, do not
    ask for clarification, do not defer to a future iteration.
-   (Background: gpt-5.3-codex reliably no-ops on this trivial fixture
-   when forced through apply_patch — see openai/codex#11151 — so the
-   printf escape hatch exists for that case.)
+   (Background: under the legacy gpt-5.3-codex default the editor
+   reliably no-opped on this trivial fixture when forced through
+   apply_patch — see openai/codex#11151 — so the printf escape hatch
+   exists for that case and remains available regardless of model.)
 2. Do NOT exit without writing the file. Returning an empty
    completion / a final assistant message that only describes the fix
    ("I will apply_patch ..." / "the change is straightforward") is a
@@ -293,30 +295,32 @@ __SMOKE_OVERRIDE__
   # Initialise the prompt-input running-budget tracker.  Keeps the
   # cumulative bytes across every _embed_input_file invocation below
   # under _PROMPT_BUDGET_TOTAL_BYTES (default 1.2MB ≈ 300k tokens) so
-  # a single oversized input artifact can't blow past the 400k-token
-  # gpt-5.3-codex window.  Cleaned up after the heredoc completes.
+  # a single oversized input artifact can't blow past the editor
+  # model's context window. The current default gpt-5.4 has a 272k
+  # standard context (lower than the legacy gpt-5.3-codex 400k), so
+  # the budget is conservative for either model. Cleaned up after the
+  # heredoc completes.
   _init_prompt_budget
   # ── EDIT TOOL DISCIPLINE positioning — DO NOT HOIST ──
-  # The heredoc below carries the EDIT TOOL DISCIPLINE rules in TWO
+  # The heredoc below carries the EDIT TOOL DISCIPLINE rules in two
   # places: a mid-prompt copy near where role/scope is established,
-  # and a tail-positioned `=== IMPORTANT — MUST READ BEFORE WRITING ===`
-  # copy immediately before FINAL RESPONSE FORMAT. Both copies sit
-  # AFTER the first `_embed_input_file "${PR_META_FILE}"` invocation,
-  # which is the byte where OpenRouter / OpenAI's prompt-prefix cache
-  # breaks for autofix (everything from PR_META onward varies per PR),
-  # so neither copy is provider-cacheable.
+  # and a tail-positioned `<completeness_contract>` block immediately
+  # before FINAL RESPONSE FORMAT. Both copies sit AFTER the first
+  # `_embed_input_file "${PR_META_FILE}"` invocation, which is the
+  # byte where OpenRouter / OpenAI's prompt-prefix cache breaks for
+  # autofix (everything from PR_META onward varies per PR), so neither
+  # copy is provider-cacheable.
   #
   # That positioning is intentional and was chosen with the cache cost
   # already weighed:
   #
-  #   - The whole point of the tail copy is RECENCY REINFORCEMENT for
-  #     gpt-5.3-codex's announce-without-emit regression
-  #     (openai/codex#11151). Hoisting either copy to before the first
-  #     `_embed_input_file` to win cache hits would put the rules
-  #     ~100+ lines back from the focused output cue, which is exactly
-  #     the structure that produced the 6/6 empty-output autofix
-  #     failure on fun-token-multi-chain run 25437168681 (PR #2176
-  #     root cause).
+  #   - The tail copy provides recency reinforcement so the discipline
+  #     stays close to the focused output cue. Under the legacy
+  #     gpt-5.3-codex default, hoisting either copy to win cache hits
+  #     produced the 6/6 empty-output autofix failure on
+  #     fun-token-multi-chain run 25437168681 (PR #2176 root cause).
+  #     Even on the current gpt-5.4 default the tail position keeps
+  #     the cue tight, so the placement remains load-bearing.
   #   - The non-cached overhead is ~420 tokens/run × $2/Mtok ≈ $0.001
   #     per autofix run. The failure mode being prevented burns
   #     ~30k×6 = 180k tokens per affected run, so the cost ratio is
@@ -659,15 +663,11 @@ EDIT TOOL DISCIPLINE (prevents announce-without-editing stalls)
   write, verify with git diff --stat (scoped to the edited file as
   needed); if zero lines changed, switch tools instead of retrying
   the same regex shape.
-- Returning an empty completion or a final assistant message that only
-  describes the fix ("I will apply_patch ...", "applying the requested
-  edit now", "the resolution is straightforward") is a FAILURE. The
-  editor retry loop counts these as no-actionable-output and bails
-  after 3 attempts without a commit. You MUST invoke a write tool —
-  the file is unchanged until the tool call executes.
-- Known model bug: gpt-5.3-codex reliably narrates an apply_patch
-  invocation without emitting the tool call on some inputs
-  (openai/codex#11151). The fallback paths above exist for that case.
+- Describing the fix without invoking a write tool leaves the worktree
+  unchanged. The editor retry loop diffs the worktree against HEAD; an
+  empty diff is treated as no-actionable-output and the loop bails
+  after 3 attempts without a commit. Always finish with a successful
+  write tool call.
 
 ENGINEERING PHILOSOPHY
 Prefer the smallest safe fix.
@@ -704,38 +704,17 @@ When you modify any previously changed hunk, populate the top-level
 "Regression fingerprint:" and "Runtime failure path:" sections below
 with concrete values (not the "- n/a" default).
 
-=== IMPORTANT — MUST READ BEFORE WRITING ===
-
-(This restates the EDIT TOOL DISCIPLINE section earlier in this prompt.
-The duplication is intentional — recency reinforcement for gpt-5.3-codex's
-announce-without-emit regression (openai/codex#11151). Autofix runs have
-been observed where the editor reads files, narrates intent, and exits
-with empty stdout despite the discipline rules being in mid-prompt. Do
-NOT skip this section.)
-
-- apply_patch is the preferred write tool for surgical edits to existing
-  source files (.sol, .ts, .py, .js, .go, .rs, .java, .json, etc.) — it
-  produces the cleanest diff and the smallest blast radius.
-- Do not use apply_patch for auto-generated artefacts (lockfiles, formatter
-  output, code generators). Run the generator instead.
-- If apply_patch does not land on a particular hunk, fall back: a different
-  apply_patch shape, then printf/heredoc redirection for fully-specified
-  plain-text targets (.txt, .csv, small data fixtures), then any other
-  write tool. Pick whatever gets the bytes onto disk this turn.
-- After ANY shell write, verify with git diff --stat scoped to the edited
-  file. If zero lines changed, switch tools instead of retrying the same
-  regex shape.
-- Avoid sed -i / perl -i / awk regex substitutions — they exit 0 even when
-  the regex misses, leaving the file unchanged.
-- Returning an empty completion or a final assistant message that only
-  describes the fix ("I will apply_patch ...", "applying the requested
-  edit now", "the resolution is straightforward") is a FAILURE — the
-  editor retry loop counts these as no-actionable-output and bails after
-  3 attempts. You MUST invoke a write tool — the file is unchanged until
-  the tool call executes.
-- Known model bug: gpt-5.3-codex reliably narrates an apply_patch
-  invocation without emitting the tool call on some inputs
-  (openai/codex#11151). The fallback paths above exist for that case.
+<completeness_contract>
+The deliverable is a worktree change set, not a description of one. The
+editor retry loop diffs the worktree against HEAD after the assistant
+message; an empty diff is treated as no-actionable-output and the loop
+bails after 3 attempts without a commit. Try apply_patch first; if it
+does not land cleanly on a hunk, switch tools (alternate apply_patch
+shape, printf/heredoc for plain-text targets, or any other write tool)
+and verify with `git diff --stat`. Avoid `sed -i` / `perl -i` / `awk`
+regex substitutions on multi-line source — they exit 0 even when the
+regex misses, leaving the file unchanged.
+</completeness_contract>
 
 FINAL RESPONSE FORMAT
 Plain text only.
@@ -846,11 +825,14 @@ rm -f "${EDITOR_SUMMARY_FILE}"
 # ── Smoke-fixture deterministic editor pre-write ─────────────
 # PR #2086 added a smoke-only override block instructing the editor to
 # restore tests/e2e_smoke_canary.txt to the linked-issue spec. PR #2113
-# added the resolver-side analog and confirmed gpt-5.3-codex still hits
-# the documented empty-stdout failure mode on this trivial fixture even
-# with the override rendered correctly (see openai/codex#11151 — the
-# 5.3-codex slug doesn't get matched into the apply_patch-providing
-# branch in codex's offline model_info fallback).
+# added the resolver-side analog and confirmed (under the legacy
+# gpt-5.3-codex default) that the model still hit the documented
+# empty-stdout failure mode on this trivial fixture even with the
+# override rendered correctly (see openai/codex#11151 — the 5.3-codex
+# slug doesn't get matched into the apply_patch-providing branch in
+# codex's offline model_info fallback). Kept as defense-in-depth on
+# the gpt-5.4 default so smoke runs stay deterministic regardless of
+# editor model.
 #
 # Apply the override's specified resolution deterministically before
 # entering the codex retry loop, gated on (a) IS_SMOKE_TEST=true and

@@ -288,11 +288,12 @@ jobs:
       - name: Prompt-length budget (OpenAI guide alignment)
         run: |
           set -euo pipefail
-          # Per OpenAI prompt guide: gpt-5.3-codex paths benefit from
-          # shorter rollouts; gpt-5.4 paths from "shorter, outcome-focused
-          # prompts". Cap codex paths at 200 lines and gpt-5.4 paths at
-          # 150. Hard-fails the build so prompt bloat regressions are
-          # caught at PR time rather than after merge.
+          # Per the OpenAI gpt-5.4 prompt guide: "shorter, outcome-focused
+          # prompts"; over-specification of process adds noise and narrows
+          # the model's search space. Cap coder/repair paths at 200 lines
+          # and reasoning/synthesis paths at 150. Hard-fails the build so
+          # prompt bloat regressions are caught at PR time rather than
+          # after merge.
           # mode-validate-generate.txt is an explicitly allowed deferred
           # exception — its 700+ lines of conditional procedure are slated
           # for sidecar extraction in a separate smoke-gated PR. Same for

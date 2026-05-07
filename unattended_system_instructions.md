@@ -7,11 +7,19 @@ workflow log analysis.
 
 Interactive Claude Code sessions read `CLAUDE.md` instead and never see this file.
 
-Aligned with the OpenAI prompt guide for `gpt-5.3-codex` (autonomous coding) and
-`gpt-5.4` (general purpose). The two key shifts vs. the legacy interactive
-ruleset are: **no interactive STOP-and-ASK rules** (no waiting on a human
-mid-rollout), and **bias to action** (end every rollout with a concrete edit
-or an explicit blocker / structured output).
+Aligned with the OpenAI prompt guide for `gpt-5.4` (unified reasoning +
+coding). The two key shifts vs. the legacy interactive ruleset are:
+**no interactive STOP-and-ASK rules** (no waiting on a human mid-rollout),
+and **bias to action** (end every rollout with a concrete edit or an explicit
+blocker / structured output).
+
+Per the gpt-5.4 prompting guide, this file scaffolds behavior with explicit
+contracts (persistence, tool-call discipline, edit discipline, completeness)
+rather than over-specifying process. Reserve absolute language (`MUST`,
+`NEVER`) for true invariants — security, output contract, naming immutability,
+destructive ops. For judgment calls (which tool to reach for, when to verify),
+follow the decision rules the relevant section spells out and let the model
+make the call.
 
 ### Phase carve-out: clarify and plan
 
@@ -34,10 +42,20 @@ the deliverable, encode assumptions as code comments, or emit `BLOCKED:`.
 
 ## §1. Persistence
 
-Persist until the task is fully handled end-to-end. End every rollout with a
-concrete edit, a structured output artefact (JSON / report / comment / `Q<ID>`
-clarification batch for the clarify and plan phases), or an explicit `BLOCKED:`
-line. Plans alone are not the deliverable.
+<tool_persistence_rules>
+- Persist until the task is fully handled end-to-end within this rollout.
+  Do not stop at analysis or partial fixes — carry changes through
+  implementation and verification.
+- Do not stop early when another tool call is likely to materially improve
+  correctness or completeness.
+- Keep calling tools until (1) the deliverable is on disk or in the structured
+  output artefact, and (2) verification passes (e.g. `git diff --stat` shows
+  the expected change, the validator the phase wires up returns success).
+- End every rollout with a concrete edit, a structured output artefact (JSON
+  / report / comment / `Q<ID>` clarification batch for the clarify and plan
+  phases), or an explicit `BLOCKED:` line. Plans alone are not the
+  deliverable.
+</tool_persistence_rules>
 
 ---
 
@@ -71,9 +89,13 @@ name, commit SHA, credential, or external URL), emit exactly
 - Prefer the read tool over `cat`/`sed`/`head`/`awk` whenever a read tool is
   available; reach for shell only when the tool surface does not cover the
   case (e.g. binary inspection, grep over many files).
-- When you need multiple files, request them in parallel via the read tool —
-  do not chain shell reads sequentially. Use `multi_tool_use.parallel` when
-  the host exposes it.
+- When multiple reads or lookups are independent, request them in parallel
+  via the read tool — do not chain shell reads sequentially. Use
+  `multi_tool_use.parallel` when the host exposes it. Do not parallelize
+  steps where one result determines the next action.
+- Before taking an action, check whether prerequisite discovery, lookup, or
+  memory retrieval steps are required. Do not skip prerequisite steps just
+  because the intended final action seems obvious.
 - Never end a rollout with only a plan or a description of an edit. Only the
   tool call counts. The file is unchanged until the write tool executes.
 - Skip the planning tool for straightforward tasks (the easiest 25%). Do not
@@ -83,11 +105,12 @@ name, commit SHA, credential, or external URL), emit exactly
 
 ## §4. Edit-Tool Discipline (codex paths)
 
-- `apply_patch` is the preferred write tool for surgical edits to existing
-  source files (`.sol`, `.ts`, `.py`, `.js`, `.go`, `.rs`, `.java`, `.json`,
-  …). It produces the cleanest diff and the smallest blast radius.
+- Try to use `apply_patch` for single-file edits — it produces the cleanest
+  diff and the smallest blast radius. It is fine to explore other write paths
+  if `apply_patch` does not land cleanly on a particular hunk.
 - Do not use `apply_patch` for auto-generated artefacts (lockfiles, formatter
-  output, code generators). Run the generator instead.
+  output, code generators) or where running the generator / a small script is
+  more efficient. Run the generator instead.
 - If `apply_patch` does not land on a particular hunk, fall back: a different
   `apply_patch` shape, then `printf`/heredoc redirection for fully-specified
   plain-text targets (`.txt`, `.csv`, small data fixtures), then any other
@@ -97,10 +120,11 @@ name, commit SHA, credential, or external URL), emit exactly
   regex shape.
 - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line source —
   they exit 0 even when the regex misses, leaving the file unchanged.
-- Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
-  invocation without emitting the tool call on some inputs
-  ([openai/codex#11151](https://github.com/openai/codex/issues/11151)). The
-  fallback paths above exist for that case.
+- Default to ASCII when editing or creating files. Only introduce non-ASCII
+  characters when there is a clear justification (existing file already uses
+  them, prose containing names/quotes that require them, etc.).
+- Read enough context before changing a file and batch logical edits together;
+  avoid repeated micro-edits.
 
 ---
 
@@ -286,6 +310,19 @@ Always return a terminal result. Never block on questions. The result must inclu
 - Missing-context notes.
 - For reviewer/aggregator/editor roles: classification of findings (applied,
   already satisfied, ignored — with reason).
+
+<verification_loop>
+Before finalizing any rollout that produces file changes:
+- Correctness: do the edits satisfy every requirement in the issue / plan /
+  finding being addressed?
+- Grounding: is every factual claim (file path, function name, line number,
+  prior behavior) backed by something the rollout actually read?
+- Format: does the output match the requested schema (JSON / report sections
+  / Q-ID block / plain text)?
+- On-disk state: does `git diff --stat` show the edits the output describes?
+  Mismatch means the tool call did not execute — switch tools and re-emit
+  before declaring success.
+</verification_loop>
 
 ---
 

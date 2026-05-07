@@ -12,13 +12,14 @@ name: AI Implement
         required: false
 
 env:
-  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'medium' }}
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
-  # prompt guide that step is research/synthesis, not coding, so it
-  # defaults to gpt-5.4 rather than gpt-5.3-codex. Override via
-  # vars.WORKFLOW_DIAGNOSE_MODEL on a per-repo basis.
+  # prompt guide that step is research/synthesis, not coding. The implement
+  # editor and the diagnose step now share the gpt-5.4 default; the separate
+  # env var is preserved so operators can route diagnose to a different model
+  # (e.g. a cheaper mini variant) without affecting the editor.
   MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-5.4' }}
   MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'medium' }}
   # Repair phases are narrow execution-heavy tasks (apply a known fix to a
@@ -596,11 +597,12 @@ jobs:
             # NOTE: Do NOT override MODEL_REASONING_EFFORT here. PR #1723
             # (3ec845d) and PR #1933 (016cbad) bounced this back and forth
             # between low and xhigh; both directions hit different
-            # manifestations of the same upstream gpt-5.3-codex/OpenRouter
-            # flakiness (low → unprefixed MCP calls; xhigh → "I'll
-            # apply_patch" announce-without-invoke). The workflow-level
-            # default is none and matches what the regular path uses, so
-            # any breakage on the smoke fixture is also visible to real
+            # manifestations of upstream Codex CLI / OpenRouter flakiness
+            # (low → unprefixed MCP calls; xhigh → announce-without-invoke
+            # patterns) on the legacy gpt-5.3-codex default. The current
+            # default (gpt-5.4) is steadier across reasoning levels but the
+            # rationale stands: keep smoke and production on the same knobs
+            # so any breakage on the smoke fixture is also visible to real
             # implements rather than masked by a smoke-only override.
             #
             # Alt-model variant override. The e2e-alt-model-test job in
@@ -906,11 +908,9 @@ jobs:
           Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
 
           The system context (`unattended_system_instructions.md`) above already
-          defines the persistence rule, edit-tool discipline (apply_patch first,
-          fallbacks, the gpt-5.3-codex#11151 carve-out), no-revert /
-          no-destructive-git rules, and parallel-reads guidance. Apply them —
-          and re-read the IMPORTANT section near the end of this prompt
-          before you start writing.
+          defines the persistence rule, edit-tool discipline (apply_patch first
+          with fallbacks, verify-after-write), no-revert / no-destructive-git
+          rules, and parallel-reads guidance. Apply them.
 
           Efficiency:
           - Aim to keep total tool calls (MCP + shell exec combined) under
@@ -941,41 +941,13 @@ jobs:
           {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
 
-          === IMPORTANT — MUST READ BEFORE WRITING ===
-
-          (This restates `unattended_system_instructions.md` §4 Edit-Tool
-          Discipline. The duplication is intentional — recency reinforcement
-          for gpt-5.3-codex's announce-without-emit regression
-          (openai/codex#11151). Do NOT skip this section, even though §4
-          already covered it earlier in the prompt.)
-
-          - `apply_patch` is the preferred write tool for surgical edits to
-            existing source files (`.sol`, `.ts`, `.py`, `.js`, `.go`, `.rs`,
-            `.java`, `.json`, …). It produces the cleanest diff and the
-            smallest blast radius.
-          - Do not use `apply_patch` for auto-generated artefacts (lockfiles,
-            formatter output, code generators). Run the generator instead.
-          - If `apply_patch` does not land on a particular hunk, fall back: a
-            different `apply_patch` shape, then `printf`/heredoc redirection
-            for fully-specified plain-text targets (`.txt`, `.csv`, small data
-            fixtures), then any other write tool. Pick whatever gets the bytes
-            onto disk this turn.
-          - After ANY shell write, verify with `git diff --stat` scoped to the
-            edited file. If zero lines changed, switch tools instead of
-            retrying the same regex shape.
-          - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
-            source — they exit 0 even when the regex misses, leaving the file
-            unchanged.
-          - Returning an empty completion or a final assistant message that
-            only describes the fix ("I will apply_patch …", "applying the
-            requested edit now", "the resolution is straightforward") is a
-            FAILURE — the workflow's stuck-detection counts this as
-            no-actionable-output. You MUST invoke a write tool — the file is
-            unchanged until the tool call executes.
-          - Known model bug: `gpt-5.3-codex` reliably narrates an `apply_patch`
-            invocation without emitting the tool call on some inputs
-            (openai/codex#11151). The fallback paths above exist for that
-            case.
+          <completeness_contract>
+          The deliverable is a worktree change set — modifications written to
+          disk by a successful write tool call. Describing the edit is not
+          the edit. The post-Codex commit step diffs the worktree against
+          HEAD; an empty diff is treated as no-actionable-output even if the
+          assistant message describes the change.
+          </completeness_contract>
 
           Output: repository changes only.
           EOF
@@ -1104,8 +1076,9 @@ jobs:
           # Used by the empty-stdout and watchdog-kill salvage branches
           # below so a trivial trailing-newline / whitespace-only edit can't
           # masquerade as partial implementation work and short-circuit the
-          # retry loop. Run b3f07ad7-4d9f-56b2-923f-aa222a1ab049 issue 200:
-          # gpt-5.3-codex announced an apply_patch in attempt 1, then on
+          # retry loop. Run b3f07ad7-4d9f-56b2-923f-aa222a1ab049 issue 200
+          # (legacy gpt-5.3-codex default, before the gpt-5.4 cutover):
+          # the editor announced an apply_patch in attempt 1, then on
           # attempt 2 ran `printf '\n' >> contracts/FunOFTAdapter.sol`,
           # exited with empty stdout, and the cmd_rc==0 + empty-stdout
           # salvage branch broke the loop at 2/5. The workflow then
@@ -1227,44 +1200,29 @@ jobs:
               fi
               {
                 cat <<'RETRY_EOF'
-          IMPORTANT: Your previous attempt produced NO file changes. The implementation
-          plan requires repository modifications. You MUST create or edit the files
-          described in the plan. Do NOT just describe the changes — execute them by
-          writing to disk. Proceed now.
+          IMPORTANT: Your previous attempt produced no file changes. The
+          implementation plan requires repository modifications. Create or
+          edit the files described in the plan and verify the bytes landed
+          on disk this turn.
 
           Concretely on this attempt:
-          - `apply_patch` is the preferred write tool for surgical edits to
-            existing source files (.sol, .ts, .py, .js, .go, .rs, .java,
-            .json, etc.). If it does not land on a particular hunk, fall back
-            to your best judgment: a different `apply_patch` shape, a shell
+          - Try `apply_patch` first. If it does not land on a particular
+            hunk, switch tools — a different `apply_patch` shape, a shell
             heredoc or `printf` redirected to the target file for
             fully-specified plain-text files (.txt, .csv, small data
             fixtures), or any other write tool. Pick whatever gets the bytes
-            onto disk this turn — what matters is that the file actually
-            changes.
-            Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line
-            source — they exit 0 even when the regex misses, leaving the
-            file unchanged. After ANY shell write, verify with
-            `git diff --stat` (scoped to the edited file as needed); if
-            zero lines changed, switch tools instead of retrying the same
-            regex shape.
-          - Do NOT read additional files until your first write tool call
-            has succeeded. Pick the file you understand best from
-            the plan, edit it first, verify the change landed on disk, and
-            only then expand scope.
-          - WARNING: describing or quoting the file's new content in your
-            response does NOT write it to disk. Returning an empty
-            completion or a final assistant message that only describes the
-            fix ("I will apply_patch …", "applying the requested edit now",
-            "the resolution is straightforward") is a FAILURE — the
-            workflow's stuck-detection counts this as no-actionable-output.
-            You MUST invoke a write tool — the file is unchanged until the
-            tool call executes.
-          - Known model bug: `gpt-5.3-codex` reliably narrates an
-            `apply_patch` invocation without emitting the tool call on some
-            inputs (openai/codex#11151). The fallback paths above exist for
-            that case — switch tools immediately rather than retrying the
-            same `apply_patch` shape.
+            onto disk this turn.
+            Avoid `sed -i` / `perl -i` / `awk` regex substitutions on
+            multi-line source — they exit 0 even when the regex misses.
+            After any shell write, verify with `git diff --stat` scoped to
+            the edited file; if zero lines changed, switch tools rather than
+            retrying the same regex shape.
+          - Pick the single file you understand best from the plan and edit
+            it first; verify the change landed on disk via `git diff --stat`
+            before expanding scope to other files.
+          - Describing the new content does not write it. The workflow's
+            stuck-detection counts an empty worktree diff as no-actionable
+            output regardless of how detailed the assistant message is.
 
           RETRY_EOF
                 if [ -n "${prior_exec_history}" ]; then
@@ -3313,9 +3271,12 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # Diagnose is research/synthesis (parse stderr+diff, emit JSON)
-          # rather than coding, so it runs on gpt-5.4 instead of
-          # gpt-5.3-codex. The script reads MODEL_DIAGNOSE first and
-          # falls back to MODEL_EDITOR for backward compatibility.
+          # rather than coding. Editor and diagnose now share the gpt-5.4
+          # default; the separate MODEL_DIAGNOSE override is preserved so
+          # operators can route diagnose to a different model (e.g. a
+          # cheaper mini variant) without affecting the editor. The script
+          # reads MODEL_DIAGNOSE first and falls back to MODEL_EDITOR for
+          # backward compatibility.
           MODEL_DIAGNOSE: ${{ env.MODEL_DIAGNOSE }}
           MODEL_DIAGNOSE_REASONING_EFFORT: ${{ env.MODEL_DIAGNOSE_REASONING_EFFORT }}
         run: |

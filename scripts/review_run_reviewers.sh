@@ -298,7 +298,9 @@ fi
 # bytes across every _embed_input_file invocation in the heredoc below
 # under _PROMPT_BUDGET_TOTAL_BYTES (default 1.2MB ≈ 300k tokens) so a
 # single oversized input artifact (e.g. a 500KB PR diff) can't blow
-# past the gpt-5.3-codex 400k-token window.
+# past the reviewer model's context window. The current default
+# gpt-5.4 has a 272k standard context (lower than the legacy
+# gpt-5.3-codex 400k); the budget is conservative for either model.
 _init_prompt_budget
 cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__
 ${ITERATION_CONTEXT_BLOCK}
@@ -1192,19 +1194,22 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # Reasoning effort is gated on the size of LAST_RUN_DIFF_FILE (the
   # "primary review target" — most recent AI-generated changes).
   #
-  # Per the OpenAI prompt guide for gpt-5.3-codex:
-  #   "We recommend 'medium' reasoning effort as a good all-around interactive"
-  #   "Use `high` or `xhigh` for hardest tasks"
-  #   "Don't treat reasoning effort as the primary way to improve quality;
-  #    prompt fixes often recover more performance."
+  # Per the OpenAI gpt-5.4 prompt guide:
+  #   "Start with `medium` or higher for tasks requiring stronger reasoning;
+  #    choose based on performance gains in your evals."
+  #   "Reserve `xhigh` for long, agentic, reasoning-heavy tasks."
+  #   "Before increasing effort, add tool_persistence_rules /
+  #    verification_loop / completeness_contract blocks first — prompt
+  #    fixes often recover more performance than reasoning bumps."
   #
   # A small diff (one-line tweak, narrow rename) does not benefit from
   # xhigh — see the editor smoke history at review_autofix.yml:1846 where
-  # gpt-5.3-codex at xhigh on a one-line bait removal burned ~81k tokens
-  # across 6 attempts and produced 0 file changes. A large or cross-
-  # cutting diff (security-sensitive, schema migration, refactor) does
-  # benefit because Pass 2 has cross-pollination context from peer
-  # reviewers and is the last analysis step before the editor commits.
+  # the legacy gpt-5.3-codex default at xhigh on a one-line bait removal
+  # burned ~81k tokens across 6 attempts and produced 0 file changes. A
+  # large or cross-cutting diff (security-sensitive, schema migration,
+  # refactor) does benefit because Pass 2 has cross-pollination context
+  # from peer reviewers and is the last analysis step before the editor
+  # commits.
   #
   # Default threshold: REVIEWER_PASS2_DIFF_LARGE_LOC=200 (added + removed
   # lines). Override per-repo via vars.REVIEWER_PASS2_DIFF_LARGE_LOC.

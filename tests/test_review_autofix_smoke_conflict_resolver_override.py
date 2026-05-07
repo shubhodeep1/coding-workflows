@@ -4,8 +4,9 @@
 The smoke fixture lands a conflicting one-line edit on `main` so a
 `git merge --no-ff origin/main` over the smoke PR's HEAD leaves Git
 merge conflict markers in tests/e2e_smoke_canary.txt. review_autofix.yml's
-conflict-resolver step (gpt-5.3-codex) is then expected to remove the
-markers and keep the HEAD-side `run_id:` value.
+conflict-resolver step (currently `openai/gpt-5.4`; observed below on
+the legacy `openai/gpt-5.3-codex` default) is then expected to remove
+the markers and keep the HEAD-side `run_id:` value.
 
 On run 25324565713 / PR #2094 the resolver hit the documented
 gpt-5.3-codex empty-stdout failure mode in all 3 retry attempts: each
@@ -14,9 +15,10 @@ the soft-validation marker scan never ran, and the
 [ai-merge-resolve] commit was aborted. PR #2059 had already pinned
 the resolver to medium reasoning to prevent the editor's
 reasoning=none/low override from starving it, but at medium reasoning
-gpt-5.3-codex still hits the failure mode on the trivial canary
-conflict — the pattern PR #2086 documented (and fixed for the editor)
-on the same model on the same fixture.
+the legacy gpt-5.3-codex default still hit the failure mode on the
+trivial canary conflict — the pattern PR #2086 documented (and fixed
+for the editor) on the same model on the same fixture. The override
+is kept as defense-in-depth on the gpt-5.4 default.
 
 This test pins the conflict-resolver analog of #2086:
 
