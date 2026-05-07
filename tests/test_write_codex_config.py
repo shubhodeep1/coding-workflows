@@ -376,6 +376,69 @@ def test_no_codex_exec_site_uses_deprecated_full_auto_flag() -> None:
 		)
 
 
+def test_no_codex_exec_site_places_ask_for_approval_after_exec() -> None:
+	"""Guard against re-introduction of the v0.114.0 flag-position regression.
+
+	Codex CLI v0.114.0 enforces flag positioning strictly: `--ask-for-approval`
+	is a TOP-LEVEL flag (must precede the `exec` subcommand). PR #2205 placed
+	`--ask-for-approval never --sandbox danger-full-access` AFTER `exec` across
+	24 codex invocation sites, which the parser rejects with:
+
+	    error: unexpected argument '--ask-for-approval' found
+	    Usage: codex exec --model <MODEL> [PROMPT]
+
+	This took down orchestrator/clarify/implement/plan/validate workflows in
+	one bulk edit. A grep guard here would have caught the regression before
+	the PR landed.
+
+	The valid layout is:
+	    codex --ask-for-approval never exec --model X --sandbox Y
+	The invalid layout is:
+	    codex exec --model X --ask-for-approval never --sandbox Y
+	    codex exec ... \\<newline>... --ask-for-approval never ... (multi-line)
+	"""
+	# `git grep -P -z` does NOT span lines (the -z flag controls output
+	# delimiter, not record boundary), so we read the relevant files
+	# directly and run a multi-line regex over each. The pattern matches
+	# `<prefix> exec` followed by an optional `\<newline><indent>` line
+	# continuation, then `--model ...` containing `--ask-for-approval`
+	# before the next newline (or before the next backslash-continued
+	# logical line ends).
+	pat = re.compile(
+		r'(codex|"\$\{codex_bin\}") exec\s+(\\\n\s+)?--model[^\n]*--ask-for-approval',
+	)
+	scan_dirs = [
+		REPO_ROOT / ".github" / "workflows",
+		REPO_ROOT / "scripts",
+	]
+	# write_codex_config.sh's docstring intentionally mentions the bad
+	# pattern in prose to document why we moved away from it.
+	exempt = {REPO_ROOT / "scripts" / "write_codex_config.sh"}
+	offenders: list[str] = []
+	for d in scan_dirs:
+		for path in sorted(d.rglob("*")):
+			if not path.is_file():
+				continue
+			if path in exempt:
+				continue
+			if path.suffix not in (".sh", ".yml", ".yaml"):
+				continue
+			text = path.read_text()
+			for m in pat.finditer(text):
+				line_no = text.count("\n", 0, m.start()) + 1
+				snippet = m.group(0).replace("\n", "\\n")
+				rel = path.relative_to(REPO_ROOT)
+				offenders.append(f"{rel}:{line_no}: {snippet}")
+	assert not offenders, (
+		"`--ask-for-approval` is a TOP-LEVEL Codex flag and must precede "
+		"the `exec` subcommand on Codex CLI v0.114.0+, otherwise the "
+		"parser rejects the invocation with `unexpected argument "
+		"'--ask-for-approval' found`. Use the layout `codex "
+		"--ask-for-approval never exec --model X --sandbox Y`. "
+		"Offending sites:\n  " + "\n  ".join(offenders)
+	)
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
