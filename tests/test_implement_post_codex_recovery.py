@@ -2320,7 +2320,7 @@ def _run_smoke_detection_step(
 	"""
 
 	script = _render_github_expressions(_extract_run_script("Detect smoke test and silence Telegram alerts"))
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(prefix="test_smoke_") as tmp:
 		tmp_path = Path(tmp)
 		github_env = tmp_path / "github_env"
 		github_env.write_text("", encoding="utf-8")
@@ -2340,13 +2340,7 @@ def _run_smoke_detection_step(
 			f"stdout:\n{proc.stdout}\n"
 			f"stderr:\n{proc.stderr}\n"
 		)
-		exports: dict[str, str] = {}
-		for line in github_env.read_text(encoding="utf-8").splitlines():
-			if "=" not in line:
-				continue
-			k, _, v = line.partition("=")
-			exports[k] = v
-		return exports
+		return _parse_github_output(github_env)
 
 
 def test_alt_model_smoke_override_parses_valid_body() -> None:
