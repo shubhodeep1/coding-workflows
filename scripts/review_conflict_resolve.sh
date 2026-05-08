@@ -36,6 +36,14 @@
 
 set -euo pipefail
 
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
+elif [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "scripts/semble_helpers.sh"
+fi
+
 # Re-derive runtime paths set in the prepare step. Shell variables
 # do not cross step boundaries; RUNTIME_DIR itself is in
 # $GITHUB_ENV so it survives, and both paths are deterministic
@@ -535,6 +543,22 @@ fi
 if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+
+RESOLVER_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/resolver_semble_context.txt"
+: > "${RESOLVER_SEMBLE_CONTEXT_FILE}"
+if command -v semble_prompt_block_from_files >/dev/null 2>&1; then
+  semble_prompt_block_from_files \
+    "Resolver Symbol Neighborhood" \
+    "${SEMBLE_CONFLICT_MAX_CHUNKS:-4}" \
+    "${SEMBLE_CONFLICT_QUERY_MAX_CHARS:-2200}" \
+    "${CONFLICT_RESOLVER_PROMPT_FILE}" \
+    "${RESOLVER_ALLOWLIST_FILE}" \
+    > "${RESOLVER_SEMBLE_CONTEXT_FILE}" || true
+fi
+if [ -s "${RESOLVER_SEMBLE_CONTEXT_FILE}" ]; then
+  printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+  cat "${RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
 fi
 
 attempt=1
@@ -1038,4 +1062,3 @@ if [ -n "$(git status --porcelain)" ]; then
 else
   echo "No conflict resolution changes to commit"
 fi
-

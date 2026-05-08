@@ -137,6 +137,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_contracts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reviewer_prompt_semble.py
 
       - name: Validation self-test unit tests
         run: |
