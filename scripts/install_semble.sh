@@ -76,8 +76,8 @@ _find_matching_semble_bin_on_path()
 	semble_bin="${SEMBLE_BIN:-$(command -v semble 2>/dev/null || true)}"
 	[ -n "${semble_bin}" ] || return 1
 	[ -x "${semble_bin}" ] || return 1
-	version_output="$(${semble_bin} --version 2>/dev/null || true)"
-	for token in ${version_output}; do
+	version_output="$(${semble_bin} --version 2>&1 || true)"
+	for token in $(printf '%s\n' "${version_output}" | tr '(),/-' ' '); do
 		case "$(printf '%s' "${token}" | tr -d '(),')" in
 			"${SEMBLE_VERSION}"|"v${SEMBLE_VERSION}")
 				printf '%s\n' "${semble_bin}"
