@@ -307,20 +307,30 @@ each round (rounds ≥ 2):
 1. Load the prior round's parsed consolidator output
    (`reviewer_artifacts/consolidator_parsed_round_<N-1>.json`).
 2. Load the current round's reviewer bundle.
-3. For each reviewer finding, compute a sticky key:
+3. For each reviewer finding, compute a sticky **identity key** that excludes
+   the line number, then match by line-range overlap separately:
 
 	```
-	sha1(file + ":" + bucket(line, ±5) + ":" + normalize(symptom))[:12]
+	identity_key = sha1(file + ":" + normalize(symptom))[:12]
 	```
 
-	`bucket(line, ±5)` rounds line to nearest 5 to absorb minor diff drift.
 	`normalize(symptom)` lowercases and strips known boilerplate prefixes
-	(e.g. "Issue: ", "Bug: ").
+	(e.g. "Issue: ", "Bug: "). The line number is **not** part of the hash.
 
-4. If the sticky key matches an entry in round (N-1) with CLASSIFICATION ∈
+4. A finding in round N matches a prior round's entry when both:
+   - `identity_key` is equal, **and**
+   - `|prior.line - current.line| <= STICKY_LINE_BUCKET` (default 5).
+
+   Earlier drafts hashed `bucket(line, ±5)` (rounding to the nearest 5)
+   into the key. That scheme was rejected because it is unstable at bucket
+   boundaries — e.g. a 1-line drift from line 4 to line 5 hashes to
+   different buckets (0 vs 5) and silently fails to match. The
+   range-overlap match above is symmetric and absorbs uniform ±5 drift.
+
+5. If a match is found in round (N-1) with CLASSIFICATION ∈
    {`non-actionable`, `nice-to-have`, `unclassified`}, mark the current
    finding as `sticky=true` and attach the prior NOTES.
-5. Emit `reviewer_artifacts/sticky_findings_round_<N>.json` and inject a
+6. Emit `reviewer_artifacts/sticky_findings_round_<N>.json` and inject a
    `<sticky_findings_priors>` block into the consolidator prompt.
 
 The consolidator prompt is updated to require: when a finding is `sticky`
@@ -334,7 +344,8 @@ classified `must-fix`.
 **New script:** `scripts/review_annotate_sticky.sh`
 - Inputs: prior consolidator JSON, current reviewer bundle.
 - Output: `reviewer_artifacts/sticky_findings_round_<N>.json`.
-- Pure shell + `jq` + a small Python helper for the sha1 + bucket logic.
+- Pure shell + `jq` + a small Python helper for the sha1 identity key and
+  the range-overlap match.
 
 **Consolidator prompt change:** `prompts/review-consolidator.txt`
 - Add a new section "Repeat findings (sticky)" that defines what `sticky=true`
@@ -364,8 +375,10 @@ classified `must-fix`.
   the parser, not the consolidator)
 - `STICKY_ANNOTATOR_NOOP` (annotator skipped due to missing or unreadable
   prior round artifact; fail-open path)
-- `STICKY_FALSE_POS` (file / line bucket matched but normalised symptom
-  differed; logged for offline tuning, no behavioural effect)
+- `STICKY_FALSE_POS` (identity key and line range matched but the current
+  finding's symptom text diverged significantly from the prior round's
+  NOTES; logged for offline tuning of `STICKY_LINE_BUCKET`, no behavioural
+  effect)
 
 ### Fail-Open Behaviour
 
@@ -384,12 +397,14 @@ classified `must-fix`.
 
 ### Risk
 
-The `bucket(line, ±5)` heuristic produces false positives if the editor moved
-unrelated code around. Mitigation: false positive rate is bounded by the
-consolidator's freedom to still dismiss with the typed REJECTION_KIND from
-Phase C. We also log false-positive candidates separately (`STICKY_FALSE_POS`)
-when the symptom string is sufficiently different despite line/file overlap,
-for offline tuning.
+The range-overlap match (`|Δline| ≤ STICKY_LINE_BUCKET`) produces false
+positives if the editor moved unrelated code around enough that an
+unrelated finding now lands inside the tolerance window. Mitigation: false
+positive rate is bounded by the consolidator's freedom to still dismiss
+with the typed REJECTION_KIND from Phase C. We also log candidate matches
+separately (`STICKY_FALSE_POS`) when the symptom text diverges
+significantly from the prior round's NOTES despite the identity key + line
+range overlap, for offline tuning of `STICKY_LINE_BUCKET`.
 
 ---
 
@@ -551,9 +566,15 @@ synthesis step that turns each remaining issue into a small assertion
 (target language: shell-runnable test, JS test, or Python test, depending on
 the consumer repo's `validation/validate.env` setting).
 
-The synthesised assertions are stored under `validation/tests/synthesised/`
-with a deterministic filename (`from_judge_round_<N>_<issue_id>.t.sh` or
-`.test.ts` etc.) and run alongside existing smoke tests in the next round.
+The synthesised assertions are stored at the **top level** of
+`${TEST_DIR}` (default `validation/tests/`) with a deterministic prefixed
+filename (`synth_round_<N>_<issue_id>.sh`) and run alongside existing
+smoke tests in the next round. The flat layout is required because
+`discover_tests()` at `scripts/validate_driver.sh:698` uses
+`find ... -maxdepth 1`; subdirectories (e.g. `synthesised/from_judge_round_<N>/`)
+would not be discovered without a driver change. The `synth_round_` prefix
+is chosen so it does NOT begin with `_` (which would be excluded by
+`HELPER_PATTERN` at `:114`, default `_*.sh`).
 
 Synthesis is one LLM call per round that emits all assertions in a batch
 (prompt budget: ≤4k input, ≤2k output, gpt-5.4-mini at `low`). The LLM is
@@ -568,19 +589,33 @@ flakiness (no network, no clock).
 - Outputs: array of `{path, content, expected_to_fail_until_fixed: bool}`.
 
 **New script:** `scripts/review_synthesise_smoke.sh`
-- Reads judge-interim artifact, calls LLM, writes test files under
-  `validation/tests/synthesised/from_judge_round_<N>/`.
-- Also writes a manifest `validation/tests/synthesised/MANIFEST_<N>.json`.
+- Reads judge-interim artifact, calls LLM, writes test files directly into
+  `${TEST_DIR}` (e.g. `validation/tests/synth_round_<N>_<issue_id>.sh`) —
+  flat, top-level, prefix-discriminated.
+- Also writes a manifest `validation/tests/synth_round_<N>_manifest.json`
+  (`.json` is naturally ignored by `discover_tests()` since the discovery
+  glob is `*.sh`).
 
 **Workflow change:** `.github/workflows/review_autofix.yml`
 - Insert a step **after** judge-interim and **before** the next round's
   reviewer pass.
 - Existing `discover_tests()` at `scripts/validate_driver.sh:687` walks
-  `${TEST_DIR}` (default `validation/tests/`, set at `:105`) and
-  `run_tests()` at `:806` executes each match; no driver change is needed
-  if synthesised tests live under that path. Add a config knob
+  `${TEST_DIR}` (default `validation/tests/`, set at `:105`) with
+  `find ... -maxdepth 1` at `:698` and `run_tests()` at `:806` executes
+  each match. No driver change is needed **provided synthesised tests are
+  placed flat** at the top level of `${TEST_DIR}`. Add a config knob
   (`VALIDATION_INCLUDE_SYNTHESISED`, default `true` when Phase D is on) to
-  allow opt-out.
+  allow opt-out by skipping write of the synthesised files.
+- **Marker-regex sync caveat.** The existing autofix loop's editor-fallback
+  detection regex (`'editor failed before producing|unavailable \(editor
+  fallback\)'`) is duplicated at `review_autofix.yml:2934` (in-step retry
+  decision) and `:3344` (disposition step that sets
+  `EDITOR_NOOP_SUSPICIOUS`). The new synthesise step must NOT write to
+  or rotate `EDITOR_SUMMARY_FILE`, and any new failure marker the step
+  introduces must use the same regex everywhere it is checked — drift
+  between sites would let a fallback summary slip past the
+  `EDITOR_NOOP_SUSPICIOUS` gate (`review_autofix.yml:3691`) and trigger
+  unnecessary merge-conflict resolver runs.
 
 ### Files Changed / Created
 
