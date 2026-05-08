@@ -433,12 +433,29 @@ def test_conflict_prompt_templates_describe_semble_blocks_as_additive() -> None:
 		)
 
 
+def test_conflict_prepare_uses_true_comma_space_join_for_query_files() -> None:
+	script = PREPARE_SCRIPT.read_text(encoding="utf-8")
+	assert "join_lines_with_comma_space()" in script, (
+		"Conflict Semble query assembly must use a dedicated join helper so separator formatting "
+		"does not rewrite comma-bearing filenames."
+	)
+	assert 'join_lines_with_comma_space)' in script, (
+		"Conflict Semble query assembly must route the conflicted-file list through the dedicated "
+		"join helper."
+	)
+	assert "sed 's/,/, /g'" not in script, (
+		"Conflict Semble query assembly must not post-process joined paths with a global comma rewrite, "
+		"because that mangles filenames containing literal commas."
+	)
+
+
 def main() -> int:
 	test_smoke_detect_exports_is_smoke_test_env()
 	test_prepare_script_contains_smoke_only_block()
 	test_production_prompt_byte_identical_when_smoke_unset_or_no_markers()
 	test_smoke_override_renders_only_when_canary_has_markers()
 	test_conflict_prompt_templates_describe_semble_blocks_as_additive()
+	test_conflict_prepare_uses_true_comma_space_join_for_query_files()
 	print(
 		"OK: review_autofix smoke conflict-resolver override contract "
 		"assertions hold"
