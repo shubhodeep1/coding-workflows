@@ -2091,6 +2091,7 @@ jobs:
           echo "── Unit tests ──"
           python3 tests/test_orchestrate_lib.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_contracts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reviewer_prompt_semble.py
 
           # 5b: CLI integration — validate a synthetic decomposition
           echo ""

@@ -454,7 +454,7 @@ fi
 CONFLICT_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/conflict_semble_context.txt"
 : > "${CONFLICT_SEMBLE_CONTEXT_FILE}"
 if command -v semble_prompt_block_from_text >/dev/null 2>&1; then
-  _conflict_query_files="$(printf '%s\n' "${CONFLICTED_FILES_LIST}" | sed 's/^ *- //' | head -n 20 | paste -sd ', ' -)"
+  _conflict_query_files="$(printf '%s\n' "${CONFLICTED_FILES_LIST}" | sed 's/^ *- //' | head -n 20 | paste -sd ',' - | sed 's/,/, /g')"
   _conflict_query_fingerprints="$(head -c 1200 "${INTEGRATION_FINGERPRINTS_FILE:-/dev/null}" 2>/dev/null || true)"
   semble_prompt_block_from_text \
     "Conflict Neighborhood Context" \

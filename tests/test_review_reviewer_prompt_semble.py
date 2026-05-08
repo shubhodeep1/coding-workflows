@@ -39,7 +39,9 @@ def test_reviewer_prompt_uses_shared_semble_helper_additively() -> None:
 
 def test_reviewer_prompt_semble_block_keeps_logs_out_of_prompt() -> None:
 	body = REVIEW_RUN_REVIEWERS.read_text(encoding="utf-8")
-	assert "SEMBLE_QUERY" not in body[body.index('cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__'):body.index('__REVIEWER_PROMPT__', body.index('cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__') + 1)], (
+	opener_idx = body.index('cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__')
+	close_idx = body.index('\n__REVIEWER_PROMPT__\n', opener_idx) + 1
+	assert "SEMBLE_QUERY" not in body[opener_idx:close_idx], (
 		"Reviewer prompt body must not inline Semble log tokens; only the rendered Semble block belongs in prompt stdout."
 	)
 	assert '"Reviewer Context"' in body, (
