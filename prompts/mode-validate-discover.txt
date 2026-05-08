@@ -10,6 +10,9 @@ Hard constraints:
 - Do not use real credentials.
 - Prefer concrete values found in the repo over guesses.
 - If uncertain, omit optional keys instead of inventing values.
+- Optional `=== SEMBLE: ... ===` blocks are bounded repo-local retrieval
+  context only; treat them as corroborating evidence and prefer concrete repo
+  facts already present in the prompt when they disagree.
 - Fallback on empty discovery: if the primary detection (build manifest,
   Dockerfile, package.json, pyproject.toml) returns empty, try at least
   one fallback (Makefile rules, README's "Getting Started", existing

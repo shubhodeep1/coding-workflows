@@ -39,20 +39,24 @@ PY
 	date +%s%3N 2>/dev/null || printf '0\n'
 }
 
-semble_query_block()
+_semble_query_block_internal()
 {
-	if [ "$#" -lt 3 ]; then
+	if [ "$#" -lt 4 ]; then
 		_semble_stderr_log "SEMBLE_FALLBACK target=query reason=invalid_arguments"
 		return 1
 	fi
 
-	local query_text="$1"
-	local max_chunks="$2"
-	local header_label="$3"
-	shift 3
+	local log_target="$1"
+	local query_text="$2"
+	local max_chunks="$3"
+	local header_label="$4"
+	shift 4
 
 	local target index_dir repo_root_file repo_root semble_bin stdout_file stderr_file output_body stderr_body bytes start_ts end_ts elapsed_ms query_rc
-	target="$(_semble_sanitize_one_line "${header_label}")"
+	target="$(_semble_sanitize_one_line "${log_target}")"
+	if [ -z "${target}" ]; then
+		target="$(_semble_sanitize_one_line "${header_label}")"
+	fi
 	index_dir="${SEMBLE_INDEX_DIR:-${RUNTIME_DIR:-}/.semble-index}"
 	case "${index_dir}" in
 		""|"/"|"/.semble-index")
@@ -123,6 +127,37 @@ semble_query_block()
 	printf '%s\n' "${output_body}"
 	printf '=== END SEMBLE ===\n'
 	return 0
+}
+
+semble_query_block()
+{
+	if [ "$#" -lt 3 ]; then
+		_semble_stderr_log "SEMBLE_FALLBACK target=query reason=invalid_arguments"
+		return 1
+	fi
+
+	local query_text="$1"
+	local max_chunks="$2"
+	local header_label="$3"
+	shift 3
+
+	_semble_query_block_internal "${header_label}" "${query_text}" "${max_chunks}" "${header_label}" "$@"
+}
+
+semble_query_block_with_target()
+{
+	if [ "$#" -lt 4 ]; then
+		_semble_stderr_log "SEMBLE_FALLBACK target=query reason=invalid_arguments"
+		return 1
+	fi
+
+	local log_target="$1"
+	local query_text="$2"
+	local max_chunks="$3"
+	local header_label="$4"
+	shift 4
+
+	_semble_query_block_internal "${log_target}" "${query_text}" "${max_chunks}" "${header_label}" "$@"
 }
 
 semble_collect_query_text()

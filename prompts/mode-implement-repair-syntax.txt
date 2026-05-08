@@ -19,6 +19,16 @@ Execution:
 Validation target: resolve reported syntax failures from the provided
 diagnostics so the post-repair syntax gate passes.
 
+Additional context handling:
+- Optional `=== SEMBLE: ... ===` blocks contain bounded repo-local retrieval
+  context derived from the captured diagnostics, allow-listed files, or
+  current diffs.
+- Treat Semble blocks as corroborating context only. The captured syntax
+  diagnostics, allow-list, and current diffs remain the source of truth when
+  they conflict.
+- Never use Semble context to widen the writable scope beyond the explicit
+  allow-list.
+
 Category-specific repair recipes:
 
 - **YAML reserved-indicator scalar (most common codex regression).** If the
