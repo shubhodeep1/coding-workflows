@@ -3707,20 +3707,32 @@ jobs:
           # the tracking issue had been created seconds earlier (verified
           # via direct issue lookup). Poll up to 90s with 5s backoff to
           # absorb the lag instead of one-shot-failing.
+          # Capture each iteration's stderr to a file (overwritten each
+          # round so we surface the LAST failure on timeout). Without
+          # this, persistent non-flaky failures (expired GH_PAT, 401/403,
+          # rate limits, 5xx) silently burn the 90s budget and we'd
+          # report a misleading "could not locate tracking issue" error.
           TRACKING_NUMBER=""
+          TRACKING_ERR_FILE=$(mktemp)
           TRACKING_DEADLINE=$(( $(date +%s) + 90 ))
           while [ "$(date +%s)" -lt "${TRACKING_DEADLINE}" ]; do
             TRACKING_NUMBER=$(gh api \
               "repos/${TEST_REPO}/issues?state=open&labels=ai:orchestrator-tracking&since=${DISPATCH_START_ISO}&per_page=50" \
               --jq "[.[] | select(.body // \"\" | contains(\"${GITHUB_RUN_ID}\"))] | sort_by(.created_at) | last | .number // empty" \
-              2>/dev/null || echo "")
+              2>"${TRACKING_ERR_FILE}" || echo "")
             [ -n "${TRACKING_NUMBER}" ] && break
             sleep 5
           done
           if [ -z "${TRACKING_NUMBER}" ]; then
+            if [ -s "${TRACKING_ERR_FILE}" ]; then
+              echo "::warning::last gh api stderr during tracking-issue polling:"
+              sed 's/^/  /' "${TRACKING_ERR_FILE}" || true
+            fi
+            rm -f "${TRACKING_ERR_FILE}"
             echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} after 90s polling (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
             exit 1
           fi
+          rm -f "${TRACKING_ERR_FILE}"
           echo "tracking_issue=${TRACKING_NUMBER}" >> "$GITHUB_OUTPUT"
           # Discover child issues by their orchestrator-managed back-reference
           # rather than by parsing the tracking-issue body. The tracking body
@@ -3739,14 +3751,18 @@ jobs:
           # issue, so the filtered list call can still race the index even
           # after the tracking-issue lookup succeeds. Poll up to 90s with
           # 5s backoff until at least 2 children are visible.
+          # Capture each iteration's stderr (overwritten each round) so a
+          # persistent non-flaky failure surfaces on timeout instead of
+          # being misreported as "produced 0 child issue(s)".
           CHILDREN=""
           CHILD_COUNT=0
+          CHILDREN_ERR_FILE=$(mktemp)
           CHILDREN_DEADLINE=$(( $(date +%s) + 90 ))
           while [ "$(date +%s)" -lt "${CHILDREN_DEADLINE}" ]; do
             CHILDREN_JSON=$(gh api \
               "repos/${TEST_REPO}/issues?state=all&labels=ai:orchestrator-managed&since=${DISPATCH_START_ISO}&per_page=100" \
               --jq "[.[] | select(.pull_request | not) | select(.body // \"\" | contains(\"Tracking issue: #${TRACKING_NUMBER}\")) | .number]" \
-              2>/dev/null || echo "[]")
+              2>"${CHILDREN_ERR_FILE}" || echo "[]")
             CHILDREN=$(echo "${CHILDREN_JSON}" | jq -r 'sort | unique | join(",")' 2>/dev/null || echo "")
             CHILD_COUNT=$(echo "${CHILDREN}" | tr ',' '\n' | grep -c .)
             [ "${CHILD_COUNT}" -ge 2 ] && break
@@ -3755,9 +3771,15 @@ jobs:
           echo "child_issues=${CHILDREN}" >> "$GITHUB_OUTPUT"
           # Decomposition assertion: at least two distinct child issues.
           if [ "${CHILD_COUNT}" -lt 2 ]; then
+            if [ -s "${CHILDREN_ERR_FILE}" ]; then
+              echo "::warning::last gh api stderr during child-issue polling:"
+              sed 's/^/  /' "${CHILDREN_ERR_FILE}" || true
+            fi
+            rm -f "${CHILDREN_ERR_FILE}"
             echo "::error::Decomposition produced ${CHILD_COUNT} child issue(s) after 90s polling; expected >= 2 (queried label=ai:orchestrator-managed since=${DISPATCH_START_ISO} body~='Tracking issue: #${TRACKING_NUMBER}')"
             exit 1
           fi
+          rm -f "${CHILDREN_ERR_FILE}"
           echo "✓ Decomposition produced ${CHILD_COUNT} child issues: ${CHILDREN}"
 
       - name: "Soft-error analyser (orchestrate-decompose)"
