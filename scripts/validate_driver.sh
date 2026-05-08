@@ -159,7 +159,11 @@ FINAL_EXIT_CODE=1
 FAILURES_FILE="$(mktemp "${TMPDIR:-/tmp}/validate_failures.XXXXXX")"
 printf '[]\n' > "${FAILURES_FILE}"
 
-VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-${RUNTIME_DIR:-}/validation_semble_query.json}"
+if [ -n "${RUNTIME_DIR:-}" ]; then
+	VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/validation_semble_query.json}"
+else
+	VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-}"
+fi
 
 TEST_FILES=()
 CANARY_TEST=""
@@ -251,6 +255,11 @@ write_semble_query_artifact()
 	if [ -z "${VALIDATION_SEMBLE_QUERY_FILE:-}" ]; then
 		return 0
 	fi
+	case "${VALIDATION_SEMBLE_QUERY_FILE}" in
+		/|/validation_semble_query.json)
+			return 0
+			;;
+	esac
 
 	local query_dir
 	query_dir="$(dirname -- "${VALIDATION_SEMBLE_QUERY_FILE}")"

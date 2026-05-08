@@ -13,6 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 VALIDATE_PROCESS_PATH = REPO_ROOT / "scripts" / "validate_process.sh"
 SELF_HEAL_SCRIPT_PATH = REPO_ROOT / "scripts" / "self_heal_validation.sh"
 SELF_HEAL_PROMPT_PATH = REPO_ROOT / "prompts" / "mode-validate-self-heal.txt"
+VALIDATE_DIAGNOSE_PROMPT_PATH = REPO_ROOT / "prompts" / "mode-validate-diagnose.txt"
+VALIDATE_DRIVER_PATH = REPO_ROOT / "scripts" / "validate_driver.sh"
 
 
 def _validate_process_text() -> str:
@@ -25,6 +27,14 @@ def _self_heal_script_text() -> str:
 
 def _self_heal_prompt_text() -> str:
 	return SELF_HEAL_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _validate_diagnose_prompt_text() -> str:
+	return VALIDATE_DIAGNOSE_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _validate_driver_text() -> str:
+	return VALIDATE_DRIVER_PATH.read_text(encoding="utf-8")
 
 
 def test_template_mode_selection_contract_present() -> None:
@@ -73,6 +83,10 @@ def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
 	assert 'Optional `=== SEMBLE: ... ===` blocks containing bounded repo-local retrieval context derived from the failing assertions, identifiers, or changed files.' in prompt_text
 	assert 'Do not let Semble context override the supplied failure evidence, current prompt contents, or additive-only patch constraints.' in prompt_text
 
+	diagnose_prompt_text = _validate_diagnose_prompt_text()
+	assert 'Optional `=== VALIDATION SEMBLE QUERY CANDIDATES ===` JSON sidecar containing the bounded identifiers/evidence used to build Semble queries when retrieval results are unavailable in this prompt' in diagnose_prompt_text
+	assert 'Treat optional Semble blocks and query-candidate sidecars as corroborating repo context only.' in diagnose_prompt_text
+
 
 def test_validate_process_exports_and_surfaces_semble_sidecar_context() -> None:
 	text = _validate_process_text()
@@ -83,6 +97,15 @@ def test_validate_process_exports_and_surfaces_semble_sidecar_context() -> None:
 	assert 'VALIDATION_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/validation_semble_query.json"' in text
 	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE}" \\' in text
 	assert '=== VALIDATION SEMBLE QUERY CANDIDATES ===' in text
+
+
+def test_validate_driver_skips_root_sidecar_fallback_when_runtime_dir_missing() -> None:
+	text = _validate_driver_text()
+	assert 'if [ -n "${RUNTIME_DIR:-}" ]; then' in text
+	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/validation_semble_query.json}"' in text
+	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-}"' in text
+	assert 'case "${VALIDATION_SEMBLE_QUERY_FILE}" in' in text
+	assert '/validation_semble_query.json)' in text
 
 
 def test_template_mode_missing_manifest_returns_harness_error() -> None:
@@ -250,6 +273,7 @@ def main() -> int:
 	test_template_mode_selection_contract_present()
 	test_render_recovery_contract_and_prompt_only_self_heal_scope()
 	test_validate_process_exports_and_surfaces_semble_sidecar_context()
+	test_validate_driver_skips_root_sidecar_fallback_when_runtime_dir_missing()
 	test_template_mode_missing_manifest_returns_harness_error()
 	test_template_mode_harness_contract_accepts_missing_validate_env()
 	test_render_recovery_lint_gate_contract_present()

@@ -126,10 +126,14 @@ echo "handled=false" >> "$GITHUB_OUTPUT"
 # The workflow-owned cache lives under the current RUNTIME_DIR; ignore any
 # path outside that scratch root so diagnose does not accidentally read the
 # wrong issue's labels/body and skip or mis-route fix-up generation.
-case "${ISSUE_META_FILE:-}" in
-  "${RUNTIME_DIR}"/*) ;;
-  *) ISSUE_META_FILE="" ;;
-esac
+if [ -n "${RUNTIME_DIR:-}" ]; then
+  case "${ISSUE_META_FILE:-}" in
+    "${RUNTIME_DIR}/"*) ;;
+    *) ISSUE_META_FILE="" ;;
+  esac
+else
+  ISSUE_META_FILE=""
+fi
 ISSUE_LABELS_JSON=""
 if [ -s "${ISSUE_META_FILE:-}" ]; then
   ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"

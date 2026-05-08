@@ -84,6 +84,7 @@ def test_validate_workflow_bootstraps_semble_fail_open() -> None:
 	assert '- name: Install Semble' in wf
 	assert '- name: Build Semble index' in wf
 	assert 'bash scripts/install_semble.sh' in wf
+	assert 'timeout 300s semble index . --out "${SEMBLE_INDEX_DIR}"' in wf
 	assert 'SEMBLE_INDEX target=validate path=${SEMBLE_INDEX_DIR}' in wf
 	assert 'SEMBLE_FALLBACK target=index reason=workspace_unavailable' in wf
 

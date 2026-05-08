@@ -20,6 +20,7 @@ import stat
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+DIAG_REPO_DIRNAME = "diag-repo"
 
 
 def _workflow_text() -> str:
@@ -372,7 +373,7 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 
 
 def _prepare_diagnose_repo(tmp_path: Path) -> Path:
-	repo_dir = tmp_path / "diag-repo"
+	repo_dir = tmp_path / DIAG_REPO_DIRNAME
 	_bootstrap_git_repo(repo_dir)
 	_copy_diagnose_assets(repo_dir)
 
@@ -924,7 +925,7 @@ def test_diagnose_prompt_includes_semble_context_when_query_succeeds() -> None:
 		)
 		index_dir = tmp_path / "runtime" / ".semble-index"
 		index_dir.mkdir(parents=True, exist_ok=True)
-		(index_dir / "repo_root").write_text(str(tmp_path / "diag-repo"), encoding="utf-8")
+		(index_dir / "repo_root").write_text(str(tmp_path / DIAG_REPO_DIRNAME), encoding="utf-8")
 
 		proc, _state, runtime_dir, paths = _run_diagnose_step(
 			tmp_path,
@@ -975,6 +976,37 @@ def test_diagnose_prompt_omits_semble_context_when_disabled() -> None:
 		assert proc.returncode == 0
 		stdin_prompt = _read_file(paths["stdin_file"])
 		assert "=== SEMBLE: Implement Diagnose Context ===" not in stdin_prompt
+
+
+def test_diagnose_ignores_inherited_issue_meta_file_outside_runtime_dir() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		stale_meta_file = tmp_path / "stale_issue_meta.json"
+		stale_meta_file.write_text(
+			json.dumps({"labels": [{"name": "ai:implementation-failed"}], "body": "stale body"}),
+			encoding="utf-8",
+		)
+
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="Traceback in scripts/repair_flow.py line 22\nValueError: parser exploded\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			extra_env={"ISSUE_META_FILE": str(stale_meta_file)},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "handled=true" in _read_file(paths["github_output"])
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1, "stale ISSUE_META_FILE outside RUNTIME_DIR must not short-circuit diagnosis"
 
 
 def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
