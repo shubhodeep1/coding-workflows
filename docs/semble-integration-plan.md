@@ -109,8 +109,10 @@ query path that:
    reason (binary missing, index error, query timeout) — the pipeline
    must never deadlock on Semble unavailability.
 4. Is propagated to consumer repos through `workflow-templates/` so the
-   `@stable` release dispatch carries the change to all 11 listed
-   consumer repos in `.github/ai/consumer_repos.json`.
+   `@stable` release dispatch carries the change to every entry in
+   `.github/ai/consumer_repos.json` (currently 11 entries, one of which
+   is `shubhodeep1/coding-workflows` itself for the self-dispatch path —
+   so 10 external consumer repos plus this repo).
 
 ### 2.2 Non-goals
 
@@ -160,7 +162,8 @@ retrieval block keyed off the plan's task summary. New CLI flags:
 
 ```
 --semble-bin <path>          Path to the semble binary (default: which semble)
---semble-index <dir>          Index directory (default: .semble-index)
+--semble-index <dir>          Index directory (default:
+                              ${RUNTIME_DIR}/.semble-index)
 --semble-query-from <file>    File whose contents become the query (e.g., the
                               plan's "Goal" section)
 --semble-max-chunks <n>       Hard cap on chunks per overflowed file (default 6)
@@ -278,14 +281,14 @@ PR so future readers see the decision was deliberate.
 | GHA job (codex-cli phase, e.g. ai-implement.yml)               |
 |                                                                |
 |  1. actions/checkout (fetch-depth: 0)                          |
-|  2. setup uv  ............................................... |
-|  3. uv tool install semble (cache-key on lockfile)             |
-|  4. semble index . --out .semble-index ...................... |
+|  2. setup uv  (new — see install path below) .............    |
+|  3. uv tool install semble (cache-key on uv lockfile)          |
+|  4. semble index . --out ${RUNTIME_DIR}/.semble-index ...      |
 |     ^- ~250 ms; index lives in $RUNTIME_DIR for the job        |
 |                                                                |
 |  5. build_static_context.sh <phase> <static.txt>               |
 |  6. targeted_file_context.py ... --semble-bin $(which semble) \|
-|         --semble-index .semble-index ...                       |
+|         --semble-index ${RUNTIME_DIR}/.semble-index ...        |
 |  7. (phase-specific reviewer / resolver / validate scripts     |
 |      shell out to `semble query` directly)                     |
 |  8. codex exec ... < <(cat static.txt dynamic.txt)             |
@@ -294,9 +297,20 @@ PR so future readers see the decision was deliberate.
 
 ### 4.2 Install path
 
-Semble installs via `uv tool install`. The pipeline already uses `uv`
-(see codex-runner-migration.md and `scripts/dev` tooling), so this adds
-no new toolchain.
+Semble installs via `uv tool install`. **`uv` is a new dependency for
+this pipeline** — it is not currently used in `.github/workflows/`,
+`workflow-templates/`, or `scripts/`. (The earlier draft of this plan
+incorrectly claimed `uv` was already in use; that has been corrected
+per Copilot review.) The Semble project itself recommends `uv` for
+installation, and adding `uv` once is cheaper than per-job `pip install`
++ venv setup, which is why this plan introduces `uv` rather than a
+plain `pip` path.
+
+The first PR in phase 1 must therefore add a `setup uv` step (using the
+canonical `astral-sh/setup-uv@v3` action or equivalent) to every
+workflow that runs the `Install semble` step. The cache-key on that
+setup step pins on the `uv.lock` file (added by phase 1) so reproducible
+installs across jobs are cheap.
 
 A new helper `scripts/install_semble.sh` encapsulates:
 
@@ -459,7 +473,9 @@ judge run succeed with the new blocks visible in the prompt logs.
     workflow drift in the install path.
 - Cut a `@stable` release. The release workflow's repository-dispatch
   step (governed by `.github/ai/consumer_repos.json` per CLAUDE.md §14)
-  delivers the updated wrappers to all 11 consumer repos.
+  delivers the updated wrappers to every entry in
+  `.github/ai/consumer_repos.json` (currently 11 entries — 10 external
+  consumer repos plus this repo's self-dispatch path).
 - Smoke: run an end-to-end issue on one consumer repo
   (e.g. `shubhodeep1/mongo-explorer`) with `SEMBLE_ENABLED=true` set as
   a repo var.
@@ -622,10 +638,11 @@ preconditions for starting:
   files-likely-to-change list. Defaulting to "Goal section" feels
   best (most semantic signal), but worth measuring against the others
   during phase 2.
-- **Q9.3**: Should the index live in `${RUNTIME_DIR}/.semble-index` or
-  `.semble-index` at the repo root? Runtime-dir is cleaner (no
-  workspace pollution); repo-root is simpler for callers that don't
-  already source the runtime-dir export. Lean runtime-dir.
+- **Q9.3**: ~~Should the index live in `${RUNTIME_DIR}/.semble-index` or
+  `.semble-index` at the repo root?~~ **Resolved**: `${RUNTIME_DIR}/.semble-index`
+  (no workspace pollution; matches the existing `RUNTIME_DIR`
+  convention). The §4.1 diagram and §4.4 query-envelope code paths use
+  this location consistently.
 - **Q9.4**: For phases 5's smoke matrix: do we also exercise a Go or
   Rust consumer repo? Currently no consumer repo in
   `consumer_repos.json` is Go/Rust. If the consumer set grows during
