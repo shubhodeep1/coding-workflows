@@ -156,7 +156,10 @@ def _legacy_overflow_marker(rel: str, raw_size: int, max_bytes: int, used_bytes:
 def _resolve_semble_bin(semble_bin: str | None) -> str | None:
 	if semble_bin:
 		candidate = Path(semble_bin)
-		return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
+		if candidate.is_file() and os.access(candidate, os.X_OK):
+			return str(candidate)
+		_stderr_log(f"SEMBLE_FALLBACK reason=invalid_binary path={_sanitize_one_line(semble_bin)}")
+		return None
 	resolved = shutil.which("semble")
 	return resolved if resolved else None
 
@@ -429,6 +432,14 @@ def emit_context(
 				if semble_error:
 					_stderr_log(f"SEMBLE_FALLBACK target={_sanitize_one_line(rel)} reason={semble_error}")
 			if semble_body is not None:
+				semble_body_bytes = len(semble_body.encode("utf-8"))
+				if used_bytes + semble_body_bytes > max_bytes:
+					_stderr_log(
+						f"SEMBLE_FALLBACK target={_sanitize_one_line(rel)} reason=response_over_budget "
+						f"bytes={semble_body_bytes} remaining={max_bytes - used_bytes}"
+					)
+					semble_body = None
+			if semble_body is not None:
 				output.extend([
 					f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble) ---",
 					*semble_body.splitlines(),
@@ -437,13 +448,13 @@ def emit_context(
 				])
 				included += 1
 				inlined += 1
-				used_bytes += len(semble_body.encode("utf-8"))
+				used_bytes += semble_body_bytes
 				continue
 			fallback_lines = _overflow_fallback_lines(rel, raw_size, max_bytes, used_bytes, semble_fallback)
 			output.extend(fallback_lines)
 			if fallback_lines:
 				skipped_too_large.append((rel, raw_size))
-			included += 1
+				included += 1
 			continue
 		raw = abs_path.read_bytes()
 		if b"\x00" in raw:
@@ -515,7 +526,7 @@ def main() -> int:
 	parser.add_argument("--semble-index", default=None)
 	parser.add_argument("--semble-query-from", default=None)
 	parser.add_argument("--semble-max-chunks", type=positive_int, default=3)
-	parser.add_argument("--semble-fallback", choices=("marker", "read", "off"), default="marker")
+	parser.add_argument("--semble-fallback", choices=("marker", "off"), default="marker")
 	parser.add_argument("--header-text", default=DEFAULT_HEADER_TEXT)
 	parser.add_argument("--output", required=True)
 	args = parser.parse_args()

@@ -13,6 +13,7 @@ plus a manual `main()` runner so CI can execute the file with
 """
 from __future__ import annotations
 
+import subprocess
 import stat
 import sys
 import tempfile
@@ -369,6 +370,58 @@ def test_total_budget_overflow_semble_failure_falls_back_to_legacy_marker() -> N
 		assert "Marker-only (would overflow): src/huge.py" in context
 
 
+def test_total_budget_overflow_with_fallback_off_emits_no_phantom_marker_count() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "huge.py").write_text("x = 1\n" * 6000, encoding="utf-8")
+
+		context = emit_context(
+			["src/huge.py"],
+			root,
+			max_bytes=1024,
+			semble_fallback="off",
+		)
+
+		assert "Marker-only (would overflow):" not in context
+		assert "Included 1 entry" not in context
+		assert "(no existing target files could be inlined)" in context
+
+
+def test_total_budget_overflow_semble_response_over_budget_falls_back_to_marker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "huge.py").write_text("x = 1\n" * 6000, encoding="utf-8")
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		query_file = root / "query.txt"
+		query_file.write_text("implementation context\nplan details\n", encoding="utf-8")
+		semble_bin = root / "semble"
+		_write_executable(
+			semble_bin,
+			"#!/usr/bin/env bash\n"
+			"python3 - <<'PY'\n"
+			"print('x' * 5000)\n"
+			"PY\n",
+		)
+
+		context = emit_context(
+			["src/huge.py"],
+			root,
+			max_bytes=1024,
+			semble_bin=str(semble_bin),
+			semble_index=str(index_dir),
+			semble_query_from=str(query_file),
+			semble_max_chunks=2,
+			semble_fallback="marker",
+		)
+
+		assert "chunk-retrieved via semble" not in context
+		assert "would overflow total budget" in context
+		assert "Marker-only (would overflow): src/huge.py" in context
+
+
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
 	"""A `--paths-file` source could be adversarial; resolve and refuse
 	anything that escapes the repo root."""
@@ -452,6 +505,33 @@ def test_paths_file_strips_diff_a_b_prefixes() -> None:
 			"scripts/baz.py",
 			"plain/path/already.md",
 		]
+
+
+def test_main_rejects_unimplemented_semble_read_fallback() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		output = Path(tmp) / "out.txt"
+		result = subprocess.run(
+			[
+				sys.executable,
+				str(REPO_ROOT / "scripts" / "targeted_file_context.py"),
+				"--repo-root",
+				tmp,
+				"--paths",
+				"src/huge.py",
+				"--max-bytes",
+				"1024",
+				"--semble-fallback",
+				"read",
+				"--output",
+				str(output),
+			],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+		assert result.returncode != 0
+		assert "invalid choice" in result.stderr
 
 
 def main() -> int:
