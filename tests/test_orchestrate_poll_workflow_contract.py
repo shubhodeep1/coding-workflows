@@ -41,8 +41,10 @@ def test_semble_foundation_is_staged_and_fail_open() -> None:
 	assert "- name: Setup uv for Semble" in wf
 	assert "uses: astral-sh/setup-uv@v3" in wf
 	assert "- name: Install Semble" in wf
+	assert "- name: Install Semble\n        if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'\n        continue-on-error: true" in wf
 	assert "bash scripts/install_semble.sh" in wf
 	assert "- name: Build Semble index" in wf
+	assert "- name: Build Semble index\n        if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'\n        continue-on-error: true" in wf
 	assert 'workspace_root="${GITHUB_WORKSPACE:-}"' in wf
 	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in wf
 	assert "SEMBLE_FALLBACK target=index reason=workspace_unavailable" in wf

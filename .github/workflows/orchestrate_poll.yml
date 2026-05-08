@@ -385,6 +385,7 @@ jobs:
 
       - name: Install Semble
         if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
           echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
@@ -393,6 +394,7 @@ jobs:
 
       - name: Build Semble index
         if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'
+        continue-on-error: true
         run: |
           set -uo pipefail
 
