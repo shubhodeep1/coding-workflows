@@ -47,6 +47,7 @@
 
 set -euo pipefail
 source scripts/gh_helpers.sh 2>/dev/null || true
+source scripts/semble_helpers.sh 2>/dev/null || true
 type gh_retry &>/dev/null || gh_retry() { "$@"; }
 type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
   local _tmpf
@@ -120,12 +121,24 @@ echo "handled=false" >> "$GITHUB_OUTPUT"
 # (partial write, truncated download, etc.); the API path
 # itself falls back to '[]' so the failure path still
 # degrades safely.
+# Guard against an unrelated inherited ISSUE_META_FILE from the outer
+# environment (for example a stale local shell export from another run).
+# The workflow-owned cache lives under the current RUNTIME_DIR; ignore any
+# path outside that scratch root so diagnose does not accidentally read the
+# wrong issue's labels/body and skip or mis-route fix-up generation.
+case "${ISSUE_META_FILE:-}" in
+  "${RUNTIME_DIR}"/*) ;;
+  *) ISSUE_META_FILE="" ;;
+esac
 ISSUE_LABELS_JSON=""
 if [ -s "${ISSUE_META_FILE:-}" ]; then
   ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
 fi
 if [ -z "${ISSUE_LABELS_JSON}" ]; then
   ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+fi
+if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_LABELS_JSON}" | jq -c '[.labels[]?.name]' 2>/dev/null || echo '[]')"
 fi
 if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
   echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
@@ -240,6 +253,123 @@ UNTRACKED_LIST_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_files.txt"
 UNTRACKED_CONTEXT_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_context.txt"
 git diff HEAD > "${DIFF_FILE}" || true
 git ls-files --others --exclude-standard -z > "${UNTRACKED_LIST_FILE}" || true
+
+extract_post_codex_semble_query()
+{
+  python3 - "${CAPTURE_FILE}" "${DIFF_FILE}" "${UNTRACKED_CONTEXT_FILE}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+capture_path, diff_path, untracked_path = [Path(arg) for arg in sys.argv[1:4]]
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|sh|js|jsx|ts|tsx|json|ya?ml|toml|md|txt))(?:[:(]\d+(?::\d+)?)?"
+)
+identifier_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+generic = {"error", "failed", "failure", "line", "column", "traceback", "exception", "warning", "stderr", "stdout"}
+
+parts = []
+seen = set()
+
+
+def add(value: str) -> None:
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if not value:
+        return
+    lowered = value.lower()
+    if lowered in seen:
+        return
+    if lowered in {"exit 1", "command failed", "validation failed"}:
+        return
+    seen.add(lowered)
+    parts.append(value[:180])
+
+
+def read_text(path: Path) -> str:
+    try:
+        if path.is_file():
+            return path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    return ""
+
+
+capture = read_text(capture_path)
+diff_text = read_text(diff_path)
+untracked = read_text(untracked_path)
+
+for match in path_re.findall(capture):
+    add(match)
+
+for line in capture.splitlines():
+    compact = re.sub(r"\s+", " ", line).strip()
+    lowered = compact.lower()
+    if not compact:
+        continue
+    if any(marker in lowered for marker in (
+        "syntaxerror",
+        "yaml",
+        "json",
+        "traceback",
+        "exception",
+        "error:",
+        "failed",
+        "undefined",
+        "unexpected",
+    )) or path_re.search(compact):
+        add(compact)
+    if len(parts) >= 6:
+        break
+
+for line in diff_text.splitlines():
+    if line.startswith(("+++ b/", "--- a/")):
+        add(line.split("/", 1)[1])
+    elif line.startswith("@@"):
+        add(line)
+    elif line.startswith("+") and not line.startswith("+++"):
+        compact = re.sub(r"\s+", " ", line[1:]).strip()
+        if path_re.search(compact) or any(marker in compact.lower() for marker in ("function", "class", "def ", "import ", "assert", "return ")):
+            add(compact)
+    if len(parts) >= 10:
+        break
+
+for match in path_re.findall(untracked):
+    add(match)
+
+for token in identifier_re.findall(capture):
+    lowered = token.lower()
+    if lowered in generic or token.isupper() and len(token) <= 3:
+        continue
+    add(token)
+    if len(parts) >= 12:
+        break
+
+query = " ; ".join(parts[:8])
+query = re.sub(r"\s+", " ", query).strip()
+if len(query) >= 8:
+    print(query[:420])
+PY
+}
+
+build_post_codex_semble_block()
+{
+  if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
+    return 0
+  fi
+  if [ "$(type -t semble_query_block 2>/dev/null || true)" != "function" ]; then
+    return 0
+  fi
+
+  local query_text
+  query_text="$(extract_post_codex_semble_query 2>/dev/null || true)"
+  query_text="$(_semble_sanitize_one_line "${query_text}")"
+  if [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  semble_query_block "${query_text}" 3 "Implement Diagnose Context" || true
+}
 
 {
   if [ ! -s "${UNTRACKED_LIST_FILE}" ]; then
@@ -375,6 +505,8 @@ fi
   echo
   echo "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ==="
   cat "${CAPTURE_FILE}"
+  echo
+  build_post_codex_semble_block
 } > "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
 
 extract_last_json_with_key() {

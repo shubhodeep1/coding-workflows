@@ -32,6 +32,8 @@
 
 set -euo pipefail
 
+source scripts/semble_helpers.sh 2>/dev/null || true
+
 : "${RUNTIME_DIR:?RUNTIME_DIR is required}"
 : "${SELF_HEAL_ATTEMPT:?SELF_HEAL_ATTEMPT is required}"
 : "${MAX_SELF_HEAL_ATTEMPTS:?MAX_SELF_HEAL_ATTEMPTS is required}"
@@ -54,6 +56,7 @@ SELF_HEAL_OUTPUT_FILE="${RUNTIME_DIR}/validate_self_heal_output.txt"
 SELF_HEAL_LOG_FILE="${RUNTIME_DIR}/validate_self_heal.log"
 SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
+VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/validation_semble_query.json}"
 
 ALLOWED_TARGETS=(
 	"mode-validate-discover.txt"
@@ -95,6 +98,108 @@ _tail_if_exists()
 		tail -n "${n}" "${path}"
 		echo
 	fi
+}
+
+_semble_query_text_from_validation_artifacts()
+{
+	python3 - "${VALIDATION_SEMBLE_QUERY_FILE:-}" "${VALIDATION_RESULT_FILE:-}" "${VALIDATE_HINTS_FILE:-}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+sidecar_path, validation_path, hints_path = sys.argv[1:4]
+
+
+def load_json(path_str: str):
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if not path.is_file() or path.stat().st_size <= 0:
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+sidecar = load_json(sidecar_path)
+if isinstance(sidecar, dict):
+    query = re.sub(r"\s+", " ", str(sidecar.get("query") or "")).strip()
+    if query:
+        print(query)
+        sys.exit(0)
+
+validation = load_json(validation_path)
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|sh|js|jsx|ts|tsx|json|ya?ml|toml|md|txt))(?:[:(]\d+(?::\d+)?)?"
+)
+identifier_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+parts = []
+seen = set()
+
+
+def add(value: str) -> None:
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if not value:
+        return
+    lowered = value.lower()
+    if lowered in seen:
+        return
+    seen.add(lowered)
+    parts.append(value[:160])
+
+
+if isinstance(validation, dict):
+    failures = validation.get("failures")
+    if isinstance(failures, list):
+        for failure in failures[:4]:
+            if not isinstance(failure, dict):
+                continue
+            add(str(failure.get("test") or ""))
+            add(str(failure.get("error") or ""))
+            for blob in (failure.get("test"), failure.get("error"), failure.get("log_tail")):
+                for match in path_re.findall(str(blob or "")):
+                    add(match)
+            for token in identifier_re.findall(f"{failure.get('test', '')} {failure.get('error', '')}"):
+                if token.lower() in {"test", "error", "line", "assert", "validation"}:
+                    continue
+                add(token)
+
+if hints_path:
+    hints = Path(hints_path)
+    if hints.is_file() and hints.stat().st_size > 0:
+        for line in hints.read_text(encoding="utf-8", errors="replace").splitlines():
+            compact = re.sub(r"\s+", " ", line).strip()
+            if ":" in compact and any(marker in compact for marker in ("entry:", "type:", "services:", "health_check:")):
+                add(compact)
+            for match in path_re.findall(compact):
+                add(match)
+
+query = " ; ".join(part for part in parts[:6] if part)
+query = re.sub(r"\s+", " ", query).strip()
+if len(query) >= 8:
+    print(query[:420])
+PY
+}
+
+_append_validation_semble_block()
+{
+	if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
+		return 0
+	fi
+	if [ "$(type -t semble_query_block 2>/dev/null || true)" != "function" ]; then
+		return 0
+	fi
+
+	local query_text
+	query_text="$(_semble_query_text_from_validation_artifacts 2>/dev/null || true)"
+	query_text="$(_semble_sanitize_one_line "${query_text}")"
+	if [ -z "${query_text}" ]; then
+		return 0
+	fi
+
+	semble_query_block "${query_text}" 3 "Validation Self-Heal Context" || true
 }
 
 # Ensure the patches ledger exists.
@@ -144,6 +249,7 @@ fi
 	_tail_if_exists "DISCOVER OUTPUT" "${DISCOVER_OUTPUT_FILE:-}" 120
 	_tail_if_exists "GENERATE OUTPUT" "${GENERATE_OUTPUT_FILE:-}" 120
 	_tail_if_exists "DIAGNOSE OUTPUT" "${DIAGNOSE_OUTPUT_FILE:-}" 120
+	_append_validation_semble_block
 } > "${SELF_HEAL_PROMPT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"
 
 # ---------------------------------------------------------------

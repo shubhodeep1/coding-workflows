@@ -159,6 +159,8 @@ FINAL_EXIT_CODE=1
 FAILURES_FILE="$(mktemp "${TMPDIR:-/tmp}/validate_failures.XXXXXX")"
 printf '[]\n' > "${FAILURES_FILE}"
 
+VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-${RUNTIME_DIR:-}/validation_semble_query.json}"
+
 TEST_FILES=()
 CANARY_TEST=""
 
@@ -244,6 +246,152 @@ with open(failures_path, "w", encoding="utf-8") as handle:
 PY
 }
 
+write_semble_query_artifact()
+{
+	if [ -z "${VALIDATION_SEMBLE_QUERY_FILE:-}" ]; then
+		return 0
+	fi
+
+	local query_dir
+	query_dir="$(dirname -- "${VALIDATION_SEMBLE_QUERY_FILE}")"
+	if [ -z "${query_dir}" ] || [ ! -d "${query_dir}" ]; then
+		return 0
+	fi
+
+	python3 - "${FAILURES_FILE}" "${VALIDATION_SEMBLE_QUERY_FILE}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+failures_path, output_path = sys.argv[1:3]
+
+try:
+    with open(failures_path, "r", encoding="utf-8") as handle:
+        failures = json.load(handle)
+except Exception:
+    failures = []
+
+if not isinstance(failures, list):
+    failures = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|sh|js|jsx|ts|tsx|json|ya?ml|toml|md|txt))(?:[:(]\d+(?::\d+)?)?"
+)
+identifier_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+generic_errors = {
+    "exit 1",
+    "exit status 1",
+    "command failed",
+    "validation failed",
+    "runtime validation failed",
+}
+generic_identifier_prefixes = {"test", "assert", "line", "file", "error", "traceback", "validation"}
+
+identifiers = []
+evidence = []
+seen_identifiers = set()
+seen_evidence = set()
+
+
+def add_identifier(value: str) -> None:
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if not value:
+        return
+    lowered = value.lower()
+    if lowered in seen_identifiers:
+        return
+    if lowered in generic_errors:
+        return
+    if lowered.startswith(("http://", "https://")):
+        return
+    seen_identifiers.add(lowered)
+    identifiers.append(value[:120])
+
+
+def add_evidence(value: str) -> None:
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if not value:
+        return
+    lowered = value.lower()
+    if lowered in seen_evidence:
+        return
+    if lowered in generic_errors:
+        return
+    seen_evidence.add(lowered)
+    evidence.append(value[:220])
+
+
+for failure in failures[:6]:
+    if not isinstance(failure, dict):
+        continue
+    test_name = str(failure.get("test") or "").strip()
+    error_text = str(failure.get("error") or "").strip()
+    log_tail = str(failure.get("log_tail") or "")
+
+    if test_name and test_name.lower() not in generic_errors:
+        add_identifier(test_name)
+    if error_text:
+        add_evidence(error_text)
+
+    for blob in (test_name, error_text, log_tail):
+        for match in path_re.findall(blob or ""):
+            add_identifier(match)
+
+    for token in identifier_re.findall(f"{test_name} {error_text}"):
+        lowered = token.lower()
+        if lowered in generic_identifier_prefixes:
+            continue
+        if token.isupper() and len(token) <= 3:
+            continue
+        if "/" in token:
+            continue
+        add_identifier(token)
+
+    for line in log_tail.splitlines():
+        compact = re.sub(r"\s+", " ", line).strip()
+        lowered = compact.lower()
+        if not compact:
+            continue
+        if path_re.search(compact) or any(marker in lowered for marker in (
+            "assert",
+            "traceback",
+            "exception",
+            "error:",
+            "failed",
+            "mismatch",
+            "syntaxerror",
+            "typeerror",
+            "valueerror",
+        )):
+            add_evidence(compact)
+        if len(evidence) >= 6:
+            break
+
+query_parts = identifiers[:4] + evidence[:3]
+query = " ; ".join(part for part in query_parts if part)
+query = re.sub(r"\s+", " ", query).strip()
+
+output = Path(output_path)
+if not query or len(query) < 8:
+    try:
+        output.unlink()
+    except FileNotFoundError:
+        pass
+    sys.exit(0)
+
+if len(query) > 420:
+    query = query[:417].rstrip() + "..."
+
+payload = {
+    "query": query,
+    "identifiers": identifiers[:8],
+    "evidence": evidence[:6],
+}
+output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
 emit_result()
 {
 	if [ "${RESULT_EMITTED}" = "1" ]; then
@@ -251,6 +399,7 @@ emit_result()
 	fi
 
 	RESULT_EMITTED=1
+	write_semble_query_artifact || true
 
 	local duration
 	duration=$(( $(date +%s) - START_TS ))

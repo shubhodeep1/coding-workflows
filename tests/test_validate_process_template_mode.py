@@ -56,6 +56,10 @@ def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
 	assert 'if [ "${render_recovery_exit}" -eq 2 ]; then' in validate_text
 
 	script_text = _self_heal_script_text()
+	assert 'source scripts/semble_helpers.sh 2>/dev/null || true' in script_text
+	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/validation_semble_query.json}"' in script_text
+	assert '_append_validation_semble_block()' in script_text
+	assert 'semble_query_block "${query_text}" 3 "Validation Self-Heal Context" || true' in script_text
 	assert '"mode-validate-discover.txt"' in script_text
 	assert '"mode-validate-generate.txt"' in script_text
 	assert '"mode-validate-fix-harness.txt"' in script_text
@@ -66,6 +70,19 @@ def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
 	prompt_text = _self_heal_prompt_text()
 	assert 'For `failing_phase=render` or deterministic template rerender/lint recovery failures, keep self-heal scope prompt-only:' in prompt_text
 	assert 'Do not propose harness-file edits, renderer-script edits, or workflow changes.' in prompt_text
+	assert 'Optional `=== SEMBLE: ... ===` blocks containing bounded repo-local retrieval context derived from the failing assertions, identifiers, or changed files.' in prompt_text
+	assert 'Do not let Semble context override the supplied failure evidence, current prompt contents, or additive-only patch constraints.' in prompt_text
+
+
+def test_validate_process_exports_and_surfaces_semble_sidecar_context() -> None:
+	text = _validate_process_text()
+	assert 'export SEMBLE_ENABLED="${SEMBLE_ENABLED:-false}"' in text
+	assert 'export SEMBLE_AVAILABLE="${SEMBLE_AVAILABLE:-false}"' in text
+	assert 'export SEMBLE_INDEX_AVAILABLE="${SEMBLE_INDEX_AVAILABLE:-false}"' in text
+	assert 'export SEMBLE_INDEX_DIR="${SEMBLE_INDEX_DIR:-${RUNTIME_DIR}/.semble-index}"' in text
+	assert 'VALIDATION_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/validation_semble_query.json"' in text
+	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE}" \\' in text
+	assert '=== VALIDATION SEMBLE QUERY CANDIDATES ===' in text
 
 
 def test_template_mode_missing_manifest_returns_harness_error() -> None:
@@ -232,6 +249,7 @@ def test_render_recovery_lint_gate_contract_present() -> None:
 def main() -> int:
 	test_template_mode_selection_contract_present()
 	test_render_recovery_contract_and_prompt_only_self_heal_scope()
+	test_validate_process_exports_and_surfaces_semble_sidecar_context()
 	test_template_mode_missing_manifest_returns_harness_error()
 	test_template_mode_harness_contract_accepts_missing_validate_env()
 	test_render_recovery_lint_gate_contract_present()

@@ -64,6 +64,10 @@ esac
 # env: block already exports MODEL_EDITOR, but standalone/local invocations
 # would otherwise lose the default at the env boundary.
 export MODEL_EDITOR
+export SEMBLE_ENABLED="${SEMBLE_ENABLED:-false}"
+export SEMBLE_AVAILABLE="${SEMBLE_AVAILABLE:-false}"
+export SEMBLE_INDEX_AVAILABLE="${SEMBLE_INDEX_AVAILABLE:-false}"
+export SEMBLE_INDEX_DIR="${SEMBLE_INDEX_DIR:-${RUNTIME_DIR}/.semble-index}"
 VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
 if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
   echo "VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})" >&2
@@ -136,6 +140,7 @@ METADATA_FILE="${RUNTIME_DIR}/validation_metadata.json"
 STATUS_FILE="${RUNTIME_DIR}/validation_status.json"
 VALIDATION_LOG_TAIL_FILE="${RUNTIME_DIR}/validation_log_tail.txt"
 CONTAINER_LOG_TAIL_FILE="${RUNTIME_DIR}/container_logs_tail.txt"
+VALIDATION_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/validation_semble_query.json"
 NULL_JSON_FILE="${RUNTIME_DIR}/null.json"
 PRE_GENERATE_STATUS_FILE="${RUNTIME_DIR}/pre_generate_git_status.txt"
 POST_GENERATE_STATUS_FILE="${RUNTIME_DIR}/post_generate_git_status.txt"
@@ -291,6 +296,7 @@ attempt_self_heal_and_reexec()
   SELF_HEAL_FAILURE_PHASE="${phase}" \
     STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE}" \
     VALIDATION_RESULT_FILE="${VALIDATION_RESULT_FILE}" \
+    VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE}" \
     DIAGNOSE_RESULT_FILE="${DIAGNOSE_RESULT_FILE}" \
     VALIDATION_LOG_TAIL_FILE="${VALIDATION_LOG_TAIL_FILE}" \
     CONTAINER_LOG_TAIL_FILE="${CONTAINER_LOG_TAIL_FILE}" \
@@ -2794,6 +2800,12 @@ fi
   echo
   echo "=== VALIDATION HINTS ==="
   cat "${VALIDATE_HINTS_FILE}"
+  echo
+  if [ -s "${VALIDATION_SEMBLE_QUERY_FILE}" ]; then
+    echo "=== VALIDATION SEMBLE QUERY CANDIDATES ==="
+    cat "${VALIDATION_SEMBLE_QUERY_FILE}"
+    echo
+  fi
 } > "${DIAGNOSE_PROMPT_FILE}"
 
 DIAGNOSE_SUCCESS=false
