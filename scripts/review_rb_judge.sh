@@ -175,6 +175,12 @@ while IFS= read -r issue_number; do
   if [ -z "${FIRST_ISSUE_BODY}" ]; then
     FIRST_ISSUE_BODY="${BODY}"
   fi
+  # Stop once we have the first issue number and a non-empty body.
+  # Subsequent linked issues are not used by review_rb_judge.sh; the
+  # FIRST_ISSUE_LABELS_JSON capture above is already pinned to
+  # FIRST_ISSUE on the first iteration, so the break preserves
+  # parent-label propagation semantics.
+  [ -n "${FIRST_ISSUE}" ] && [ -n "${FIRST_ISSUE_BODY}" ] && break
 done <<< "${ISSUE_NUMBERS}"
 
 if [ -z "${FIRST_ISSUE}" ]; then
