@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:116-130 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The refactored ISSUE_META_FILE guard no longer has an inline comment explaining why stale inherited metadata is discarded.\n  WHY: The code is functionally correct, but reviewers agree the removed documentation makes the two-branch guard harder to maintain and more likely to be accidentally removed later.\n- tests/test_implement_post_codex_recovery.py:1203-1236 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new regression test validates the guard only indirectly, so it could still pass even if the guard were broken by future mock/API or label-logic changes.\n  WHY: The assertions check handled=false and no codex calls, but do not directly prove the stale ISSUE_META_FILE was never used as the label source.\n- tests/test_implement_post_codex_recovery.py:1200-1236 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The new regression test covers only the RUNTIME_DIR-empty early-exit path and does not verify that diagnosis continues normally using API-fetched labels after a stale ISSUE_META_FILE is cleared.\n  WHY: The test exercises the edge case but does not assert downstream prompt generation or full diagnosis behavior in the complementary branch.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/implement_diagnose_post_codex_failure.sh:116-130 | severity=low | confidence=4\n  PROBLEM: The refactored ISSUE_META_FILE guard lost the explanatory inline comment describing why stale inherited metadata must be discarded.\n  WHY: The code is correct, but the missing documentation makes the guard harder to understand and more vulnerable to accidental removal.\n- tests/test_implement_post_codex_recovery.py:1203-1236 | severity=low | confidence=2\n  PROBLEM: The new regression test only validates the guard indirectly, so it could pass spuriously if future changes alter the mock API response or label-comparison behavior.\n  WHY: The assertions only show handled=false and no codex calls, not that the stale file was actually ignored as the label source.\n- tests/test_implement_post_codex_recovery.py:1203-1236 | severity=low | confidence=2\n  PROBLEM: The test does not verify the complementary case where the stale ISSUE_META_FILE is cleared and diagnosis proceeds normally using API-fetched labels.\n  WHY: The current assertions cover the empty-RUNTIME_DIR early-exit path but not the downstream full diagnosis path with differing stale-versus-API labels.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:119-130 | severity=low | confidence=5\n  PROBLEM: The refactored ISSUE_META_FILE guard lacks an explanatory inline comment for its two-branch behavior.\n  WHY: The code handles both stale-path cases correctly, but the removed comment leaves the purpose of the guard undocumented for future maintainers.\n- tests/test_implement_post_codex_recovery.py:1203-1236 | severity=low | confidence=4\n  PROBLEM: The new regression test checks only that short-circuiting is avoided and does not verify that diagnosis proceeds through the full downstream path.\n  WHY: It asserts handled=false and no codex calls, but not prompt generation or other follow-on outputs.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:116-130 | severity=low | confidence=4\n  PROBLEM: The expanded ISSUE_META_FILE guard lacks an inline comment explaining why inherited or stale metadata is discarded.\n  WHY: The code is correct, but the missing documentation makes the two-branch guard less understandable and harder to maintain.\n- tests/test_implement_post_codex_recovery.py:1200-1236 | severity=low | confidence=3\n  PROBLEM: The new regression test validates the guard path but does not verify that diagnosis proceeds to prompt generation or other downstream behavior.\n  WHY: It confirms the early-exit behavior, but not the full path after the stale metadata is cleared.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/implement_diagnose_post_codex_failure.sh:116-130 | severity=low | confidence=5\n  PROBLEM: The refactored ISSUE_META_FILE guard has no inline comment explaining the two-branch logic that discards stale inherited metadata.\n  WHY: The guard is functionally correct, but the removed documentation makes the RUNTIME_DIR-unset and outside-RUNTIME_DIR cases harder to understand.\n- tests/test_implement_post_codex_recovery.py:1200-1236 | severity=low | confidence=4\n  PROBLEM: The new test verifies only early guard behavior and does not assert that diagnosis proceeds to build the prompt or use the expected downstream fallback behavior.\n  WHY: It checks handled=false and no codex calls, but not that the stale metadata was excluded from the full diagnosis path.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ebeab3d56315d46c5a3d1eb76cd04a68b3e250d530c6eca7439b34a7ec6c7609",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2334,
+    "run_id": "25576327840",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25576327840",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508201749_076877b146",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2334,
+    "run_id": "25576327840"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-08T20:17:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
