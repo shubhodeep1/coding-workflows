@@ -51,7 +51,7 @@ semble_query_block()
 	local header_label="$3"
 	shift 3
 
-	local target index_dir repo_root_file repo_root semble_bin stdout_file stderr_file output_body stderr_body bytes start_ts end_ts elapsed_ms
+	local target index_dir repo_root_file repo_root semble_bin stdout_file stderr_file output_body stderr_body bytes start_ts end_ts elapsed_ms query_rc
 	target="$(_semble_sanitize_one_line "${header_label}")"
 	index_dir="${SEMBLE_INDEX_DIR:-${RUNTIME_DIR:-}/.semble-index}"
 	repo_root_file="${index_dir}/repo_root"
@@ -61,7 +61,7 @@ semble_query_block()
 		return 1
 	fi
 
-	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${index_dir}" ] || [ ! -f "${repo_root_file}" ]; then
+	if [ ! -d "${index_dir}" ] || [ ! -f "${repo_root_file}" ]; then
 		_semble_stderr_log "SEMBLE_FALLBACK target=${target} reason=index_metadata_missing"
 		return 1
 	fi
@@ -81,10 +81,17 @@ semble_query_block()
 	stdout_file="$(mktemp)"
 	stderr_file="$(mktemp)"
 	start_ts="$(_semble_now_ms)"
-	if ! "${semble_bin}" search "$@" --top-k "${max_chunks}" "${query_text}" "${repo_root}" >"${stdout_file}" 2>"${stderr_file}"; then
+	if timeout 5s "${semble_bin}" query "${query_text}" --index "${index_dir}" --top-k "${max_chunks}" --format text "$@" >"${stdout_file}" 2>"${stderr_file}"; then
+		:
+	else
+		query_rc=$?
 		stderr_body="$(_semble_sanitize_one_line "$(cat "${stderr_file}" 2>/dev/null || true)")"
 		rm -f "${stdout_file}" "${stderr_file}"
-		_semble_stderr_log "SEMBLE_FALLBACK target=${target} reason=query_failed detail=${stderr_body}"
+		if [ "${query_rc}" -eq 124 ]; then
+			_semble_stderr_log "SEMBLE_FALLBACK target=${target} reason=query_timeout"
+		else
+			_semble_stderr_log "SEMBLE_FALLBACK target=${target} reason=query_failed detail=${stderr_body}"
+		fi
 		return 1
 	fi
 	end_ts="$(_semble_now_ms)"

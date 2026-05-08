@@ -175,6 +175,13 @@ def test_semble_query_block_keeps_prompt_output_on_stdout_only() -> None:
 		_write_executable(
 			bin_dir / "semble",
 			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || { echo 'wrong subcommand' >&2; exit 9; }\n"
+			"[ \"$2\" = 'needle query' ] || { echo 'wrong query text' >&2; exit 10; }\n"
+			"[ \"$3\" = --index ] || { echo 'missing index flag' >&2; exit 11; }\n"
+			"[ \"$5\" = --top-k ] || { echo 'missing top-k flag' >&2; exit 12; }\n"
+			"[ \"$6\" = 3 ] || { echo 'wrong chunk count' >&2; exit 13; }\n"
+			"[ \"$7\" = --format ] || { echo 'missing format flag' >&2; exit 14; }\n"
+			"[ \"$8\" = text ] || { echo 'wrong format' >&2; exit 15; }\n"
 			"printf 'relevant prompt block\\nsecond line\\n'\n",
 		)
 		result = _run_helper(
@@ -211,6 +218,7 @@ def test_semble_query_block_query_failures_do_not_leak_to_stdout() -> None:
 		_write_executable(
 			bin_dir / "semble",
 			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 8\n"
 			"echo 'backend exploded' >&2\n"
 			"exit 7\n",
 		)
@@ -226,6 +234,33 @@ def test_semble_query_block_query_failures_do_not_leak_to_stdout() -> None:
 		assert "SEMBLE_FALLBACK target=Implement Context reason=query_failed detail=backend exploded" in result.stderr, result.stderr
 
 
+def test_semble_query_block_timeouts_map_to_timeout_fallback() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		runtime_dir = tmp / "runtime"
+		index_dir = runtime_dir / ".semble-index"
+		index_dir.mkdir(parents=True)
+		(index_dir / "repo_root").write_text(str(tmp), encoding="utf-8")
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 8\n"
+			"sleep 10\n",
+		)
+		result = _run_helper(
+			{
+				"RUNTIME_DIR": str(runtime_dir),
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			}
+		)
+		assert result.returncode == 1, result.returncode
+		assert result.stdout == "", result.stdout
+		assert "SEMBLE_FALLBACK target=Implement Context reason=query_timeout" in result.stderr, result.stderr
+
+
 def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	body = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 	assert "write_codex_config.sh install_semble.sh semble_helpers.sh; do" in body, "workflow must stage the Semble support scripts"
@@ -236,6 +271,7 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert "bash scripts/install_semble.sh" in install_step, "workflow must run the install helper"
 	index_step = _workflow_step_block("Build Semble index")
 	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_step, "workflow must build the workspace-local index directory"
+	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in index_step, "workflow must build a real Semble index before advertising it"
 
 
 def main() -> int:

@@ -567,6 +567,7 @@ jobs:
           fi
 
           if mkdir -p "${SEMBLE_INDEX_DIR}" && \
+             (cd "$GITHUB_WORKSPACE" && semble index . --out "${SEMBLE_INDEX_DIR}") && \
              printf '%s\n' "$GITHUB_WORKSPACE" > "${SEMBLE_INDEX_DIR}/repo_root" && \
              {
                printf 'created_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
