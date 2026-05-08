@@ -1050,3 +1050,147 @@ String scan result: no `TODO`, `FIXME`, `HACK`, or `XXX` markers were found in `
 | Code modularization | 4 | Medium |
 | Expression size reduction | 4 | Medium |
 | Medium/Low fixes | 3 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-08)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is fully proven safe to consolidate without changing filters, retry/error behavior, cache contracts, or concurrency semantics. `NEEDS_VERIFICATION` means the overlap is real, but at least one safety precondition is not statically provable from this repo read alone. `RISKY_SKIP` means the overlap exists, but the call sits in a retry/backoff, pagination, polling, race-defense, or other sensitive path where auto-consolidation would be unsafe without manual design review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/cancel_on_pr_close.yml:68-77` and `.github/workflows/cancel_on_pr_close.yml:79-88`  
+  **Current call count** — 2 logical `actions/runs` list calls per no-error pass  
+  **Proposed call count** — 1 logical `actions/runs` list call, with local `queued|in_progress` filtering  
+  **Endpoint(s)** — `GET /repos/{repo}/actions/runs`  
+  **Evidence** — the step performs two paginated listings against the same endpoint, differing only by `status=queued` vs `status=in_progress`, then concatenates them locally before extracting run IDs:
+  ```bash
+  queued_runs_json="$(
+    _gh_retry gh api \
+      --method GET \
+      "repos/${REPOSITORY}/actions/runs" \
+      --paginate \
+      -f status=queued \
+      -f event=pull_request \
+      -f "branch=${PR_HEAD_REF}" \
+      -f per_page=100 \
+    | jq -s "${RUNS_JQ}"
+  )"
+  in_progress_runs_json="$(
+    _gh_retry gh api \
+      --method GET \
+      "repos/${REPOSITORY}/actions/runs" \
+      --paginate \
+      -f status=in_progress \
+      -f event=pull_request \
+      -f "branch=${PR_HEAD_REF}" \
+      -f per_page=100 \
+    | jq -s "${RUNS_JQ}"
+  )"
+  ```
+  **Proposed fix** — If a human decides to change this path, prototype a single `actions/runs` listing for the same branch/event scope and filter `status == "queued" or status == "in_progress"` locally before the existing dedupe/cancel loop. Keep the current `_gh_retry` / `_rl_wait` behavior and existing log messages unless parity is explicitly re-approved.  
+  **Safety rationale** — This path is both paginated and embedded in a retry/backoff + rate-limit handler (`_gh_retry` / `_rl_wait` at `.github/workflows/cancel_on_pr_close.yml:27-52`), which hits the repo’s explicit `RISKY_SKIP` triggers.  
+  **Downstream signal** — Do **not** auto-implement; manual review must prove that a single unfiltered branch/event listing does not increase page count, change cancellation eligibility, or alter rate-limit/backoff/logging behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:188-193` and `.github/workflows/issue_pr_status.yml:295-297`  
+  **Current call count** — 2 logical GraphQL calls on the direct-`closingIssuesReferences` happy path  
+  **Proposed call count** — 1 logical GraphQL call on that path; keep the second query only for branch-derived or fallback-only issue numbers not present in the first payload  
+  **Endpoint(s)** — GitHub GraphQL `repository.pullRequest(number:) { closingIssuesReferences ... }` and GitHub GraphQL `repository { issue(number:) { labels body } }`  
+  **Evidence** — the step first asks GraphQL for linked issue numbers, then later asks GraphQL again for those issues’ labels/body so it can classify tracking vs managed issues:
+  ```bash
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    -f owner="${REPOSITORY%/*}" \
+    -f name="${REPOSITORY#*/}" \
+    -F number="${PR_NUMBER}" \
+    -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+  ```
+  ```bash
+  ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ```
+  The second query is needed for labels/body classification, but for issues that already came from `closingIssuesReferences`, those fields could have been fetched in the first query.  
+  **Proposed fix** — Extend the first GraphQL query to return `closingIssuesReferences(first: 50) { nodes { number body labels(first: 50) { nodes { name } } } }`, normalize it into a JSON map keyed by issue number, and consult that cache before building `ORCH_ALIAS_FRAGMENT`. Only alias-query issue numbers added later from `PR_HEAD_REF` or from the body/title fallback.  
+  **Safety rationale** — The overlap is real and both calls occur in the same shell step with no local mutation in between, but the later classification path also includes branch-derived/fallback issue numbers that are not guaranteed to exist in `closingIssuesReferences`.  
+  **Downstream signal** — Verify three cases before changing this: (1) PR with only `closingIssuesReferences`, (2) PR that relies on `ai/issue-N` branch-name augmentation, and (3) PR that reaches the body/title fallback path.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/implement.yml:3244-3258` and `scripts/implement_diagnose_post_codex_failure.sh:188-209`  
+  **Current call count** — 2 logical fetch sites to the same jobs endpoint on the failure path, each with up to 3 attempts  
+  **Proposed call count** — 1 logical fetch site on the common path by carrying forward the earlier result; retain the script-side fetch only when the carried value is absent/empty/`unknown-step`  
+  **Endpoint(s)** — `GET /repos/{repo}/actions/runs/{run_id}/jobs?per_page=100`  
+  **Evidence** — the workflow step fetches run jobs to derive `FAILED_STEP_NAME`:
+  ```bash
+  RUN_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" || true)"
+  FAILED_STEP_NAME="$(printf '%s' "${RUN_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
+  echo "failed_step_name=${FAILED_STEP_NAME}" >> "$GITHUB_OUTPUT"
+  ```
+  Then the diagnose script immediately refetches the same endpoint and repeats the same inference:
+  ```bash
+  FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+  FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '
+    [.jobs[].steps[]
+      | select(
+          .conclusion == "failure"
+          or .conclusion == "cancelled"
+          or .conclusion == "timed_out"
+          or .conclusion == "action_required"
+        )
+    ]
+    | first
+    | .name // ""' 2>/dev/null || true)"
+  ```
+  **Proposed fix** — Extend `Capture post-Codex validation errors` to persist either `FAILED_STEP_NAME` or the raw jobs JSON into `${RUNTIME_DIR}`, and update `scripts/implement_diagnose_post_codex_failure.sh` to consume that artifact first. Keep the script’s existing fetch loop as a fallback only when the carried value is missing, empty, or still `unknown-step`.  
+  **Safety rationale** — The endpoint and inferred field are the same, but the duplicate fetch appears to be compensating for a GitHub eventual-consistency window on just-failed runs, so behavior parity cannot be proven statically.  
+  **Downstream signal** — Before implementing, compare one hard-fail run and one cancelled run to confirm the carried-forward `FAILED_STEP_NAME` matches what the second fetch would have resolved after its retry window.
+
+- **ID** — `REUSE-003`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:65-67` and `.github/workflows/orchestrate_clarify_respond.yml:403-405`  
+  **Current call count** — 2 logical `GET /issues/{issue_number}` calls per orchestrator-managed run, plus the separate tracking-issue fetch  
+  **Proposed call count** — 1 logical child-issue fetch, reusing the earlier payload in the later context assembly step  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence** — the workflow fetches the child issue once in `Check orchestrator metadata`:
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+  ```
+  and then fetches the same child issue again in `Fetch issue and tracking context`:
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ```
+  **Proposed fix** — Persist the first child-issue payload to a runtime file or exported env blob in `Check orchestrator metadata`, then have `Fetch issue and tracking context` reuse that payload and fall back to `gh_retry gh api` only on cache miss / parse failure. Leave the separate `TRACKING_NUM` fetch (`.github/workflows/orchestrate_clarify_respond.yml:413-414`) unchanged.  
+  **Safety rationale** — The duplicate fetches hit the same endpoint and there is no workflow-local mutation in between, but the first call is raw `gh api` while the second is `gh_retry gh api`, and the later step may intentionally prefer a fresher issue body/title after setup latency.  
+  **Downstream signal** — Verify that reusing the first payload is acceptable by checking whether issue body/title edits made during runner setup are expected to affect the same run, and confirm that failure handling remains acceptable if the first fetch fails.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- `BATCH-001`: `RISKY_SKIP` — Real consolidation target, but it is dominated by paginated PR comment/review fetches, so helper substitution must be parity-checked for page-boundary and fallback behavior before implementation.
+- `BATCH-002`: `NEEDS_VERIFICATION` — The N+1 linked-issue REST loop is real, but batching must preserve the judge’s “first linked issue with body/labels” behavior and current fail-open semantics.
+- `BATCH-003`: `RISKY_SKIP` — This helper is already on a paginated timeline/fallback path, so changing it touches exactly the page-boundary/race-sensitive area the safety policy flags.
+- `API-001`: `NEEDS_VERIFICATION` — The two `gh run list` calls clearly overlap, but a single-call replacement must preserve queued-vs-in-progress detection and the current dispatch-skip logs.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
