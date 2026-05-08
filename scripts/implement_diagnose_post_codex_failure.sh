@@ -116,34 +116,31 @@ patch_diagnose_reasoning_into_config
 
 echo "handled=false" >> "$GITHUB_OUTPUT"
 
+if [ -n "${ISSUE_META_FILE:-}" ]; then
+  if [ -n "${RUNTIME_DIR:-}" ]; then
+    case "${ISSUE_META_FILE}" in
+      "${RUNTIME_DIR}"/*) ;;
+      *)
+        ISSUE_META_FILE=""
+        ;;
+    esac
+  else
+    ISSUE_META_FILE=""
+  fi
+fi
+
 # Reuse the cached issue snapshot when available — see the
 # "Fetch issue metadata" step.  Falls back to a fresh API
 # call when the file is missing OR jq fails to parse it
 # (partial write, truncated download, etc.); the API path
 # itself falls back to '[]' so the failure path still
 # degrades safely.
-# Guard against an unrelated inherited ISSUE_META_FILE from the outer
-# environment (for example a stale local shell export from another run).
-# The workflow-owned cache lives under the current RUNTIME_DIR; ignore any
-# path outside that scratch root so diagnose does not accidentally read the
-# wrong issue's labels/body and skip or mis-route fix-up generation.
-if [ -n "${RUNTIME_DIR:-}" ]; then
-  case "${ISSUE_META_FILE:-}" in
-    "${RUNTIME_DIR}/"*) ;;
-    *) ISSUE_META_FILE="" ;;
-  esac
-else
-  ISSUE_META_FILE=""
-fi
 ISSUE_LABELS_JSON=""
 if [ -s "${ISSUE_META_FILE:-}" ]; then
   ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
 fi
 if [ -z "${ISSUE_LABELS_JSON}" ]; then
   ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
-fi
-if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-  ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_LABELS_JSON}" | jq -c '[.labels[]?.name]' 2>/dev/null || echo '[]')"
 fi
 if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
   echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
@@ -259,107 +256,77 @@ UNTRACKED_CONTEXT_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_context.txt"
 git diff HEAD > "${DIFF_FILE}" || true
 git ls-files --others --exclude-standard -z > "${UNTRACKED_LIST_FILE}" || true
 
-extract_post_codex_semble_query()
-{
-  python3 - "${CAPTURE_FILE}" "${DIFF_FILE}" "${UNTRACKED_CONTEXT_FILE}" <<'PY'
+build_post_codex_semble_query() {
+  python3 - "${CAPTURE_FILE:-}" "${DIFF_FILE:-}" "${UNTRACKED_CONTEXT_FILE:-}" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-capture_path, diff_path, untracked_path = [Path(arg) for arg in sys.argv[1:4]]
+capture_path, diff_path, untracked_path = sys.argv[1:4]
 
 path_re = re.compile(
     r"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|sh|js|jsx|ts|tsx|json|ya?ml|toml|md|txt))(?:[:(]\d+(?::\d+)?)?"
 )
 identifier_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
-generic = {"error", "failed", "failure", "line", "column", "traceback", "exception", "warning", "stderr", "stdout"}
+generic_tokens = {
+    "test",
+    "error",
+    "line",
+    "assert",
+    "traceback",
+    "failed",
+    "failure",
+    "python3",
+    "runtime",
+    "validation",
+}
 
 parts = []
 seen = set()
 
 
-def add(value: str) -> None:
+def add(value: str, *, limit: int = 180) -> None:
     value = re.sub(r"\s+", " ", value or "").strip()
     if not value:
         return
     lowered = value.lower()
     if lowered in seen:
         return
-    if lowered in {"exit 1", "command failed", "validation failed"}:
-        return
     seen.add(lowered)
-    parts.append(value[:180])
+    parts.append(value[:limit])
 
 
-def read_text(path: Path) -> str:
-    try:
-        if path.is_file():
-            return path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    return ""
+def ingest_text(text: str) -> None:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if compact:
+        add(compact, limit=220)
+    for match in path_re.findall(text or ""):
+        add(match, limit=120)
+    for token in identifier_re.findall(text or ""):
+        lowered = token.lower()
+        if lowered in generic_tokens:
+            continue
+        if token.isupper() and len(token) <= 3:
+            continue
+        add(token, limit=120)
 
 
-capture = read_text(capture_path)
-diff_text = read_text(diff_path)
-untracked = read_text(untracked_path)
-
-for match in path_re.findall(capture):
-    add(match)
-
-for line in capture.splitlines():
-    compact = re.sub(r"\s+", " ", line).strip()
-    lowered = compact.lower()
-    if not compact:
+for candidate in (capture_path, diff_path, untracked_path):
+    path = Path(candidate)
+    if not path.is_file() or path.stat().st_size <= 0:
         continue
-    if any(marker in lowered for marker in (
-        "syntaxerror",
-        "yaml",
-        "json",
-        "traceback",
-        "exception",
-        "error:",
-        "failed",
-        "undefined",
-        "unexpected",
-    )) or path_re.search(compact):
-        add(compact)
-    if len(parts) >= 6:
-        break
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[:80]:
+        ingest_text(line)
 
-for line in diff_text.splitlines():
-    if line.startswith(("+++ b/", "--- a/")):
-        add(line.split("/", 1)[1])
-    elif line.startswith("@@"):
-        add(line)
-    elif line.startswith("+") and not line.startswith("+++"):
-        compact = re.sub(r"\s+", " ", line[1:]).strip()
-        if path_re.search(compact) or any(marker in compact.lower() for marker in ("function", "class", "def ", "import ", "assert", "return ")):
-            add(compact)
-    if len(parts) >= 10:
-        break
-
-for match in path_re.findall(untracked):
-    add(match)
-
-for token in identifier_re.findall(capture):
-    lowered = token.lower()
-    if lowered in generic or token.isupper() and len(token) <= 3:
-        continue
-    add(token)
-    if len(parts) >= 12:
-        break
-
-query = " ; ".join(parts[:8])
+query = " ; ".join(part for part in parts[:6] if part)
 query = re.sub(r"\s+", " ", query).strip()
 if len(query) >= 8:
     print(query[:420])
 PY
 }
 
-build_post_codex_semble_block()
-{
-  for helper_name in _semble_bool_true _semble_sanitize_one_line semble_query_block; do
+append_post_codex_semble_block() {
+  for helper_name in _semble_bool_true _semble_sanitize_one_line semble_query_block_with_target; do
     if [ "$(type -t "${helper_name}" 2>/dev/null || true)" != "function" ]; then
       return 0
     fi
@@ -369,13 +336,13 @@ build_post_codex_semble_block()
   fi
 
   local query_text
-  query_text="$(extract_post_codex_semble_query 2>/dev/null || true)"
+  query_text="$(build_post_codex_semble_query 2>/dev/null || true)"
   query_text="$(_semble_sanitize_one_line "${query_text}")"
   if [ -z "${query_text}" ]; then
     return 0
   fi
 
-  semble_query_block "${query_text}" 3 "Implement Diagnose Context" || true
+  semble_query_block_with_target "implement-diagnose" "${query_text}" 6 "Implement Diagnose Context" || true
 }
 
 {
@@ -513,7 +480,7 @@ fi
   echo "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ==="
   cat "${CAPTURE_FILE}"
   echo
-  build_post_codex_semble_block
+  append_post_codex_semble_block
 } > "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
 
 extract_last_json_with_key() {

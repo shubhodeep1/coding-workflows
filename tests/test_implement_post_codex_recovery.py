@@ -333,6 +333,11 @@ stdin_file = os.environ.get("MOCK_CODEX_STDIN_FILE")
 if stdin_file:
 	Path(stdin_file).write_text(stdin_text, encoding="utf-8")
 
+rewrite_file = os.environ.get("MOCK_CODEX_REWRITE_FILE")
+if rewrite_file:
+	rewrite_content = os.environ.get("MOCK_CODEX_REWRITE_CONTENT", "")
+	Path(rewrite_file).write_text(rewrite_content, encoding="utf-8")
+
 mode = os.environ.get("MOCK_CODEX_MODE", "success")
 if mode == "fail":
 	print("mock codex failure", file=sys.stderr)
@@ -384,6 +389,94 @@ def _prepare_diagnose_repo(tmp_path: Path) -> Path:
 	tracked.write_text("after\n", encoding="utf-8")
 
 	return repo_dir
+
+
+def _copy_repair_assets(repo_dir: Path) -> None:
+	for rel in (
+		"scripts/semble_helpers.sh",
+		"scripts/validate_changed_files_syntax.sh",
+		"prompts/mode-implement-repair.txt",
+	):
+		src = REPO_ROOT / rel
+		dst = repo_dir / rel
+		dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(src, dst)
+		if dst.suffix == ".sh":
+			dst.chmod(0o755)
+
+
+def _prepare_repair_repo(tmp_path: Path, *, yaml_contents: str) -> Path:
+	repo_dir = tmp_path / "repair-repo"
+	_bootstrap_git_repo(repo_dir)
+	_copy_repair_assets(repo_dir)
+
+	broken_yaml = repo_dir / "broken.yml"
+	broken_yaml.write_text("good: value\n", encoding="utf-8")
+	_git(["git", "add", "broken.yml"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "add broken yaml seed"], cwd=repo_dir)
+	broken_yaml.write_text(yaml_contents, encoding="utf-8")
+
+	return repo_dir
+
+
+def _run_repair_step(
+	tmp_path: Path,
+	*,
+	yaml_contents: str,
+	codex_mode: str,
+	codex_output: str,
+	rewrite_content: str | None = None,
+	extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, str]]:
+	repo_dir = _prepare_repair_repo(tmp_path, yaml_contents=yaml_contents)
+	runtime_dir = tmp_path / "runtime"
+	bin_dir = tmp_path / "bin"
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+	bin_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_mock_codex(bin_dir)
+
+	github_output = runtime_dir / "repair_github_output.txt"
+	stdin_file = runtime_dir / "repair_codex_stdin.txt"
+	calls_file = runtime_dir / "repair_codex_calls.log"
+
+	script = _render_github_expressions(_extract_run_script("Attempt post-Codex syntax repair"))
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"OPENROUTER_API_KEY": "test-openrouter",
+			"RUNTIME_DIR": str(runtime_dir),
+			"GITHUB_OUTPUT": str(github_output),
+			"MODEL_EDITOR": "openai/gpt-5.4",
+			"MAX_POST_CODEX_REPAIR_ATTEMPTS": "1",
+			"MOCK_CODEX_MODE": codex_mode,
+			"MOCK_CODEX_OUTPUT": codex_output,
+			"MOCK_CODEX_CALLS_FILE": str(calls_file),
+			"MOCK_CODEX_STDIN_FILE": str(stdin_file),
+			"TMPDIR": str(runtime_dir),
+		}
+	)
+	if rewrite_content is not None:
+		env.update(
+			{
+				"MOCK_CODEX_REWRITE_FILE": str(repo_dir / "broken.yml"),
+				"MOCK_CODEX_REWRITE_CONTENT": rewrite_content,
+			}
+		)
+	if extra_env:
+		env.update(extra_env)
+	if str(bin_dir) not in env.get("PATH", "").split(":"):
+		env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	paths = {
+		"github_output": str(github_output),
+		"stdin_file": str(stdin_file),
+		"calls_file": str(calls_file),
+		"capture_file": str(runtime_dir / "post_codex_validation_errors.txt"),
+	}
+	return proc, repo_dir, paths
 
 
 def _run_diagnose_step(
@@ -723,6 +816,11 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
 	assert "prompts/mode-implement-repair.txt" in repair_block
 	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert 'source scripts/semble_helpers.sh 2>/dev/null || true' in repair_block
+	assert 'build_repair_semble_query() {' in repair_block
+	assert 'append_repair_semble_block() {' in repair_block
+	assert 'semble_query_block_with_target "implement-repair"' in repair_block
+	assert 'append_repair_semble_block' in repair_block
 	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
 	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
 	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
@@ -978,6 +1076,99 @@ def test_diagnose_prompt_omits_semble_context_when_disabled() -> None:
 		assert "=== SEMBLE: Implement Diagnose Context ===" not in stdin_prompt
 
 
+def test_repair_prompt_includes_semble_context_when_query_succeeds() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_repair_") as td:
+		tmp_path = Path(td)
+		bin_dir = tmp_path / "semble-bin"
+		bin_dir.mkdir(parents=True, exist_ok=True)
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 8\n"
+			"printf 'repair retrieval context\\n'\n",
+		)
+		index_dir = tmp_path / "runtime" / ".semble-index"
+		index_dir.mkdir(parents=True, exist_ok=True)
+		(index_dir / "repo_root").write_text(str(tmp_path / "repair-repo"), encoding="utf-8")
+
+		codex_output = "Applied minimal repair\n"
+		proc, _repo_dir, paths = _run_repair_step(
+			tmp_path,
+			yaml_contents="broken: `oops\n",
+			codex_mode="success",
+			codex_output=codex_output,
+			rewrite_content='broken: "oops"\n',
+			extra_env={
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"SEMBLE_ENABLED": "true",
+				"SEMBLE_AVAILABLE": "true",
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"SEMBLE_INDEX_DIR": str(index_dir),
+			},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "=== SEMBLE: Implement Repair Context ===" in stdin_prompt
+		assert "repair retrieval context" in stdin_prompt
+		assert "SEMBLE_FALLBACK target=implement-repair" not in stdin_prompt
+		assert "SEMBLE_QUERY target=implement-repair" in proc.stderr, proc.stderr
+
+
+def test_repair_prompt_omits_semble_context_when_disabled() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_repair_") as td:
+		tmp_path = Path(td)
+		proc, _repo_dir, paths = _run_repair_step(
+			tmp_path,
+			yaml_contents="broken: `oops\n",
+			codex_mode="success",
+			codex_output="Applied minimal repair\n",
+			rewrite_content='broken: "oops"\n',
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "=== SEMBLE: Implement Repair Context ===" not in stdin_prompt
+
+
+def test_repair_prompt_logs_implement_repair_fallback_without_leaking_into_prompt() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_repair_") as td:
+		tmp_path = Path(td)
+		bin_dir = tmp_path / "semble-bin"
+		bin_dir.mkdir(parents=True, exist_ok=True)
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 8\n"
+			"echo 'repair retrieval backend exploded' >&2\n"
+			"exit 7\n",
+		)
+		index_dir = tmp_path / "runtime" / ".semble-index"
+		index_dir.mkdir(parents=True, exist_ok=True)
+		(index_dir / "repo_root").write_text(str(tmp_path / "repair-repo"), encoding="utf-8")
+
+		proc, _repo_dir, paths = _run_repair_step(
+			tmp_path,
+			yaml_contents="broken: `oops\n",
+			codex_mode="success",
+			codex_output="Applied minimal repair\n",
+			rewrite_content='broken: "oops"\n',
+			extra_env={
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"SEMBLE_ENABLED": "true",
+				"SEMBLE_AVAILABLE": "true",
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"SEMBLE_INDEX_DIR": str(index_dir),
+			},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "=== SEMBLE: Implement Repair Context ===" not in stdin_prompt
+		assert "SEMBLE_FALLBACK target=implement-repair" not in stdin_prompt
+		assert "SEMBLE_FALLBACK target=implement-repair reason=query_failed detail=repair retrieval backend exploded" in proc.stderr, proc.stderr
+
+
 def test_diagnose_ignores_inherited_issue_meta_file_outside_runtime_dir() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
 		tmp_path = Path(td)
@@ -1007,6 +1198,37 @@ def test_diagnose_ignores_inherited_issue_meta_file_outside_runtime_dir() -> Non
 		assert "handled=true" in _read_file(paths["github_output"])
 		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
 		assert len(call_lines) == 1, "stale ISSUE_META_FILE outside RUNTIME_DIR must not short-circuit diagnosis"
+
+
+def test_diagnose_ignores_inherited_issue_meta_file_when_runtime_dir_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		stale_meta_file = tmp_path / "stale_issue_meta.json"
+		stale_meta_file.write_text(
+			json.dumps({"labels": [{"name": "ai:implementation-failed"}], "body": "stale body"}),
+			encoding="utf-8",
+		)
+
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="Traceback in scripts/repair_flow.py line 22\nValueError: parser exploded\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			extra_env={"ISSUE_META_FILE": str(stale_meta_file), "RUNTIME_DIR": ""},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "handled=false" in _read_file(paths["github_output"])
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert state.get("created_issues", []) == []
 
 
 def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
@@ -1474,6 +1696,12 @@ def test_yaml_reserved_indicator_recipe_in_repair_prompts() -> None:
 		assert "Do NOT shell out to `rg`/`grep`" in body or "Do NOT shell out to `rg`" in body, (
 			f"{prompt_path.name} must explicitly forbid the failed strategy "
 			"(rg/grep with literal backtick)"
+		)
+		assert "Optional `=== SEMBLE: ... ===` blocks contain bounded repo-local retrieval" in body, (
+			f"{prompt_path.name} must explain how additive Semble blocks should be interpreted"
+		)
+		assert "corroborating context only" in body, (
+			f"{prompt_path.name} must say Semble is corroborating-only so diagnostics remain source of truth"
 		)
 
 

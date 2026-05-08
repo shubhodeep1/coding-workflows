@@ -14,6 +14,7 @@ VALIDATE_PROCESS_PATH = REPO_ROOT / "scripts" / "validate_process.sh"
 SELF_HEAL_SCRIPT_PATH = REPO_ROOT / "scripts" / "self_heal_validation.sh"
 SELF_HEAL_PROMPT_PATH = REPO_ROOT / "prompts" / "mode-validate-self-heal.txt"
 VALIDATE_DIAGNOSE_PROMPT_PATH = REPO_ROOT / "prompts" / "mode-validate-diagnose.txt"
+VALIDATE_DISCOVER_PROMPT_PATH = REPO_ROOT / "prompts" / "mode-validate-discover.txt"
 VALIDATE_DRIVER_PATH = REPO_ROOT / "scripts" / "validate_driver.sh"
 
 
@@ -31,6 +32,10 @@ def _self_heal_prompt_text() -> str:
 
 def _validate_diagnose_prompt_text() -> str:
 	return VALIDATE_DIAGNOSE_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _validate_discover_prompt_text() -> str:
+	return VALIDATE_DISCOVER_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def _validate_driver_text() -> str:
@@ -95,9 +100,23 @@ def test_validate_process_exports_and_surfaces_semble_sidecar_context() -> None:
 	assert 'export SEMBLE_AVAILABLE="${SEMBLE_AVAILABLE:-false}"' in text
 	assert 'export SEMBLE_INDEX_AVAILABLE="${SEMBLE_INDEX_AVAILABLE:-false}"' in text
 	assert 'export SEMBLE_INDEX_DIR="${SEMBLE_INDEX_DIR:-${RUNTIME_DIR}/.semble-index}"' in text
+	assert 'source scripts/semble_helpers.sh 2>/dev/null || true' in text
+	assert '_validation_semble_query_text_from_artifacts()' in text
+	assert '_append_validation_semble_block()' in text
+	assert 'semble_query_block_with_target "validate phase=${phase}" "${query_text}" "${max_chunks}" "${header_label}" || true' in text
 	assert 'VALIDATION_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/validation_semble_query.json"' in text
 	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE}" \\' in text
+	assert '_append_validation_semble_block "discover" "Validation Discover Context" 2' in text
+	assert '_append_validation_semble_block "diagnose" "Validation Diagnose Context" 6' in text
 	assert '=== VALIDATION SEMBLE QUERY CANDIDATES ===' in text
+	assert '=== SEMBLE: Validation Diagnose Context ===' not in text
+	assert 'SEMBLE_FALLBACK target=validate phase=diagnose' not in text
+
+
+def test_validate_discover_prompt_documents_optional_semble_blocks_as_corroborating_only() -> None:
+	text = _validate_discover_prompt_text()
+	assert 'Optional `=== SEMBLE: ... ===` blocks are bounded repo-local retrieval' in text
+	assert 'treat them as corroborating evidence' in text
 
 
 def test_validate_driver_skips_root_sidecar_fallback_when_runtime_dir_missing() -> None:

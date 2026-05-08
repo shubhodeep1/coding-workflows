@@ -14,6 +14,8 @@
 
 set -euo pipefail
 
+source scripts/semble_helpers.sh 2>/dev/null || true
+
 : "${RUNTIME_DIR:?RUNTIME_DIR is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
@@ -699,6 +701,175 @@ with open(output_file, "w", encoding="utf-8") as handle:
     json.dump(candidates[-1], handle, ensure_ascii=True, indent=2)
     handle.write("\n")
 PY
+}
+
+_validation_semble_query_text_from_artifacts()
+{
+	python3 - "${VALIDATION_SEMBLE_QUERY_FILE:-}" "${VALIDATION_RESULT_FILE:-}" "${VALIDATE_HINTS_FILE:-}" "${PRIOR_RESULT_JSON_FILE:-}" "${PRIOR_CONTAINER_LOGS_FILE:-}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+sidecar_path, validation_path, hints_path, prior_result_path, prior_logs_path = sys.argv[1:6]
+
+
+def load_json(path_str: str):
+	if not path_str:
+		return None
+	path = Path(path_str)
+	if not path.is_file() or path.stat().st_size <= 0:
+		return None
+	try:
+		return json.loads(path.read_text(encoding="utf-8"))
+	except Exception:
+		return None
+
+
+path_re = re.compile(
+	r"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|sh|js|jsx|ts|tsx|json|ya?ml|toml|md|txt))(?:[:(]\d+(?::\d+)?)?"
+)
+identifier_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+generic_tokens = {
+	"test",
+	"error",
+	"line",
+	"assert",
+	"validation",
+	"runtime",
+	"failed",
+	"failure",
+	"traceback",
+	"result",
+	"summary",
+}
+
+parts = []
+seen = set()
+seeded = False
+
+
+def add(value: str, *, limit: int = 160) -> None:
+	value = re.sub(r"\s+", " ", value or "").strip()
+	if not value:
+		return
+	lowered = value.lower()
+	if lowered in seen:
+		return
+	seen.add(lowered)
+	parts.append(value[:limit])
+
+
+sidecar = load_json(sidecar_path)
+if isinstance(sidecar, dict):
+	query = re.sub(r"\s+", " ", str(sidecar.get("query") or "")).strip()
+	if query:
+		print(query[:420])
+		sys.exit(0)
+	for item in sidecar.get("identifiers") or []:
+		if isinstance(item, str):
+			add(item, limit=120)
+			seeded = True
+	for item in sidecar.get("evidence") or []:
+		if isinstance(item, str):
+			add(item, limit=180)
+			seeded = True
+
+validation = load_json(validation_path)
+if isinstance(validation, dict):
+	failures = validation.get("failures")
+	if isinstance(failures, list):
+		for failure in failures[:4]:
+			if not isinstance(failure, dict):
+				continue
+			for raw_value in (failure.get("test"), failure.get("error")):
+				text = str(raw_value or "")
+				if text:
+					add(text, limit=180)
+					seeded = True
+			for blob in (failure.get("test"), failure.get("error"), failure.get("log_tail")):
+				blob_text = str(blob or "")
+				for match in path_re.findall(blob_text):
+					add(match, limit=120)
+					seeded = True
+				for token in identifier_re.findall(blob_text):
+					if token.lower() in generic_tokens:
+						continue
+					add(token, limit=120)
+					seeded = True
+
+prior_result = load_json(prior_result_path)
+if isinstance(prior_result, dict):
+	summary = str(prior_result.get("summary") or "")
+	if summary:
+		add(summary, limit=220)
+		seeded = True
+		for match in path_re.findall(summary):
+			add(match, limit=120)
+			seeded = True
+		for token in identifier_re.findall(summary):
+			if token.lower() in generic_tokens:
+				continue
+			add(token, limit=120)
+			seeded = True
+
+prior_logs = Path(prior_logs_path) if prior_logs_path else None
+if prior_logs and prior_logs.is_file() and prior_logs.stat().st_size > 0:
+	for line in prior_logs.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
+		compact = re.sub(r"\s+", " ", line).strip()
+		if not compact:
+			continue
+		for match in path_re.findall(compact):
+			add(match, limit=120)
+			seeded = True
+		for token in identifier_re.findall(compact):
+			if token.lower() in generic_tokens:
+				continue
+			add(token, limit=120)
+			seeded = True
+
+if seeded and hints_path:
+	hints = Path(hints_path)
+	if hints.is_file() and hints.stat().st_size > 0:
+		for line in hints.read_text(encoding="utf-8", errors="replace").splitlines():
+			compact = re.sub(r"\s+", " ", line).strip()
+			if not compact:
+				continue
+			if ":" in compact and any(marker in compact for marker in ("entry:", "type:", "services:", "health_check:")):
+				add(compact, limit=180)
+			for match in path_re.findall(compact):
+				add(match, limit=120)
+
+query = " ; ".join(part for part in parts[:6] if part)
+query = re.sub(r"\s+", " ", query).strip()
+if len(query) >= 8:
+	print(query[:420])
+PY
+}
+
+_append_validation_semble_block()
+{
+	local phase="${1:-unknown}"
+	local header_label="${2:-Validation Context}"
+	local max_chunks="${3:-4}"
+
+	for helper_name in _semble_bool_true _semble_sanitize_one_line semble_query_block_with_target; do
+		if [ "$(type -t "${helper_name}" 2>/dev/null || true)" != "function" ]; then
+			return 0
+		fi
+	done
+	if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
+		return 0
+	fi
+
+	local query_text
+	query_text="$(_validation_semble_query_text_from_artifacts 2>/dev/null || true)"
+	query_text="$(_semble_sanitize_one_line "${query_text}")"
+	if [ -z "${query_text}" ]; then
+		return 0
+	fi
+
+	semble_query_block_with_target "validate phase=${phase}" "${query_text}" "${max_chunks}" "${header_label}" || true
 }
 
 is_validation_harness_runnable()
@@ -2087,6 +2258,7 @@ else
   echo "=== PROJECT SPEC ==="
     cat "${PROJECT_SPEC_FILE}"
     echo
+    _append_validation_semble_block "discover" "Validation Discover Context" 2
     echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
   } > "${DISCOVER_PROMPT_FILE}"
 
@@ -2802,6 +2974,7 @@ fi
   echo "=== VALIDATION HINTS ==="
   cat "${VALIDATE_HINTS_FILE}"
   echo
+  _append_validation_semble_block "diagnose" "Validation Diagnose Context" 6
   if [ -s "${VALIDATION_SEMBLE_QUERY_FILE}" ]; then
     echo "=== VALIDATION SEMBLE QUERY CANDIDATES ==="
     cat "${VALIDATION_SEMBLE_QUERY_FILE}"

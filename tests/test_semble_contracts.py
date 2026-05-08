@@ -78,6 +78,31 @@ def _run_helper(env_overrides: dict[str, str] | None = None) -> subprocess.Compl
 	)
 
 
+def _run_helper_with_target(
+	log_target: str,
+	header_label: str,
+	*,
+	query_text: str = "needle query",
+	max_chunks: int = 3,
+	env_overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+	full_env = os.environ.copy()
+	if env_overrides:
+		full_env.update(env_overrides)
+	harness = f"""
+		set -u
+		source {HELPERS_SCRIPT}
+		semble_query_block_with_target {log_target!r} {query_text!r} {max_chunks} {header_label!r}
+	"""
+	return subprocess.run(
+		["bash", "-lc", harness],
+		env=full_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+
+
 def test_install_semble_disabled_is_noop_and_fail_soft() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		env_file = Path(td) / "github_env.txt"
@@ -305,6 +330,79 @@ def test_semble_query_block_timeouts_map_to_timeout_fallback() -> None:
 		assert "SEMBLE_FALLBACK target=Implement Context reason=query_timeout" in result.stderr, result.stderr
 
 
+def test_semble_query_block_with_target_uses_custom_log_target_without_leaking_logs() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		runtime_dir = tmp / "runtime"
+		index_dir = runtime_dir / ".semble-index"
+		index_dir.mkdir(parents=True)
+		(index_dir / "repo_root").write_text(str(tmp), encoding="utf-8")
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 8\n"
+			"printf 'custom target context\\n'\n",
+		)
+		result = _run_helper_with_target(
+			"validate phase=diagnose",
+			"Validation Diagnose Context",
+			env_overrides={
+				"RUNTIME_DIR": str(runtime_dir),
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			},
+		)
+		assert result.returncode == 0, result.stderr
+		assert "=== SEMBLE: Validation Diagnose Context ===" in result.stdout, result.stdout
+		assert "custom target context" in result.stdout, result.stdout
+		assert "SEMBLE_QUERY target=validate phase=diagnose" in result.stderr, result.stderr
+		assert "SEMBLE_QUERY" not in result.stdout, result.stdout
+		assert "SEMBLE_FALLBACK" not in result.stdout, result.stdout
+
+
+def test_semble_query_block_with_target_logs_validate_discover_fallback() -> None:
+	result = _run_helper_with_target(
+		"validate phase=discover",
+		"Validation Discover Context",
+		env_overrides={"SEMBLE_INDEX_AVAILABLE": "false"},
+	)
+	assert result.returncode == 1, result.returncode
+	assert result.stdout == "", result.stdout
+	assert "SEMBLE_FALLBACK target=validate phase=discover reason=index_unavailable" in result.stderr, result.stderr
+
+
+def test_semble_query_block_with_target_logs_implement_repair_failures() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		runtime_dir = tmp / "runtime"
+		index_dir = runtime_dir / ".semble-index"
+		index_dir.mkdir(parents=True)
+		(index_dir / "repo_root").write_text(str(tmp), encoding="utf-8")
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 8\n"
+			"echo 'repair backend exploded' >&2\n"
+			"exit 7\n",
+		)
+		result = _run_helper_with_target(
+			"implement-repair",
+			"Implement Repair Context",
+			env_overrides={
+				"RUNTIME_DIR": str(runtime_dir),
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			},
+		)
+		assert result.returncode == 1, result.returncode
+		assert result.stdout == "", result.stdout
+		assert "SEMBLE_FALLBACK target=implement-repair reason=query_failed detail=repair backend exploded" in result.stderr, result.stderr
+
+
 def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	body = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 	assert "write_codex_config.sh install_semble.sh semble_helpers.sh; do" in body, "workflow must stage the Semble support scripts"
@@ -323,6 +421,12 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert 'echo "ISSUE DESCRIPTION"' in query_step, "workflow must derive the Semble query file from issue description"
 	assert 'cat "${CLARIFICATION_ANSWERS_FILE}"' in query_step, "workflow must include clarification answers in the Semble query file"
 	assert 'cat "${PLAN_FILE}"' in query_step, "workflow must include the approved implementation plan in the Semble query file"
+	repair_step = _workflow_step_block("Attempt post-Codex syntax repair")
+	assert 'source scripts/semble_helpers.sh 2>/dev/null || true' in repair_step, "repair step must source the shared Semble helper"
+	assert 'build_repair_semble_query() {' in repair_step, "repair step must build bounded Semble query evidence"
+	assert 'append_repair_semble_block() {' in repair_step, "repair step must assemble additive repair retrieval context"
+	assert 'semble_query_block_with_target "implement-repair"' in repair_step, "repair step must log with target=implement-repair"
+	assert 'append_repair_semble_block' in repair_step, "repair prompt assembly must append additive Semble context when available"
 	assert '--semble-bin "$(command -v semble 2>/dev/null || true)"' in body, "targeted-file-context must receive the resolved Semble binary path"
 	assert '--semble-index "${SEMBLE_INDEX_DIR:-}"' in body, "targeted-file-context must receive the Semble index path"
 	assert '--semble-query-from "${IMPLEMENTATION_SEMBLE_QUERY_FILE}"' in body, "targeted-file-context must receive the runtime-local query file"

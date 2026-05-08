@@ -1842,6 +1842,140 @@ jobs:
           CAPTURED_FILES_FILE="${RUNTIME_DIR}/post_codex_captured_files.txt"
           ALLOW_LIST_FILE="${RUNTIME_DIR}/post_codex_repair_allow_list.txt"
 
+          source scripts/semble_helpers.sh 2>/dev/null || true
+
+          build_repair_semble_query() {
+            python3 -c '
+            import re
+            import sys
+            from pathlib import Path
+
+            capture_path, allow_list_path, initial_changed_path = sys.argv[1:4]
+
+            path_re = re.compile(
+                r"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|sh|js|jsx|ts|tsx|json|ya?ml|toml|md|txt))(?:[:(]\d+(?::\d+)?)?"
+            )
+            identifier_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+            generic_tokens = {
+                "test",
+                "error",
+                "line",
+                "assert",
+                "traceback",
+                "syntax",
+                "failed",
+                "failure",
+                "invalid",
+                "token",
+                "scannererror",
+                "scanner",
+                "python3",
+                "yaml",
+            }
+
+            parts = []
+            seen = set()
+
+
+            def add(value: str, *, limit: int = 160) -> None:
+                value = re.sub(r"\s+", " ", value or "").strip()
+                if not value:
+                    return
+                lowered = value.lower()
+                if lowered in seen:
+                    return
+                seen.add(lowered)
+                parts.append(value[:limit])
+
+
+            def ingest_text(text: str) -> None:
+                compact = re.sub(r"\s+", " ", text or "").strip()
+                if compact:
+                    add(compact, limit=220)
+                for match in path_re.findall(text or ""):
+                    add(match, limit=120)
+                for token in identifier_re.findall(text or ""):
+                    lowered = token.lower()
+                    if lowered in generic_tokens:
+                        continue
+                    if token.isupper() and len(token) <= 3:
+                        continue
+                    add(token, limit=120)
+
+
+            for list_path in (allow_list_path, initial_changed_path):
+                path = Path(list_path)
+                if not path.is_file() or path.stat().st_size <= 0:
+                    continue
+                for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    item = line.strip()
+                    if not item:
+                        continue
+                    add(item, limit=120)
+                    add(Path(item).name, limit=120)
+                    stem = Path(item).stem
+                    if stem:
+                        add(stem, limit=120)
+
+            capture = Path(capture_path)
+            if capture.is_file() and capture.stat().st_size > 0:
+                for line in capture.read_text(encoding="utf-8", errors="replace").splitlines()[:60]:
+                    if line.startswith("====="):
+                        line = line.strip("= ")
+                    ingest_text(line)
+
+            query = " ; ".join(part for part in parts[:6] if part)
+            query = re.sub(r"\s+", " ", query).strip()
+            if len(query) >= 8:
+                print(query[:420])
+            ' "${CAPTURE_FILE:-}" "${ALLOW_LIST_FILE:-}" "${INITIAL_CHANGED_FILE:-}"
+          }
+
+          append_repair_semble_block() {
+            for helper_name in _semble_bool_true _semble_sanitize_one_line semble_collect_query_text semble_query_block_with_target; do
+              if [ "$(type -t "${helper_name}" 2>/dev/null || true)" != "function" ]; then
+                return 0
+              fi
+            done
+            if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
+              return 0
+            fi
+
+            local base_query=""
+            local query_text=""
+            local diff_fragment=""
+            local -a query_fragments=()
+
+            base_query="$(build_repair_semble_query 2>/dev/null || true)"
+            base_query="$(_semble_sanitize_one_line "${base_query}")"
+            if [ -n "${base_query}" ]; then
+              query_fragments+=("${base_query}")
+            fi
+
+            while IFS= read -r allowed_file; do
+              [ -n "${allowed_file}" ] || continue
+              if git ls-files --error-unmatch -- "${allowed_file}" >/dev/null 2>&1 || [ -f "${allowed_file}" ]; then
+                diff_fragment="$(git diff --unified=0 -- "${allowed_file}" 2>/dev/null | head -c 1200 || true)"
+                diff_fragment="$(_semble_sanitize_one_line "${allowed_file}: ${diff_fragment}")"
+                if [ -n "${diff_fragment}" ]; then
+                  query_fragments+=("${diff_fragment}")
+                fi
+              fi
+            done < "${ALLOW_LIST_FILE}"
+
+            if [ "${#query_fragments[@]}" -eq 0 ]; then
+              return 0
+            fi
+
+            query_text="$(semble_collect_query_text 420 "${query_fragments[@]}")"
+            query_text="$(_semble_sanitize_one_line "${query_text}")"
+            if [ -z "${query_text}" ]; then
+              return 0
+            fi
+
+            semble_query_block_with_target "implement-repair" "${query_text}" 6 "Implement Repair Context" || true
+          }
+
           if [ ! -s "${REPAIR_PROMPT_TEMPLATE}" ] || [ ! -s "${REPAIR_VALIDATOR_SCRIPT}" ]; then
             echo "::error::Required repair artifacts are missing from repair-prompt-and-validator-split dependency."
             echo "Expected prompt: ${REPAIR_PROMPT_TEMPLATE} (non-empty)"
@@ -1976,6 +2110,7 @@ jobs:
                   echo "(file not found in working tree)"
                 fi
               done < "${ALLOW_LIST_FILE}"
+              append_repair_semble_block
             } > "${REPAIR_PROMPT_FILE}"
 
             REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
