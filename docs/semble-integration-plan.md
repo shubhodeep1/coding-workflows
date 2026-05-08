@@ -161,7 +161,11 @@ emit `(would overflow total budget — read with read tool)`.
 retrieval block keyed off the plan's task summary. New CLI flags:
 
 ```
---semble-bin <path>          Path to the semble binary (default: which semble)
+--semble-bin <path>          Path to the semble binary. Resolved at
+                              runtime via `shutil.which("semble")` when
+                              not supplied; the helper exits 0 with a
+                              `SEMBLE_FALLBACK` log line if the binary
+                              cannot be found on PATH.
 --semble-index <dir>          Index directory (default:
                               ${RUNTIME_DIR}/.semble-index)
 --semble-query-from <file>    File whose contents become the query (e.g., the
@@ -278,7 +282,7 @@ PR so future readers see the decision was deliberate.
 
 ```
 +----------------------------------------------------------------+
-| GHA job (codex-cli phase, e.g. ai-implement.yml)               |
+| GHA job (codex-cli phase, e.g. .github/workflows/implement.yml)|
 |                                                                |
 |  1. actions/checkout (fetch-depth: 0)                          |
 |  2. setup uv  (new — see install path below) .............    |
@@ -316,8 +320,10 @@ A new helper `scripts/install_semble.sh` encapsulates:
 
 - Pinned version (e.g. `semble==<X.Y.Z>` — exact pin TBD on first stable
   cut; see §9 open questions).
-- Cache key on `(uname -s, semble version)` for the GHA `actions/cache`
-  step.
+- Cache key on `(uname -s, semble --version)` for the GHA
+  `actions/cache` step. (`--version` is the canonical Unix-tool flag;
+  `semble version` as a subcommand is not a documented Semble surface
+  and would silently miscompute the cache key.)
 - Idempotent: skip install if `which semble` resolves and reports the
   pinned version.
 - Fail-soft: on install failure, set `SEMBLE_AVAILABLE=false` in
@@ -396,8 +402,10 @@ the consumer-repo propagation.
 
 - Add `scripts/install_semble.sh`.
 - Add `scripts/semble_helpers.sh` with `semble_query_block`.
-- Add a "Build semble index" step to `.github/workflows/ai-implement.yml`
-  only (smallest blast radius). Step is gated on
+- Add a "Build semble index" step to `.github/workflows/implement.yml`
+  only (smallest blast radius — `implement.yml` is the reusable
+  workflow that the consumer-side `workflow-templates/ai-implement.yml`
+  wrapper calls via `uses: ...@stable`). Step is gated on
   `vars.SEMBLE_ENABLED == 'true'` (default false).
 - Add `SEMBLE_FALLBACK` to the stable-log-prefix list in `agents.md` §
   "Stable log prefixes (contractual)".
@@ -416,7 +424,7 @@ downstream phase changed behaviour (prompt diff = empty).
   --semble-max-chunks / --semble-fallback` flags in
   `scripts/targeted_file_context.py`.
 - Wire the implement-phase caller (`render_prompt.sh` invocation in
-  `ai-implement.yml`) to pass the new flags.
+  `.github/workflows/implement.yml`) to pass the new flags.
 - Add a unit test in `tests/` for the overflow → Semble emission shape
   (mock `semble` binary).
 
@@ -457,25 +465,36 @@ block in the reviewer prompt logs and the autofix succeeds end-to-end.
 **Acceptance**: one real validate self-heal run and one stall-recovery
 judge run succeed with the new blocks visible in the prompt logs.
 
-### 5.5 Phase 5 — Consumer-repo propagation via `workflow-templates/`
+### 5.5 Phase 5 — Consumer-repo propagation via `@stable` release
 
-**Lands**: the same install + index steps in every consumer-repo wrapper.
+**Lands**: a new `@stable` release that ships the install + index steps
+through the *reusable workflows* under `.github/workflows/`. The
+consumer-side `workflow-templates/*.yml` wrappers are NOT edited — they
+are reusable-workflow callers (`uses: shubhodeep1/coding-workflows/.github/workflows/<phase>.yml@stable`)
+and a job using `uses:` cannot also have `steps:` (GHA schema). The
+templates already pin to `@stable`, so cutting the new tag is what
+flows the change to consumers transitively.
 
-- Mirror the `Build semble index` step into every relevant template
-  under `workflow-templates/`:
-  - `ai-implement.yml`
-  - `ai-review.yml`
-  - `ai-validate.yml`
-  - `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`,
-    `ai-orchestrate-clarify-respond.yml`
-  - `ai-clarify.yml`, `ai-plan.yml` — included for parity even though
-    those phases don't query Semble; the index is cheap and avoids per-
-    workflow drift in the install path.
+- Confirm phases 1–4 have added the `Install semble` + `Build semble
+  index` steps to every relevant reusable workflow under
+  `.github/workflows/`:
+  - `implement.yml`, `internal-implement.yml`
+  - `review_autofix.yml`, `internal-review.yml`
+  - `validate.yml`, `internal-validate.yml`
+  - `orchestrate.yml`, `orchestrate_poll.yml`,
+    `orchestrate_clarify_respond.yml`,
+    `internal-orchestrate.yml`, `internal-orchestrate-poll.yml`,
+    `internal-orchestrate-clarify-respond.yml`
+  - `clarify.yml`, `internal-clarify.yml`,
+    `plan.yml`, `internal-plan.yml` — included for parity even though
+    those phases don't query Semble; the index is cheap and avoids
+    per-workflow drift in the install path.
 - Cut a `@stable` release. The release workflow's repository-dispatch
   step (governed by `.github/ai/consumer_repos.json` per CLAUDE.md §14)
-  delivers the updated wrappers to every entry in
-  `.github/ai/consumer_repos.json` (currently 11 entries — 10 external
-  consumer repos plus this repo's self-dispatch path).
+  notifies every entry (currently 11 — 10 external consumer repos plus
+  this repo's self-dispatch path). Consumer wrappers do not need to
+  change because they already pin to `@stable`; their next phase
+  invocation resolves the updated reusable workflow at runtime.
 - Smoke: run an end-to-end issue on one consumer repo
   (e.g. `shubhodeep1/mongo-explorer`) with `SEMBLE_ENABLED=true` set as
   a repo var.
@@ -486,36 +505,48 @@ relative to a comparable historical issue on the same repo.
 
 ---
 
-## 6. Consumer-repo distribution (workflow-templates)
+## 6. Consumer-repo distribution (reusable workflows + `@stable`)
 
-### 6.1 Template surface
+### 6.1 Reusable-workflow surface
 
-Every `workflow-templates/*.yml` file that runs a codex-cli phase needs:
+The consumer-side wrappers under `workflow-templates/*.yml` are
+reusable-workflow callers — each job uses
+`uses: shubhodeep1/coding-workflows/.github/workflows/<phase>.yml@stable`
+and `secrets: inherit`. A job using `uses:` cannot also have a `steps:`
+sequence (GHA schema), so install/index steps **must not** be added to
+the templates. They go in the **reusable workflows** under
+`.github/workflows/` that the templates call.
 
-1. The `setup uv` step (already present in some — audit during rollout).
+The reusable workflows that run a codex-cli phase need:
+
+1. A `setup uv` step (new — `uv` is not currently in the pipeline; see
+   §4.2). Use `astral-sh/setup-uv@v3` (or equivalent pinned action).
 2. A new `Install semble` step (calls `scripts/install_semble.sh`).
 3. A new `Build semble index` step.
 4. The downstream phase steps already shell out to scripts that, after
-   phases 1–4 land, internally use Semble; no per-template change beyond
-   adding 1–3.
+   phases 1–4 land, internally use Semble; no per-workflow change
+   beyond adding 1–3.
 
 ### 6.2 SEMBLE_ENABLED flag
 
 A new repo-var `SEMBLE_ENABLED` (default `false`) gates everything. The
-flag is read by the install/index steps and exported into
-`$GITHUB_ENV` for downstream scripts. Consumer repos opt in by setting
-the repo-var explicitly. The default-false posture means consumer repos
-that pull the new templates but haven't opted in stay on the legacy
-path.
+flag is read by the install/index steps in the reusable workflows and
+exported into `$GITHUB_ENV` for downstream scripts. Consumer repos opt
+in by setting the repo-var explicitly on their own repository — the
+reusable workflow inherits the *caller* repo's vars when invoked via
+`uses:`. The default-false posture means consumer repos that pick up
+the new `@stable` reusable workflow but haven't opted in stay on the
+legacy path.
 
 ### 6.3 Wrapper-pin policy interaction
 
-Consumer-repo wrappers pin to specific commits of this repo's templates
-(see CLAUDE.md §14 + `wrapper pin policy` in the operator runbook).
-Phase 5 cuts a new `@stable` tag *after* phases 1–4 have soaked on this
-repo. Consumer repos will pick up the new wrappers on their normal
-auto-update cycle (the `repository_dispatch` event). No per-repo manual
-edits are required.
+Consumer-repo wrappers pin to `@stable` (see CLAUDE.md §14 +
+`wrapper pin policy` in the operator runbook). Phase 5 cuts a new
+`@stable` tag *after* phases 1–4 have soaked on this repo. Because the
+consumer wrappers themselves are unchanged, the propagation requires
+only the new tag — the next reusable-workflow invocation resolves to
+the updated `.github/workflows/<phase>.yml`. No per-repo manual edits
+are required.
 
 ### 6.4 GH_PAT scope
 
@@ -688,14 +719,15 @@ plan, ordered by dependency:
       `SEMBLE_ENABLED=true`.
 - [ ] Phase 2 — `scripts/targeted_file_context.py` overflow path with
       Semble, `tests/` overflow shape test, wire into
-      `ai-implement.yml`.
+      `.github/workflows/implement.yml`.
 - [ ] Phase 3 — Reviewer + conflict resolver scripts, prompt-shape test
       updates.
 - [ ] Phase 4 — Validate + implement-diagnose + judge phases,
       `{{SEMBLE_PREFETCH}}` placeholder + `render_prompt.sh` handling.
-- [ ] Phase 5 — Mirror install/index steps into every relevant
-      `workflow-templates/*.yml`. Cut `@stable`. Smoke on one
-      consumer repo.
+- [ ] Phase 5 — Confirm install/index steps are present in every
+      relevant reusable workflow under `.github/workflows/` (NOT in
+      `workflow-templates/`, which use `uses:` and cannot carry
+      `steps:`). Cut `@stable`. Smoke on one consumer repo.
 - [ ] Cost audit extension (`scripts/cost_audit.py`) — Semble byte
       bucket + fallback counter.
 - [ ] Workflow log analysis section flagging high fallback rates.
