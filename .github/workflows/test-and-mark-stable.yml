@@ -3334,11 +3334,11 @@ jobs:
         # its 30m cap, run #25200117236 cancelled at 60m 11s on
         # api-redundancy with its 60m cap (now 90m, see workflow-log-
         # analysis.yml), run #25474659590 cancelled at 45m 16s on
-        # deep-audit with its prior 45m cap (now 75m), and run
-        # #25558885206 cancelled at 30m 14s on analyze-commit-notify
-        # with its prior 30m cap (now 60m). Per Copilot review on
-        # PR #1742: the previous 95m setting could still time out a
-        # healthy run that hit the worst case.
+        # deep-audit with its prior 45m cap (now 75m), and run #25558885206
+        # cancelled at 30m 14s on analyze-commit-notify with its
+        # prior 30m cap (now 60m). Per Copilot review on PR #1742:
+        # the previous 95m setting could still time out a healthy
+        # run that hit the worst case.
         timeout-minutes: 265
         env:
           WF_FILE: workflow-log-analysis.yml

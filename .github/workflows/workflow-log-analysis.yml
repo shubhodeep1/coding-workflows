@@ -183,10 +183,21 @@ jobs:
     # 11m 57s, 25470798500 12m 46s), so this run hit a slow Codex pass /
     # retry under the 30m cap. Bumped 30 → 60m to mirror the api-redundancy
     # 30 → 60m precedent (run #25115192726). When this is bumped again,
-    # also propagate the +Δ minutes through test-and-mark-stable.yml's
-    # `Dispatch & watch — workflow-log-analysis` step (in-script DEADLINE
-    # in seconds, step timeout-minutes, and the job-level timeout-minutes
-    # with its sum-of-DEADLINEs comment).
+    # also propagate the +Δ minutes through every caller that watches a
+    # dispatched run of this workflow:
+    #   1. test-and-mark-stable.yml's `orphan-workflows-test` →
+    #      `Dispatch & watch — workflow-log-analysis` step (in-script
+    #      DEADLINE in seconds, step timeout-minutes, and the job-level
+    #      timeout-minutes with its sum-of-DEADLINEs comment).
+    #   2. comprehensive-test-and-release.yml's
+    #      `phase2-collect-and-analyze-logs` (and the downstream
+    #      `phase3-...` job that reuses the same watcher pattern) —
+    #      both currently capped at `timeout-minutes: 120`. The watcher
+    #      is idle-based (INACTIVITY_LIMIT = phase_timeout * 60), so a
+    #      progressing run won't trigger the soft idle exit, but the
+    #      hard 120m job cap can still cancel a healthy run whose chain
+    #      now totals up to 250m. Bump those caps if/when this worst
+    #      case becomes observable in those callers.
     timeout-minutes: 60
     outputs:
       report_file: ${{ steps.analyze.outputs.report_file }}
