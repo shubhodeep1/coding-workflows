@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1035-1041 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The structured-block detector matches any bullet-like line after a Q-ID without requiring a real recommended option marker, so unrelated prose can set HAS_STRUCTURED_CLARIFICATION_BLOCK=true.\n  WHY: This can trigger unnecessary auto-answer parsing and human fallback on non-clarification output; some reviewers called it a pre-existing design trade-off or non-blocking, but others flagged it as a false-positive bug.\n- scripts/orchestrate_poll_process.sh:7138-7145 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The poll parser only captures a single letter in recommended-option bullets, so same-line chord recommendations like A+B are truncated or dropped instead of being handled like plan.yml's chord-aware parser.\n  WHY: Valid chord-form recommendations can then fall back to human /answer or emit incomplete answers; several reviewers noted this is a pre-existing limitation rather than a PR-introduced regression.\n- tests/test_plan_auto_answer_recommended_parser.py:288-298 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new test file does not cover poll-parser chord rejection or structured-block false positives, so those regressions are not exercised in CI.\n  WHY: Missing coverage means widened heuristics can change behavior without a failing test.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/plan.yml:1038 | confidence=4\n  PROBLEM: The detection regex matches any bullet-like line after a Q-ID without requiring \"(RECOMMENDED)\", so it can incorrectly set HAS_STRUCTURED_CLARIFICATION_BLOCK=true on non-recommendation bullets.\n  WHY: This can trigger unnecessary auto-answer evaluation that then fails with \"Missing recommended option\" and causes an unnecessary human fallback.\n- scripts/orchestrate_poll_process.sh:7142 | confidence=5\n  PROBLEM: The capture group `([A-Za-z])` only captures a single letter, while the plan.yml parser supports chords like `A+B`.\n  WHY: Same-line chord recommendations such as `- A+B \u2014 description (Recommended)` can be truncated to `A`, causing valid chord recommendations to fall back to human /answer.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:7142 | confidence=4\n  PROBLEM: The poll parser only captures a single letter, while the sibling parser in plan.yml captures chords like `A+C`.\n  WHY: If Codex emits a chord recommendation on one bullet line, the poll parser emits only the first letter and can produce an incomplete answer or force a human /answer fallback.\n- .github/workflows/plan.yml:1035-1041 | confidence=3\n  PROBLEM: The structured-block detection regex is very broad and can set `HAS_STRUCTURED_CLARIFICATION_BLOCK=true` on bullet output that is not a real clarification block.\n  WHY: That can incorrectly set `needs_clarification` and send the workflow down the parse/fallback path even when the output would otherwise be CLEAR.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/plan.yml:1035-1041 | confidence=4\n  PROBLEM: Detection heuristic flags any bullet matching the pattern within 20 lines after a Q-line, without requiring \"Choices:\" or \"(RECOMMENDED)\", so unrelated prose bullets falsely set HAS_STRUCTURED_CLARIFICATION_BLOCK=true.\n  WHY: It triggers auto-answer parsing on non-clarification output, leading to parse errors and unnecessary re-clarify loops or human fallback instead of clean CLEAR.\n- scripts/orchestrate_poll_process.sh:7138-7145 | confidence=4\n  PROBLEM: Single-letter capture `([A-Za-z])` rejects same-line chords like `- **A+B** \u2014 desc (RECOMMENDED)`, unlike plan.yml's chord-aware `([A-Za-z](?:\\+[A-Za-z])*)`.\n  WHY: extract_recommended_answers() misses valid chord emissions, emitting no Q1: line so the poller skips auto-answer and forces human /answer despite valid recommendations.\n- tests/test_plan_auto_answer_recommended_parser.py:288-298 | confidence=3\n  PROBLEM: No test coverage for poll-parser chord rejection or structured-block false positives, such as no-QID bullets or prose after Q-prefix.\n  WHY: Regressions in the widened heuristics can slip through CI because the tests only cover accepted forms and prompt text.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:7141 | confidence=4\n  PROBLEM: The capture group `([A-Za-z])` only matches single letters, rejecting same-line chord format `- A+B \u2014 text (RECOMMENDED)` that the prompts describe as valid and that plan.yml supports.\n  WHY: If Codex emits a chord recommendation on a single line, the poll parser skips it entirely and outputs nothing for that Q-ID, forcing a human /answer fallback despite valid content.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "49c40fd08b8ee70fe44a84b42472cdeddc0ce85b6920e75f230a766f60a5d0f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2312,
+    "run_id": "25564041618",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25564041618",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508155617_9b8ce780bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2312,
+    "run_id": "25564041618"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-08T15:56:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
