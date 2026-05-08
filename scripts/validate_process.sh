@@ -30,14 +30,12 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
 fi
 
 MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.4}"
-# Per the OpenAI gpt-5.4 prompt guide, validate generate / diagnose /
-# fix-harness / self-heal are research/synthesis tasks → `medium` is the
-# right default. Earlier revisions defaulted to `none`, which (a) is not
-# in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
-# for the gpt-5.x family, and (b) silently differed from `validate.yml`'s
-# workflow-level `THINKING_LEVEL_VALIDATE || 'xhigh'`. CI runs were
-# unaffected (the workflow exports the env), but standalone / local
-# invocations now match CI behaviour.
+# Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
+# policy and `validate.yml`'s workflow-level `THINKING_LEVEL_VALIDATE ||
+# 'xhigh'`. Earlier revisions defaulted to `medium`/`none`; `none` is
+# not in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
+# for the gpt-5.x family, so the standalone / local invocation default
+# is kept aligned with the workflow env to avoid silent drift.
 MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
 # Discover is a low-volume execution-heavy task (read repo metadata,
 # emit `.ai/validate.yml` hints). It now defaults to `xhigh` to match

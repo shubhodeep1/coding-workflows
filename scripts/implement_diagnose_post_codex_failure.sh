@@ -23,9 +23,10 @@
 #                                     env. Falls back to MODEL_EDITOR for backward
 #                                     compatibility with older callers.
 #   MODEL_DIAGNOSE_REASONING_EFFORT   reasoning effort for the diagnose model.
-#                                     Defaults to "medium". Patched into
-#                                     ~/.codex/config.toml before invocation
-#                                     (codex exec does not accept a CLI flag).
+#                                     Defaults to "xhigh" (repo-wide gpt-5.4
+#                                     policy). Patched into ~/.codex/config.toml
+#                                     before invocation (codex exec does not
+#                                     accept a CLI flag).
 #   MODEL_EDITOR                      Fallback model when MODEL_DIAGNOSE is unset
 #                                     (legacy / consumer-repo flow).
 #   ISSUE_META_FILE                   Optional cached issue metadata JSON.

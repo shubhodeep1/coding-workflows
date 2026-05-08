@@ -30,11 +30,10 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-      # Per OpenAI prompt guide: clarify is execution-heavy (read repo,
-      # decide whether questions are needed, emit closed STATUS contract)
-      # → low reasoning is sufficient. The smoke override below is now a
-      # noop because the default is already low; kept for parity with
-      # other phases that still flip from medium → low on smoke.
+      # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
+      # policy. The smoke override below intentionally drops reasoning to
+      # `low` for the bait-line smoke fixture; production runs honour the
+      # xhigh default unless overridden via vars.THINKING_LEVEL_CLARIFY.
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'xhigh' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CLARIFY || 'low' }}
       THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'xhigh' }}

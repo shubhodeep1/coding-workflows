@@ -180,12 +180,12 @@ RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
 # that value; for smoke PRs that's fine since "low" doesn't trip the
 # empty-stdout failure mode. The pin here exists so that future changes
 # to the smoke override level don't accidentally starve the resolver:
-# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "medium")
-# overrides config.toml unconditionally before the resolver runs.
-# PR #2058 / run 25300219172 originally hit this with override=none.
+# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "xhigh"
+# repo-wide) overrides config.toml unconditionally before the resolver
+# runs. PR #2058 / run 25300219172 originally hit this with override=none.
 #
 # Override config.toml here using CONFLICT_RESOLVER_REASONING_EFFORT
-# (set by the workflow step's env, defaults to "medium"). Also ensure
+# (set by the workflow step's env, defaults to "xhigh"). Also ensure
 # model_reasoning_summary = "auto" is present — same diagnostic +
 # anti-empty-stdout rationale as the editor step.
 _resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}"

@@ -1194,32 +1194,23 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "Cross-pollination summary: $(wc -c < "${CROSS_POLLINATION_FILE}") bytes"
 
   # ── PASS 2: deep review with cross-pollination ──
-  # Reasoning effort is gated on the size of LAST_RUN_DIFF_FILE (the
+  # Reasoning effort can be gated on the size of LAST_RUN_DIFF_FILE (the
   # "primary review target" — most recent AI-generated changes).
   #
-  # Per the OpenAI gpt-5.4 prompt guide:
-  #   "Start with `medium` or higher for tasks requiring stronger reasoning;
-  #    choose based on performance gains in your evals."
-  #   "Reserve `xhigh` for long, agentic, reasoning-heavy tasks."
-  #   "Before increasing effort, add tool_persistence_rules /
-  #    verification_loop / completeness_contract blocks first — prompt
-  #    fixes often recover more performance than reasoning bumps."
-  #
-  # A small diff (one-line tweak, narrow rename) does not benefit from
-  # xhigh — see the editor smoke history at review_autofix.yml:1846 where
-  # the legacy editor default at xhigh on a one-line bait removal
-  # burned ~81k tokens across 6 attempts and produced 0 file changes. A
-  # large or cross-cutting diff (security-sensitive, schema migration,
-  # refactor) does benefit because Pass 2 has cross-pollination context
-  # from peer reviewers and is the last analysis step before the editor
-  # commits.
+  # Both PASS2_REASONING_SMALL and PASS2_REASONING_LARGE now default to
+  # xhigh (repo-wide gpt-5.4 reasoning-level policy), so the size gate
+  # is a no-op at default settings. The gate structure is retained so
+  # operators can override REVIEWER_PASS2_REASONING_SMALL and/or
+  # REVIEWER_PASS2_REASONING_LARGE per-repo to differentiate small vs
+  # large diffs (e.g. drop small-diff effort to medium for cost).
   #
   # Default threshold: REVIEWER_PASS2_DIFF_LARGE_LOC=200 (added + removed
   # lines). Override per-repo via vars.REVIEWER_PASS2_DIFF_LARGE_LOC.
   #
   # Smoke runs override REVIEWER_REASONING_EFFORT=low explicitly (set in
-  # review_autofix.yml's "Detect smoke test" step) — the gate honours
-  # that override and never escalates on smoke runs.
+  # review_autofix.yml's "Detect smoke test" step) — the operator-override
+  # branch below honours that and never falls through to the size gate
+  # on smoke runs.
   PASS2_DIFF_LARGE_LOC="${REVIEWER_PASS2_DIFF_LARGE_LOC:-200}"
   if ! [[ "${PASS2_DIFF_LARGE_LOC}" =~ ^[0-9]+$ ]]; then
     echo "::warning::Invalid REVIEWER_PASS2_DIFF_LARGE_LOC='${PASS2_DIFF_LARGE_LOC}'. Falling back to 200."
@@ -1266,10 +1257,10 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     PASS2_GATE_NOTE="explicit override from REVIEWER_REASONING_EFFORT=${REVIEWER_REASONING_EFFORT}"
   elif [ "${PASS2_DIFF_LOC}" -ge "${PASS2_DIFF_LARGE_LOC}" ]; then
     PASS2_REASONING="${PASS2_REASONING_LARGE}"
-    PASS2_GATE_NOTE="diff is ${PASS2_DIFF_LOC} LOC ≥ ${PASS2_DIFF_LARGE_LOC} threshold → escalate"
+    PASS2_GATE_NOTE="diff is ${PASS2_DIFF_LOC} LOC ≥ ${PASS2_DIFF_LARGE_LOC} threshold → REVIEWER_PASS2_REASONING_LARGE=${PASS2_REASONING_LARGE}"
   else
     PASS2_REASONING="${PASS2_REASONING_SMALL}"
-    PASS2_GATE_NOTE="diff is ${PASS2_DIFF_LOC} LOC < ${PASS2_DIFF_LARGE_LOC} threshold → keep default"
+    PASS2_GATE_NOTE="diff is ${PASS2_DIFF_LOC} LOC < ${PASS2_DIFF_LARGE_LOC} threshold → REVIEWER_PASS2_REASONING_SMALL=${PASS2_REASONING_SMALL}"
   fi
   echo "=== PASS 2: Deep review (${PASS2_REASONING} reasoning — ${PASS2_GATE_NOTE}) ==="
   PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
