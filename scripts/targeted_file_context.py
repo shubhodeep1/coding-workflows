@@ -519,11 +519,18 @@ def emit_context(
 	if included == 0:
 		output.append("(no existing target files could be inlined)")
 	else:
-		summary = (
-			f"Included {included} entr{'y' if included == 1 else 'ies'} "
-			f"({inlined} inlined, {chunk_retrieved} chunk-retrieved-via-Semble, {marker_only} marker-only), "
-			f"{used_bytes} byte(s) of source content."
-		)
+		if chunk_retrieved > 0:
+			summary = (
+				f"Included {included} entr{'y' if included == 1 else 'ies'} "
+				f"({inlined} inlined, {chunk_retrieved} chunk-retrieved-via-Semble, {marker_only} marker-only), "
+				f"{used_bytes} byte(s) of source content."
+			)
+		else:
+			summary = (
+				f"Included {included} entr{'y' if included == 1 else 'ies'} "
+				f"({inlined} inlined, {marker_only} marker-only), "
+				f"{used_bytes} byte(s) of source content."
+			)
 		if retrieved_via_semble:
 			retrieved_summary = ", ".join(
 				f"{path} ({raw_bytes} bytes -> {chunk_bytes} bytes)"

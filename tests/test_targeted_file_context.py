@@ -334,6 +334,23 @@ def test_overflow_uses_semble_retrieval_when_configured_and_bounded() -> None:
 		assert "src/b.py" in context
 
 
+def test_non_semble_summary_keeps_legacy_parenthetical_format() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "small.py").write_text("small = 1\n", encoding="utf-8")
+		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
+
+		context = emit_context(
+			["src/small.py", "src/big.py"],
+			root,
+			max_bytes=1024,
+		)
+
+		assert "Included 2 entries (1 inlined, 1 marker-only), " in context
+		assert "chunk-retrieved-via-Semble" not in context
+
+
 def test_overflow_semble_fail_open_missing_query_keeps_marker() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
