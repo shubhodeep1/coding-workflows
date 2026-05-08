@@ -1428,10 +1428,64 @@ jobs:
             fi
           fi
 
+          # Body-text fallback: when GraphQL closingIssuesReferences returns
+          # empty (which happens systematically for orchestrator-managed PRs
+          # whose base is `orchestrator/project-<n>` rather than the default
+          # branch — GitHub's closingIssuesReferences only resolves closing
+          # keywords for default-branch-targeted PRs), parse the PR body for
+          # explicit Closes/Fixes/Resolves + #N or in-repo issue URL refs
+          # and back-fill issue title+body via REST.
+          # Scope: only LINKED_ISSUE_CONTEXT_FILE (used for editor/reviewer
+          # prompt context) is affected.  LINKED_ISSUES_JSON (used for
+          # downstream labeling and auto-merge gating) keeps GraphQL-only
+          # semantics — labeling-by-keyword is itself default-branch-gated
+          # by GitHub, so back-filling there would alter unrelated semantics.
+          # Same regex as the smoke-test detection step (case-insensitive
+          # closing keywords + #N or repo-scoped issue URL).  URL prefix is
+          # restricted to the current repository so a cross-repo
+          # `Closes <other-repo>/issues/N` reference cannot route an
+          # unrelated number into this repo's lookup.
+          # API cost: bounded by the count of distinct closing references in
+          # the PR body (typically 1-2); each match issues one
+          # `gh api repos/.../issues/<n>` REST call.  Failures are logged
+          # and skipped (fail-open).
+          _linked_context_raw="${_linked_raw}"
+          if [ "${_linked_context_raw}" = "[]" ] && [ -s "${PR_META_FILE}" ]; then
+            _pr_body_for_fallback="$(jq -r '.body // ""' "${PR_META_FILE}")"
+            if [ -n "${_pr_body_for_fallback}" ]; then
+              _fallback_numbers="$(printf '%s\n' "${_pr_body_for_fallback}" \
+                | grep -oiP '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' \
+                | sort -un || true)"
+              if [ -n "${_fallback_numbers}" ]; then
+                _fallback_json='[]'
+                while IFS= read -r _fb_num; do
+                  [ -z "${_fb_num}" ] && continue
+                  _fb_issue_tmp="$(mktemp)"
+                  if gh_retry "${_fb_issue_tmp}" api "repos/${{ github.repository }}/issues/${_fb_num}" \
+                    --jq '{number: (.number // 0), title: (.title // ""), body: (.body // "")}'; then
+                    _fb_issue_obj="$(cat "${_fb_issue_tmp}" 2>/dev/null || echo '')"
+                    if [ -n "${_fb_issue_obj}" ]; then
+                      _fallback_json="$(printf '%s' "${_fallback_json}" \
+                        | jq --argjson o "${_fb_issue_obj}" '. + [$o]' 2>/dev/null \
+                        || printf '%s' "${_fallback_json}")"
+                    fi
+                  else
+                    echo "::warning::Linked-issue body-text fallback: gh api repos/${{ github.repository }}/issues/${_fb_num} failed; skipping"
+                  fi
+                  rm -f "${_fb_issue_tmp}"
+                done <<< "${_fallback_numbers}"
+                if [ "${_fallback_json}" != "[]" ]; then
+                  _linked_context_raw="${_fallback_json}"
+                  echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
+                fi
+              fi
+            fi
+          fi
+
           # Build linked issue context file for reviewer/editor prompts.
           # Use a temp file to avoid ARG_MAX failures on large issue bodies.
           _linked_json_file="$(mktemp)"
-          printf '%s' "${_linked_raw}" > "${_linked_json_file}"
+          printf '%s' "${_linked_context_raw}" > "${_linked_json_file}"
           PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
           import json, sys
           json_path = sys.argv[1]
