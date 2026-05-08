@@ -317,7 +317,7 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert "--semble-bin \"$(command -v semble 2>/dev/null || true)\"" in targeted_context_step, "workflow must pass the Semble binary to targeted_file_context.py"
 	assert "--semble-index \"${SEMBLE_INDEX_DIR:-}\"" in targeted_context_step, "workflow must pass the runtime-local Semble index"
 	assert "--semble-query-from \"${TARGETED_FILE_CONTEXT_QUERY_FILE:-}\"" in targeted_context_step, "workflow must pass the deterministic Semble query source"
-	assert "--semble-max-chunks \"${TARGETED_FILE_CONTEXT_SEMBLE_MAX_CHUNKS:-3}\"" in targeted_context_step, "workflow must bound Semble retrieval chunks"
+	assert "--semble-max-chunks \"${TARGETED_FILE_CONTEXT_SEMBLE_MAX_CHUNKS:-6}\"" in targeted_context_step, "workflow must bound Semble retrieval chunks"
 	assert "--semble-fallback marker" in targeted_context_step, "workflow must preserve legacy marker fallback on Semble failure"
 
 

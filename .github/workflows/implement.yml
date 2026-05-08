@@ -1056,7 +1056,7 @@ jobs:
               --semble-bin "$(command -v semble 2>/dev/null || true)" \
               --semble-index "${SEMBLE_INDEX_DIR:-}" \
               --semble-query-from "${TARGETED_FILE_CONTEXT_QUERY_FILE:-}" \
-              --semble-max-chunks "${TARGETED_FILE_CONTEXT_SEMBLE_MAX_CHUNKS:-3}" \
+              --semble-max-chunks "${TARGETED_FILE_CONTEXT_SEMBLE_MAX_CHUNKS:-6}" \
               --semble-fallback marker \
               --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
               --output "${TARGETED_FILES_CONTEXT_FILE}" || \

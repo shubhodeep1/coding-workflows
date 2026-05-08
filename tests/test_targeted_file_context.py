@@ -335,6 +335,7 @@ def test_total_budget_overflow_uses_semble_when_enabled() -> None:
 		assert "--- END FILE: src/huge.py ---" in context
 		assert "read with read tool, max_bytes=" not in context
 		assert "Marker-only (would overflow):" not in context
+		assert "0 inlined, 1 chunk-retrieved via semble, 0 marker-only" in context
 
 
 def test_total_budget_overflow_semble_failure_falls_back_to_legacy_marker() -> None:
@@ -366,8 +367,9 @@ def test_total_budget_overflow_semble_failure_falls_back_to_legacy_marker() -> N
 		)
 
 		assert "would overflow total budget" in context
-		assert "chunk-retrieved via semble" not in context
+		assert "bytes — chunk-retrieved via semble" not in context
 		assert "Marker-only (would overflow): src/huge.py" in context
+		assert "0 inlined, 0 chunk-retrieved via semble, 1 marker-only" in context
 
 
 def test_total_budget_overflow_with_fallback_off_emits_no_phantom_marker_count() -> None:
@@ -417,9 +419,56 @@ def test_total_budget_overflow_semble_response_over_budget_falls_back_to_marker(
 			semble_fallback="marker",
 		)
 
-		assert "chunk-retrieved via semble" not in context
+		assert "bytes — chunk-retrieved via semble" not in context
 		assert "would overflow total budget" in context
 		assert "Marker-only (would overflow): src/huge.py" in context
+		assert "0 inlined, 0 chunk-retrieved via semble, 1 marker-only" in context
+
+
+def test_semble_logs_use_stable_target_with_file_field() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "huge.py").write_text("x = 1\n" * 6000, encoding="utf-8")
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		query_file = root / "query.txt"
+		query_file.write_text("implementation context\nplan details\n", encoding="utf-8")
+		semble_bin = root / "semble"
+		_write_executable(
+			semble_bin,
+			"#!/usr/bin/env bash\n"
+			"echo 'backend exploded' >&2\n"
+			"exit 7\n",
+		)
+
+		result = subprocess.run(
+			[
+				sys.executable,
+				str(REPO_ROOT / "scripts" / "targeted_file_context.py"),
+				"--repo-root",
+				str(root),
+				"--paths",
+				"src/huge.py",
+				"--max-bytes",
+				"1024",
+				"--semble-bin",
+				str(semble_bin),
+				"--semble-index",
+				str(index_dir),
+				"--semble-query-from",
+				str(query_file),
+				"--output",
+				str(root / "out.txt"),
+			],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+		assert result.returncode == 0
+		assert "SEMBLE_FALLBACK target=overflow file=src/huge.py reason=query_failed" in result.stderr
+		assert "target=src/huge.py" not in result.stderr
 
 
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:

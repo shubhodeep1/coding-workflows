@@ -134,6 +134,7 @@ DEFAULT_HEADER_TEXT = (
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 SEMBLE_QUERY_TIMEOUT_SECONDS = 5
 SEMBLE_QUERY_TEXT_MAX_CHARS = 4000
+SEMBLE_OVERFLOW_LOG_TARGET = "overflow"
 
 
 def _stderr_log(message: str) -> None:
@@ -223,7 +224,8 @@ def _query_semble_for_overflow(
 		return None, "no_results"
 	bytes_returned = len(body.encode("utf-8"))
 	_stderr_log(
-		f"SEMBLE_QUERY target={_sanitize_one_line(rel)} chunks={semble_max_chunks} bytes={bytes_returned}"
+		f"SEMBLE_QUERY target={SEMBLE_OVERFLOW_LOG_TARGET} file={_sanitize_one_line(rel)} "
+		f"chunks={semble_max_chunks} bytes={bytes_returned}"
 	)
 	return body, None
 
@@ -383,12 +385,13 @@ def emit_context(
 	semble_bin: str | None = None,
 	semble_index: str | None = None,
 	semble_query_from: str | None = None,
-	semble_max_chunks: int = 3,
+	semble_max_chunks: int = 6,
 	semble_fallback: str = "marker",
 ) -> str:
 	output: list[str] = []
 	included = 0
 	inlined = 0
+	semble_retrieved = 0
 	used_bytes = 0
 	skipped_too_large: list[tuple[str, int]] = []
 
@@ -430,12 +433,16 @@ def emit_context(
 					semble_max_chunks=semble_max_chunks,
 				)
 				if semble_error:
-					_stderr_log(f"SEMBLE_FALLBACK target={_sanitize_one_line(rel)} reason={semble_error}")
+					_stderr_log(
+						f"SEMBLE_FALLBACK target={SEMBLE_OVERFLOW_LOG_TARGET} "
+						f"file={_sanitize_one_line(rel)} reason={semble_error}"
+					)
 			if semble_body is not None:
 				semble_body_bytes = len(semble_body.encode("utf-8"))
 				if used_bytes + semble_body_bytes > max_bytes:
 					_stderr_log(
-						f"SEMBLE_FALLBACK target={_sanitize_one_line(rel)} reason=response_over_budget "
+						f"SEMBLE_FALLBACK target={SEMBLE_OVERFLOW_LOG_TARGET} "
+						f"file={_sanitize_one_line(rel)} reason=response_over_budget "
 						f"bytes={semble_body_bytes} remaining={max_bytes - used_bytes}"
 					)
 					semble_body = None
@@ -447,7 +454,7 @@ def emit_context(
 					"",
 				])
 				included += 1
-				inlined += 1
+				semble_retrieved += 1
 				used_bytes += semble_body_bytes
 				continue
 			fallback_lines = _overflow_fallback_lines(rel, raw_size, max_bytes, used_bytes, semble_fallback)
@@ -491,9 +498,11 @@ def emit_context(
 	if included == 0:
 		output.append("(no existing target files could be inlined)")
 	else:
+		marker_only = included - inlined - semble_retrieved
 		summary = (
 			f"Included {included} entr{'y' if included == 1 else 'ies'} "
-			f"({inlined} inlined, {included - inlined} marker-only), "
+			f"({inlined} inlined, {semble_retrieved} chunk-retrieved via semble, "
+			f"{marker_only} marker-only), "
 			f"{used_bytes} byte(s) of source content."
 		)
 		if skipped_too_large:
@@ -525,7 +534,7 @@ def main() -> int:
 	parser.add_argument("--semble-bin", default=None)
 	parser.add_argument("--semble-index", default=None)
 	parser.add_argument("--semble-query-from", default=None)
-	parser.add_argument("--semble-max-chunks", type=positive_int, default=3)
+	parser.add_argument("--semble-max-chunks", type=positive_int, default=6)
 	parser.add_argument("--semble-fallback", choices=("marker", "off"), default="marker")
 	parser.add_argument("--header-text", default=DEFAULT_HEADER_TEXT)
 	parser.add_argument("--output", required=True)
