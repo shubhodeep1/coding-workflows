@@ -79,9 +79,15 @@ Verified against the repo at HEAD of `claude/review-pr57-defects-Gx4k3`.
    `scripts/review_rb_judge.sh:636-682` closes the PR, calls `gh issue create`
    with `NEW_ISSUE_BODY` from the judge JSON. The closed PR's branch is not
    cherry-picked and the prior diff is not referenced as a baseline.
-5. **Smoke / validation runs typecheck + lint + Docker health + test
-   discovery only.** `scripts/validate_driver.sh:75-114`. There is no
-   synthesis of behavioural assertions from judge findings.
+5. **Smoke / validation harness is a Docker Compose health probe plus a
+   TAP-based shell-test runner; it does not itself run typecheck or lint.**
+   `scripts/validate_driver.sh:75-114` is env / config defaults (compose
+   file, app URL, health timeouts, `TEST_DIR`, `CANARY_PATTERN`,
+   `HELPER_PATTERN`); `discover_tests()` at `:687` walks `${TEST_DIR}` and
+   `run_tests()` at `:806` executes each script as a TAP test. Typecheck /
+   lint, when run at all, run in the consumer repo's own CI, not in this
+   driver. There is no synthesis of behavioural assertions from judge
+   findings.
 6. **Spec citations are required of the judge but never verified.**
    `prompts/mode-judge.txt:17-18` says "Cite specific files, functions, and
    line numbers inline next to each claim. Never fabricate" — instruction
@@ -341,7 +347,7 @@ classified `must-fix`.
 | `scripts/review_annotate_sticky.sh` | NEW |
 | `scripts/review_apply_fixes.sh` | INSERT call to sticky annotator before consolidator step |
 | `prompts/review-consolidator.txt` | APPEND "Repeat findings (sticky)" section |
-| `agents.md` | ADD `STICKY_FINDING_DETECTED`, `STICKY_FINDING_PROMOTED` |
+| `agents.md` | ADD `STICKY_FINDING_DETECTED`, `STICKY_FINDING_PROMOTED`, `STICKY_ANNOTATOR_NOOP`, `STICKY_FALSE_POS` |
 
 ### Env Vars
 
@@ -356,6 +362,10 @@ classified `must-fix`.
 - `STICKY_FINDING_PROMOTED` (when consolidator's classification was
   upgraded `non-actionable → must-fix` because of sticky rules; emitted by
   the parser, not the consolidator)
+- `STICKY_ANNOTATOR_NOOP` (annotator skipped due to missing or unreadable
+  prior round artifact; fail-open path)
+- `STICKY_FALSE_POS` (file / line bucket matched but normalised symptom
+  differed; logged for offline tuning, no behavioural effect)
 
 ### Fail-Open Behaviour
 
@@ -496,6 +506,8 @@ roughly proportional to the number of `non-actionable` rejections (typically
 - `CONSOLIDATOR_REJECT_REVERSED` — LLM/script verdict = does-not-support;
   classification reversed to `must-fix`
 - `CONSOLIDATOR_REJECT_VERIFIER_INCONCLUSIVE`
+- `CONSOLIDATOR_REJECT_VERIFIER_FAIL` — verifier script timeout / LLM error /
+  malformed output; classifications left as-is (fail-open)
 
 ### Fail-Open Behaviour
 
@@ -523,11 +535,13 @@ roughly proportional to the number of `non-actionable` rejections (typically
 
 ### Motivation
 
-Per-round smoke today is typecheck + lint + Docker health. Both downstream
-defects in the diagnosis were behavioural (URL fallback shape, never-settling
-Promise) and would have been green on every typecheck/lint pass. Synthesising
-a tiny behavioural assertion per remaining issue gives the loop a per-round
-red signal for behavioural defects.
+Per-round smoke today is the consumer's CI (typecheck / lint, when wired)
+plus the upstream Docker Compose health probe and TAP shell tests run by
+`scripts/validate_driver.sh`. Both downstream defects in the diagnosis were
+behavioural (URL fallback shape, never-settling Promise) and would have been
+green on every typecheck / lint pass and would not have been exercised by
+the existing TAP harness. Synthesising a tiny behavioural assertion per
+remaining issue gives the loop a per-round red signal for behavioural defects.
 
 ### Design
 
@@ -561,10 +575,12 @@ flakiness (no network, no clock).
 **Workflow change:** `.github/workflows/review_autofix.yml`
 - Insert a step **after** judge-interim and **before** the next round's
   reviewer pass.
-- Existing `scripts/validate_driver.sh:104-114` already discovers tests in
-  `validation/tests/`; no change needed there if synthesised tests live
-  under that path. Add a config knob (`VALIDATION_INCLUDE_SYNTHESISED`,
-  default `true` when Phase D is on) to allow opt-out.
+- Existing `discover_tests()` at `scripts/validate_driver.sh:687` walks
+  `${TEST_DIR}` (default `validation/tests/`, set at `:105`) and
+  `run_tests()` at `:806` executes each match; no driver change is needed
+  if synthesised tests live under that path. Add a config knob
+  (`VALIDATION_INCLUDE_SYNTHESISED`, default `true` when Phase D is on) to
+  allow opt-out.
 
 ### Files Changed / Created
 
