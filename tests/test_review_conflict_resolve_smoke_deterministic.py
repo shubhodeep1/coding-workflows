@@ -271,11 +271,28 @@ def test_empty_stdout_no_longer_hard_fail_in_resolver_loop() -> None:
 	)
 
 
+def test_resolver_appends_additive_semble_block_after_targeted_context() -> None:
+	"""The resolver prompt should append Semble context after the existing
+	targeted-file inline block so retries inherit both additive sections."""
+	src = _resolve_script_text()
+	targeted_idx = src.index('cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"')
+	semble_idx = src.index('cat "${RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"')
+	assert targeted_idx < semble_idx, (
+		"Resolver Semble block must be appended after targeted-file context so "
+		"the existing conflict-marker inline context remains first and retries "
+		"inherit both additive sections in stable order."
+	)
+	assert 'semble_prompt_block_from_files' in src, (
+		"Resolver must use the shared Semble helper for additive symbol-neighborhood context."
+	)
+
+
 def main() -> int:
 	test_smoke_deterministic_block_present_and_gated()
 	test_smoke_deterministic_resolution_keeps_head_drops_alt()
 	test_smoke_deterministic_block_is_no_op_without_smoke_env()
 	test_empty_stdout_no_longer_hard_fail_in_resolver_loop()
+	test_resolver_appends_additive_semble_block_after_targeted_context()
 	print(
 		"OK: review_conflict_resolve smoke deterministic-resolution "
 		"and empty-stdout fallthrough contracts hold"

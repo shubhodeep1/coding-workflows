@@ -36,6 +36,13 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   echo "::warning::gh_helpers.sh unavailable or incomplete; falling back to direct gh calls without retry helper."
   gh_retry() { "$@"; }
 fi
+if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
+elif [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "scripts/semble_helpers.sh"
+fi
 
 echo "Running Codex resolver"
 
@@ -61,6 +68,7 @@ git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
   git merge --abort 2>/dev/null || true
 fi
+
 git reset --hard HEAD 2>/dev/null || true
 
 # Move workflow-fetched untracked dirs out of the way so they don't
@@ -443,6 +451,24 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
   rm -f "${_fp_violated_tmp}"
 fi
 
+CONFLICT_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/conflict_semble_context.txt"
+: > "${CONFLICT_SEMBLE_CONTEXT_FILE}"
+if command -v semble_prompt_block_from_text >/dev/null 2>&1; then
+  _conflict_query_files="$(printf '%s\n' "${CONFLICTED_FILES_LIST}" | sed 's/^ *- //' | head -n 20 | paste -sd ', ' -)"
+  _conflict_query_fingerprints="$(head -c 1200 "${INTEGRATION_FINGERPRINTS_FILE:-/dev/null}" 2>/dev/null || true)"
+  semble_prompt_block_from_text \
+    "Conflict Neighborhood Context" \
+    "${SEMBLE_CONFLICT_MAX_CHUNKS:-4}" \
+    "${SEMBLE_CONFLICT_QUERY_MAX_CHARS:-2200}" \
+    "Conflict resolver must preserve in-scope files, conflict-marker cleanup, allowlist limits, and fingerprint constraints while resolving merge hunks." \
+    "In-scope conflicted files: ${_conflict_query_files}" \
+    "Tracking issue title: ${INTEGRATION_TRACKING_TITLE}" \
+    "Tracking issue body: ${INTEGRATION_TRACKING_BODY}" \
+    "Merged sub-issues: ${INTEGRATION_MERGED_SUB_ISSUES_LIST}" \
+    "Intent fingerprints: ${_conflict_query_fingerprints}" \
+    > "${CONFLICT_SEMBLE_CONTEXT_FILE}" || true
+fi
+
 # Render the prompt template with substitutions. We pass placeholder
 # names + their values via env so the python one-liner stays under
 # GHA's 21,000-char per-step expression limit and avoids wrestling
@@ -459,6 +485,11 @@ PROMPT_TPL="${PROMPT_TPL}" \
   INTEGRATION_FINGERPRINTS_FILE="${INTEGRATION_FINGERPRINTS_FILE:-}" \
   python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
   > "${CONFLICT_RESOLVER_PROMPT_FILE}"
+
+if [ -s "${CONFLICT_SEMBLE_CONTEXT_FILE}" ]; then
+  printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+  cat "${CONFLICT_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
 
 # ── Smoke-test override gate ──────────────────────────────────────
 # The smoke override prepends a "you MUST call apply_patch on

@@ -24,15 +24,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SCRIPT = REPO_ROOT / "scripts" / "install_semble.sh"
 HELPERS_SCRIPT = REPO_ROOT / "scripts" / "semble_helpers.sh"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
 
-def _workflow_step_block(step_name: str) -> str:
-	body = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+def _workflow_step_block_from(workflow_path: Path, step_name: str) -> str:
+	body = workflow_path.read_text(encoding="utf-8")
 	marker = f"\n      - name: {step_name}\n"
 	_, found, tail = body.partition(marker)
 	assert found, f"workflow step missing: {step_name}"
 	block, _, _ = tail.partition("\n      - name: ")
 	return block
+
+
+def _workflow_step_block(step_name: str) -> str:
+	return _workflow_step_block_from(IMPLEMENT_WORKFLOW, step_name)
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -312,6 +317,22 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert "reason=workspace_unavailable" in index_step, "workflow must fail soft when the workspace path is unavailable"
 	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_step, "workflow must build the workspace-local index directory"
 	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in index_step, "workflow must build a real Semble index before advertising it"
+
+
+def test_review_autofix_workflow_stages_and_gates_semble_foundation() -> None:
+	body = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	assert "SEMBLE_ENABLED" in body, "review workflow must expose SEMBLE_ENABLED"
+	assert "install_semble.sh semble_helpers.sh" in body, "review workflow must stage the Semble support scripts"
+	setup_block = _workflow_step_block_from(REVIEW_AUTOFIX_WORKFLOW, "Setup uv for Semble")
+	assert "uses: astral-sh/setup-uv@v3" in setup_block, "review workflow must install uv when Semble is enabled"
+	install_block = _workflow_step_block_from(REVIEW_AUTOFIX_WORKFLOW, "Install Semble")
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"' in install_block, "review workflow must run the install helper from staged support scripts"
+	index_block = _workflow_step_block_from(REVIEW_AUTOFIX_WORKFLOW, "Build Semble index")
+	assert 'workspace_root="${GITHUB_WORKSPACE:-}"' in index_block, "review workflow must guard the workspace path before indexing"
+	assert "reason=workspace_unavailable" in index_block, "review workflow must fail soft when the workspace path is unavailable"
+	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_block, "review workflow must build the workspace-local index directory"
+	assert 'SEMBLE_INDEX target=review_autofix path=${SEMBLE_INDEX_DIR}' in index_block, "review workflow must log review-path Semble index creation"
+	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in index_block, "review workflow must build a real Semble index before advertising it"
 
 
 def main() -> int:

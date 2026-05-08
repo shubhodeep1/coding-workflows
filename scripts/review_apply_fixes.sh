@@ -32,6 +32,14 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
   }
 fi
 
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
+elif [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "scripts/semble_helpers.sh"
+fi
+
 # Returns 0 iff the worktree carries a non-whitespace change vs HEAD —
 # either a tracked file whose `git diff --ignore-space-at-eol
 # --ignore-blank-lines HEAD` shows a hunk, or an untracked file
@@ -263,6 +271,19 @@ if [ -n "${_targeted_paths_source}" ]; then
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
 
+EDITOR_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/editor_semble_context.txt"
+: > "${EDITOR_SEMBLE_CONTEXT_FILE}"
+if command -v semble_prompt_block_from_files >/dev/null 2>&1; then
+  semble_prompt_block_from_files \
+    "Editor Referenced Context" \
+    "${SEMBLE_EDITOR_MAX_CHUNKS:-4}" \
+    "${SEMBLE_EDITOR_QUERY_MAX_CHARS:-2200}" \
+    "${REVIEWER_CONSENSUS_FILE}" \
+    "${REVIEW_ISSUES_FILE}" \
+    "${REVIEWER_BUNDLE_FILE}" \
+    > "${EDITOR_SEMBLE_CONTEXT_FILE}" || true
+fi
+
 # Build the editor prompt body. The smoke override (when active) is
 # prepended OUTSIDE the main heredoc so non-smoke runs produce a
 # byte-identical body to the pre-#2086 implementation — keeps the
@@ -439,6 +460,8 @@ $(_embed_input_file "${LAST_COMMIT_STAT_FILE}" 50000)
 === END ${LAST_COMMIT_STAT_FILE} ===
 
 $(if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then _embed_input_file "${TARGETED_FILES_CONTEXT_FILE}" 200000; fi)
+
+$(if [ -s "${EDITOR_SEMBLE_CONTEXT_FILE}" ]; then _embed_input_file "${EDITOR_SEMBLE_CONTEXT_FILE}" 30000; fi)
 
 === BEGIN ${REVIEWER_CONSENSUS_FILE} (cross-reviewer consensus ledger — multi-reviewer findings are higher confidence) ===
 $(_embed_input_file "${REVIEWER_CONSENSUS_FILE}" 150000)

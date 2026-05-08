@@ -277,11 +277,14 @@ def _render_conflict_resolver_prompt(
 	shutil.copy(CONFLICT_RESOLVER_TPL, prompts_dir / "conflict-resolver.txt")
 
 	prompt_file = runtime / "conflict_resolver_prompt.txt"
+	semble_context_file = runtime / "conflict_semble_context.txt"
+	semble_context_file.write_text("", encoding="utf-8")
 	env = os.environ.copy()
 	env.update({
 		"SUPPORT_PROMPTS_DIR": str(prompts_dir),
 		"RUNTIME_DIR": str(runtime),
 		"CONFLICT_RESOLVER_PROMPT_FILE": str(prompt_file),
+		"CONFLICT_SEMBLE_CONTEXT_FILE": str(semble_context_file),
 		# Empty / non-orchestrator values so the integration-sync
 		# branch is skipped and the python one-liner renders the
 		# generic template.
@@ -416,11 +419,26 @@ def test_smoke_override_renders_only_when_canary_has_markers() -> None:
 		)
 
 
+def test_conflict_prompt_templates_describe_semble_blocks_as_additive() -> None:
+	generic = CONFLICT_RESOLVER_TPL.read_text(encoding="utf-8")
+	integration = (REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt").read_text(encoding="utf-8")
+	for body in (generic, integration):
+		assert "=== SEMBLE: ... ===" in body, (
+			"Conflict resolver templates must describe Semble blocks explicitly so "
+			"the additive context boundary is clear to the model."
+		)
+		assert "additive repository context only" in body, (
+			"Conflict resolver templates must say Semble blocks are additive-only and "
+			"non-authoritative."
+		)
+
+
 def main() -> int:
 	test_smoke_detect_exports_is_smoke_test_env()
 	test_prepare_script_contains_smoke_only_block()
 	test_production_prompt_byte_identical_when_smoke_unset_or_no_markers()
 	test_smoke_override_renders_only_when_canary_has_markers()
+	test_conflict_prompt_templates_describe_semble_blocks_as_additive()
 	print(
 		"OK: review_autofix smoke conflict-resolver override contract "
 		"assertions hold"

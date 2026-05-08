@@ -89,6 +89,7 @@ on:
         type: boolean
 
 env:
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m2.5
     moonshotai/kimi-k2.5
@@ -911,7 +912,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh install_semble.sh semble_helpers.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -1222,6 +1223,61 @@ jobs:
             --web-search disabled \
             --catalog-path "${CATALOG_PATH}"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Setup uv for Semble
+        if: env.SEMBLE_ENABLED == 'true'
+        id: setup_uv_for_semble
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Semble
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
+
+      - name: Build Semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -uo pipefail
+
+          workspace_root="${GITHUB_WORKSPACE:-}"
+          SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+
+          if [ "${SEMBLE_AVAILABLE:-false}" != 'true' ]; then
+            echo "SEMBLE_FALLBACK target=index reason=semble_unavailable" >&2
+            exit 0
+          fi
+
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "SEMBLE_FALLBACK target=index reason=missing_binary_after_install" >&2
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [ -z "${workspace_root}" ] || [ ! -d "${workspace_root}" ]; then
+            echo "SEMBLE_FALLBACK target=index reason=workspace_unavailable" >&2
+            exit 0
+          fi
+
+          if mkdir -p "${SEMBLE_INDEX_DIR}" && \
+             (cd "${workspace_root}" && semble index . --out "${SEMBLE_INDEX_DIR}") && \
+             printf '%s\n' "${workspace_root}" > "${SEMBLE_INDEX_DIR}/repo_root" && \
+             {
+               printf 'created_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+               printf 'semble_bin=%s\n' "$(command -v semble)"
+             } > "${SEMBLE_INDEX_DIR}/metadata.env"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_DIR=${SEMBLE_INDEX_DIR}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX target=review_autofix path=${SEMBLE_INDEX_DIR}" >&2
+          else
+            echo "SEMBLE_FALLBACK target=index reason=build_failed" >&2
+          fi
 
       - name: Pre-assemble static context (cacheable across runs)
         run: |
@@ -3451,7 +3507,7 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh install_semble.sh semble_helpers.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src=".codex-workflow-src/scripts/${f}"
