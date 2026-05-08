@@ -33,7 +33,7 @@ Rules:
   implementation will replace): emit exactly `BLOCKED: <short reason>`.
   Missing source files on the current ref are NOT external inputs — they are
   codebase state the plan can address; flag them under CONFLICT DETECTION
-  (see plan.yml inline block) and continue planning.
+  and continue planning.
 - Scope-too-large gate: if the honest estimate exceeds 60 minutes, do NOT
   emit a plan; emit exactly
   `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`.

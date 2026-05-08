@@ -43,8 +43,10 @@ Rules:
   the PR is closed. Either (a) phrase guidance in terms of behaviour and
   acceptance criteria rather than file:line addresses, or (b) when file:line
   refs are necessary for clarity, prefix them with "in the closed PR
-  (#<n>):" so downstream planners do not interpret them as prerequisites on
-  main. Do NOT cite paths/lines as bare `apps/x/y.ts:NN` without that prefix.
+  (#<number>):" — replace `<number>` with the actual closed PR number from
+  the context (the PR you are about to close) — so downstream planners do
+  not interpret them as prerequisites on main. Do NOT cite paths/lines as
+  bare `apps/x/y.ts:NN` without that prefix.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
 
