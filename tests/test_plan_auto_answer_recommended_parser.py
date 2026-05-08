@@ -279,6 +279,21 @@ def test_structured_block_detector_rejects_input_with_no_qid() -> None:
 	)
 
 
+def test_structured_block_detector_accepts_same_line_chord_form() -> None:
+	# Codex can emit a chord recommendation on a single bullet
+	# (`- A+B — desc (Recommended)`); both the auto-answer parser at
+	# line 1193 and the poll parser accept that shape. Without chord
+	# support, a Codex emission that omits `STATUS: NEEDS_CLARIFICATION`
+	# and the `Choices:` literal would be missed by the fallback
+	# detector and the workflow would set needs_clarification=false.
+	assert _run_structured_block_detector(
+		"Q1: Pick one\n- A+B — chord recommendation (Recommended)\n"
+	)
+	assert _run_structured_block_detector(
+		"Q1: Pick one\n- **A+C** — chord with bold (RECOMMENDED)\n"
+	)
+
+
 def test_structured_block_detector_rejects_prose_bullets_without_recommended() -> None:
 	# Without `(RECOMMENDED)` on the bullet, a single-letter prose item
 	# after a Q-ID-shaped line must not falsely trigger the heuristic —
