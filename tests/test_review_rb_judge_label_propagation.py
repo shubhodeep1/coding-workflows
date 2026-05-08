@@ -130,10 +130,13 @@ def test_close_and_reissue_branch_gates_on_orchestrator_managed_label() -> None:
 		"on the parent carrying ai:orchestrator-managed — widening the "
 		"gate would mislabel standalone (non-orchestrator) reissues."
 	)
-	assert '--label" "ai:orchestrator-managed"' in branch or \
-		'"--label" "ai:orchestrator-managed"' in branch, (
+	# Pin the exact bash array assignment that appends the label flag
+	# pair to `gh issue create`.  Matching the literal source line is
+	# clearer than a quote-escaped substring search and catches both a
+	# missing `--label` arg and a wrong label name in one assertion.
+	assert 'RB_PROPAGATE_LABELS+=("--label" "ai:orchestrator-managed")' in branch, (
 		"close_and_reissue branch must append `--label ai:orchestrator-managed` "
-		"to the gh issue create args when the gate fires."
+		"to the gh issue create args via the RB_PROPAGATE_LABELS array."
 	)
 
 
