@@ -385,7 +385,7 @@ output = Path(output_path)
 if not query or len(query) < 8:
     try:
         output.unlink()
-    except FileNotFoundError:
+    except OSError:
         pass
     sys.exit(0)
 
@@ -397,7 +397,10 @@ payload = {
     "identifiers": identifiers[:8],
     "evidence": evidence[:6],
 }
-output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+try:
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+except OSError:
+    sys.exit(0)
 PY
 }
 

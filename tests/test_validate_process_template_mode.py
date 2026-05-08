@@ -69,6 +69,7 @@ def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
 	assert 'source scripts/semble_helpers.sh 2>/dev/null || true' in script_text
 	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/validation_semble_query.json}"' in script_text
 	assert '_append_validation_semble_block()' in script_text
+	assert 'for helper_name in _semble_bool_true _semble_sanitize_one_line semble_query_block; do' in script_text
 	assert 'semble_query_block "${query_text}" 3 "Validation Self-Heal Context" || true' in script_text
 	assert '"mode-validate-discover.txt"' in script_text
 	assert '"mode-validate-generate.txt"' in script_text
@@ -106,6 +107,7 @@ def test_validate_driver_skips_root_sidecar_fallback_when_runtime_dir_missing() 
 	assert 'VALIDATION_SEMBLE_QUERY_FILE="${VALIDATION_SEMBLE_QUERY_FILE:-}"' in text
 	assert 'case "${VALIDATION_SEMBLE_QUERY_FILE}" in' in text
 	assert '/validation_semble_query.json)' in text
+	assert 'except OSError:' in text
 
 
 def test_template_mode_missing_manifest_returns_harness_error() -> None:

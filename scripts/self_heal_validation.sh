@@ -185,10 +185,12 @@ PY
 
 _append_validation_semble_block()
 {
+	for helper_name in _semble_bool_true _semble_sanitize_one_line semble_query_block; do
+		if [ "$(type -t "${helper_name}" 2>/dev/null || true)" != "function" ]; then
+			return 0
+		fi
+	done
 	if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
-		return 0
-	fi
-	if [ "$(type -t semble_query_block 2>/dev/null || true)" != "function" ]; then
 		return 0
 	fi
 
