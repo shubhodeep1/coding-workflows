@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: File contains corrupted content and does not match the required exact 3-line specification from issue #2305.\n  WHY: The smoke-test validator performs strict equality checks, and the required status, run_id, and updated-by values are wrong while extra lines are present, so the gate will reject the file.\n- tests/e2e_smoke_canary.txt:1 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: \"status: BROKEN_BY_E2E_BAIT_25558853263\" does not match required \"status: ok\".\n  WHY: Status field validation fails exact match required by the issue spec.\n- tests/e2e_smoke_canary.txt:2 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: \"run_id: WRONG_VALUE_SHOULD_BE_25558853263\" does not match required \"run_id: 25558853263\".\n  WHY: run_id field validation fails exact match required by the issue spec.\n- tests/e2e_smoke_canary.txt:3 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: \"updated-by: e2e-bait-injector\" does not match required \"updated-by: ai-pipeline\".\n  WHY: Attribution field validation fails exact match required by the issue spec.\n- tests/e2e_smoke_canary.txt:4-6 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Three extraneous lines are present beyond the required 3-line limit.\n  WHY: The issue forbids any extra content, so line-count validation rejects the file.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file contains 6 lines of bait-corrupted content that violates the linked issue specification.\n  WHY: The E2E smoke-test gate reads this file and performs strict equality validation, so the wrong values and extra lines will fail parsing and comparison checks.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file content is corrupted and does not match the required specification from issue #2305.\n  WHY: The issue explicitly requires exactly three lines with no extra content, but the current file has wrong values and three extra lines, so downstream validation fails.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File contains corrupted E2E bait content instead of the required exact 3-line specification from issue #2305.\n  WHY: The E2E smoke test validator performs strict equality checks on this file, so the line count mismatch, wrong field values, and extra lines will fail validation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file contains 6 lines of corrupted content instead of exactly the 3 lines specified in issue #2305.\n  WHY: The E2E smoke test validator expects an exact match to the 3-line specification, and every field is wrong with 3 extra lines present, so the gate rejects it.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File contains exactly 6 lines with incorrect values instead of exactly 3 required lines (\"status: ok\", \"run_id: 25558853263\", \"updated-by: ai-pipeline\" with trailing newline).\n  WHY: Any validator parsing this file per issue #2305 spec will reject due to line count mismatch, field value mismatches, and extraneous lines 4-6; E2E smoke gate blocks.\n- tests/e2e_smoke_canary.txt:1 | severity=high | confidence=5\n  PROBLEM: \"status: BROKEN_BY_E2E_BAIT_25558853263\" does not match required \"status: ok\".\n  WHY: Status field validation fails exact match required by issue spec.\n- tests/e2e_smoke_canary.txt:2 | severity=high | confidence=5\n  PROBLEM: \"run_id: WRONG_VALUE_SHOULD_BE_25558853263\" does not match required \"run_id: 25558853263\".\n  WHY: run_id field validation fails exact match; PR attempted update but result mismatches spec (bait corruption not fully overwritten).\n- tests/e2e_smoke_canary.txt:3 | severity=high | confidence=5\n  PROBLEM: \"updated-by: e2e-bait-injector\" does not match required \"updated-by: ai-pipeline\".\n  WHY: Attribution field validation fails exact match.\n- tests/e2e_smoke_canary.txt:4-6 | severity=high | confidence=5\n  PROBLEM: Three extraneous lines present beyond required 3-line limit.\n  WHY: Issue forbids \"any extra content\"; line count validation rejects file.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File content is corrupted and does not match the required specification from issue #2305.\n  WHY: The E2E smoke test validator will fail strict equality checks because the required 3-line format is violated by wrong field values and extra content, blocking the smoke gate.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5536c02b40382e82af29ea551b15b5762bb340c789d86248998096221e5e538e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2309,
+    "run_id": "25559145025",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25559145025",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508140543_a4e1c81172",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2309,
+    "run_id": "25559145025"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-08T14:05:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
