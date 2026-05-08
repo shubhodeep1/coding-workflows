@@ -1099,3 +1099,128 @@ _Notes from the cross-cutting sweep:_
 | Code modularization | 5-7 | Medium |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 4-6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-08)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven equivalent enough to consolidate without changing filters, retries, pagination, failure behavior, cache contracts, or concurrency semantics. `NEEDS_VERIFICATION` means there is a plausible consolidation/reuse win, but at least one of those safety conditions is not fully provable from static reading alone. `RISKY_SKIP` means the overlap is real, but the call sits in a polling/retry/race-defense path where this pass must not authorize auto-implementation.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — `issue_pr_status.yml` does two GraphQL lookups over the same linked-issue set in one step
+- **Safety tag:** NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/issue_pr_status.yml:188-193` and `.github/workflows/issue_pr_status.yml:280-350`
+- **Current call count:** 2 baseline GitHub GraphQL calls in the `Update linked issue labels when PR closes` step
+- **Proposed call count:** 1 baseline GraphQL call, with a conditional extra lookup only if `BRANCH_ISSUE_NUMBER` adds an issue not already returned by `closingIssuesReferences`
+- **Endpoint(s):** GitHub GraphQL `repository { pullRequest(number: ...) { closingIssuesReferences(...) } }` and GitHub GraphQL `repository { issue(number: ...) { ... } }`
+- **Evidence:** The step first fetches only linked issue numbers, then later re-queries the same issue set to classify tracking/managed issues by labels/body.
+  ```bash
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ...
+    -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+  ```
+  ```bash
+  ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+  ...
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+  ```
+  The second call exists only because the first call did not ask for `labels`/`body`, even though the first call already identified the core linked-issue set.
+- **Proposed fix:** In the `Update linked issue labels when PR closes` step, extend the first `closingIssuesReferences` query to fetch `nodes { number labels(first: 50) { nodes { name } } body }`, classify those nodes directly, and reserve the later alias-query path only for any branch-derived issue number added from `PR_HEAD_REF` that is not already present in the first response.
+- **Safety rationale:** The calls overlap strongly and occur in the same workflow step with no intervening mutation, but the branch-derived `ai/issue-N` fallback means static reading alone does not prove the first query fully covers every issue that the second query currently classifies.
+- **Downstream signal:** Verify on representative PR-close events that `BRANCH_ISSUE_NUMBER` never loses tracking/managed classification when it is absent from `closingIssuesReferences`; only then collapse the second GraphQL call into the first-query payload.
+
+#### MERGE-002 — `test-and-mark-stable.yml` polls the same run endpoint twice per iteration for `status` and `conclusion`
+- **Safety tag:** RISKY_SKIP
+- **File path and line ranges:** `.github/workflows/test-and-mark-stable.yml:2797-2806`
+- **Current call count:** 2 REST calls per polling iteration
+- **Proposed call count:** 1 REST call per polling iteration
+- **Endpoint(s):** GitHub REST `GET /repos/{repo}/actions/runs/{run_id}`
+- **Evidence:** The loop calls the identical endpoint twice back-to-back, once for `.status` and once for `.conclusion`.
+  ```bash
+  EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.status // ""' 2>/dev/null || echo "")
+  EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.conclusion // ""' 2>/dev/null || echo "")
+  ```
+  Other watcher blocks in the same workflow already use the single-call shape:
+  ```bash
+  JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
+  ```
+  at `.github/workflows/test-and-mark-stable.yml:3377-3381`, `3435-3439`, `3496-3500`, `3559-3563`, `3673-3677`, and `3908-3912`.
+- **Proposed fix:** Manually align the `cancel-on-close` watcher loop with the existing one-call watcher pattern already used elsewhere in `test-and-mark-stable.yml`: fetch `--jq '{status, conclusion}'` once per iteration, then parse both fields from the same JSON blob.
+- **Safety rationale:** This is a clean endpoint-level merge, but it is inside a dispatch-polling loop, which the audit contract treats as a rate-limit-sensitive path requiring manual review instead of auto-implementation.
+- **Downstream signal:** Do not auto-implement; manually review the polling cadence, failure logging, and timeout semantics for the `cancel-on-close` smoke path before collapsing the two per-iteration calls into one.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — `issue_pr_status.yml` re-fetches issue bodies for merged-alert suppression even though orchestrator classification was already computed earlier in the same job
+- **Safety tag:** NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/issue_pr_status.yml:297-350` and `.github/workflows/issue_pr_status.yml:501-517`
+- **Current call count:** Up to **N** REST calls in `Send PR merged Telegram alert`, where **N** is the number of linked issues
+- **Proposed call count:** 0 additional classification calls in the alert step
+- **Endpoint(s):** Earlier step: GitHub GraphQL issue classification via `ORCH_QUERY`; later step: GitHub REST `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:** The earlier step already computes `TRACKING_ISSUES` and `MANAGED_ISSUES` from labels/body:
+  ```bash
+  _managed_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+    .data.repository | to_entries[] | .value | select(. != null) |
+    select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
+    select(
+      ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+      or
+      ((.body // "") | contains("Managed by: AI Orchestrator"))
+    ) | .number
+  ' 2>/dev/null || echo '')"
+  ```
+  But the later alert step re-fetches each linked issue body to answer the narrower question “is any linked issue orchestrator-managed?”:
+  ```bash
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+      IS_ORCHESTRATED="true"
+      break
+    fi
+  done <<< "${LINKED_ISSUE_NUMBERS}"
+  ```
+- **Proposed fix:** In `Update linked issue labels when PR closes`, export a job-scoped boolean like `IS_ORCHESTRATED=true|false` or export `MANAGED_ISSUES` to `GITHUB_ENV`; then have `Send PR merged Telegram alert` consume that exported result instead of re-reading every linked issue body.
+- **Safety rationale:** The data is already derived in the same job, but the earlier step includes conservative fallback logic that treats lookup failures as tracking/skip, so a human must verify that exporting and reusing that classification preserves the same “better to suppress the alert than misclassify” behavior.
+- **Downstream signal:** Verify that the earlier classification step always runs before the Telegram alert on all merged-PR paths and that its GraphQL/REST fail-open behavior remains conservative when reused for alert suppression.
+
+#### REUSE-002 — `implement.yml` fetches the same issue payload twice before the workflow mutates that issue
+- **Safety tag:** NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/implement.yml:64-87` and `.github/workflows/implement.yml:533-565`
+- **Current call count:** 2 REST issue GETs before the workflow’s first issue-label mutation
+- **Proposed call count:** 1 REST issue GET reused across both steps
+- **Endpoint(s):** GitHub REST `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:** The early precheck fetches `state` and `labels`:
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ```
+  Later, `Fetch issue metadata` hits the same issue endpoint again to populate `ISSUE_META_FILE` and export title/body:
+  ```bash
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  ```
+  No workflow step between these two reads mutates the issue itself; the first mutation is later in `Validate approval phase label` at `.github/workflows/implement.yml:707-709`.
+- **Proposed fix:** Persist the first issue response into a step-exported temp file or job-scoped env payload and let `Fetch issue metadata` hydrate `ISSUE_META_FILE` from that cached response when present; if the cached payload is missing or malformed, keep the existing fresh GET as fallback.
+- **Safety rationale:** The endpoint is identical and the reads occur before any local mutation of the issue, but the reuse crosses workflow steps and would slightly change the current “fresh read after setup” behavior, so it needs a human check for any timing assumptions around long queue/setup gaps.
+- **Downstream signal:** Verify with a human review that no external actor is expected to change the issue body/title between `Precheck approval phase label` and `Fetch issue metadata`; if that freshness is not required, reuse the first payload with a malformed-cache fallback to the current GET.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: RISKY_SKIP — valid redundancy, but it lives in `scripts/orchestrate_poll_process.sh`’s standalone stall sweep, which is explicitly a poller/race-defense path and should stay manual-only.
+- BATCH-002: NEEDS_VERIFICATION — the batching opportunity is real, but the fallback path changes linked-issue discovery semantics in `review_autofix.yml` and needs a human check against non-default-branch PR behavior.
+- API-001: RISKY_SKIP — the per-tracking-issue comment hydration sits inside the orchestrator poll cycle and uses paginated comment fetches, so it should not be auto-implemented from this pass.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
