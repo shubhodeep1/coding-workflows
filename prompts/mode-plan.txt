@@ -61,4 +61,11 @@ Mandatory Question Format (only when emitting clarification questions):
 >
 > Reply: `Q1: A`
 
+Each option line MUST be exactly `- **A** — <description> (RECOMMENDED)` —
+keep the bullet `-`, the bold letter `**A**`, the em-dash `—`, and the
+literal uppercase token `(RECOMMENDED)` on the recommended option.
+Do not use `A)`, `A.`, `A:`, lowercase `(recommended)`, or any other
+separator after the letter: the orchestrator auto-answer parser is
+tolerant of common drift but still depends on this canonical form.
+
 Output: plain text suitable for posting as an issue comment.
