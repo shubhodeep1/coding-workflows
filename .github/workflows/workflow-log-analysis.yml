@@ -177,7 +177,17 @@ jobs:
   analyze-commit-notify:
     needs: collect-logs
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Run #25558885206 cancelled at 30m 14s on this job (Codex pass alone
+    # ran ~26m 31s — start 13:47:06, ##[error]The operation was canceled
+    # 14:13:38). Successful neighbours took only 9–13m (e.g. 25548339583
+    # 11m 57s, 25470798500 12m 46s), so this run hit a slow Codex pass /
+    # retry under the 30m cap. Bumped 30 → 60m to mirror the api-redundancy
+    # 30 → 60m precedent (run #25115192726). When this is bumped again,
+    # also propagate the +Δ minutes through test-and-mark-stable.yml's
+    # `Dispatch & watch — workflow-log-analysis` step (in-script DEADLINE
+    # in seconds, step timeout-minutes, and the job-level timeout-minutes
+    # with its sum-of-DEADLINEs comment).
+    timeout-minutes: 60
     outputs:
       report_file: ${{ steps.analyze.outputs.report_file }}
       analysis_status: ${{ steps.analyze.outputs.analysis_status }}
