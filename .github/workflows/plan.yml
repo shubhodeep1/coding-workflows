@@ -1190,7 +1190,7 @@ jobs:
             }
 
             next if !$current_qid;
-            if ($line =~ /^\s*-\s*(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*[—–-].*\(RECOMMENDED\)/i) {
+            if ($line =~ /^\s*-\s*(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*[—–\-)\.:].*\(RECOMMENDED\)/i) {
               push @{ $recommended_tokens{$current_qid} }, uc($1);
             }
           }
