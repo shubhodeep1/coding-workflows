@@ -69,6 +69,24 @@ def _extract_close_and_reissue_branch() -> str:
 	return match.group("branch")
 
 
+def _extract_body_fetch_loop() -> str:
+	"""Pull the FIRST_ISSUE / FIRST_ISSUE_BODY / FIRST_ISSUE_LABELS_JSON
+	body-fetch loop out of the real script.  Anchored on the
+	`FIRST_ISSUE=""` declaration through the loop's `done` line so the
+	regex follows the loop's lexical block."""
+	text = _rb_judge_text()
+	match = re.search(
+		r'(?P<loop>FIRST_ISSUE=""\n.*?done <<< "\$\{ISSUE_NUMBERS\}")',
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError(
+			"could not extract body-fetch loop from review_rb_judge.sh"
+		)
+	return match.group("loop")
+
+
 def test_loop_captures_first_issue_labels_json() -> None:
 	"""The body-fetch loop must populate FIRST_ISSUE_LABELS_JSON from
 	the parent issue's labels.  Static check: a future refactor that
@@ -167,12 +185,44 @@ if args[:2] == ["label", "create"]:
 	sys.exit(0)
 
 if args[:1] == ["api"]:
+	# Find the path arg (first non-flag, non-flag-value).  We treat the
+	# first positional after `api` as the path.  Caller-configured
+	# `api_responses` is keyed by substring match against that path.
+	path = ""
+	for arg in args[1:]:
+		if not arg.startswith("-"):
+			path = arg
+			break
 	state.setdefault("api_calls", []).append(args)
+	api_responses = state.get("api_responses", {}) or {}
+	matched = None
+	for pattern, resp in api_responses.items():
+		if pattern and pattern in path:
+			matched = resp
+			break
 	save()
-	# This mock is invoked only by the close_and_reissue branch under
-	# test, which never calls `gh api` directly — _safe_gh_jq is stubbed
-	# in the harness so the body-fetch loop is bypassed.  Anything that
-	# does land here (e.g. _resilient_phase_swap label PUT) is a no-op.
+	if matched is not None:
+		# Honour `--jq` server-side filtering: emit the filtered string,
+		# not the raw JSON, so callers that pre-fix used `--jq '.body'`
+		# still see the same shape (this matters for tests that exercise
+		# behaviour beyond the loop refactor).
+		jq_filter = ""
+		for i, arg in enumerate(args):
+			if arg == "--jq" and i + 1 < len(args):
+				jq_filter = args[i + 1]
+				break
+		if jq_filter:
+			# Limited support: handle `.body // ""` and `.state` to keep
+			# the mock predictable; anything else falls through to raw
+			# JSON so a future test can extend behaviour as needed.
+			if jq_filter == ".body // \"\"" or jq_filter == ".body":
+				print(matched.get("body", ""))
+			elif jq_filter == ".state":
+				print(matched.get("state", ""))
+			else:
+				print(json.dumps(matched))
+		else:
+			print(json.dumps(matched))
 	sys.exit(0)
 
 save()
@@ -340,6 +390,196 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 	assert "ai:orchestrator-managed" not in args, (
 		f"reissue must NOT inherit ai:orchestrator-managed when parent "
 		f"label set is empty; got args: {args}"
+	)
+
+
+def _run_body_fetch_loop(issue_responses: dict[str, dict], issue_numbers: str) -> dict:
+	"""Run the real body-fetch loop block against a mocked `gh api` so
+	the actual jq pipeline (`[(.labels // [])[]?.name]` plus the body
+	extract) is exercised end-to-end.
+
+	``issue_responses`` maps an API path substring (e.g.
+	``"issues/41"``) to the mocked GitHub issue JSON the mock returns.
+	``issue_numbers`` is the newline-separated string fed to the loop's
+	``ISSUE_NUMBERS`` reader.
+
+	Returns the captured ``FIRST_ISSUE``, ``FIRST_ISSUE_BODY``, and
+	``FIRST_ISSUE_LABELS_JSON`` values."""
+	loop = _extract_body_fetch_loop()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_loop_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(
+			json.dumps({"api_responses": issue_responses}),
+			encoding="utf-8",
+		)
+
+		capture_file = runtime_dir / "captured.env"
+		# _safe_gh_jq is the gh_helpers.sh wrapper.  Substitute a thin
+		# bash function that forwards directly to the mocked `gh api`
+		# so the loop's actual jq filters run against real shell output.
+		harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+_safe_gh_jq() {{ gh api "$@"; }}
+
+ISSUE_NUMBERS="${{ISSUE_NUMBERS_INPUT}}"
+
+{loop}
+
+{{
+  printf 'FIRST_ISSUE=%s\\n' "${{FIRST_ISSUE}}"
+  printf 'FIRST_ISSUE_BODY=%s\\n' "${{FIRST_ISSUE_BODY}}"
+  printf 'FIRST_ISSUE_LABELS_JSON=%s\\n' "${{FIRST_ISSUE_LABELS_JSON}}"
+}} > "${{CAPTURE_FILE}}"
+"""
+		script_path = runtime_dir / "loop_harness.sh"
+		script_path.write_text(harness, encoding="utf-8")
+		script_path.chmod(0o755)
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"REPOSITORY": "owner/repo",
+			"ISSUE_NUMBERS_INPUT": issue_numbers,
+			"CAPTURE_FILE": str(capture_file),
+		}
+		run_env = os.environ.copy()
+		run_env.update(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"loop harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		captured = {}
+		for raw in capture_file.read_text(encoding="utf-8").splitlines():
+			if "=" in raw:
+				k, _, v = raw.partition("=")
+				captured[k] = v
+		return captured
+
+
+def test_loop_jq_filter_extracts_orchestrator_managed_from_realistic_payload() -> None:
+	"""End-to-end runtime test: feed the real body-fetch loop a
+	GitHub-shape issue JSON via mocked `gh api` and assert the actual
+	jq filter populates FIRST_ISSUE_LABELS_JSON with the parent's
+	label names.
+
+	Without this, the other runtime tests (which pre-seed
+	FIRST_ISSUE_LABELS_JSON via env and stub _safe_gh_jq to a no-op)
+	would not catch a future jq-filter typo or a GitHub-shape change
+	in the `.labels` field — the propagation gate would silently see
+	`[]` and skip."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"title": "Orchestrator-managed parent",
+				"body": "Build feature X.",
+				"state": "closed",
+				"labels": [
+					{"id": 1, "name": "ai:orchestrator-managed", "color": "bfdadc"},
+					{"id": 2, "name": "ai:closed", "color": "6a737d"},
+				],
+			},
+		},
+		issue_numbers="41",
+	)
+	assert captured.get("FIRST_ISSUE") == "41"
+	assert captured.get("FIRST_ISSUE_BODY") == "Build feature X."
+	labels = json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "[]"))
+	assert labels == ["ai:orchestrator-managed", "ai:closed"], (
+		f"expected the loop's jq filter to extract both label names from a "
+		f"realistic GitHub /issues/N response; got {labels}"
+	)
+
+
+def test_loop_jq_filter_handles_null_labels_field() -> None:
+	"""GitHub shape variation: some payloads return ``"labels": null``
+	(rare but documented).  The `// []` defensive default in the jq
+	filter must collapse that to an empty list, not error out — a
+	future filter rewrite that dropped the safe default would silently
+	break propagation here."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"body": "Body present",
+				"labels": None,
+			},
+		},
+		issue_numbers="41",
+	)
+	assert captured.get("FIRST_ISSUE") == "41"
+	assert json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "null")) == []
+
+
+def test_loop_jq_filter_handles_missing_labels_key() -> None:
+	"""If the labels key is absent entirely (defensive: malformed or
+	stripped response), the filter must yield an empty list — not
+	error and not propagate stale state from a previous iteration."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"body": "Body present",
+			},
+		},
+		issue_numbers="41",
+	)
+	assert json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "null")) == []
+
+
+def test_loop_pins_labels_to_first_issue_even_when_body_comes_from_later_issue() -> None:
+	"""When the first linked issue has an empty body, the loop falls
+	back to a later issue's body — pre-existing behaviour.  The
+	label-propagation fix MUST keep FIRST_ISSUE_LABELS_JSON pinned to
+	the first issue's labels (which match the reissue footer's
+	``Replaces #FIRST_ISSUE``), not jump to the later issue's labels.
+
+	This nails down the contract grok-4.1-fast flagged on PR #2267:
+	labels follow FIRST_ISSUE, not whichever issue contributed the body."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"body": "",
+				"labels": [{"name": "ai:orchestrator-managed"}],
+			},
+			"issues/42": {
+				"number": 42,
+				"body": "Fallback body",
+				"labels": [{"name": "bug"}],
+			},
+		},
+		issue_numbers="41\n42",
+	)
+	assert captured.get("FIRST_ISSUE") == "41", (
+		"FIRST_ISSUE must be the first linked issue, not the body-source"
+	)
+	assert captured.get("FIRST_ISSUE_BODY") == "Fallback body", (
+		"pre-existing behaviour: empty first body → fall back to next issue's body"
+	)
+	labels = json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "[]"))
+	assert labels == ["ai:orchestrator-managed"], (
+		f"FIRST_ISSUE_LABELS_JSON must follow FIRST_ISSUE (#41), not the "
+		f"body-source (#42); got {labels}"
 	)
 
 
