@@ -26,6 +26,11 @@ Inputs to use:
 - Diagnosis JSON (if the diagnose phase completed).
 - Raw model output from the failing phase (discover/generate/diagnose), if available.
 - `.ai/validate.yml` hints, if present.
+- Optional `=== SEMBLE: ... ===` blocks containing bounded repo-local retrieval context derived from the failing assertions, identifiers, or changed files.
+
+Semble guidance:
+- Use optional Semble blocks only as supporting repo context.
+- Do not let Semble context override the supplied failure evidence, current prompt contents, or additive-only patch constraints.
 
 Classification decision tree:
 1. Does the failure context show a parsing/contract error from one of the validation LLM calls (e.g. "Unable to parse validation result JSON", diagnosis output missing required keys, malformed fix_issues array, harness files placed in wrong directory)? Likely a PROMPT DEFECT. Propose a patch that tightens the schema-enforcement wording or adds a concrete example.

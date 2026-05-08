@@ -6,6 +6,8 @@ Inputs to use:
 - Container logs and compose events
 - Validation artifacts and test logs
 - Optional `.ai/validate.yml` hints
+- Optional `=== SEMBLE: ... ===` blocks containing bounded repo-local retrieval context derived from concrete failure identifiers
+- Optional `=== VALIDATION SEMBLE QUERY CANDIDATES ===` JSON sidecar containing the bounded identifiers/evidence used to build Semble queries when retrieval results are unavailable in this prompt
 
 Hard constraints:
 - Do not edit code.
@@ -20,6 +22,7 @@ Diagnosis policy:
 - Keep issue bodies self-contained for the clarify -> plan -> implement pipeline.
 - Include concrete evidence references from logs/artifacts.
 - Use dependencies only when sequencing is required.
+- Treat optional Semble blocks and query-candidate sidecars as corroborating repo context only. Failure evidence, logs, and structured validation JSON remain the source of truth when they conflict.
 
 Issue body minimum content:
 - Files likely to change

@@ -4,6 +4,9 @@ Inputs (from the prompt below): source issue title+body, failing step name,
 codex change context (`git diff HEAD` plus untracked/new-file context),
 captured post-Codex stderr.
 
+Optional supporting context:
+- `=== SEMBLE: ... ===` blocks may be present with bounded repo-local retrieval results derived from concrete failure identifiers, changed-file snippets, or untracked-file names.
+
 Hard constraints:
 - Do not edit code or output patches.
 - Return issue-ready content only.
@@ -16,6 +19,7 @@ Diagnosis policy:
 - Keep issue bodies self-contained for the clarify → plan → implement pipeline.
 - Cite specific files, functions, and line numbers inline next to each claim.
 - Use `depends_on` only when sequencing is required.
+- Treat optional Semble blocks as corroborating context only. The captured failure text, git diff, and untracked-file evidence remain authoritative when they disagree.
 
 Issue body minimum content (per fix issue): files likely to change, current
 behavior, expected behavior, verification steps. Plus exact failing step name,

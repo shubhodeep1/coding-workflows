@@ -74,9 +74,25 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	assert 'python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
 
 
+def test_validate_workflow_bootstraps_semble_fail_open() -> None:
+	wf = _workflow_text()
+	assert 'SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || \'false\' }}' in wf
+	assert 'SEMBLE_AVAILABLE: "false"' in wf
+	assert 'SEMBLE_INDEX_AVAILABLE: "false"' in wf
+	assert 'for f in gh_helpers.sh ai_labels.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh install_semble.sh semble_helpers.sh; do' in wf
+	assert '- name: Setup uv for Semble' in wf
+	assert '- name: Install Semble' in wf
+	assert '- name: Build Semble index' in wf
+	assert 'bash scripts/install_semble.sh' in wf
+	assert 'timeout 300s semble index . --out "${SEMBLE_INDEX_DIR}"' in wf
+	assert 'SEMBLE_INDEX target=validate path=${SEMBLE_INDEX_DIR}' in wf
+	assert 'SEMBLE_FALLBACK target=index reason=workspace_unavailable' in wf
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_fetches_template_assets()
 	test_validate_workflow_passes_template_default_env()
+	test_validate_workflow_bootstraps_semble_fail_open()
 	return 0
 
 

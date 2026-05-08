@@ -15,10 +15,12 @@ import shutil
 import subprocess
 from pathlib import Path
 import tempfile
+import stat
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+DIAG_REPO_DIRNAME = "diag-repo"
 
 
 def _workflow_text() -> str:
@@ -306,6 +308,11 @@ sys.exit(1)
 	mock_path.chmod(0o755)
 
 
+def _write_executable(path: Path, body: str) -> None:
+	path.write_text(body, encoding="utf-8")
+	path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
 def _install_mock_codex(bin_dir: Path) -> None:
 	codex_script = r'''#!/usr/bin/env python3
 import json
@@ -352,6 +359,7 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 		"scripts/gh_helpers.sh",
 		"scripts/implement_diagnose_post_codex_failure.sh",
 		"scripts/render_prompt.sh",
+		"scripts/semble_helpers.sh",
 		"scripts/validate_changed_files_syntax.sh",
 		"prompts/mode-implement-diagnose.txt",
 		"prompts/mode-implement-repair-syntax.txt",
@@ -365,7 +373,7 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 
 
 def _prepare_diagnose_repo(tmp_path: Path) -> Path:
-	repo_dir = tmp_path / "diag-repo"
+	repo_dir = tmp_path / DIAG_REPO_DIRNAME
 	_bootstrap_git_repo(repo_dir)
 	_copy_diagnose_assets(repo_dir)
 
@@ -387,6 +395,7 @@ def _run_diagnose_step(
 	codex_output: dict | None,
 	failed_step_name: str,
 	issue_body: str,
+	extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path, dict[str, str]]:
 	repo_dir = _prepare_diagnose_repo(tmp_path)
 	runtime_dir = tmp_path / "runtime"
@@ -456,6 +465,8 @@ def _run_diagnose_step(
 			"TMPDIR": str(runtime_dir),
 		}
 	)
+	if extra_env:
+		env.update(extra_env)
 
 	proc = _run_shell_script(script, cwd=repo_dir, env=env)
 	state = _read_gh_state(gh_state_file)
@@ -833,6 +844,7 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "tracked.txt" in stdin_prompt
 		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
 		assert "scanner error on line 3" in stdin_prompt
+		assert "=== SEMBLE: Implement Diagnose Context ===" not in stdin_prompt
 
 		created_issues = state.get("created_issues", [])
 		assert len(created_issues) == 1
@@ -898,6 +910,103 @@ def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_fai
 		call_args = json.loads(call_lines[0])
 		assert "exec" in call_args
 		assert "--model" in call_args
+
+
+def test_diagnose_prompt_includes_semble_context_when_query_succeeds() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir(parents=True, exist_ok=True)
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 8\n"
+			"printf 'matching repo context\\n'\n",
+		)
+		index_dir = tmp_path / "runtime" / ".semble-index"
+		index_dir.mkdir(parents=True, exist_ok=True)
+		(index_dir / "repo_root").write_text(str(tmp_path / DIAG_REPO_DIRNAME), encoding="utf-8")
+
+		proc, _state, runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="Traceback in scripts/repair_flow.py line 22\nValueError: parser exploded\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			extra_env={
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"SEMBLE_ENABLED": "true",
+				"SEMBLE_AVAILABLE": "true",
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"SEMBLE_INDEX_DIR": str(index_dir),
+			},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "=== SEMBLE: Implement Diagnose Context ===" in stdin_prompt
+		assert "matching repo context" in stdin_prompt
+
+
+def test_diagnose_prompt_omits_semble_context_when_disabled() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="Traceback in scripts/repair_flow.py line 22\nValueError: parser exploded\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "=== SEMBLE: Implement Diagnose Context ===" not in stdin_prompt
+
+
+def test_diagnose_ignores_inherited_issue_meta_file_outside_runtime_dir() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		stale_meta_file = tmp_path / "stale_issue_meta.json"
+		stale_meta_file.write_text(
+			json.dumps({"labels": [{"name": "ai:implementation-failed"}], "body": "stale body"}),
+			encoding="utf-8",
+		)
+
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="Traceback in scripts/repair_flow.py line 22\nValueError: parser exploded\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			extra_env={"ISSUE_META_FILE": str(stale_meta_file)},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "handled=true" in _read_file(paths["github_output"])
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1, "stale ISSUE_META_FILE outside RUNTIME_DIR must not short-circuit diagnosis"
 
 
 def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
