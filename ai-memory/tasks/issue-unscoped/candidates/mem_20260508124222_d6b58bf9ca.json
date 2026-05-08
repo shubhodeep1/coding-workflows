@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/targeted_file_context.py:162 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_resolve_semble_bin` emits `SEMBLE_FALLBACK reason=invalid_binary path=...` in the legacy log shape, which is inconsistent with the updated stable `target=overflow file=...` format used by the other Semble overflow logs.\n  WHY: This creates two different `SEMBLE_FALLBACK` formats for the same failure class and can double-report a single invalid-binary event; the reviewer characterized it as a minor observability inconsistency with no runtime correctness impact.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/targeted_file_context.py:162 | severity=low | confidence=2\n  PROBLEM: `_resolve_semble_bin` emits `SEMBLE_FALLBACK reason=invalid_binary path=...` in the legacy log shape, which is inconsistent with the updated stable `target=overflow file=...` format used by the other Semble overflow logs.\n  WHY: This creates two different `SEMBLE_FALLBACK` formats for the same failure class and can double-report a single invalid-binary event; the reviewer characterized it as a minor observability inconsistency with no runtime correctness impact.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d266a4c70bdc0ab7032ee6915505fc273d4b66b1c8dc151a48f549b67ec08f2e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2294,
+    "run_id": "25555237380",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25555237380",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508124222_d6b58bf9ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2294,
+    "run_id": "25555237380"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-08T12:42:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
