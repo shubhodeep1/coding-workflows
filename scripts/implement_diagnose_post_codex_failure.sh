@@ -116,13 +116,17 @@ patch_diagnose_reasoning_into_config
 
 echo "handled=false" >> "$GITHUB_OUTPUT"
 
-if [ -n "${ISSUE_META_FILE:-}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
-  case "${ISSUE_META_FILE}" in
-    "${RUNTIME_DIR}"/*) ;;
-    *)
-      ISSUE_META_FILE=""
-      ;;
-  esac
+if [ -n "${ISSUE_META_FILE:-}" ]; then
+  if [ -n "${RUNTIME_DIR:-}" ]; then
+    case "${ISSUE_META_FILE}" in
+      "${RUNTIME_DIR}"/*) ;;
+      *)
+        ISSUE_META_FILE=""
+        ;;
+    esac
+  else
+    ISSUE_META_FILE=""
+  fi
 fi
 
 # Reuse the cached issue snapshot when available — see the

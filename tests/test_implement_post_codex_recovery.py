@@ -1200,6 +1200,37 @@ def test_diagnose_ignores_inherited_issue_meta_file_outside_runtime_dir() -> Non
 		assert len(call_lines) == 1, "stale ISSUE_META_FILE outside RUNTIME_DIR must not short-circuit diagnosis"
 
 
+def test_diagnose_ignores_inherited_issue_meta_file_when_runtime_dir_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		stale_meta_file = tmp_path / "stale_issue_meta.json"
+		stale_meta_file.write_text(
+			json.dumps({"labels": [{"name": "ai:implementation-failed"}], "body": "stale body"}),
+			encoding="utf-8",
+		)
+
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="Traceback in scripts/repair_flow.py line 22\nValueError: parser exploded\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			extra_env={"ISSUE_META_FILE": str(stale_meta_file), "RUNTIME_DIR": ""},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "handled=false" in _read_file(paths["github_output"])
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert state.get("created_issues", []) == []
+
+
 def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
 		tmp_path = Path(td)
