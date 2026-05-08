@@ -5,13 +5,26 @@
   "entry_id": "processed_command_2302_4406855752_approved",
   "issue_number": 2302,
   "metadata": {
+    "branch": "ai/issue-2302",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      "scripts/implement_diagnose_post_codex_failure.sh",
+      "scripts/targeted_file_context.py",
+      "tests/test_semble_contracts.py",
+      "tests/test_targeted_file_context.py"
+    ],
+    "issue_number": 2302,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2302",
+    "pr_number": 2310,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2310",
+    "run_attempt": "1",
+    "run_id": "25558758213",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25558758213"
   },
   "run_attempt": 1,
   "run_id": "25558758213",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-08T13:40:13Z",
+  "status": "completed",
+  "timestamp": "2026-05-08T13:49:01Z",
   "workflow": "implement"
 }
