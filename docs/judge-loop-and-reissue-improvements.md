@@ -88,10 +88,15 @@ Verified against the repo at HEAD of `claude/review-pr57-defects-Gx4k3`.
    lint, when run at all, run in the consumer repo's own CI, not in this
    driver. There is no synthesis of behavioural assertions from judge
    findings.
-6. **Spec citations are required of the judge but never verified.**
-   `prompts/mode-judge.txt:17-18` says "Cite specific files, functions, and
-   line numbers inline next to each claim. Never fabricate" — instruction
-   only, no verifier.
+6. **Spec citations are required of both judges but never verified.** The
+   orchestrator judge (`prompts/mode-judge.txt:17-18`) says "Cite specific
+   files, functions, and line numbers inline next to each claim. Never
+   fabricate file paths, line numbers, or commit SHAs." The review-blocked
+   judge (`prompts/mode-judge-review-blocked.txt:35`) likewise says "Be
+   precise. Cite specific files and line numbers." Both are instructions
+   only; no script verifies the cited passages actually support the claim.
+   (Note: the two judges have distinct JSON schemas — see Architecture
+   Overview — and Phases A and E touch different files.)
 
 ---
 
@@ -135,15 +140,27 @@ Round N+1 starts ─────────────────────
 
 After MAX_AUTOFIX_ITERATIONS or force_rb_judge:
   ▼
-Per-PR Judge (existing) — unchanged role + budget
-  │   • emits action ∈ {merge_ok, keep_iterating, close_and_reissue}
-  │   • when close_and_reissue, NEW field: reissue_mode ∈ {spot-fix, redo}
+Review-Blocked Judge (existing — `prompts/mode-judge-review-blocked.txt`,
+                      rendered by `scripts/review_rb_judge.sh:244`)
+  │   • role + budget unchanged
+  │   • today emits action ∈ {merge, fix, close_and_reissue},
+  │     remaining_issues_summary (string), new_issue (singular, nullable)
+  │   • Phase E adds: reissue_mode ∈ {spot-fix, redo}, AND a structured
+  │     remaining_issues[] (file + line range + symptom) as a sibling to
+  │     the existing remaining_issues_summary string — both kept for
+  │     backward compat
   ▼
 Reissue Path (Phase E)
   │   • spot-fix: cherry-pick prior PR head onto a new branch, file new issue
-  │     with files_touched scoped to judge.remaining_issues[].file
+  │     with files_touched scoped to the structured remaining_issues[].file
+  │     added to the RB judge schema by Phase E
   │   • redo (today's behaviour): create fresh issue, no baseline
 ```
+
+(Note: the orchestrator judge — `prompts/mode-judge.txt` — uses a
+different, status-based schema with `new_issues[]` and is invoked by
+`orchestrate_poll_process.sh`, not by the review-autofix loop. Phases A
+and E touch only the review-autofix loop's prompts and scripts.)
 
 ---
 
@@ -193,10 +210,16 @@ consolidator input as a new `<judge_interim_priors>` block.
 ### Interfaces
 
 **New prompt:** `prompts/mode-judge-interim.txt`
-- Inherits citation rules from `mode-judge.txt:17-23` verbatim.
-- Hard constraints: must NOT emit `action`, must NOT recommend
+- Inherits the citation rule and empty-lookup fallback rule from
+  `prompts/mode-judge.txt:17-23` verbatim. (The orchestrator judge has
+  the cleanest citation discipline; the review-blocked judge prompt at
+  `mode-judge-review-blocked.txt:35` has its own citation rule but is
+  action-oriented, not findings-oriented.)
+- Hard constraints: must NOT emit `action` (an RB-judge field) or
+  `status` (an orchestrator-judge field), must NOT recommend
   `close_and_reissue`, output is advisory only.
-- Output JSON schema (subset of mode-judge.txt):
+- Output JSON schema (NEW — standalone; not a subset of either existing
+  judge prompt):
 
 	```
 	{
@@ -243,7 +266,7 @@ consolidator input as a new `<judge_interim_priors>` block.
 
 | Path | Change |
 |---|---|
-| `prompts/mode-judge-interim.txt` | NEW — derived from `prompts/mode-judge.txt` |
+| `prompts/mode-judge-interim.txt` | NEW — standalone schema; citation rules borrowed from `prompts/mode-judge.txt:17-23` |
 | `scripts/review_run_judge_interim.sh` | NEW |
 | `.github/workflows/review_autofix.yml` | INSERT 1 step around line 2210 (mid-loop, before the existing exhaustion check) |
 | `scripts/review_apply_fixes.sh` | ADD prior-merge logic (script-level, no schema change) |
@@ -701,12 +724,36 @@ hasn't been updated.
 
 ### Interfaces
 
-**Prompt update:** `prompts/mode-judge.txt`
-- Add the `reissue_mode` field to the JSON output spec near the existing
-  `action` definition.
-- Add ~6 lines of guidance: choose `spot-fix` when remaining_issues count is
-  small relative to PR diff size and the issues are localised; otherwise
-  `redo`.
+**Prompt update:** `prompts/mode-judge-review-blocked.txt`
+(this is the prompt rendered by `scripts/review_rb_judge.sh:244` whose
+`action` field drives `close_and_reissue`; the orchestrator judge prompt
+`mode-judge.txt` uses a different schema with `status` and `new_issues[]`
+and is not relevant to this phase)
+- Add the `reissue_mode` field to the JSON output schema (the schema block
+  starts at `mode-judge-review-blocked.txt:74`, with the `action` enum at
+  `:78`). Place `reissue_mode` adjacent to `action`; only meaningful when
+  `action == "close_and_reissue"`.
+- Add a structured `remaining_issues` array as a **sibling** to the
+  existing `remaining_issues_summary` string (do NOT replace the string —
+  keep both for backward compat). Shape:
+
+	```
+	"remaining_issues": [
+		{
+			"file": "<repo-relative path>",
+			"line_start": <int>, "line_end": <int>,
+			"symptom": "<short string>"
+		}
+	]
+	```
+
+  This shape is deliberately a strict subset of the Phase A interim
+  judge's `remaining_issues[]` so the reissue path can consume either
+  source.
+- Add ~6 lines of guidance: choose `spot-fix` when `remaining_issues`
+  count is small relative to PR diff size and the issues are localised;
+  otherwise `redo`. Default when omitted: `redo` (preserves current
+  behaviour).
 
 **Script update:** `scripts/review_rb_judge.sh:636-690`
 - Branch on `reissue_mode`:
@@ -717,8 +764,12 @@ hasn't been updated.
       caller's checkout), create a new branch off the closed PR's HEAD.
     - Push that branch.
     - Create the new issue with a `prior_pr_baseline_branch:` field in
-      the issue body and `files_touched:` scoped to the judge's remaining
-      issues. The implement phase already respects `files_touched`.
+      the issue body and `files_touched:` sourced from the new structured
+      `remaining_issues[].file` field added to the RB judge schema by
+      this same prompt update. The implement phase already respects
+      `files_touched`. If `remaining_issues[]` is absent (older judge
+      runs predating this schema change) or empty, fall back to `redo`
+      rather than producing an unscoped or empty `files_touched`.
 - On any failure during the spot-fix path (worktree creation, push, branch
   ref missing), fall back to `redo` and log `REISSUE_BASELINE_DISCARDED`.
 
@@ -732,7 +783,7 @@ present. When absent, behaviour is unchanged.
 
 | Path | Change |
 |---|---|
-| `prompts/mode-judge.txt` | ADD `reissue_mode` field, guidance lines |
+| `prompts/mode-judge-review-blocked.txt` | ADD `reissue_mode` field, structured `remaining_issues[]` array (sibling to existing `remaining_issues_summary` string), guidance lines |
 | `scripts/review_rb_judge.sh` | EXTEND `close_and_reissue` action with the spot-fix path (lines 636-690) |
 | `.github/workflows/implement.yml` (and `internal-implement.yml`) | ADD optional `prior_pr_baseline_branch` checkout step |
 | `agents.md` | ADD log prefixes |
@@ -877,7 +928,7 @@ coupling beyond D depending on A's artifact format).
 - A synthetic end-to-end run on a small fixture repo with all flags on:
   3 autofix rounds, judge-interim each round, sticky promotion in round 2,
   one consolidator rejection reversed by Phase C, behavioural smoke
-  synthesised each round, and a final judge action of `merge_ok`.
+  synthesised each round, and a final RB-judge action of `merge`.
 - A synthetic end-to-end where the final action is `close_and_reissue`
   with `reissue_mode: spot-fix`; assert the new issue's body contains
   the baseline branch reference.
