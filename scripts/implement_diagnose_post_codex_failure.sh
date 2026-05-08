@@ -23,9 +23,10 @@
 #                                     env. Falls back to MODEL_EDITOR for backward
 #                                     compatibility with older callers.
 #   MODEL_DIAGNOSE_REASONING_EFFORT   reasoning effort for the diagnose model.
-#                                     Defaults to "medium". Patched into
-#                                     ~/.codex/config.toml before invocation
-#                                     (codex exec does not accept a CLI flag).
+#                                     Defaults to "xhigh" (repo-wide gpt-5.4
+#                                     policy). Patched into ~/.codex/config.toml
+#                                     before invocation (codex exec does not
+#                                     accept a CLI flag).
 #   MODEL_EDITOR                      Fallback model when MODEL_DIAGNOSE is unset
 #                                     (legacy / consumer-repo flow).
 #   ISSUE_META_FILE                   Optional cached issue metadata JSON.
@@ -68,7 +69,7 @@ TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE=20
 # not coding). Fall back to MODEL_EDITOR for legacy callers / consumer
 # repos that haven't bumped their workflow staging yet.
 DIAGNOSE_MODEL="${MODEL_DIAGNOSE:-${MODEL_EDITOR:-openai/gpt-5.4}}"
-DIAGNOSE_REASONING="${MODEL_DIAGNOSE_REASONING_EFFORT:-medium}"
+DIAGNOSE_REASONING="${MODEL_DIAGNOSE_REASONING_EFFORT:-xhigh}"
 
 # Validate DIAGNOSE_REASONING against the known codex-CLI reasoning
 # levels. A typo (e.g. "MEDIUM" or "med" or "average") would silently
@@ -78,8 +79,8 @@ DIAGNOSE_REASONING="${MODEL_DIAGNOSE_REASONING_EFFORT:-medium}"
 case "${DIAGNOSE_REASONING}" in
   xhigh|high|medium|low|none) ;;
   *)
-    echo "::warning::Invalid MODEL_DIAGNOSE_REASONING_EFFORT='${DIAGNOSE_REASONING}'. Falling back to 'medium'." >&2
-    DIAGNOSE_REASONING="medium"
+    echo "::warning::Invalid MODEL_DIAGNOSE_REASONING_EFFORT='${DIAGNOSE_REASONING}'. Falling back to 'xhigh'." >&2
+    DIAGNOSE_REASONING="xhigh"
     ;;
 esac
 

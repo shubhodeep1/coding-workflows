@@ -52,7 +52,7 @@ env:
   # codex (file edits) — those phases override MODEL_EDITOR locally if
   # WORKFLOW_VALIDATE_FIX_MODEL is set.
   MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'medium' }}
+  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}

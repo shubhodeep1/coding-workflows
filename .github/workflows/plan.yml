@@ -39,9 +39,10 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       SKIP_PLAN: "false"
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-      # Plan is research-heavy (read repo + clarify history + plan a
-      # ≤60-min implementation) → medium reasoning per the OpenAI guide.
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_PLAN || 'medium' }}
+      # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
+      # policy. Override per-repo via vars.THINKING_LEVEL_PLAN; the smoke
+      # path forces `low` separately in the "Detect smoke test" step.
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_PLAN || 'xhigh' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_PLAN || 'low' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
@@ -862,9 +863,24 @@ jobs:
             in reasoning.
           - Map each interpreted answer back to its corresponding Q<ID> clarification question
             before creating the plan.
+          - Review-blocked reissues: if the issue body contains
+            `Type: review-blocked-reissue` (footer block produced by the review-blocked
+            judge), the file paths and line numbers cited in the body refer to the
+            closed PR's prior implementation and are intentionally absent from the
+            current planning ref. Treat them as guidance about what the new
+            implementation must (re)create or change, NOT as prerequisite files that
+            must already exist. Do NOT emit `BLOCKED:` for "files referenced in the
+            issue do not exist on the current ref" in this case — produce a normal
+            plan that re-creates the relevant files. The plan must call out the
+            files-to-create explicitly under "Files likely to change."
           - If required input is external and non-synthesizable by the auto-answerer
-            (for example branch name, commit SHA, credential, or external URL), do not
-            emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
+            (for example branch name, commit SHA, credential, or external URL) AND the
+            input is required to plan the change itself (not merely referenced as
+            context that the new implementation will replace), do not emit Q/Choices;
+            emit exactly `BLOCKED: <short reason>`. Missing source files on the current
+            ref are NOT external inputs — they are codebase state the plan can address;
+            note them under "Risks and edge cases" as a conflict (per the CONFLICT
+            DETECTION rule above) and continue planning.
           - Surface the planning ref context (`git rev-parse HEAD` and symbolic branch)
             from the planning context and do not assume `main`.
           - If checked-out ref mismatches Integration branch metadata, emit exactly
