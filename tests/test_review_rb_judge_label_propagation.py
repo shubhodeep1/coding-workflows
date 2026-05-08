@@ -341,3 +341,27 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 		f"reissue must NOT inherit ai:orchestrator-managed when parent "
 		f"label set is empty; got args: {args}"
 	)
+
+
+def main() -> int:
+	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
+	# tests via that pattern (see ci.yml) rather than pytest discovery,
+	# so without this block the assertions never execute under CI.
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
