@@ -47,7 +47,7 @@ permissions:
 # re-triggers for different PRs would cancel each other.
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('internal-review-dispatch-pr-{0}', github.event.inputs.pr_number) || format('internal-review-{0}', github.head_ref || github.ref_name) }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ startsWith(github.head_ref || github.ref_name, 'claude/') }}
 
 jobs:
   review:
