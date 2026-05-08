@@ -158,15 +158,29 @@ fi
 
 FIRST_ISSUE=""
 FIRST_ISSUE_BODY=""
+# Labels of the parent (FIRST_ISSUE) issue.  Captured from the same
+# REST GET that already fetches the body so the close_and_reissue
+# branch below can propagate orchestrator-lineage labels without
+# issuing an extra API call (see CLAUDE.md §15 — extend an existing
+# call rather than adding a new one).
+FIRST_ISSUE_LABELS_JSON="[]"
 while IFS= read -r issue_number; do
   [ -n "${issue_number}" ] || continue
+  ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+  BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
   if [ -z "${FIRST_ISSUE}" ]; then
     FIRST_ISSUE="${issue_number}"
+    FIRST_ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_META_JSON}" | jq -c '[(.labels // [])[]?.name]' 2>/dev/null || echo '[]')"
   fi
-  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
   if [ -z "${FIRST_ISSUE_BODY}" ]; then
     FIRST_ISSUE_BODY="${BODY}"
   fi
+  # Stop once we have the first issue number and a non-empty body.
+  # Subsequent linked issues are not used by review_rb_judge.sh; the
+  # FIRST_ISSUE_LABELS_JSON capture above is already pinned to
+  # FIRST_ISSUE on the first iteration, so the break preserves
+  # parent-label propagation semantics.
+  [ -n "${FIRST_ISSUE}" ] && [ -n "${FIRST_ISSUE_BODY}" ] && break
 done <<< "${ISSUE_NUMBERS}"
 
 if [ -z "${FIRST_ISSUE}" ]; then
@@ -645,10 +659,27 @@ ${RB_FIX_DESC}"
 - Replaces: ${FIRST_ISSUE:+#${FIRST_ISSUE} }(PR #${PR_NUMBER} closed — approach rework)
 - Type: review-blocked-reissue"
 
+      # Propagate ai:orchestrator-managed from the parent issue when it
+      # carries that label.  Without this, an orchestrator-managed
+      # parent's reissue lands with only ai:clarification (added later
+      # by clarify.yml on issues.opened) and the orchestrator-managed
+      # auto-answer fast path in clarify.yml never fires — the reissue
+      # stalls in clarification while the orchestrator's parallel
+      # judge-addition issue silently delivers the same work.  Standalone
+      # (non-orchestrator) reissues do NOT inherit this label so their
+      # human-driven clarify semantics are preserved.
+      RB_PROPAGATE_LABELS=()
+      if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
+        ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
+        RB_PROPAGATE_LABELS+=("--label" "ai:orchestrator-managed")
+        echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to review-blocked reissue."
+      fi
+
       NEW_URL="$(gh_retry gh issue create \
         --repo "${REPOSITORY}" \
         --title "${NEW_ISSUE_TITLE}" \
-        --body "${FULL_NEW_BODY}")"
+        --body "${FULL_NEW_BODY}" \
+        ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
       echo "Created replacement issue: ${NEW_URL}"
     else
       echo "::warning::Judge chose close_and_reissue but provided no new issue details."
