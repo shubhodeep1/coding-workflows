@@ -28,6 +28,7 @@ env:
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
 
 jobs:
   implement:
@@ -59,6 +60,8 @@ jobs:
       APPROVAL_COMMENT_ID: ${{ github.event.comment.id }}
       SKIP_IMPLEMENT: "false"
       RESTORE_AWAITING_APPROVAL_ON_SKIP: "false"
+      SEMBLE_AVAILABLE: "false"
+      SEMBLE_INDEX_AVAILABLE: "false"
 
     steps:
       - name: Precheck approval phase label
@@ -403,7 +406,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh install_semble.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -528,6 +531,52 @@ jobs:
               # workflow artifact.
               echo "probably_unnecessary_but_read_if_stuck.md" >> "${FETCHED_MANIFEST}"
             fi
+          fi
+
+      - name: Setup uv for Semble
+        if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'
+        id: setup_uv_for_semble
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Semble
+        if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/install_semble.sh
+
+      - name: Build Semble index
+        if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -uo pipefail
+
+          SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+
+          if [ "${SEMBLE_AVAILABLE:-false}" != 'true' ]; then
+            echo "SEMBLE_FALLBACK target=index reason=semble_unavailable" >&2
+            exit 0
+          fi
+
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "SEMBLE_FALLBACK target=index reason=missing_binary_after_install" >&2
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if mkdir -p "${SEMBLE_INDEX_DIR}" && \
+             printf '%s\n' "$GITHUB_WORKSPACE" > "${SEMBLE_INDEX_DIR}/repo_root" && \
+             {
+               printf 'created_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+               printf 'semble_bin=%s\n' "$(command -v semble)"
+             } > "${SEMBLE_INDEX_DIR}/metadata.env"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_DIR=${SEMBLE_INDEX_DIR}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX target=implement path=${SEMBLE_INDEX_DIR}" >&2
+          else
+            echo "SEMBLE_FALLBACK target=index reason=build_failed" >&2
           fi
 
       - name: Fetch issue metadata

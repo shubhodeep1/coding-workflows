@@ -918,6 +918,16 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `ENABLE_LABEL_REPAIR_SWEEP` | `true` | Contract-defined gate for poller label-repair sweep. Current branch status: reserved (not consumed yet); `reconcile_managed_issue_labels` runs every poll cycle for current-wave managed issues. |
 | `LABEL_REPAIR_DRY_RUN` | `false` | Contract-defined dry-run mode for label repair. Current branch status: reserved (not consumed yet); label diffs are applied live when detected. |
 | `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` | `50` | Contract-defined cap for per-cycle label-repair mutations. Current branch status: reserved (not consumed yet); effective scope is the current-wave issue set. |
+| `SEMBLE_ENABLED` | `false` | Opt-in gate for the implement workflow's Semble foundation plumbing. When `true`, the workflow best-effort installs `uv`, installs pinned `semble`, and prepares `${RUNTIME_DIR}/.semble-index`. Failures are fail-soft and preserve the legacy path. |
+
+### Semble runtime contract
+
+When the implement workflow runs, it exports these runtime env vars for downstream shell callers:
+
+- `SEMBLE_AVAILABLE` — defaults to `false`; flips to `true` only when the pinned `uv`-managed Semble install is available on `PATH`.
+- `SEMBLE_INDEX_AVAILABLE` — defaults to `false`; flips to `true` only when the workflow successfully prepares the workspace-local `${RUNTIME_DIR}/.semble-index` metadata directory.
+
+Downstream scripts should treat both values as fail-soft capability flags and fall back cleanly when either is not `true`.
 
 ## Semantic Cache (Clarification Only)
 
