@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #1 (`smoke-canary-a`)\n\nPlanning ref context\n- HEAD: `35effffc4d70ceb4f9097edfa256afda3d029d98`\n- Checked-out branch: `orchestrator/project-2321`\n- Integration branch metadata: `orchestrator/project-2321`\n- Branch/ref check: matched; no integration-branch mismatch\n\nClarification mapping\n- No clarification questions (`Q1`, `Q2`, etc.) were asked in the clarify phase.\n- The `/answer [auto-answered-by-orchestrator]` comment is interpreted as confirmation to proceed with the issue exactly as written, with no added requirements or exceptions.\n\nFiles likely to change\n- `tests/e2e_smoke_canary.txt`\n\nFunctions or modules to implement\n- No code modules, functions, or workflow logic need to change.\n- This is a direct, minimal edit to a single text fixture/canary file.\n\nData structures affected\n- The line-oriented text contract in `tests/e2e_smoke_canary.txt`.\n- Expected first two lines after implementation:\n  1. `status: ok`\n  2. `decompose-run: 25567947079`\n\nAPI or interface changes\n- No API, CLI, workflow, or schema changes.\n- The only contract change is the literal content of line 2 in `tests/e2e_smoke_canary.txt`, which must change from the current `run_id: ...` form to `decompose-run: 25567947079`.\n\nConflict detection / current-state note\n- `tests/e2e_smoke_canary.txt` already exists.\n- Current content conflicts with the issue requirement:\n  - Line 1 already matches: `status: ok`\n  - Line 2 currently reads `run_id: 25558853263`, not the required `decompose-run: 25567947079`\n- No path/name mismatch was found; the issue\u2019s target file exists on the planning ref.\n\nImplementation approach\n1. Edit only `tests/e2e_smoke_canary.txt`.\n2. Preserve line 1 exactly as `status: ok`.\n3. Replace line 2 so it is exactly `decompose-run: 25567947079`.\n4. Avoid touching any other file.\n5. Keep the edit minimal and avoid unrelated churn in the rest of the file.\n\nAssumptions\n- Because the issue only constrains the first two lines and explicitly asks for a minimal change, any existing content after line 2 should be preserved unless changing it is strictly necessary to satisfy the first-two-lines requirement.\n- No file creation is needed because the target file already exists.\n\nPotential risks or edge cases\n- Do not accidentally rewrite the file in a way that changes unrelated lines, whitespace, or newline style.\n- Ensure the line order remains exactly as required: `status: ok` first, `decompose-run: 25567947079` second.\n- If any downstream consumer expects the previous `run_id:` key, that behavior would change; however, the issue explicitly requires the new `decompose-run:` line, so the implementation should follow the issue rather than preserve the old key.\n\nTesting / verification considerations\n- Verify `tests/e2e_smoke_canary.txt` still exists after the edit.\n- Verify the first two lines match exactly, in order:\n  - `status: ok`\n  - `decompose-run: 25567947079`\n- Verify no other files were modified (`git diff --stat` should show only `tests/e2e_smoke_canary.txt`).\n- Expected diff scope: ideally a one-line content change on line 2 only.\n\nIf this plan looks correct, reply `/approved` to proceed with implementation. If you want the plan revised, reply `/reclarify`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c443dece45ecd9f77101a2322841406e14c50cb311ab879acd1ae7c5b86f4734",
+  "lineage": {
+    "issue_number": 2322,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25568161057",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25568161057",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2322"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260508165644_d866b3e90e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2322,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25568161057"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2322",
+  "timestamps": {
+    "created_at": "2026-05-08T16:56:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
