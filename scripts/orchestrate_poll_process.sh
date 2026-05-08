@@ -2682,7 +2682,7 @@ invoke_judge_for_integration_conflict() {
   # header for the apply_patch / trust / elevation rationale.
   bash scripts/write_codex_config.sh \
     --model "${MODEL_EDITOR:-openai/gpt-5.4}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
   local prompt_file
   local output_file
@@ -5615,7 +5615,7 @@ invoke_stall_judge() {
   # Centralised in scripts/write_codex_config.sh.
   bash scripts/write_codex_config.sh \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
   local judge_success="false"
   local attempt
@@ -8892,7 +8892,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # Centralised in scripts/write_codex_config.sh.
     bash scripts/write_codex_config.sh \
       --model "${MODEL_EDITOR}" \
-      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
+      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
@@ -10570,11 +10570,11 @@ Manual intervention required." >/dev/null
   # Setup Codex config for judge
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
-  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-medium}"
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
   # Centralised in scripts/write_codex_config.sh.
   bash scripts/write_codex_config.sh \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
     continue

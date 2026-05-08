@@ -13,9 +13,8 @@ plus a manual `main()` runner so CI can execute the file with
 """
 from __future__ import annotations
 
-import os
-import stat
-import subprocess
+import io
+import contextlib
 import sys
 import tempfile
 from pathlib import Path
@@ -24,16 +23,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from targeted_file_context import (  # noqa: E402
+	SEMBLE_QUERY_TIMEOUT_SECS,
 	emit_context,
 	extract_paths_from_plan,
+	main as targeted_file_context_main,
 	parse_paths_arg,
 	parse_paths_file,
 )
 
 
-def _write_executable(path: Path, body: str) -> None:
-	path.write_text(body, encoding="utf-8")
-	path.chmod(path.stat().st_mode | stat.S_IXUSR)
+def _make_fake_semble_script(path: Path, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> None:
+	path.write_text(
+		"#!/usr/bin/env python3\n"
+		"import sys\n"
+		f"sys.stdout.write({stdout!r})\n"
+		f"sys.stderr.write({stderr!r})\n"
+		f"raise SystemExit({exit_code})\n",
+		encoding="utf-8",
+	)
+	path.chmod(0o755)
 
 
 def test_extracts_files_likely_to_change_section_only() -> None:
@@ -297,291 +305,201 @@ def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
 			assert name in context, f"path {name} missing from output"
 
 
-def test_overflow_uses_semble_retrieval_when_configured_and_bounded() -> None:
+def test_non_overflow_output_stays_legacy_shape_even_with_semble_flags_present() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "a.py").write_text("small = 1\n", encoding="utf-8")
-		(root / "src" / "b.py").write_text("y = 1\n" * 6000, encoding="utf-8")
+		(root / "src" / "ok.py").write_text("print('ok')\n", encoding="utf-8")
 		query_file = root / "query.txt"
-		query_file.write_text("implement the plan\n", encoding="utf-8")
-		index_dir = root / ".semble-index"
-		index_dir.mkdir()
-		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		_write_executable(
-			bin_dir / "semble",
-			"#!/usr/bin/env bash\n"
-			"[ \"$1\" = query ] || exit 8\n"
-			"printf 'src/b.py:120-140\\nrelevant chunk line\\n'\n",
-		)
+		query_file.write_text("find relevant chunks\n", encoding="utf-8")
 
-		context = emit_context(
-			["src/a.py", "src/b.py"],
+		legacy = emit_context(["src/ok.py"], root, max_bytes=1024)
+		with_semble_args = emit_context(
+			["src/ok.py"],
 			root,
 			max_bytes=1024,
-			semble_bin=str(bin_dir / "semble"),
-			semble_index=str(index_dir),
-			semble_query_from=str(query_file),
+			semble_bin="/does/not/matter",
+			semble_index=str(root / ".semble-index"),
+			semble_query_text=query_file.read_text(encoding="utf-8"),
 			semble_max_chunks=3,
+			semble_fallback="read",
 		)
 
-		assert "chunk-retrieved via Semble" in context
-		assert "relevant chunk line" in context
-		assert "0 chunk-retrieved-via-Semble" not in context
-		assert "1 chunk-retrieved-via-Semble" in context
-		assert "src/b.py" in context
+		assert with_semble_args == legacy
 
 
-def test_non_semble_summary_keeps_legacy_parenthetical_format() -> None:
+def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "small.py").write_text("small = 1\n", encoding="utf-8")
-		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
-
-		context = emit_context(
-			["src/small.py", "src/big.py"],
-			root,
-			max_bytes=1024,
-		)
-
-		assert "Included 2 entries (1 inlined, 1 marker-only), " in context
-		assert "chunk-retrieved-via-Semble" not in context
-
-
-def test_overflow_semble_fail_open_missing_query_keeps_marker() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		(root / "src").mkdir()
-		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
-		index_dir = root / ".semble-index"
-		index_dir.mkdir()
-		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
-
-		context = emit_context(
-			["src/big.py"],
-			root,
-			max_bytes=1024,
-			semble_index=str(index_dir),
-			semble_query_from=str(root / "missing-query.txt"),
-		)
-
-		assert "would overflow total budget" in context
-		assert "chunk-retrieved via Semble" not in context
-		assert "1 marker-only" in context
-
-
-def test_overflow_semble_no_results_keeps_marker() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		(root / "src").mkdir()
-		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
-		query_file = root / "query.txt"
-		query_file.write_text("implement the plan\n", encoding="utf-8")
-		index_dir = root / ".semble-index"
-		index_dir.mkdir()
-		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		_write_executable(
-			bin_dir / "semble",
-			"#!/usr/bin/env bash\n"
-			"[ \"$1\" = query ] || exit 8\n"
-			"printf 'No results found.'\n",
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(
+			semble,
+			stdout="chunk 1\n# lines 10-20\nchunk 2\n",
 		)
 
 		context = emit_context(
 			["src/big.py"],
 			root,
-			max_bytes=1024,
-			semble_bin=str(bin_dir / "semble"),
-			semble_index=str(index_dir),
-			semble_query_from=str(query_file),
+			max_bytes=100,
+			semble_bin=str(semble),
+			semble_index=str(root / ".semble-index"),
+			semble_query_text="task summary",
+			semble_max_chunks=2,
 		)
 
-		assert "would overflow total budget" in context
-		assert "Chunk-retrieved via Semble:" not in context
+		assert "chunk-retrieved via semble" in context
+		assert "--- FILE: src/big.py (12000 bytes; would overflow total budget" not in context
+		assert "src/big.py" in context
 
 
-def test_overflow_semble_oversized_response_keeps_marker() -> None:
+def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "small.py").write_text("small = 1\n", encoding="utf-8")
-		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
-		query_file = root / "query.txt"
-		query_file.write_text("implement the plan\n", encoding="utf-8")
-		index_dir = root / ".semble-index"
-		index_dir.mkdir()
-		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		_write_executable(
-			bin_dir / "semble",
-			"#!/usr/bin/env bash\n"
-			"[ \"$1\" = query ] || exit 8\n"
-			"python3 - <<'PY'\n"
-			"print('src/big.py')\n"
-			"print('z' * 5000)\n"
-			"PY\n",
-		)
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
 
-		context = emit_context(
-			["src/small.py", "src/big.py"],
-			root,
-			max_bytes=1024,
-			semble_bin=str(bin_dir / "semble"),
-			semble_index=str(index_dir),
-			semble_query_from=str(query_file),
-		)
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/big.py"],
+				root,
+				max_bytes=100,
+				semble_bin=str(root / "missing_semble"),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+			)
 
 		assert "would overflow total budget" in context
-		assert "chunk-retrieved via Semble" not in context
+		assert "chunk-retrieved via semble" not in context
+		assert "SEMBLE_FALLBACK target=overflow file=src/big.py" in stderr.getvalue()
 
 
-def test_overflow_semble_launch_failure_keeps_marker() -> None:
+def test_overflow_read_fallback_emits_bounded_head_body() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
-		query_file = root / "query.txt"
-		query_file.write_text("implement the plan\n", encoding="utf-8")
-		index_dir = root / ".semble-index"
-		index_dir.mkdir()
-		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		_write_executable(
-			bin_dir / "semble",
-			"#!/nonexistent/interpreter\n",
-		)
+		body = "line\n" * 3000
+		(root / "src" / "big.py").write_text(body, encoding="utf-8")
 
 		context = emit_context(
 			["src/big.py"],
 			root,
-			max_bytes=1024,
-			semble_bin=str(bin_dir / "semble"),
-			semble_index=str(index_dir),
-			semble_query_from=str(query_file),
+			max_bytes=128,
+			semble_bin=str(root / "missing_semble"),
+			semble_index=str(root / ".semble-index"),
+			semble_query_text="task summary",
+			semble_fallback="read",
 		)
 
-		assert "would overflow total budget" in context
-		assert "chunk-retrieved via Semble" not in context
+		assert "overflow fallback read head" in context
+		assert "truncated to 128 byte(s)" in context
+		assert "line\nline\nline\n" in context
+		assert "--- FILE: src/big.py (15000 bytes; would overflow total budget" not in context
 
 
-def test_zero_semble_max_chunks_disables_retrieval_and_keeps_marker() -> None:
+def test_overflow_marker_fallback_does_not_read_file_bytes() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
-		query_file = root / "query.txt"
-		query_file.write_text("implement the plan\n", encoding="utf-8")
-		index_dir = root / ".semble-index"
-		index_dir.mkdir()
-		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		_write_executable(
-			bin_dir / "semble",
-			"#!/usr/bin/env bash\n"
-			"printf 'src/big.py:120-140\\nrelevant chunk line\\n'\n",
+		target = root / "src" / "big.py"
+		target.write_text("x = 1\n" * 2000, encoding="utf-8")
+		original_read_bytes = Path.read_bytes
+		calls: list[Path] = []
+
+		def _tracking_read_bytes(self: Path) -> bytes:
+			calls.append(self)
+			return original_read_bytes(self)
+
+		Path.read_bytes = _tracking_read_bytes
+		try:
+			context = emit_context(
+				["src/big.py"],
+				root,
+				max_bytes=100,
+				semble_bin=str(root / "missing_semble"),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+			)
+		finally:
+			Path.read_bytes = original_read_bytes
+
+		assert "would overflow total budget" in context
+		assert calls == []
+
+
+def test_overflow_read_fallback_counts_rendered_bytes_in_budget() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("a" * 5000, encoding="utf-8")
+		(root / "src" / "small.py").write_text("b" * 20, encoding="utf-8")
+
+		context = emit_context(
+			["src/big.py", "src/small.py"],
+			root,
+			max_bytes=128,
+			semble_bin=str(root / "missing_semble"),
+			semble_index=str(root / ".semble-index"),
+			semble_query_text="task summary",
+			semble_fallback="read",
 		)
+
+		assert "overflow fallback read head" in context
+		assert "--- FILE: src/small.py (20 bytes; would overflow total budget" in context
+		assert "Included 2 entries (0 inlined, 1 marker-only, 0 semble, 1 read), 128 byte(s) of source content." in context
+
+
+def test_semble_query_timeout_falls_back_cleanly() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
+		timeout_semble = root / "sleepy_semble.py"
+		timeout_semble.write_text(
+			"#!/usr/bin/env python3\n"
+			"import time\n"
+			f"time.sleep({SEMBLE_QUERY_TIMEOUT_SECS + 1})\n",
+			encoding="utf-8",
+		)
+		timeout_semble.chmod(0o755)
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/big.py"],
+				root,
+				max_bytes=100,
+				semble_bin=str(timeout_semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+			)
+
+		assert "would overflow total budget" in context
+		assert "timed out" in stderr.getvalue().lower()
+
+
+def test_overflow_off_fallback_emits_no_representation_and_no_marker_count() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
 
 		context = emit_context(
 			["src/big.py"],
 			root,
-			max_bytes=1024,
-			semble_bin=str(bin_dir / "semble"),
-			semble_index=str(index_dir),
-			semble_query_from=str(query_file),
-			semble_max_chunks=0,
+			max_bytes=100,
+			semble_bin=str(root / "missing_semble"),
+			semble_index=str(root / ".semble-index"),
+			semble_query_text="task summary",
+			semble_fallback="off",
 		)
 
-		assert "would overflow total budget" in context
-		assert "chunk-retrieved via Semble" not in context
-
-
-def test_cli_accepts_semble_flags_and_keeps_stdout_prompt_safe() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		(root / "src").mkdir()
-		(root / "src" / "small.py").write_text("small = 1\n", encoding="utf-8")
-		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
-		plan_file = root / "plan.md"
-		plan_file.write_text("Files likely to change\n- `src/small.py`\n- `src/big.py`\n", encoding="utf-8")
-		query_file = root / "query.txt"
-		query_file.write_text("implement the plan\n", encoding="utf-8")
-		index_dir = root / ".semble-index"
-		index_dir.mkdir()
-		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		_write_executable(
-			bin_dir / "semble",
-			"#!/usr/bin/env bash\n"
-			"[ \"$1\" = query ] || exit 8\n"
-			"printf 'src/big.py:120-140\\nrelevant chunk line\\n'\n",
-		)
-		output_file = root / "out.txt"
-		result = subprocess.run(
-			[
-				sys.executable,
-				str(REPO_ROOT / "scripts" / "targeted_file_context.py"),
-				"--plan-file",
-				str(plan_file),
-				"--repo-root",
-				str(root),
-				"--max-bytes",
-				"1024",
-				"--semble-bin",
-				str(bin_dir / "semble"),
-				"--semble-index",
-				str(index_dir),
-				"--semble-query-from",
-				str(query_file),
-				"--semble-max-chunks",
-				"3",
-				"--semble-fallback",
-				"marker",
-				"--output",
-				str(output_file),
-			],
-			text=True,
-			capture_output=True,
-			check=False,
-			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-		)
-		assert result.returncode == 0, result.stderr
-		assert result.stdout == "", result.stdout
-		assert "SEMBLE_QUERY target=src/big.py" in result.stderr, result.stderr
-		assert "relevant chunk line" in output_file.read_text(encoding="utf-8")
-
-
-def test_cli_rejects_unimplemented_read_fallback_mode() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		output_file = root / "out.txt"
-		result = subprocess.run(
-			[
-				sys.executable,
-				str(REPO_ROOT / "scripts" / "targeted_file_context.py"),
-				"--repo-root",
-				str(root),
-				"--semble-fallback",
-				"read",
-				"--output",
-				str(output_file),
-			],
-			text=True,
-			capture_output=True,
-			check=False,
-			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-		)
-
-		assert result.returncode != 0
-		assert "invalid choice" in result.stderr
+		assert "--- FILE: src/big.py (12000 bytes; would overflow total budget" not in context
+		assert "chunk-retrieved via semble" not in context
+		assert "Suppressed overflow entries: 1." in context
+		assert "(0 inlined, 0 marker-only, 0 semble, 0 read)" in context
 
 
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
@@ -667,6 +585,58 @@ def test_paths_file_strips_diff_a_b_prefixes() -> None:
 			"scripts/baz.py",
 			"plain/path/already.md",
 		]
+
+
+def test_cli_accepts_read_fallback_mode() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		paths_file = root / "paths.txt"
+		paths_file.write_text("src/file.py\n", encoding="utf-8")
+		output = root / "out.txt"
+		argv = sys.argv[:]
+		try:
+			sys.argv = [
+				"targeted_file_context.py",
+				"--paths-file",
+				str(paths_file),
+				"--repo-root",
+				str(root),
+				"--semble-fallback",
+				"read",
+				"--output",
+				str(output),
+			]
+			assert targeted_file_context_main() == 0
+		finally:
+			sys.argv = argv
+
+
+def test_cli_rejects_unknown_fallback_mode() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		output = root / "out.txt"
+		argv = sys.argv[:]
+		stderr = io.StringIO()
+		try:
+			sys.argv = [
+				"targeted_file_context.py",
+				"--repo-root",
+				str(root),
+				"--semble-fallback",
+				"bogus",
+				"--output",
+				str(output),
+			]
+			with contextlib.redirect_stderr(stderr):
+				try:
+					targeted_file_context_main()
+				except SystemExit as exc:
+					assert exc.code != 0
+				else:
+					raise AssertionError("expected argparse to reject unknown fallback mode")
+		finally:
+			sys.argv = argv
+		assert "invalid choice" in stderr.getvalue()
 
 
 def main() -> int:
