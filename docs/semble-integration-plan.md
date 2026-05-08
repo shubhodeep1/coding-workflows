@@ -361,12 +361,29 @@ It:
 3. Wraps stdout in `=== SEMBLE: <header-label> ===` / `=== END SEMBLE
    ===` markers so the prompt text is clearly delimited and easy to grep
    out for debugging.
-4. On non-zero exit, logs `SEMBLE_FALLBACK target=<header-label>
-   exit=<code>` and returns 1, signalling the caller to run its
-   fallback path.
+4. On non-zero exit, returns 1 to signal the caller to run its fallback
+   path.
+
+**Stream discipline (mandatory)**: callers redirect `semble_query_block`
+stdout into the prompt file. Therefore stdout is reserved exclusively
+for the prompt chunk block (the marker-wrapped Semble output, or empty
+on bail-out). All log lines — `SEMBLE_QUERY target=<…> chunks=<n>
+bytes=<m> ms=<t>` on success and `SEMBLE_FALLBACK target=<…>
+[exit=<code>] reason=<…>` on failure or bail-out — go to **stderr**,
+which the caller redirects to the GHA job log (typically already
+captured by the runner). Equivalently, the helper may emit the log
+lines as `::notice::` / `::warning::` workflow commands, which GHA
+routes to the log without touching stdout.
+
+A regression test in `tests/` (added in phase 1) asserts that
+`SEMBLE_QUERY` / `SEMBLE_FALLBACK` strings never appear in the prompt
+file produced by `semble_query_block` — that assertion is the
+contractual guard against the contamination Copilot raised in PR
+review.
 
 This keeps every per-site integration to ~3 lines: build the query,
-call `semble_query_block`, on failure run the legacy path.
+call `semble_query_block` (stdout → prompt; stderr → job log), on
+failure run the legacy path.
 
 ### 4.5 Sandbox compatibility
 
@@ -624,6 +641,11 @@ registry rules are unaffected.
 
 Both prefixes are added to `agents.md` "Stable log prefixes
 (contractual)".
+
+**Stream**: both prefixes go to **stderr** (or as `::notice::` /
+`::warning::` workflow commands), never to stdout. Stdout is reserved
+for prompt content. See §4.4 for the per-call helper contract and the
+phase-1 regression test that enforces this.
 
 ### 8.2 Cost audit integration
 
