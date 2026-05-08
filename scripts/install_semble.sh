@@ -70,6 +70,24 @@ _uv_tool_bin_dir()
 	"${uv_bin}" tool dir --bin 2>/dev/null || return 1
 }
 
+_find_matching_semble_bin_on_path()
+{
+	local semble_bin version_output token
+	semble_bin="${SEMBLE_BIN:-$(command -v semble 2>/dev/null || true)}"
+	[ -n "${semble_bin}" ] || return 1
+	[ -x "${semble_bin}" ] || return 1
+	version_output="$(${semble_bin} --version 2>/dev/null || true)"
+	for token in ${version_output}; do
+		case "$(printf '%s' "${token}" | tr -d '(),')" in
+			"${SEMBLE_VERSION}"|"v${SEMBLE_VERSION}")
+				printf '%s\n' "${semble_bin}"
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
 _has_matching_semble_tool()
 {
 	local uv_bin="$1"
@@ -96,11 +114,18 @@ EOF
 
 main()
 {
-	local uv_bin install_log bin_dir
+	local uv_bin install_log bin_dir existing_semble_bin
 
 	if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
 		_semble_append_env SEMBLE_AVAILABLE false
 		_semble_log "SEMBLE_INSTALL target=install status=disabled enabled=false"
+		exit 0
+	fi
+
+	if existing_semble_bin="$(_find_matching_semble_bin_on_path)"; then
+		_semble_append_path "$(dirname "${existing_semble_bin}")"
+		_semble_append_env SEMBLE_AVAILABLE true
+		_semble_log "SEMBLE_INSTALL target=install status=already_installed version=${SEMBLE_VERSION} source=path"
 		exit 0
 	fi
 

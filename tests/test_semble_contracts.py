@@ -124,6 +124,35 @@ def test_install_semble_failure_exports_false_without_failing() -> None:
 		assert result.stdout == "", result.stdout
 
 
+def test_install_semble_skips_uv_when_matching_binary_is_already_on_path() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		env_file = tmp / "github_env.txt"
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"if [ \"${1:-}\" = --version ]; then\n"
+			"  echo 'semble 0.1.3'\n"
+			"  exit 0\n"
+			"fi\n"
+			"exit 0\n",
+		)
+		result = _run_install(
+			{
+				"SEMBLE_ENABLED": "true",
+				"GITHUB_ENV": str(env_file),
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			}
+		)
+		assert result.returncode == 0, result.stderr
+		body = env_file.read_text(encoding="utf-8")
+		assert "SEMBLE_AVAILABLE=true" in body, body
+		assert "status=already_installed version=0.1.3 source=path" in result.stderr, result.stderr
+		assert "uv_unavailable" not in result.stderr, result.stderr
+
+
 def test_install_semble_skips_reinstall_for_matching_uv_tool() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
