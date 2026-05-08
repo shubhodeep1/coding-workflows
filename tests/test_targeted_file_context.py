@@ -471,6 +471,47 @@ def test_semble_logs_use_stable_target_with_file_field() -> None:
 		assert "target=src/huge.py" not in result.stderr
 
 
+def test_invalid_explicit_semble_binary_uses_stable_single_fallback_log() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "huge.py").write_text("x = 1\n" * 6000, encoding="utf-8")
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		query_file = root / "query.txt"
+		query_file.write_text("implementation context\nplan details\n", encoding="utf-8")
+		invalid_bin = root / "not-executable"
+		invalid_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+		result = subprocess.run(
+			[
+				sys.executable,
+				str(REPO_ROOT / "scripts" / "targeted_file_context.py"),
+				"--repo-root",
+				str(root),
+				"--paths",
+				"src/huge.py",
+				"--max-bytes",
+				"1024",
+				"--semble-bin",
+				str(invalid_bin),
+				"--semble-index",
+				str(index_dir),
+				"--semble-query-from",
+				str(query_file),
+				"--output",
+				str(root / "out.txt"),
+			],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+		assert result.returncode == 0
+		assert "SEMBLE_FALLBACK target=overflow file=src/huge.py reason=invalid_binary path=" in result.stderr
+		assert "SEMBLE_FALLBACK reason=invalid_binary path=" not in result.stderr
+
+
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
 	"""A `--paths-file` source could be adversarial; resolve and refuse
 	anything that escapes the repo root."""

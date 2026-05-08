@@ -159,7 +159,6 @@ def _resolve_semble_bin(semble_bin: str | None) -> str | None:
 		candidate = Path(semble_bin)
 		if candidate.is_file() and os.access(candidate, os.X_OK):
 			return str(candidate)
-		_stderr_log(f"SEMBLE_FALLBACK reason=invalid_binary path={_sanitize_one_line(semble_bin)}")
 		return None
 	resolved = shutil.which("semble")
 	return resolved if resolved else None
@@ -193,6 +192,8 @@ def _query_semble_for_overflow(
 		return None, "index_unavailable"
 	resolved_semble_bin = _resolve_semble_bin(semble_bin)
 	if not resolved_semble_bin:
+		if semble_bin:
+			return None, f"invalid_binary path={_sanitize_one_line(semble_bin)}"
 		return None, "missing_binary"
 	targeted_query = f"{query_text}\n\nTarget file: {rel}"
 	try:
