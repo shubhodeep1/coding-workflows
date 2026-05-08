@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/semble_helpers.sh:54-70 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The implicit index-dir guard only rejects a few root-derived literal paths, so other fallback values can bypass the early safety rejection and fall through to later metadata checks.\n  WHY: Both reviewers identified the same guard hole: minimax noted transient fallback directories were not rejected, and x-ai noted malformed variants such as `//.semble-index`; same root cause, overlapping lines.\n- .github/workflows/implement.yml:~555 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The index-build step checks `SEMBLE_AVAILABLE` before validating `workspace_root`, so a missing workspace is only caught after the binary-availability state has already been established.\n  WHY: x-ai reported that this can leave `SEMBLE_AVAILABLE=true` even when workspace-based indexing cannot proceed, which downstream logic may interpret as a usable binary but no index.\n- tests/test_semble_contracts.py:277-296 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The workflow contract test only checks for YAML substrings, so it does not exercise the guard at runtime under mocked empty-path conditions.\n  WHY: Both reviewers pointed out the same limitation: the test asserts text presence for `workspace_root=` / `reason=workspace_unavailable` instead of running the step with `GITHUB_WORKSPACE=\"\"`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/semble_helpers.sh:54-60 | confidence=3\n  PROBLEM: The guard only rejects three explicit unsafe paths (`\"\"`, `/`, `/.semble-index`), but does not catch transient user-writable directories.\n  WHY: A downstream caller with `RUNTIME_DIR=/tmp` and no `SEMBLE_INDEX_DIR` would get `SEMBLE_FALLBACK reason=index_metadata_missing` instead of a clear signal that the path is unsafe/transient.\n- tests/test_semble_contracts.py:277-284 | confidence=3\n  PROBLEM: The test only checks that certain string patterns exist in the workflow YAML, but does not execute the step under mocked conditions to verify the fallback actually fires at runtime.\n  WHY: A rename of the log prefix or restructuring of the step would falsely fail this test even though the logic is correct, while a broken guard would not be caught.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/semble_helpers.sh:~66-70 | confidence=3\n  PROBLEM: The guard rejects `\"\"|\"/\"|\"/.semble-index\"` but accepts malformed fallback paths like `//.semble-index` or `/foo/.semble-index`, so the early safety rejection can be bypassed.\n  WHY: x-ai reported that these variants would proceed to a later probe instead of being rejected by `index_dir_unset`, missing the intended safety signal.\n- .github/workflows/implement.yml:~555 | confidence=2\n  PROBLEM: `SEMBLE_AVAILABLE` is checked before `workspace_root`, so if the workspace becomes unavailable the step can still leave the binary-available state set even though indexing cannot proceed.\n  WHY: x-ai reported that downstream logic may then see `SEMBLE_AVAILABLE=true` with no usable index data and fall back through later metadata checks.\n- tests/test_semble_contracts.py:~289-296 | confidence=3\n  PROBLEM: The new workflow assertion still only checks for YAML substrings and does not execute the index step with `GITHUB_WORKSPACE=\"\"` to verify the short-circuit behavior.\n  WHY: x-ai reported that this can miss runtime failures in the guard path and only validates the presence of the log text.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d3a5f035a1d31756a970d309ce8dd61cb5d1bf1f3a64a1d78ea38ac11ada4d4c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2265,
+    "run_id": "25550034957",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25550034957",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508103007_c21fd2f18f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2265,
+    "run_id": "25550034957"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-08T10:30:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
