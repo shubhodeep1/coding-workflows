@@ -75,6 +75,30 @@ def _run_plan_parser(input_text: str) -> dict[str, str]:
 	return result
 
 
+def _extract_structured_block_perl_program() -> str:
+	wf = _read(PLAN_WF)
+	m = re.search(
+		r"HAS_STRUCTURED_CLARIFICATION_BLOCK=\"false\"\s*\n\s*if perl -ne '(.*?)'\s*\"\$\{CODEX_OUTPUT_FILE\}\";\s*then",
+		wf,
+		re.DOTALL,
+	)
+	assert m, "Failed to locate structured-block detection perl in plan.yml"
+	return m.group(1)
+
+
+def _run_structured_block_detector(input_text: str) -> bool:
+	program = _extract_structured_block_perl_program()
+	with tempfile.TemporaryDirectory() as tmp:
+		input_file = Path(tmp) / "input.txt"
+		input_file.write_text(input_text, encoding="utf-8")
+		proc = subprocess.run(
+			["perl", "-ne", program, str(input_file)],
+			capture_output=True,
+			text=True,
+		)
+	return proc.returncode == 0
+
+
 def _extract_poll_perl_program() -> str:
 	source = _read(POLL_PROCESS)
 	m = re.search(
@@ -228,6 +252,47 @@ def test_plan_parser_skips_recommended_lines_inside_code_fences() -> None:
 	assert r.get("mapping") == "Q1->B", r
 
 
+def test_structured_block_detector_accepts_template_form() -> None:
+	assert _run_structured_block_detector(
+		"Q1: Pick one\nChoices:\n- **A** — text (RECOMMENDED)\n"
+	)
+
+
+def test_structured_block_detector_accepts_paren_form() -> None:
+	# Mirrors the failing tele-funtoken-msg-scoring#2812 codex output.
+	# Without this fix, a Codex emission that uses `- A) ...` and omits
+	# `STATUS: NEEDS_CLARIFICATION` would set needs_clarification=false.
+	assert _run_structured_block_detector(
+		"Q1: Pick one\n- A) text (Recommended)\n"
+	)
+
+
+def test_structured_block_detector_accepts_dash_no_bold_form() -> None:
+	assert _run_structured_block_detector(
+		"Q1: Pick one\n- A — text (Recommended)\n"
+	)
+
+
+def test_structured_block_detector_rejects_input_with_no_qid() -> None:
+	assert not _run_structured_block_detector(
+		"Some prose without a Q-ID.\n- A — looks like a bullet (Recommended)\n"
+	)
+
+
+def test_structured_block_detector_skips_lines_inside_code_fences() -> None:
+	# A bullet inside ``` ... ``` should not satisfy the heuristic on its
+	# own; only a Q-ID followed by an out-of-fence bullet should match.
+	body = (
+		"Q1: Real question\n"
+		"```\n"
+		"- A — illustrative example (Recommended)\n"
+		"```\n"
+	)
+	# No bullet outside the fence and no Choices: line, so the block is
+	# not detected.
+	assert not _run_structured_block_detector(body)
+
+
 def test_poll_parser_accepts_template_form() -> None:
 	out = _run_poll_parser(_TEMPLATE_FORM)
 	assert out.strip() == "Q1: A", out
@@ -288,8 +353,16 @@ def test_prompt_template_documents_canonical_recommended_form() -> None:
 	plan_prompt = _read(PROMPT_PLAN)
 	clarify_prompt = _read(PROMPT_CLARIFY)
 	for prompt in (plan_prompt, clarify_prompt):
+		# Pre-existing blockquote template (escaped angle brackets so
+		# `<description>` renders literally inside the blockquote).
 		assert "**A** — \\<description\\> (RECOMMENDED)" in prompt
-		assert "Each option line MUST be exactly" in prompt
+		# New explicit canonical-form instruction (added in this change).
+		# The placeholder lives inside a backtick code span where markdown
+		# does not parse HTML, so the angle brackets stay unescaped.
+		assert (
+			"Each option line MUST be exactly `- **A** — <description> (RECOMMENDED)`"
+			in prompt
+		)
 
 
 def main() -> int:

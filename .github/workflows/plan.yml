@@ -1035,7 +1035,7 @@ jobs:
             next if $in_code;
             if (/^\s*(?:\*\*)?Q[0-9]+(?:\*\*)?:(?:\*\*)?\s+/i) { $q_line = $.; next; }
             if (defined $q_line && $. - $q_line <= 20 && /^\s*Choices:\s*$/i) { $has_block = 1; }
-            if (defined $q_line && $. - $q_line <= 20 && /^\s*-\s*\*\*[A-Z]\*\*\s*[—–-]/) { $has_block = 1; }
+            if (defined $q_line && $. - $q_line <= 20 && /^\s*-\s*(?:\*\*)?[A-Za-z](?:\*\*)?\s*(?:—|–|[-)\.:])/) { $has_block = 1; }
             END { exit($has_block ? 0 : 1); }
           ' "${CODEX_OUTPUT_FILE}"; then
             HAS_STRUCTURED_CLARIFICATION_BLOCK="true"
