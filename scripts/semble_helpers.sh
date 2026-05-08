@@ -27,6 +27,18 @@ _semble_stderr_log()
 	printf '%s\n' "$*" >&2
 }
 
+_semble_now_ms()
+{
+	if command -v python3 >/dev/null 2>&1; then
+		python3 - <<'PY' 2>/dev/null || printf '0\n'
+import time
+print(int(time.time() * 1000))
+PY
+		return 0
+	fi
+	date +%s%3N 2>/dev/null || printf '0\n'
+}
+
 semble_query_block()
 {
 	if [ "$#" -lt 3 ]; then
@@ -68,23 +80,22 @@ semble_query_block()
 
 	stdout_file="$(mktemp)"
 	stderr_file="$(mktemp)"
-	start_ts="$(python3 - <<'PY'
-import time
-print(int(time.time() * 1000))
-PY
-)"
+	start_ts="$(_semble_now_ms)"
 	if ! "${semble_bin}" search "$@" --top-k "${max_chunks}" "${query_text}" "${repo_root}" >"${stdout_file}" 2>"${stderr_file}"; then
 		stderr_body="$(_semble_sanitize_one_line "$(cat "${stderr_file}" 2>/dev/null || true)")"
 		rm -f "${stdout_file}" "${stderr_file}"
 		_semble_stderr_log "SEMBLE_FALLBACK target=${target} reason=query_failed detail=${stderr_body}"
 		return 1
 	fi
-	end_ts="$(python3 - <<'PY'
-import time
-print(int(time.time() * 1000))
-PY
-)"
-	elapsed_ms=$(( end_ts - start_ts ))
+	end_ts="$(_semble_now_ms)"
+	case "${start_ts}:${end_ts}" in
+		*[!0-9:]*|:*|*:)
+			elapsed_ms=0
+			;;
+		*)
+			elapsed_ms=$(( end_ts - start_ts ))
+			;;
+	esac
 	output_body="$(cat "${stdout_file}" 2>/dev/null || true)"
 	rm -f "${stdout_file}" "${stderr_file}"
 

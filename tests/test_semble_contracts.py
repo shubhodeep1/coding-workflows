@@ -14,7 +14,6 @@ foundation available to downstream callers.
 from __future__ import annotations
 
 import os
-import shutil
 import stat
 import subprocess
 import tempfile
@@ -25,6 +24,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SCRIPT = REPO_ROOT / "scripts" / "install_semble.sh"
 HELPERS_SCRIPT = REPO_ROOT / "scripts" / "semble_helpers.sh"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+
+
+def _workflow_step_block(step_name: str) -> str:
+	body = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	marker = f"\n      - name: {step_name}\n"
+	_, found, tail = body.partition(marker)
+	assert found, f"workflow step missing: {step_name}"
+	block, _, _ = tail.partition("\n      - name: ")
+	return block
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -76,7 +84,6 @@ def test_install_semble_disabled_is_noop_and_fail_soft() -> None:
 		assert result.returncode == 0, result.stderr
 		body = env_file.read_text(encoding="utf-8")
 		assert "SEMBLE_AVAILABLE=false" in body, body
-		assert "SEMBLE_INDEX_AVAILABLE=false" in body, body
 		assert "SEMBLE_FALLBACK" not in result.stdout, result.stdout
 
 
@@ -221,11 +228,14 @@ def test_semble_query_block_query_failures_do_not_leak_to_stdout() -> None:
 
 def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	body = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
-	assert "install_semble.sh" in body, "workflow must stage install_semble.sh"
-	assert "semble_helpers.sh" in body, "workflow must stage semble_helpers.sh"
-	assert "astral-sh/setup-uv@v3" in body, "workflow must install uv when Semble is enabled"
+	assert "write_codex_config.sh install_semble.sh semble_helpers.sh; do" in body, "workflow must stage the Semble support scripts"
 	assert "SEMBLE_ENABLED" in body, "workflow must expose SEMBLE_ENABLED"
-	assert "${RUNTIME_DIR}/.semble-index" in body, "workflow must build the workspace-local index directory"
+	setup_step = _workflow_step_block("Setup uv for Semble")
+	assert "uses: astral-sh/setup-uv@v3" in setup_step, "workflow must install uv when Semble is enabled"
+	install_step = _workflow_step_block("Install Semble")
+	assert "bash scripts/install_semble.sh" in install_step, "workflow must run the install helper"
+	index_step = _workflow_step_block("Build Semble index")
+	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_step, "workflow must build the workspace-local index directory"
 
 
 def main() -> int:

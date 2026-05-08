@@ -73,9 +73,21 @@ _uv_tool_bin_dir()
 _has_matching_semble_tool()
 {
 	local uv_bin="$1"
-	local tool_list bin_dir
+	local tool_list bin_dir line
 	tool_list="$("${uv_bin}" tool list 2>/dev/null || true)"
-	printf '%s\n' "${tool_list}" | grep -Eq "^semble v${SEMBLE_VERSION}$" || return 1
+	while IFS= read -r line; do
+		case "${line}" in
+			"semble v${SEMBLE_VERSION}"|"semble ${SEMBLE_VERSION}")
+				break
+				;;
+			*)
+				line=""
+				;;
+		esac
+	done <<EOF
+${tool_list}
+EOF
+	[ -n "${line}" ] || return 1
 	bin_dir="$(_uv_tool_bin_dir "${uv_bin}")" || return 1
 	_semble_append_path "${bin_dir}"
 	[ -x "${bin_dir}/semble" ] || command -v semble >/dev/null 2>&1 || return 1
@@ -85,8 +97,6 @@ _has_matching_semble_tool()
 main()
 {
 	local uv_bin install_log bin_dir
-
-	_semble_append_env SEMBLE_INDEX_AVAILABLE false
 
 	if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
 		_semble_append_env SEMBLE_AVAILABLE false
