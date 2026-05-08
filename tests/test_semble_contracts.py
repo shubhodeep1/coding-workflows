@@ -206,6 +206,13 @@ def test_semble_query_block_falls_back_cleanly_when_index_disabled() -> None:
 	assert "SEMBLE_FALLBACK target=Implement Context reason=index_unavailable" in result.stderr, result.stderr
 
 
+def test_semble_query_block_rejects_implicit_root_index_dir() -> None:
+	result = _run_helper({"SEMBLE_INDEX_AVAILABLE": "true", "RUNTIME_DIR": "", "SEMBLE_INDEX_DIR": ""})
+	assert result.returncode == 1, result.returncode
+	assert result.stdout == "", result.stdout
+	assert "SEMBLE_FALLBACK target=Implement Context reason=index_dir_unset" in result.stderr, result.stderr
+
+
 def test_semble_query_block_query_failures_do_not_leak_to_stdout() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
@@ -270,6 +277,8 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	install_step = _workflow_step_block("Install Semble")
 	assert "bash scripts/install_semble.sh" in install_step, "workflow must run the install helper"
 	index_step = _workflow_step_block("Build Semble index")
+	assert 'workspace_root="${GITHUB_WORKSPACE:-}"' in index_step, "workflow must guard the workspace path before indexing"
+	assert "reason=workspace_unavailable" in index_step, "workflow must fail soft when the workspace path is unavailable"
 	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_step, "workflow must build the workspace-local index directory"
 	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in index_step, "workflow must build a real Semble index before advertising it"
 

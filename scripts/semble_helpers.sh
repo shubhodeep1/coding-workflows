@@ -54,6 +54,12 @@ semble_query_block()
 	local target index_dir repo_root_file repo_root semble_bin stdout_file stderr_file output_body stderr_body bytes start_ts end_ts elapsed_ms query_rc
 	target="$(_semble_sanitize_one_line "${header_label}")"
 	index_dir="${SEMBLE_INDEX_DIR:-${RUNTIME_DIR:-}/.semble-index}"
+	case "${index_dir}" in
+		""|"/"|"/.semble-index")
+			_semble_stderr_log "SEMBLE_FALLBACK target=${target} reason=index_dir_unset"
+			return 1
+			;;
+	esac
 	repo_root_file="${index_dir}/repo_root"
 
 	if ! _semble_bool_true "${SEMBLE_INDEX_AVAILABLE:-false}"; then
