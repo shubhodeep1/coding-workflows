@@ -424,6 +424,68 @@ def test_overflow_semble_oversized_response_keeps_marker() -> None:
 		assert "chunk-retrieved via Semble" not in context
 
 
+def test_overflow_semble_launch_failure_keeps_marker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
+		query_file = root / "query.txt"
+		query_file.write_text("implement the plan\n", encoding="utf-8")
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		_write_executable(
+			bin_dir / "semble",
+			"#!/nonexistent/interpreter\n",
+		)
+
+		context = emit_context(
+			["src/big.py"],
+			root,
+			max_bytes=1024,
+			semble_bin=str(bin_dir / "semble"),
+			semble_index=str(index_dir),
+			semble_query_from=str(query_file),
+		)
+
+		assert "would overflow total budget" in context
+		assert "chunk-retrieved via Semble" not in context
+
+
+def test_zero_semble_max_chunks_disables_retrieval_and_keeps_marker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
+		query_file = root / "query.txt"
+		query_file.write_text("implement the plan\n", encoding="utf-8")
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		(index_dir / "repo_root").write_text(str(root), encoding="utf-8")
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		_write_executable(
+			bin_dir / "semble",
+			"#!/usr/bin/env bash\n"
+			"printf 'src/big.py:120-140\\nrelevant chunk line\\n'\n",
+		)
+
+		context = emit_context(
+			["src/big.py"],
+			root,
+			max_bytes=1024,
+			semble_bin=str(bin_dir / "semble"),
+			semble_index=str(index_dir),
+			semble_query_from=str(query_file),
+			semble_max_chunks=0,
+		)
+
+		assert "would overflow total budget" in context
+		assert "chunk-retrieved via Semble" not in context
+
+
 def test_cli_accepts_semble_flags_and_keeps_stdout_prompt_safe() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -478,6 +540,31 @@ def test_cli_accepts_semble_flags_and_keeps_stdout_prompt_safe() -> None:
 		assert result.stdout == "", result.stdout
 		assert "SEMBLE_QUERY target=src/big.py" in result.stderr, result.stderr
 		assert "relevant chunk line" in output_file.read_text(encoding="utf-8")
+
+
+def test_cli_rejects_unimplemented_read_fallback_mode() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		output_file = root / "out.txt"
+		result = subprocess.run(
+			[
+				sys.executable,
+				str(REPO_ROOT / "scripts" / "targeted_file_context.py"),
+				"--repo-root",
+				str(root),
+				"--semble-fallback",
+				"read",
+				"--output",
+				str(output_file),
+			],
+			text=True,
+			capture_output=True,
+			check=False,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+
+		assert result.returncode != 0
+		assert "invalid choice" in result.stderr
 
 
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:

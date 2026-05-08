@@ -134,6 +134,7 @@ DEFAULT_HEADER_TEXT = (
 # long prompts).
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 SEMBLE_TIMEOUT_SECS = 5
+SEMBLE_QUERY_TEXT_MAX_CHARS = 16000
 DEFAULT_SEMBLE_MAX_CHUNKS = 6
 NO_RESULTS_TEXT = "No results found."
 
@@ -273,7 +274,7 @@ def parse_paths_arg(arg: str) -> list[str]:
 
 
 def _stderr_log(message: str) -> None:
-	print(message, file=sys.stderr)
+	print(_sanitize_one_line(message), file=sys.stderr)
 
 
 def _sanitize_one_line(value: str) -> str:
@@ -291,9 +292,10 @@ def _read_semble_query_text(query_file: str | None, rel: str) -> tuple[str | Non
 	if not query_file:
 		return None, "query_text_unset"
 	try:
-		query_body = Path(query_file).read_text(encoding="utf-8", errors="replace").strip()
+		query_body = Path(query_file).read_text(encoding="utf-8", errors="replace")
 	except OSError:
 		return None, "query_text_unreadable"
+	query_body = query_body[:SEMBLE_QUERY_TEXT_MAX_CHARS].strip()
 	if not query_body:
 		return None, "query_text_empty"
 	return f"Target file: {rel}\n{query_body}", None
@@ -360,6 +362,11 @@ def _retrieve_semble_overflow(
 			timeout=SEMBLE_TIMEOUT_SECS,
 			check=False,
 		)
+	except OSError as exc:
+		detail = _sanitize_one_line(str(exc))
+		if detail:
+			return None, 0, f"query_launch_failed detail={detail}"
+		return None, 0, "query_launch_failed"
 	except subprocess.TimeoutExpired:
 		return None, 0, "query_timeout"
 
@@ -408,6 +415,9 @@ def emit_context(
 	inlined = 0
 	chunk_retrieved = 0
 	marker_only = 0
+	# Tracks source-content bytes only. Deliberately excludes emitted
+	# marker/header/footer framing so Semble overflow retrieval preserves
+	# the longstanding budget contract used by fully inlined files.
 	used_bytes = 0
 	skipped_too_large: list[tuple[str, int]] = []
 	retrieved_via_semble: list[tuple[str, int, int]] = []
@@ -421,10 +431,12 @@ def emit_context(
 		return "\n".join(output) + "\n"
 
 	repo_root_resolved = repo_root.resolve()
+	if semble_fallback not in {"marker", "off"}:
+		_stderr_log(f"SEMBLE_FALLBACK target=config reason=invalid_fallback value={semble_fallback}")
 	fallback_mode = "off" if semble_fallback == "off" else "marker"
 
 	if semble_max_chunks <= 0:
-		semble_max_chunks = DEFAULT_SEMBLE_MAX_CHUNKS
+		_stderr_log(f"SEMBLE_FALLBACK target=config reason=max_chunks_disabled value={semble_max_chunks}")
 
 	for rel in paths:
 		abs_path = (repo_root / rel).resolve()
@@ -445,7 +457,7 @@ def emit_context(
 			chunk_lines = None
 			retrieved_bytes = 0
 			reason = None
-			if remaining_bytes > 0 and semble_index and semble_query_from:
+			if remaining_bytes > 0 and semble_max_chunks > 0 and semble_index and semble_query_from:
 				chunk_lines, retrieved_bytes, reason = _retrieve_semble_overflow(
 					rel,
 					raw_size,
@@ -551,7 +563,7 @@ def main() -> int:
 	parser.add_argument("--semble-index", default=None)
 	parser.add_argument("--semble-query-from", default=None)
 	parser.add_argument("--semble-max-chunks", type=positive_int, default=DEFAULT_SEMBLE_MAX_CHUNKS)
-	parser.add_argument("--semble-fallback", choices=("marker", "read", "off"), default="marker")
+	parser.add_argument("--semble-fallback", choices=("marker", "off"), default="marker")
 	parser.add_argument("--output", required=True)
 	args = parser.parse_args()
 

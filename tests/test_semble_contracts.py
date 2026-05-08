@@ -323,6 +323,7 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert 'echo "ISSUE DESCRIPTION"' in query_step, "workflow must derive the Semble query file from issue description"
 	assert 'cat "${CLARIFICATION_ANSWERS_FILE}"' in query_step, "workflow must include clarification answers in the Semble query file"
 	assert 'cat "${PLAN_FILE}"' in query_step, "workflow must include the approved implementation plan in the Semble query file"
+	assert '--semble-bin "$(command -v semble 2>/dev/null || true)"' in body, "targeted-file-context must receive the resolved Semble binary path"
 	assert '--semble-index "${SEMBLE_INDEX_DIR:-}"' in body, "targeted-file-context must receive the Semble index path"
 	assert '--semble-query-from "${IMPLEMENTATION_SEMBLE_QUERY_FILE}"' in body, "targeted-file-context must receive the runtime-local query file"
 	assert '--semble-max-chunks "${SEMBLE_TARGETED_FILE_MAX_CHUNKS:-6}"' in body, "targeted-file-context must receive the Semble chunk cap"

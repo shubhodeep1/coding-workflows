@@ -1053,6 +1053,7 @@ jobs:
               --plan-file "${PLAN_FILE}" \
               --repo-root "${GITHUB_WORKSPACE}" \
               --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
+              --semble-bin "$(command -v semble 2>/dev/null || true)" \
               --semble-index "${SEMBLE_INDEX_DIR:-}" \
               --semble-query-from "${IMPLEMENTATION_SEMBLE_QUERY_FILE}" \
               --semble-max-chunks "${SEMBLE_TARGETED_FILE_MAX_CHUNKS:-6}" \
