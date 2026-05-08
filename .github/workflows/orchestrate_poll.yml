@@ -28,10 +28,9 @@ name: AI Orchestrate Poller (Reusable)
 
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-  # Judge is research-heavy (read PR diffs + CI status + prior wave
-  # state, emit structured JSON evaluation) → medium reasoning per
-  # the OpenAI prompt guide.
-  MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'medium' }}
+  # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
+  # policy. Override per-repo via vars.THINKING_LEVEL_JUDGE.
+  MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
@@ -446,7 +445,7 @@ jobs:
           MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
           MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
           MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'medium' }}
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'xhigh' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh

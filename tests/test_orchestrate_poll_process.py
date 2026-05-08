@@ -276,9 +276,9 @@ def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	# `model_reasoning_effort = "..."` in the emitted TOML — see
 	# tests/test_write_codex_config.py for that contract). Pin the
 	# call-site shape so an accidental refactor that drops the
-	# `${MODEL_REASONING_EFFORT_JUDGE:-medium}` substitution and silently
+	# `${MODEL_REASONING_EFFORT_JUDGE:-xhigh}` substitution and silently
 	# swaps in another env var is caught here.
-	assert '--reasoning "${MODEL_REASONING_EFFORT_JUDGE:-medium}"' in script
+	assert '--reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"' in script
 
 
 def _base_state(status: str = "in_progress") -> dict:
