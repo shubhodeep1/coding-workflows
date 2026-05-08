@@ -3696,12 +3696,29 @@ jobs:
           # references this run's GITHUB_RUN_ID (the project_description
           # we sent embeds it, and the body includes project_summary
           # which typically carries it through).
-          TRACKING_NUMBER=$(gh api \
-            "repos/${TEST_REPO}/issues?state=open&labels=ai:orchestrator-tracking&since=${DISPATCH_START_ISO}&per_page=50" \
-            --jq "[.[] | select(.body // \"\" | contains(\"${GITHUB_RUN_ID}\"))] | sort_by(.created_at) | last | .number // empty" \
-            2>/dev/null || echo "")
+          # GitHub's /repos/{}/{}/issues endpoint with `since=` + `labels=`
+          # filters has eventual-consistency lag: a freshly-created issue
+          # can take tens of seconds to surface in subsequent filtered list
+          # calls under release-day API load. The orchestrate run completes
+          # within ~1s of creating the tracking issue ("Create tracking
+          # issue" → "Dispatch Wave 1" runs in ~20s inside the orchestrate
+          # bootstrap), so the immediate post-run lookup races the index.
+          # Runs 25542750558 and 25477674617 both failed here even though
+          # the tracking issue had been created seconds earlier (verified
+          # via direct issue lookup). Poll up to 90s with 5s backoff to
+          # absorb the lag instead of one-shot-failing.
+          TRACKING_NUMBER=""
+          TRACKING_DEADLINE=$(( $(date +%s) + 90 ))
+          while [ "$(date +%s)" -lt "${TRACKING_DEADLINE}" ]; do
+            TRACKING_NUMBER=$(gh api \
+              "repos/${TEST_REPO}/issues?state=open&labels=ai:orchestrator-tracking&since=${DISPATCH_START_ISO}&per_page=50" \
+              --jq "[.[] | select(.body // \"\" | contains(\"${GITHUB_RUN_ID}\"))] | sort_by(.created_at) | last | .number // empty" \
+              2>/dev/null || echo "")
+            [ -n "${TRACKING_NUMBER}" ] && break
+            sleep 5
+          done
           if [ -z "${TRACKING_NUMBER}" ]; then
-            echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
+            echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} after 90s polling (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
             exit 1
           fi
           echo "tracking_issue=${TRACKING_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -3717,16 +3734,28 @@ jobs:
           # `ai:orchestrator-managed` label, so we list those directly.
           # `since=${DISPATCH_START_ISO}` and the body filter scope the
           # match to children opened by THIS dispatch, never an older run.
-          CHILDREN_JSON=$(gh api \
-            "repos/${TEST_REPO}/issues?state=all&labels=ai:orchestrator-managed&since=${DISPATCH_START_ISO}&per_page=100" \
-            --jq "[.[] | select(.pull_request | not) | select(.body // \"\" | contains(\"Tracking issue: #${TRACKING_NUMBER}\")) | .number]" \
-            2>/dev/null || echo "[]")
-          CHILDREN=$(echo "${CHILDREN_JSON}" | jq -r 'sort | unique | join(",")' 2>/dev/null || echo "")
+          # Same eventual-consistency caveat as the tracking-issue lookup
+          # above: the Wave 1 children are created ~3-4s after the tracking
+          # issue, so the filtered list call can still race the index even
+          # after the tracking-issue lookup succeeds. Poll up to 90s with
+          # 5s backoff until at least 2 children are visible.
+          CHILDREN=""
+          CHILD_COUNT=0
+          CHILDREN_DEADLINE=$(( $(date +%s) + 90 ))
+          while [ "$(date +%s)" -lt "${CHILDREN_DEADLINE}" ]; do
+            CHILDREN_JSON=$(gh api \
+              "repos/${TEST_REPO}/issues?state=all&labels=ai:orchestrator-managed&since=${DISPATCH_START_ISO}&per_page=100" \
+              --jq "[.[] | select(.pull_request | not) | select(.body // \"\" | contains(\"Tracking issue: #${TRACKING_NUMBER}\")) | .number]" \
+              2>/dev/null || echo "[]")
+            CHILDREN=$(echo "${CHILDREN_JSON}" | jq -r 'sort | unique | join(",")' 2>/dev/null || echo "")
+            CHILD_COUNT=$(echo "${CHILDREN}" | tr ',' '\n' | grep -c .)
+            [ "${CHILD_COUNT}" -ge 2 ] && break
+            sleep 5
+          done
           echo "child_issues=${CHILDREN}" >> "$GITHUB_OUTPUT"
           # Decomposition assertion: at least two distinct child issues.
-          CHILD_COUNT=$(echo "${CHILDREN}" | tr ',' '\n' | grep -c .)
           if [ "${CHILD_COUNT}" -lt 2 ]; then
-            echo "::error::Decomposition produced ${CHILD_COUNT} child issue(s); expected >= 2 (queried label=ai:orchestrator-managed since=${DISPATCH_START_ISO} body~='Tracking issue: #${TRACKING_NUMBER}')"
+            echo "::error::Decomposition produced ${CHILD_COUNT} child issue(s) after 90s polling; expected >= 2 (queried label=ai:orchestrator-managed since=${DISPATCH_START_ISO} body~='Tracking issue: #${TRACKING_NUMBER}')"
             exit 1
           fi
           echo "✓ Decomposition produced ${CHILD_COUNT} child issues: ${CHILDREN}"
