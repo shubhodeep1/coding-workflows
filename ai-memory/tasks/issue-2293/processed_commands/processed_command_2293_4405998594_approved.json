@@ -5,13 +5,33 @@
   "entry_id": "processed_command_2293_4405998594_approved",
   "issue_number": 2293,
   "metadata": {
+    "branch": "ai/issue-2293",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "prompts/conflict-resolver.txt",
+      "prompts/integration-sync-conflict-resolver.txt",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_conflict_prepare.sh",
+      "scripts/review_conflict_resolve.sh",
+      "scripts/review_run_reviewers.sh",
+      "scripts/semble_helpers.sh",
+      "tests/test_review_autofix_smoke_conflict_resolver_override.py",
+      "tests/test_review_conflict_resolve_smoke_deterministic.py",
+      "tests/test_review_reviewer_prompt_semble.py",
+      "tests/test_semble_contracts.py"
+    ],
+    "issue_number": 2293,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2293",
+    "pr_number": 2295,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2295",
+    "run_attempt": "1",
+    "run_id": "25552728644",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25552728644"
   },
   "run_attempt": 1,
   "run_id": "25552728644",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-08T11:20:35Z",
+  "status": "completed",
+  "timestamp": "2026-05-08T11:32:22Z",
   "workflow": "implement"
 }
