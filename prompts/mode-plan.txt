@@ -18,8 +18,22 @@ Rules:
 - If any answer is missing, contradictory, or unclear: emit clarification
   questions in the mandatory `Q<ID>` / Choices format (see Mandatory Question
   Format below).
+- Review-blocked reissues: if the issue body contains
+  `Type: review-blocked-reissue` (footer block produced by the review-blocked
+  judge), the file paths and line numbers cited in the body refer to the
+  closed PR's prior implementation and are intentionally absent from `main`.
+  Treat them as guidance about what the new implementation must (re)create or
+  change, NOT as prerequisite files that must already exist. Do NOT emit
+  `BLOCKED:` for "files referenced in the issue do not exist on main" in this
+  case — produce a normal plan that re-creates the relevant files. The plan
+  must call out the files-to-create explicitly under "Files likely to change."
 - If a required input is external and non-synthesizable (branch name,
-  commit SHA, credential, external URL): emit exactly `BLOCKED: <short reason>`.
+  commit SHA, credential, external URL) AND the input is required to plan
+  the change itself (not merely referenced as context that the new
+  implementation will replace): emit exactly `BLOCKED: <short reason>`.
+  Missing source files on the current ref are NOT external inputs — they are
+  codebase state the plan can address; flag them under CONFLICT DETECTION
+  (see plan.yml inline block) and continue planning.
 - Scope-too-large gate: if the honest estimate exceeds 60 minutes, do NOT
   emit a plan; emit exactly
   `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`.
