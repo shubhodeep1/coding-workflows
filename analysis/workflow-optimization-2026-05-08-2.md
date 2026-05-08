@@ -941,3 +941,161 @@ Ordered by end-to-end impact.
 | Recommended next metric | cache read/create/hit/miss counters per workflow |
 
 If you want, I can turn this into a shorter “engineering action plan” with owners, rollout order, and a 2-week measurement checklist.
+
+## Deep Audit — Workflows & Scripts (2026-05-08)
+
+Inspected all workflow files under `.github/workflows/` and all repository scripts under `scripts/`. I did **not** repeat already-documented report topics that were already covered in the in-progress report (notably the broad `review_autofix` stale-run/concurrency problem and the `test-and-mark-stable` tracking-issue eventual-consistency failure), and focused this audit on additional evidence-backed findings.
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001 — Fail-open PR lookup can dispatch the no-PR review path even when an open PR already exists
+- **File path**: `.github/workflows/internal-review.yml:91-103`
+- **Severity**: Medium
+- **Category tag**: `bug`
+- **Description**: The `resolve-claude-branch-pr` step uses raw `gh api` calls with `|| echo ""` / `|| echo 'main'` fallbacks:
+  - `existing_pr="$(gh api ... || echo "")"` at lines 98-100
+  - `base_ref="$(gh api ... || echo 'main')"` at line 101  
+  On any transient GitHub API failure, `existing_pr` becomes empty and line 112 emits `proceed=true`, which dispatches the no-PR `review_autofix.yml` path even though the step’s own comments at lines 68-74 say this lookup is the guard against double-firing when a PR already exists for the branch.
+- **Recommended fix**: Fail closed on PR-discovery errors instead of defaulting to “no PR”. Concretely, source `scripts/gh_helpers.sh` and use `gh_retry` + `_safe_gh_jq`, or replace the two raw REST calls with a single retried `gh pr list --head ... --state open --json number,baseRefName` call. If lookup still fails after retries, set `proceed=false` and log a warning rather than dispatching review work.
+
+#### BUG-002 — Stable-release smoke uses a weaker consumer-dispatch path than production
+- **File path**: `.github/workflows/test-and-mark-stable.yml:4663-4668`
+- **Severity**: Medium
+- **Category tag**: `bug`
+- **Description**: The release-callback step dispatches `repository_dispatch` to each consumer repo with a bare `gh api "repos/${REPO}/dispatches"` and only logs a warning on failure. The production workflow `mark-stable.yml` uses a rate-limit-aware `_gh_retry` wrapper for the same loop at `.github/workflows/mark-stable.yml:472-491`. That means the smoke path does not exercise the same retry/backoff behavior as production, so transient 403/429/5xx errors can be misclassified as harmless warnings during rehearsal.
+- **Recommended fix**: Reuse the production dispatch helper in smoke. The smallest safe change is to extract the `_gh_retry`/dispatch loop from `mark-stable.yml` into a shared helper script and source it from both workflows so smoke and production use identical retry semantics.
+
+_No additional evidence-backed secret-leak or shell-injection findings rose above the reporting threshold in the audited `run:` blocks and sourced shell scripts._
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001 — Standalone stall sweep burns seven label-list calls every poll cycle before it even starts candidate enrichment
+- **File path**: `scripts/orchestrate_poll_process.sh:6310-6335`
+- **Severity**: Medium
+- **Category tag**: `api-batching`
+- **Description**: The standalone stall sweep builds `labeled_issues` by iterating seven labels and calling `gh issue list` once per label at lines 6313-6317 (`ai:clarification`, `ai:planning`, `ai:awaiting-approval`, `ai:implementing`, `ai:done`, `ai:ready-to-merge`, `ai:review-blocked`). It then performs one more GraphQL marker search at lines 6323-6326 and one candidate-details batch call at line 6334. So the baseline path is **9 API calls per poll cycle** before any fallback work: **7 label-list REST calls + 1 marker GraphQL call + 1 candidate-details GraphQL call**.
+- **Current call count**: **9** baseline calls per cycle.
+- **Proposed call count after fix**: **2** baseline calls per cycle.
+- **Existing batching pattern to extend**: Extend `_fetch_standalone_marker_issues_graphql()` in `scripts/orchestrate_poll_process.sh:5727-5767` to issue one aliased GraphQL `search` request for all seven labels plus the two marker searches, then keep the existing `_fetch_candidate_issue_details_graphql()` call.
+- **Recommended fix**: Replace the seven `gh issue list` calls with a single aliased GraphQL search helper that returns all label buckets in one response, union that result with the existing marker-search response, and then pass the merged candidate set into `_fetch_candidate_issue_details_graphql()` unchanged.
+
+#### BATCH-002 — `review_autofix` fallback path does N per-issue label lookups after reconstructing linked issues from PR text
+- **File path**: `.github/workflows/review_autofix.yml:522-567`
+- **Severity**: Medium
+- **Category tag**: `api-batching`
+- **Description**: When `closingIssuesReferences` is empty, the workflow falls back to parsing linked issue numbers from the PR title/body at lines 523-532. That fallback constructs `issue_nodes_json` with `labels: null`, and the loop at lines 537-567 then executes `gh issue view "${issue_number}" --json labels` at line 541 for every linked issue to discover whether `ai:orchestrator-validate-required` is present. On this fallback path, the pre-dispatch discovery cost becomes **1 PR fetch + N issue-label fetches**.
+- **Current call count**: **1 + N** pre-dispatch discovery calls on the fallback path, where **N** is the number of parsed linked issues.
+- **Proposed call count after fix**: **2** pre-dispatch discovery calls on the fallback path.
+- **Existing batching pattern to extend**: `_fetch_candidate_issue_details_graphql()` in `scripts/orchestrate_poll_process.sh:5807-6037`.
+- **Recommended fix**: Keep the single PR fetch that provides the fallback text, then batch-fetch labels for all parsed issue numbers with one aliased GraphQL query that returns `{number, labels}` for the parsed set. That removes the `gh issue view` call from the loop entirely.
+
+#### API-001 — Tracking-issue comment hydration is still linear in tracking-issue count
+- **File path**: `scripts/orchestrate_poll_process.sh:6284-6301`
+- **Severity**: Medium
+- **Category tag**: `api-redundancy`
+- **Description**: When `RUNTIME_DIR/tracking_issues.json` is present, the loop fetches comments for each tracking issue individually using `gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100"` at line 6290. The only data consumed from those responses is the recent comment body set used by `extract_latest_valid_orchestrator_state`, which already matches the comment shape returned by `_fetch_candidate_issue_details_graphql()`.
+- **Current call count**: **T** REST comment-list calls per poll cycle, where **T** is the number of tracking issues in `tracking_issues.json`.
+- **Proposed call count after fix**: **ceil(T / 25)** GraphQL calls per poll cycle.
+- **Existing batching pattern to extend**: `_fetch_candidate_issue_details_graphql()` in `scripts/orchestrate_poll_process.sh:5807-6037`.
+- **Recommended fix**: Batch the tracking issue numbers into the existing issue-details GraphQL helper and read `.comments` from that cache instead of calling `/issues/{n}/comments` in a loop. Keep the current per-issue REST path only as fail-open fallback when the batch helper returns no entry.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — `test-and-mark-stable.yml` contains five local copies of the same GitHub polling helper family, and they have already drifted
+- **File path**: `.github/workflows/test-and-mark-stable.yml:467-503,592-626,785-825,1232-1254,2386-2397`
+- **Severity**: Medium
+- **Category tag**: `duplication`
+- **Description**: The workflow defines near-identical `gh_api_safe()` helpers three times with the same retry/backoff body (lines 467-481, 592-604, 785-797), plus two more simplified copies (lines 1235-1254 and 2386-2397). The first three copies also duplicate the same `capture_run_id()` helper (lines 488-503, 611-626, 810-825). The copies have already diverged: the earlier versions log non-rate-limit stderr (`cat /tmp/gh_api_err >&2`), while the later simplified copies silently return empty output on non-rate-limit failures.
+- **Recommended fix**: Extract a shared module, e.g. `scripts/e2e_gh_watch_helpers.sh`, with:
+  - `gh_api_safe <endpoint> [gh api args...]`
+  - `capture_run_id <repo> <created_after> <name_regex>`
+  - optionally `watch_run_until_complete <repo> <run_id> <deadline_epoch>`  
+  Update the clarify, plan, implement, review, and orchestrate-poll watcher steps to source that module instead of redefining the helpers inline.
+
+#### DUP-002 — Multiple workflows re-implement GitHub retry wrappers instead of using the canonical helper library
+- **File path**: `.github/workflows/cancel_on_pr_close.yml:26-53`; `.github/workflows/mark-stable.yml:303-336,472-485`; `.github/workflows/orchestrate_poll.yml:79-111`; `.github/workflows/review_autofix.yml:600-612,1291-1329`; `.github/workflows/test-and-mark-stable.yml:4523-4536`; `scripts/gh_helpers.sh:381-512`
+- **Severity**: Medium
+- **Category tag**: `duplication`
+- **Description**: The repository already has canonical retry helpers in `scripts/gh_helpers.sh` (`gh_retry`, `gh_retry_to_file`, `_safe_gh_jq`), but several workflows still carry bespoke wrappers. The duplicates are not identical:
+  - `scripts/gh_helpers.sh` distinguishes permanent vs retryable failures and includes rate-limit trip-breaker/alert behavior.
+  - `review_autofix.yml:603-612` retries every failure with simple doubling sleep.
+  - `mark-stable.yml`, `cancel_on_pr_close.yml`, `orchestrate_poll.yml`, and `test-and-mark-stable.yml` each keep their own `_gh_retry` variant with fixed `/tmp/_gh_rl_err` scratch files and slightly different logging.
+- **Recommended fix**: Standardize on `scripts/gh_helpers.sh` as the single owner. Where a workflow cannot assume the repo is already checked out, add a minimal fetched helper bootstrap or a tiny shared script dedicated to retry logic. The function surface should stay the canonical one already in use: `gh_retry`, `gh_retry_to_file`, and `_safe_gh_jq`.
+
+#### DUP-003 — `comprehensive-test-and-release.yml` duplicates its dispatch-watch utility block inside the same file
+- **File path**: `.github/workflows/comprehensive-test-and-release.yml:57-103,305-345`
+- **Severity**: Low
+- **Category tag**: `duplication`
+- **Description**: The workflow defines the same helper set twice in the same file:
+  - `sanitize_single_line()`
+  - `is_positive_integer()`
+  - `gh_api_safe()`
+  - `list_dispatch_runs()`  
+  The two copies are materially identical aside from surrounding local variables (`WORKFLOW_FILE`, `TARGET_BRANCH`).
+- **Recommended fix**: Move the helper block into a shared script, e.g. `scripts/workflow_dispatch_watch.sh`, with a narrow interface such as `list_dispatch_runs <repo> <workflow_file>` and `gh_api_safe <endpoint> [args...]`. Then invoke that helper from both dispatch-watch sections.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No additional expression-size findings crossed the reporting thresholds.
+
+- **Largest interpolated `run:` block found**: `.github/workflows/test-and-mark-stable.yml:4501-4571` at approximately **2,999 characters**, leaving roughly **18,001 characters** of headroom before the 21,000-character hard limit.
+- **Next largest interpolated `run:` blocks**:
+  - `.github/workflows/plan.yml:1245-1288` at approximately **2,962 characters**
+  - `.github/workflows/mark-stable.yml:303-368` at approximately **2,743 characters**
+- **Largest workflow file sizes**:
+  - `.github/workflows/review_autofix.yml` — **286,105 bytes**
+  - `.github/workflows/test-and-mark-stable.yml` — **271,478 bytes**
+  - `.github/workflows/implement.yml` — **187,126 bytes**
+
+All workflow files are well below the **800 KB** early-warning threshold and far below the **1 MB** hard file-size limit.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Reserved label-repair evidence helpers are present but not wired into any workflow/script entrypoint
+- **File path**: `scripts/orchestrate_lib.py:988-1371`
+- **Severity**: Low
+- **Category tag**: `dead-code`
+- **Description**: `parse_phase_failure_markers()`, `resolve_label_repair_evidence()`, and `choose_most_advanced_conclusive_evidence()` are fully implemented in `scripts/orchestrate_lib.py`, but repo-local workflow/script references do not call them. The architecture note in `agents.md:124-131` explicitly says these helpers are “contract/reserved and not yet wired into poller reconciliation,” which matches the absence of call sites in the workflow/script surface.
+- **Recommended fix**: Either wire these helpers into the active label-repair path in `scripts/orchestrate_poll_process.sh` or remove/defer them until the integration is ready. Leaving them half-integrated increases maintenance cost because behavior can drift without any production caller exercising it.
+
+#### DEBT-001 — Deterministic-skip label metadata is hard-coded inline and must stay “in lockstep” with the real label catalog
+- **File path**: `.github/workflows/review_autofix.yml:614-625`; `scripts/label_helpers.sh:22-98`
+- **Severity**: Low
+- **Category tag**: `tech-debt`
+- **Description**: The deterministic-skip job in `review_autofix.yml` defines its own `ensure_label_exists()` and hard-codes the `ai:review-skipped` color/description inline. The comment at lines 619-624 explicitly says this copy “must stay in lockstep with the catalog,” while the canonical catalog already exists in `scripts/label_helpers.sh` and ultimately mirrors `.github/ai/label_contract.v1.json`. This is a known drift trap rather than a hypothetical one.
+- **Recommended fix**: Make `scripts/label_helpers.sh` the only owner of label metadata. If the job must stay lightweight, fetch/source just that helper or generate the one-off label metadata from the same central contract during bootstrap rather than hand-copying color/description strings.
+
+#### CONSIST-001 — `review_autofix` still uses step-local retry semantics that differ from the canonical GitHub helper behavior
+- **File path**: `.github/workflows/review_autofix.yml:600-612,1291-1329`; `scripts/gh_helpers.sh:381-512`
+- **Severity**: Medium
+- **Category tag**: `consistency`
+- **Description**: `review_autofix.yml` contains two different inline retry implementations:
+  - a simple exponential backoff wrapper at lines 603-612
+  - a file-capturing wrapper at lines 1308-1329  
+  Neither matches the canonical behavior in `scripts/gh_helpers.sh`, which classifies permanent failures, retries JSON fetches safely, and centralizes rate-limit handling. Because the review path is one of the repository’s most API-heavy flows, this inconsistency creates workflow-specific retry semantics and makes future incident analysis harder.
+- **Recommended fix**: Replace both inline wrappers with the canonical `scripts/gh_helpers.sh` interface. If early bootstrap constraints prevent sourcing it directly, extract a minimal shared retry shim from `gh_helpers.sh` and consume that same shim in all review-related jobs.
+
+_Notes from the cross-cutting sweep:_
+- The `TODO|FIXME|HACK|XXX` grep did **not** surface genuine debt markers in workflow/script bodies; the hits were `mktemp` suffixes such as `XXXXXX`, not real TODO comments.
+- I did not elevate the unquoted `for ... in ${var}` loops I found in `scripts/tg_helpers.sh`, `scripts/check_external_branch_advance.sh`, and selected workflows because the audited values are repo slugs or numeric/comma-delimited IDs, not free-form user text.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 8 | BUG-001, BUG-002, BATCH-001, BATCH-002, API-001, DUP-001, DUP-002, CONSIST-001 |
+| Low | 3 | DUP-003, DEAD-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2-3 | Large |
+| Code modularization | 5-7 | Medium |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 4-6 | Medium |
