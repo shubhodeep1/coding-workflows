@@ -502,6 +502,7 @@ def emit_context(
 	if included == 0 and off_suppressed == 0:
 		output.append("(no existing target files could be inlined)")
 	else:
+		marker_only = included - inlined - semble_rendered - read_fallback_rendered
 		if semble_rendered == 0 and read_fallback_rendered == 0 and off_suppressed == 0:
 			summary = (
 				f"Included {included} entr{'y' if included == 1 else 'ies'} "
@@ -509,7 +510,6 @@ def emit_context(
 				f"{used_bytes} byte(s) of source content."
 			)
 		else:
-			marker_only = included - inlined - semble_rendered - read_fallback_rendered
 			summary = (
 				f"Included {included} entr{'y' if included == 1 else 'ies'} "
 				f"({inlined} inlined, {marker_only} marker-only, "

@@ -32,9 +32,32 @@ def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
 	assert "install -m 0644 \"${src}\" \"prompts/${pf}\"" in wf
 
 
+def test_semble_foundation_is_staged_and_fail_open() -> None:
+	wf = _workflow()
+	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in wf
+	assert 'SEMBLE_AVAILABLE: "false"' in wf
+	assert 'SEMBLE_INDEX_AVAILABLE: "false"' in wf
+	assert "install_semble.sh semble_helpers.sh" in wf
+	assert "- name: Setup uv for Semble" in wf
+	assert "uses: astral-sh/setup-uv@v3" in wf
+	assert "- name: Install Semble" in wf
+	assert "- name: Install Semble\n        if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'\n        continue-on-error: true" in wf
+	assert "bash scripts/install_semble.sh" in wf
+	assert "- name: Build Semble index" in wf
+	assert "- name: Build Semble index\n        if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'\n        continue-on-error: true" in wf
+	assert 'workspace_root="${GITHUB_WORKSPACE:-}"' in wf
+	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in wf
+	assert "SEMBLE_FALLBACK target=index reason=workspace_unavailable" in wf
+	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in wf
+	assert 'printf \'%s\\n\' "${workspace_root}" > "${SEMBLE_INDEX_DIR}/repo_root"' in wf
+	assert 'echo "SEMBLE_INDEX_DIR=${SEMBLE_INDEX_DIR}" >> "$GITHUB_ENV"' in wf
+	assert "SEMBLE_INDEX target=orchestrate_poll path=${SEMBLE_INDEX_DIR}" in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
+	test_semble_foundation_is_staged_and_fail_open()
 	return 0
 
 
