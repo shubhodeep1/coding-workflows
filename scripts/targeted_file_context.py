@@ -134,6 +134,7 @@ DEFAULT_HEADER_TEXT = (
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 SEMBLE_QUERY_TIMEOUT_SECS = 30
 SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
+SEMBLE_QUERY_TEXT_MAX_CHARS = 16000
 
 
 def is_probable_path(value: str) -> bool:
@@ -292,6 +293,21 @@ def _append_inlined_file_block(output: list[str], rel: str, raw: bytes) -> None:
 	output.append("")
 
 
+def _bounded_query_text(text: str | None) -> str | None:
+	if text is None:
+		return None
+	stripped = text.strip()
+	if not stripped:
+		return None
+	if len(stripped) > SEMBLE_QUERY_TEXT_MAX_CHARS:
+		print(
+			f"SEMBLE_QUERY_TRUNCATED chars={len(stripped)} limit={SEMBLE_QUERY_TEXT_MAX_CHARS}",
+			file=sys.stderr,
+		)
+		stripped = stripped[:SEMBLE_QUERY_TEXT_MAX_CHARS]
+	return stripped
+
+
 def _read_optional_query_text(path_str: str | None) -> str | None:
 	if not path_str:
 		return None
@@ -299,8 +315,7 @@ def _read_optional_query_text(path_str: str | None) -> str | None:
 		text = Path(path_str).read_text(encoding="utf-8", errors="replace")
 	except OSError:
 		return None
-	stripped = text.strip()
-	return stripped or None
+	return _bounded_query_text(text)
 
 
 def _run_semble_query(
@@ -494,9 +509,10 @@ def emit_context(
 				f"{used_bytes} byte(s) of source content."
 			)
 		else:
+			marker_only = included - inlined - semble_rendered - read_fallback_rendered
 			summary = (
 				f"Included {included} entr{'y' if included == 1 else 'ies'} "
-				f"({inlined} inlined, {len(skipped_too_large)} marker-only, "
+				f"({inlined} inlined, {marker_only} marker-only, "
 				f"{semble_rendered} semble, {read_fallback_rendered} read), "
 				f"{used_bytes} byte(s) of source content."
 			)
@@ -567,7 +583,7 @@ def main() -> int:
 		args.header_text,
 		semble_bin=args.semble_bin,
 		semble_index=args.semble_index,
-		semble_query_text=_read_optional_query_text(args.semble_query_from) or (plan_text.strip() or None),
+		semble_query_text=_read_optional_query_text(args.semble_query_from) or _bounded_query_text(plan_text),
 		semble_max_chunks=args.semble_max_chunks,
 		semble_fallback=args.semble_fallback,
 	)

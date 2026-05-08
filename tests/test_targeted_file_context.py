@@ -23,7 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from targeted_file_context import (  # noqa: E402
+	SEMBLE_QUERY_TEXT_MAX_CHARS,
 	SEMBLE_QUERY_TIMEOUT_SECS,
+	_read_optional_query_text,
 	emit_context,
 	extract_paths_from_plan,
 	main as targeted_file_context_main,
@@ -328,6 +330,35 @@ def test_non_overflow_output_stays_legacy_shape_even_with_semble_flags_present()
 		assert with_semble_args == legacy
 
 
+def test_non_semble_summary_keeps_legacy_parenthetical_format() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "small.py").write_text("small = 1\n", encoding="utf-8")
+		(root / "src" / "big.py").write_text("y = 1\n" * 6000, encoding="utf-8")
+
+		context = emit_context(
+			["src/small.py", "src/big.py"],
+			root,
+			max_bytes=1024,
+		)
+
+		assert "Included 2 entries (1 inlined, 1 marker-only), " in context
+		assert "chunk-retrieved-via-Semble" not in context
+
+
+def test_read_optional_query_text_truncates_large_input() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		query_file = Path(tmp) / "query.txt"
+		oversized = "x" * (SEMBLE_QUERY_TEXT_MAX_CHARS + 50)
+		query_file.write_text(oversized, encoding="utf-8")
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			query_text = _read_optional_query_text(str(query_file))
+		assert query_text == oversized[:SEMBLE_QUERY_TEXT_MAX_CHARS]
+		assert f"limit={SEMBLE_QUERY_TEXT_MAX_CHARS}" in stderr.getvalue()
+
+
 def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -449,6 +480,20 @@ def test_overflow_read_fallback_counts_rendered_bytes_in_budget() -> None:
 		assert "overflow fallback read head" in context
 		assert "--- FILE: src/small.py (20 bytes; would overflow total budget" in context
 		assert "Included 2 entries (0 inlined, 1 marker-only, 0 semble, 1 read), 128 byte(s) of source content." in context
+
+
+def test_semble_summary_counts_missing_and_binary_entries_as_marker_only() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "blob.py").write_bytes(b"\x00\x01")
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(semble, stdout="chunk\n")
+		context = emit_context(["src/missing.py", "src/blob.py", "src/big.py"], root, max_bytes=100, semble_bin=str(semble), semble_index=str(root / ".semble-index"), semble_query_text="task summary", semble_max_chunks=1)
+		assert "--- FILE: src/missing.py (missing) ---" in context
+		assert "--- FILE: src/blob.py (binary skipped) ---" in context
+		assert "Included 3 entries (0 inlined, 2 marker-only, 1 semble, 0 read), " in context
 
 
 def test_semble_query_timeout_falls_back_cleanly() -> None:

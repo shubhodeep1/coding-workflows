@@ -309,6 +309,7 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	body = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 	assert "write_codex_config.sh install_semble.sh semble_helpers.sh; do" in body, "workflow must stage the Semble support scripts"
 	assert "SEMBLE_ENABLED" in body, "workflow must expose SEMBLE_ENABLED"
+	assert "IMPLEMENTATION_SEMBLE_QUERY_FILE" in body, "workflow must export a runtime-local Semble query file"
 	setup_step = _workflow_step_block("Setup uv for Semble")
 	assert "uses: astral-sh/setup-uv@v3" in setup_step, "workflow must install uv when Semble is enabled"
 	install_step = _workflow_step_block("Install Semble")
@@ -318,6 +319,15 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert "reason=workspace_unavailable" in index_step, "workflow must fail soft when the workspace path is unavailable"
 	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_step, "workflow must build the workspace-local index directory"
 	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in index_step, "workflow must build a real Semble index before advertising it"
+	query_step = _workflow_step_block("Build implementation Semble query file")
+	assert 'echo "ISSUE DESCRIPTION"' in query_step, "workflow must derive the Semble query file from issue description"
+	assert 'cat "${CLARIFICATION_ANSWERS_FILE}"' in query_step, "workflow must include clarification answers in the Semble query file"
+	assert 'cat "${PLAN_FILE}"' in query_step, "workflow must include the approved implementation plan in the Semble query file"
+	assert '--semble-bin "$(command -v semble 2>/dev/null || true)"' in body, "targeted-file-context must receive the resolved Semble binary path"
+	assert '--semble-index "${SEMBLE_INDEX_DIR:-}"' in body, "targeted-file-context must receive the Semble index path"
+	assert '--semble-query-from "${IMPLEMENTATION_SEMBLE_QUERY_FILE}"' in body, "targeted-file-context must receive the runtime-local query file"
+	assert '--semble-max-chunks "${SEMBLE_TARGETED_FILE_MAX_CHUNKS:-6}"' in body, "targeted-file-context must receive the Semble chunk cap"
+	assert '--semble-fallback marker' in body, "targeted-file-context must keep marker fallback as the default fail-open behavior"
 
 
 def test_review_autofix_workflow_stages_and_gates_semble_foundation() -> None:
