@@ -1440,23 +1440,36 @@ jobs:
           # downstream labeling and auto-merge gating) keeps GraphQL-only
           # semantics — labeling-by-keyword is itself default-branch-gated
           # by GitHub, so back-filling there would alter unrelated semantics.
-          # Same regex as the smoke-test detection step (case-insensitive
-          # closing keywords + #N or repo-scoped issue URL).  URL prefix is
-          # restricted to the current repository so a cross-repo
-          # `Closes <other-repo>/issues/N` reference cannot route an
-          # unrelated number into this repo's lookup.
-          # API cost: bounded by the count of distinct closing references in
-          # the PR body (typically 1-2); each match issues one
-          # `gh api repos/.../issues/<n>` REST call.  Failures are logged
-          # and skipped (fail-open).
+          # Trigger: GraphQL returned exactly `[]`.  A non-empty (even
+          # partial) GraphQL result is trusted as authoritative and the
+          # body is NOT scanned, matching the brief's intent (only fix the
+          # case where GitHub resolved nothing).
+          # Regex (case-insensitive closing keywords + #N or repo-scoped
+          # github.com issue URL): host is anchored to `github.com` and
+          # the repo path is PCRE-escaped via python's re.escape before
+          # splicing in, so neither a non-GitHub URL with the same path
+          # nor a future repo rename containing regex metacharacters can
+          # route an unrelated number into this repo's lookup.
+          # API cost: each distinct closing reference costs one
+          # `gh api repos/.../issues/<n>` REST call; capped at
+          # _FALLBACK_MAX_ISSUES (truncation logged) to bound the worst
+          # case against verbose or adversarial PR bodies.  Failures are
+          # logged and skipped (fail-open).
           _linked_context_raw="${_linked_raw}"
           if [ "${_linked_context_raw}" = "[]" ] && [ -s "${PR_META_FILE}" ]; then
             _pr_body_for_fallback="$(jq -r '.body // ""' "${PR_META_FILE}")"
             if [ -n "${_pr_body_for_fallback}" ]; then
+              _fb_repo_pcre="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import re,sys; sys.stdout.write(re.escape(sys.argv[1]))' '${{ github.repository }}')"
               _fallback_numbers="$(printf '%s\n' "${_pr_body_for_fallback}" \
-                | grep -oiP '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' \
+                | grep -oiP "\\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\\s+(?:https?://github\\.com/${_fb_repo_pcre}/issues/|#)\\K\\d+\\b" \
                 | sort -un || true)"
               if [ -n "${_fallback_numbers}" ]; then
+                _FALLBACK_MAX_ISSUES=20
+                _fallback_total="$(printf '%s\n' "${_fallback_numbers}" | wc -l | tr -d '[:space:]')"
+                if [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
+                  echo "::warning::Linked-issue body-text fallback: PR body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
+                  _fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
+                fi
                 _fallback_json='[]'
                 while IFS= read -r _fb_num; do
                   [ -z "${_fb_num}" ] && continue
