@@ -331,18 +331,18 @@ def _run_semble_query(
 			check=False,
 			capture_output=True,
 			cwd=str(repo_root),
-			text=True,
 			timeout=SEMBLE_QUERY_TIMEOUT_SECS,
 		)
 	except (OSError, subprocess.TimeoutExpired) as exc:
 		return False, str(exc)
+	stderr_text = result.stderr.decode("utf-8", errors="replace")
 	if result.returncode != 0:
-		stderr_tail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
+		stderr_tail = stderr_text.strip().splitlines()[-1] if stderr_text.strip() else ""
 		reason = f"exit={result.returncode}"
 		if stderr_tail:
 			reason = f"{reason} {stderr_tail}"
 		return False, reason
-	chunk_text = result.stdout.strip("\n")
+	chunk_text = result.stdout.decode("utf-8", errors="replace").strip("\n")
 	if not chunk_text.strip():
 		return False, "empty-result"
 	return True, chunk_text
@@ -541,6 +541,7 @@ def main() -> int:
 
 	merged: list[str] = []
 	seen: set[str] = set()
+	plan_text = ""
 
 	def _extend(items: list[str]) -> None:
 		for item in items:
@@ -566,7 +567,7 @@ def main() -> int:
 		args.header_text,
 		semble_bin=args.semble_bin,
 		semble_index=args.semble_index,
-		semble_query_text=_read_optional_query_text(args.semble_query_from) or _read_optional_query_text(args.plan_file),
+		semble_query_text=_read_optional_query_text(args.semble_query_from) or (plan_text.strip() or None),
 		semble_max_chunks=args.semble_max_chunks,
 		semble_fallback=args.semble_fallback,
 	)
