@@ -26,8 +26,11 @@ def test_reviewer_prompt_uses_shared_semble_helper_additively() -> None:
 	assert 'build_reviewer_semble_block()' in body, (
 		"Reviewer prompt assembly must build the Semble block through a dedicated helper."
 	)
+	assert 'build_reviewer_semble_block > "${REVIEWER_SEMBLE_CONTEXT_FILE}" || true' in body, (
+		"Reviewer prompt assembly must materialize Semble output into a file before embedding it so prompt-budget accounting still applies."
+	)
 	last_commit_idx = body.index('=== END ${LAST_COMMIT_STAT_FILE} ===')
-	semble_idx = body.index('$(build_reviewer_semble_block)')
+	semble_idx = body.index('$(if [ -s "${REVIEWER_SEMBLE_CONTEXT_FILE}" ]; then _embed_input_file "${REVIEWER_SEMBLE_CONTEXT_FILE}" 30000; fi)')
 	comments_idx = body.index('=== BEGIN UNTRUSTED ${PR_ALL_COMMENTS_CONTEXT_FILE}')
 	assert last_commit_idx < semble_idx < comments_idx, (
 		"Reviewer Semble block must be appended after the existing diff/pre-bundle context and before the later untrusted comment sections."

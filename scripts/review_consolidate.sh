@@ -6,6 +6,14 @@ review_log()
 	printf 'stage=consolidator %s\n' "$*" >&2
 }
 
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+	# shellcheck source=/dev/null
+	source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
+elif [ -f "scripts/semble_helpers.sh" ]; then
+	# shellcheck source=/dev/null
+	source "scripts/semble_helpers.sh"
+fi
+
 # Per the OpenAI prompt guide, consolidation/aggregation is a synthesis
 # task with a closed output contract. Model TIER is bumped from
 # gpt-5.4-mini to gpt-5.4 (full) to align with the guide's "synthesis
@@ -29,6 +37,7 @@ PR_CHANGED_FILES_FILE="${PR_CHANGED_FILES_FILE:-${RUNTIME_DIR}/pr_changed_files.
 LAST_RUN_DIFF_STAT_FILE="${LAST_RUN_DIFF_STAT_FILE:-${RUNTIME_DIR}/last_run_diff_stat.txt}"
 CONSOLIDATOR_PROMPT_FILE="${RUNTIME_DIR}/review_consolidator_prompt.txt"
 CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
+CONSOLIDATOR_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/consolidator_semble_context.txt"
 
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
@@ -53,6 +62,18 @@ for required in "${PROMPT_TEMPLATE}" "${REVIEWER_BUNDLE_FILE}"; do
 		exit 0
 	fi
 done
+
+: > "${CONSOLIDATOR_SEMBLE_CONTEXT_FILE}"
+if command -v semble_prompt_block_from_files >/dev/null 2>&1; then
+	semble_prompt_block_from_files \
+		"Consolidator Context" \
+		"${SEMBLE_CONSOLIDATE_MAX_CHUNKS:-4}" \
+		"${SEMBLE_CONSOLIDATE_QUERY_MAX_CHARS:-2200}" \
+		"${REVIEWER_BUNDLE_FILE}" \
+		"${PR_CHANGED_FILES_FILE}" \
+		"${LAST_RUN_DIFF_STAT_FILE}" \
+		> "${CONSOLIDATOR_SEMBLE_CONTEXT_FILE}" || true
+fi
 
 {
 	if [ -s ./pre_assembled_static.txt ]; then
@@ -79,6 +100,10 @@ done
 		echo "(no last-run diff stat available)"
 	fi
 	echo
+	if [ -s "${CONSOLIDATOR_SEMBLE_CONTEXT_FILE}" ]; then
+		cat "${CONSOLIDATOR_SEMBLE_CONTEXT_FILE}"
+		echo
+	fi
 	echo "=== REVIEWER BUNDLE ==="
 	cat "${REVIEWER_BUNDLE_FILE}"
 } > "${CONSOLIDATOR_PROMPT_FILE}"

@@ -36,7 +36,7 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   echo "::warning::gh_helpers.sh unavailable or incomplete; falling back to direct gh calls without retry helper."
   gh_retry() { "$@"; }
 fi
-if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
 elif [ -f "scripts/semble_helpers.sh" ]; then

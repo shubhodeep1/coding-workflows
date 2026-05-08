@@ -165,6 +165,9 @@ semble_prompt_block_from_text()
 	shift 3
 
 	local query_text target
+	if ! printf '%s' "${max_chunks}" | grep -Eq '^[0-9]+$' || [ "${max_chunks}" -le 0 ]; then
+		max_chunks=4
+	fi
 	target="$(_semble_sanitize_one_line "${header_label}")"
 	query_text="$(semble_collect_query_text "${max_query_chars}" "$@")"
 	if [ -z "${query_text}" ]; then
@@ -201,7 +204,7 @@ semble_prompt_block_from_files()
 		[ -s "${file}" ] || continue
 		snippet="$(head -c "${per_file_chars}" "${file}" 2>/dev/null || true)"
 		[ -n "${snippet}" ] || continue
-		fragments+=("$(basename "${file}"): ${snippet}")
+		fragments+=("${file#./}: ${snippet}")
 	done
 
 	if [ "${#fragments[@]}" -eq 0 ]; then
