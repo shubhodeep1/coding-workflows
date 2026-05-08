@@ -29,6 +29,11 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/semble_helpers.sh
+fi
 
 # Process-lifetime cache of labels we've already verified exist on the
 # repo.  `ensure_label_exists` is called from 10+ code paths with a
@@ -161,6 +166,84 @@ assemble_judge_static_context() {
       echo
     fi
   } > "${out_file}"
+}
+
+build_judge_semble_prefetch_file() {
+  local out_file="$1"
+  local log_target="$2"
+  local header_label="$3"
+  local max_chunks="${4:-3}"
+  shift 4 || true
+
+  : > "${out_file}"
+
+  for helper_name in _semble_sanitize_one_line semble_collect_query_text semble_query_block_with_target; do
+    if [ "$(type -t "${helper_name}" 2>/dev/null || true)" != "function" ]; then
+      return 0
+    fi
+  done
+  if ! is_truthy "${SEMBLE_ENABLED:-false}"; then
+    return 0
+  fi
+  if ! is_truthy "${SEMBLE_INDEX_AVAILABLE:-false}"; then
+    return 0
+  fi
+
+  local max_query_chars="${SEMBLE_JUDGE_QUERY_MAX_CHARS:-2200}"
+  local max_prefetch_bytes="${SEMBLE_JUDGE_PREFETCH_MAX_BYTES:-20000}"
+  local query_text
+  if ! printf '%s' "${max_chunks}" | grep -Eq '^[0-9]+$' || [ "${max_chunks}" -le 0 ]; then
+    max_chunks=3
+  fi
+  if ! printf '%s' "${max_query_chars}" | grep -Eq '^[0-9]+$' || [ "${max_query_chars}" -le 0 ]; then
+    max_query_chars=2200
+  fi
+  if ! printf '%s' "${max_prefetch_bytes}" | grep -Eq '^[0-9]+$' || [ "${max_prefetch_bytes}" -le 0 ]; then
+    max_prefetch_bytes=20000
+  fi
+
+  query_text="$(semble_collect_query_text "${max_query_chars}" "$@")"
+  query_text="$(_semble_sanitize_one_line "${query_text}")"
+  if [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  local raw_file
+  raw_file="$(mktemp)"
+  if semble_query_block_with_target "${log_target}" "${query_text}" "${max_chunks}" "${header_label}" > "${raw_file}"; then
+    PYTHONDONTWRITEBYTECODE=1 python3 - "${max_prefetch_bytes}" "${raw_file}" "${out_file}" <<'PY' || cp "${raw_file}" "${out_file}"
+from pathlib import Path
+import sys
+
+
+def _bytes(text: str) -> int:
+	return len(text.encode("utf-8"))
+
+
+cap_arg, src_arg, dst_arg = sys.argv[1:4]
+cap = int(cap_arg) if cap_arg.isdigit() and int(cap_arg) > 0 else 20000
+src = Path(src_arg).read_text(encoding="utf-8", errors="replace")
+if _bytes(src) <= cap:
+	Path(dst_arg).write_text(src, encoding="utf-8")
+	sys.exit(0)
+
+lines = src.splitlines(True)
+header = lines[0] if lines else "=== SEMBLE ===\n"
+footer = lines[-1] if lines and lines[-1].startswith("=== END SEMBLE") else "=== END SEMBLE ===\n"
+marker = "[... TRUNCATED ...]\n"
+body_budget = max(cap - _bytes(header) - _bytes(footer) - _bytes(marker), 0)
+body = []
+used = 0
+for line in lines[1:-1]:
+	line_bytes = _bytes(line)
+	if used + line_bytes > body_budget:
+		break
+	body.append(line)
+	used += line_bytes
+Path(dst_arg).write_text(header + "".join(body) + marker + footer, encoding="utf-8")
+PY
+  fi
+  rm -f "${raw_file}"
 }
 
 # ---------------------------------------------------------------
@@ -5589,7 +5672,10 @@ invoke_stall_judge() {
 
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
+  local stall_semble_prefetch_file="${RUNTIME_DIR}/stall_judge_semble_${issue_num}.txt"
   local static_file="${RUNTIME_DIR}/judge_static.txt"
+  local stall_recent_comments_summary=""
+  local stall_diagnostics_summary=""
 
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
@@ -5598,6 +5684,22 @@ invoke_stall_judge() {
     fi
   fi
 
+  stall_recent_comments_summary="$(printf '%s' "${recent_comments}" | jq -r '[.[]? | ((.created_at // "") + " " + (.author // "unknown") + ": " + (.body // ""))] | .[:3] | join(" | ")' 2>/dev/null | head -c 1200 || true)"
+  stall_diagnostics_summary="$(printf '%s' "${diagnostics}" | jq -c '{issue_number, local_id, phase, stall_minutes, recovery_count, linked_pr, recent_review_workflow_outcomes}' 2>/dev/null | head -c 1400 || true)"
+  build_judge_semble_prefetch_file \
+    "${stall_semble_prefetch_file}" \
+    "judge phase=stall issue=${issue_num}" \
+    "Stall Recovery Context" \
+    "${SEMBLE_STALL_JUDGE_MAX_CHUNKS:-3}" \
+    "Stall-recovery decision for issue #${issue_num}" \
+    "Phase: ${phase}" \
+    "Local id: ${local_id}" \
+    "Stall minutes: ${stall_minutes}" \
+    "Recovery count: ${recovery_count}" \
+    "Linked PR: ${target_pr} state=${pr_state} mergeable=${pr_mergeable} head=${head_ref} base=${base_ref}" \
+    "Recent tracking comments: ${stall_recent_comments_summary}" \
+    "Diagnostics summary: ${stall_diagnostics_summary}"
+
   {
     cat "${static_file}"
     echo
@@ -5605,7 +5707,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    SEMBLE_PREFETCH_FILE="${stall_semble_prefetch_file}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -9294,17 +9396,44 @@ ${FOLLOWUP_BLOCK_REASON}"
       # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
+      RB_JUDGE_SEMBLE_PREFETCH_FILE="${RUNTIME_DIR}/rb_judge_semble_${rb_issue}.txt"
+      RB_COMMENT_SUMMARY=""
+      RB_REVIEW_SUMMARY=""
+      RB_PR_TITLE=""
+      RB_PR_BODY=""
+      RB_PR_HEAD_REF_SUMMARY=""
+      RB_PR_BASE_REF_SUMMARY=""
 
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
+
+      RB_COMMENT_SUMMARY="$(printf '%s' "${PR_COMMENTS}" | jq -r '[.[]? | ((.author // "unknown") + ": " + (.body // ""))] | .[:4] | join(" | ")' 2>/dev/null | head -c 1200 || true)"
+      RB_REVIEW_SUMMARY="$(printf '%s' "${PR_REVIEW_COMMENTS}" | jq -r '[.[]? | ((.path // "?") + ":" + ((.line // 0) | tostring) + " " + (.body // ""))] | .[:4] | join(" | ")' 2>/dev/null | head -c 1200 || true)"
+      RB_PR_TITLE="$(printf '%s' "${PR_META}" | jq -r '.title // ""' 2>/dev/null | head -c 300 || true)"
+      RB_PR_BODY="$(printf '%s' "${PR_META}" | jq -r '.body // ""' 2>/dev/null | head -c 900 || true)"
+      RB_PR_HEAD_REF_SUMMARY="$(printf '%s' "${PR_META}" | jq -r '.head_ref // ""' 2>/dev/null | head -c 200 || true)"
+      RB_PR_BASE_REF_SUMMARY="$(printf '%s' "${PR_META}" | jq -r '.base_ref // ""' 2>/dev/null | head -c 200 || true)"
+      build_judge_semble_prefetch_file \
+        "${RB_JUDGE_SEMBLE_PREFETCH_FILE}" \
+        "judge phase=review-blocked issue=${rb_issue} pr=${RB_PR}" \
+        "Review-Blocked Judge Context" \
+        "${SEMBLE_REVIEW_BLOCKED_JUDGE_MAX_CHUNKS:-3}" \
+        "Review-blocked judge for issue #${rb_issue} and PR #${RB_PR}" \
+        "Linked issue requirement: $(printf '%s' "${ISSUE_BODY}" | head -c 1000 || true)" \
+        "PR title: ${RB_PR_TITLE}" \
+        "PR body: ${RB_PR_BODY}" \
+        "PR refs: head=${RB_PR_HEAD_REF_SUMMARY} base=${RB_PR_BASE_REF_SUMMARY}" \
+        "Review summary comments: ${RB_COMMENT_SUMMARY}" \
+        "Inline review findings: ${RB_REVIEW_SUMMARY}" \
+        "Retry context: retry=$((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES} final=${IS_FINAL}"
 
       {
         cat "${RUNTIME_DIR}/judge_static.txt"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        SEMBLE_PREFETCH_FILE="${RB_JUDGE_SEMBLE_PREFETCH_FILE}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -10662,13 +10791,28 @@ ${PR_DIFF}
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
+  JUDGE_SEMBLE_PREFETCH_FILE="${RUNTIME_DIR}/judge_semble_prefetch_${CURRENT_WAVE}.txt"
+  JUDGE_PROJECT_SUMMARY="$(printf '%s' "${PROJECT_BODY}" | head -c 1200 || true)"
+  JUDGE_WAVE_SUMMARY="$(printf '%s' "${WAVE_STATUS}" | jq -c '{complete: (.complete // null), failed: (.failed // null), issues: [.issues[]? | {issue: (.github_issue // .issue // .number // null), status: (.status // null), pr: (.linked_pr // .pull_request // .pr_number // null)}]}' 2>/dev/null | head -c 1600 || true)"
+  JUDGE_CI_SUMMARY="$(printf '%s' "${CI_STATUS}" | jq -c '.' 2>/dev/null | head -c 900 || true)"
+  build_judge_semble_prefetch_file \
+    "${JUDGE_SEMBLE_PREFETCH_FILE}" \
+    "judge phase=wave-completion tracking=${TRACKING_NUM}" \
+    "Judge Context" \
+    "${SEMBLE_JUDGE_MAX_CHUNKS:-3}" \
+    "Wave-completion judge for tracking issue #${TRACKING_NUM}" \
+    "Current wave: ${CURRENT_WAVE}" \
+    "Project description: ${JUDGE_PROJECT_SUMMARY}" \
+    "Wave status summary: ${JUDGE_WAVE_SUMMARY}" \
+    "Default-branch CI summary: ${JUDGE_CI_SUMMARY}"
+
   # Build judge prompt
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
     echo "=== JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge.txt
+    SEMBLE_PREFETCH_FILE="${JUDGE_SEMBLE_PREFETCH_FILE}" bash scripts/render_prompt.sh prompts/mode-judge.txt
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo

@@ -33,6 +33,7 @@ env:
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver
   # path) via this workflow-level env block. Without this export, the
@@ -44,6 +45,9 @@ env:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    env:
+      SEMBLE_AVAILABLE: "false"
+      SEMBLE_INDEX_AVAILABLE: "false"
     concurrency:
       # Only one poller per repo at a time; newer runs queue instead of
       # killing the active run (which may be mid-way through conflict
@@ -281,7 +285,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh ai_labels.py orchestrate_lib.py orchestrate_poll_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh ai_labels.py orchestrate_lib.py orchestrate_poll_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh install_semble.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -370,6 +374,61 @@ jobs:
           done
 
           rm -rf .codex-workflow-src-main
+
+      - name: Setup uv for Semble
+        if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'
+        id: setup_uv_for_semble
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Semble
+        if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build Semble index
+        if: env.SEMBLE_ENABLED == 'true' && steps.find_tracking.outputs.has_work == 'true'
+        run: |
+          set -uo pipefail
+
+          workspace_root="${GITHUB_WORKSPACE:-}"
+          SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+
+          if [ "${SEMBLE_AVAILABLE:-false}" != 'true' ]; then
+            echo "SEMBLE_FALLBACK target=index reason=semble_unavailable" >&2
+            exit 0
+          fi
+
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "SEMBLE_FALLBACK target=index reason=missing_binary_after_install" >&2
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [ -z "${workspace_root}" ] || [ ! -d "${workspace_root}" ]; then
+            echo "SEMBLE_FALLBACK target=index reason=workspace_unavailable" >&2
+            exit 0
+          fi
+
+          if mkdir -p "${SEMBLE_INDEX_DIR}" && \
+             (cd "${workspace_root}" && semble index . --out "${SEMBLE_INDEX_DIR}") && \
+             printf '%s\n' "${workspace_root}" > "${SEMBLE_INDEX_DIR}/repo_root" && \
+             {
+               printf 'created_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+               printf 'semble_bin=%s\n' "$(command -v semble)"
+             } > "${SEMBLE_INDEX_DIR}/metadata.env"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_DIR=${SEMBLE_INDEX_DIR}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX target=orchestrate_poll path=${SEMBLE_INDEX_DIR}" >&2
+          else
+            echo "SEMBLE_FALLBACK target=index reason=build_failed" >&2
+          fi
 
       - name: Record poll run start
         if: always()

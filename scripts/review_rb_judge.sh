@@ -26,6 +26,13 @@ source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null || true
+elif [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source "scripts/semble_helpers.sh" 2>/dev/null || true
+fi
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else
@@ -228,11 +235,107 @@ if [ "${PR_META_JSON}" = "{}" ]; then
   PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 fi
 
+build_review_blocked_semble_block()
+{
+  local out_file="$1"
+  : > "${out_file}"
+
+  for helper_name in _semble_bool_true _semble_sanitize_one_line semble_collect_query_text semble_query_block_with_target; do
+    if [ "$(type -t "${helper_name}" 2>/dev/null || true)" != "function" ]; then
+      return 0
+    fi
+  done
+  if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
+    return 0
+  fi
+  if ! _semble_bool_true "${SEMBLE_INDEX_AVAILABLE:-false}"; then
+    return 0
+  fi
+
+  local max_chunks="${SEMBLE_REVIEW_BLOCKED_JUDGE_MAX_CHUNKS:-3}"
+  local max_query_chars="${SEMBLE_JUDGE_QUERY_MAX_CHARS:-2200}"
+  local max_prefetch_bytes="${SEMBLE_JUDGE_PREFETCH_MAX_BYTES:-20000}"
+  local pr_title pr_body pr_head_ref pr_base_ref issue_summary comment_summary review_summary diff_summary query_text
+  if ! printf '%s' "${max_chunks}" | grep -Eq '^[0-9]+$' || [ "${max_chunks}" -le 0 ]; then
+    max_chunks=3
+  fi
+  if ! printf '%s' "${max_query_chars}" | grep -Eq '^[0-9]+$' || [ "${max_query_chars}" -le 0 ]; then
+    max_query_chars=2200
+  fi
+  if ! printf '%s' "${max_prefetch_bytes}" | grep -Eq '^[0-9]+$' || [ "${max_prefetch_bytes}" -le 0 ]; then
+    max_prefetch_bytes=20000
+  fi
+
+  pr_title="$(printf '%s' "${PR_META_JSON}" | jq -r '.title // ""' 2>/dev/null | head -c 300 || true)"
+  pr_body="$(printf '%s' "${PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null | head -c 900 || true)"
+  pr_head_ref="$(printf '%s' "${PR_META_JSON}" | jq -r '.head_ref // .head.ref // .headRefName // ""' 2>/dev/null | head -c 200 || true)"
+  pr_base_ref="$(printf '%s' "${PR_META_JSON}" | jq -r '.base_ref // .base.ref // .baseRefName // ""' 2>/dev/null | head -c 200 || true)"
+  issue_summary="$(printf '%s' "${FIRST_ISSUE_BODY}" | head -c 1000 || true)"
+  comment_summary="$(printf '%s' "${PR_COMMENTS}" | jq -r '[.[]? | ((.author // "unknown") + ": " + (.body // ""))] | .[:4] | join(" | ")' 2>/dev/null | head -c 1200 || true)"
+  review_summary="$(printf '%s' "${PR_REVIEW_COMMENTS}" | jq -r '[.[]? | ((.path // "?") + ":" + ((.line // 0) | tostring) + " " + (.body // ""))] | .[:4] | join(" | ")' 2>/dev/null | head -c 1200 || true)"
+  diff_summary="$(printf '%s\n' "${PR_DIFF}" | grep '^diff --git ' | head -n 20 | tr '\n' '|' | head -c 900 || true)"
+
+  query_text="$(semble_collect_query_text "${max_query_chars}" \
+    "Review-blocked judge for PR #${PR_NUMBER}" \
+    "Retry context: retry=$((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES} final=${IS_FINAL}" \
+    "Linked issue requirement: ${issue_summary}" \
+    "PR title: ${pr_title}" \
+    "PR body: ${pr_body}" \
+    "PR refs: head=${pr_head_ref} base=${pr_base_ref}" \
+    "Review summary comments: ${comment_summary}" \
+    "Inline review findings: ${review_summary}" \
+    "Compact diff summary: ${diff_summary}")"
+  query_text="$(_semble_sanitize_one_line "${query_text}")"
+  if [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  local raw_file
+  raw_file="$(mktemp)"
+  if semble_query_block_with_target "judge phase=review-blocked pr=${PR_NUMBER}" "${query_text}" "${max_chunks}" "Review-Blocked Judge Context" > "${raw_file}"; then
+    PYTHONDONTWRITEBYTECODE=1 python3 - "${max_prefetch_bytes}" "${raw_file}" "${out_file}" <<'PY' || cp "${raw_file}" "${out_file}"
+from pathlib import Path
+import sys
+
+
+def _bytes(text: str) -> int:
+	return len(text.encode("utf-8"))
+
+
+cap_arg, src_arg, dst_arg = sys.argv[1:4]
+cap = int(cap_arg) if cap_arg.isdigit() and int(cap_arg) > 0 else 20000
+src = Path(src_arg).read_text(encoding="utf-8", errors="replace")
+if _bytes(src) <= cap:
+	Path(dst_arg).write_text(src, encoding="utf-8")
+	sys.exit(0)
+
+lines = src.splitlines(True)
+header = lines[0] if lines else "=== SEMBLE ===\n"
+footer = lines[-1] if lines and lines[-1].startswith("=== END SEMBLE") else "=== END SEMBLE ===\n"
+marker = "[... TRUNCATED ...]\n"
+body_budget = max(cap - _bytes(header) - _bytes(footer) - _bytes(marker), 0)
+body = []
+used = 0
+for line in lines[1:-1]:
+	line_bytes = _bytes(line)
+	if used + line_bytes > body_budget:
+		break
+	body.append(line)
+	used += line_bytes
+Path(dst_arg).write_text(header + "".join(body) + marker + footer, encoding="utf-8")
+PY
+  fi
+  rm -f "${raw_file}"
+}
+
 # -----------------------------------------------------------
 # Build judge prompt
 # -----------------------------------------------------------
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
+RB_JUDGE_SEMBLE_PREFETCH_FILE="${RUNTIME_DIR}/rb_judge_semble_prefetch.txt"
+
+build_review_blocked_semble_block "${RB_JUDGE_SEMBLE_PREFETCH_FILE}"
 
 {
   if [ -f ./pre_assembled_static.txt ]; then
@@ -244,7 +347,7 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
     (
       cd "${SUPPORT_ROOT_DIR}"
-      bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+      SEMBLE_PREFETCH_FILE="${RB_JUDGE_SEMBLE_PREFETCH_FILE}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
     )
   else
     echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
