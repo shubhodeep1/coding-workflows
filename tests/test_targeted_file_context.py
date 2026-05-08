@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from targeted_file_context import (  # noqa: E402
+	SEMBLE_QUERY_TIMEOUT_SECS,
 	emit_context,
 	extract_paths_from_plan,
 	main as targeted_file_context_main,
@@ -396,6 +397,87 @@ def test_overflow_read_fallback_emits_bounded_head_body() -> None:
 		assert "truncated to 128 byte(s)" in context
 		assert "line\nline\nline\n" in context
 		assert "--- FILE: src/big.py (15000 bytes; would overflow total budget" not in context
+
+
+def test_overflow_marker_fallback_does_not_read_file_bytes() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		target = root / "src" / "big.py"
+		target.write_text("x = 1\n" * 2000, encoding="utf-8")
+		original_read_bytes = Path.read_bytes
+		calls: list[Path] = []
+
+		def _tracking_read_bytes(self: Path) -> bytes:
+			calls.append(self)
+			return original_read_bytes(self)
+
+		Path.read_bytes = _tracking_read_bytes
+		try:
+			context = emit_context(
+				["src/big.py"],
+				root,
+				max_bytes=100,
+				semble_bin=str(root / "missing_semble"),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+			)
+		finally:
+			Path.read_bytes = original_read_bytes
+
+		assert "would overflow total budget" in context
+		assert calls == []
+
+
+def test_overflow_read_fallback_counts_rendered_bytes_in_budget() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("a" * 5000, encoding="utf-8")
+		(root / "src" / "small.py").write_text("b" * 20, encoding="utf-8")
+
+		context = emit_context(
+			["src/big.py", "src/small.py"],
+			root,
+			max_bytes=128,
+			semble_bin=str(root / "missing_semble"),
+			semble_index=str(root / ".semble-index"),
+			semble_query_text="task summary",
+			semble_fallback="read",
+		)
+
+		assert "overflow fallback read head" in context
+		assert "--- FILE: src/small.py (20 bytes; would overflow total budget" in context
+		assert "Included 2 entries (0 inlined, 1 marker-only, 0 semble, 1 read), 128 byte(s) of source content." in context
+
+
+def test_semble_query_timeout_falls_back_cleanly() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
+		timeout_semble = root / "sleepy_semble.py"
+		timeout_semble.write_text(
+			"#!/usr/bin/env python3\n"
+			"import time\n"
+			f"time.sleep({SEMBLE_QUERY_TIMEOUT_SECS + 1})\n",
+			encoding="utf-8",
+		)
+		timeout_semble.chmod(0o755)
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/big.py"],
+				root,
+				max_bytes=100,
+				semble_bin=str(timeout_semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+			)
+
+		assert "would overflow total budget" in context
+		assert "timed out" in stderr.getvalue().lower()
 
 
 def test_overflow_off_fallback_emits_no_representation_and_no_marker_count() -> None:

@@ -132,6 +132,7 @@ DEFAULT_HEADER_TEXT = (
 # the header (which can scroll off the model's effective attention on
 # long prompts).
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
+SEMBLE_QUERY_TIMEOUT_SECS = 30
 SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 
 
@@ -331,8 +332,9 @@ def _run_semble_query(
 			capture_output=True,
 			cwd=str(repo_root),
 			text=True,
+			timeout=SEMBLE_QUERY_TIMEOUT_SECS,
 		)
-	except OSError as exc:
+	except (OSError, subprocess.TimeoutExpired) as exc:
 		return False, str(exc)
 	if result.returncode != 0:
 		stderr_tail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
@@ -354,9 +356,7 @@ def _append_semble_block(output: list[str], rel: str, raw_size: int, chunk_text:
 	return len(chunk_text.encode("utf-8"))
 
 
-def _append_read_fallback_block(output: list[str], rel: str, raw: bytes, raw_size: int, max_bytes: int) -> int:
-	head_bytes = min(raw_size, max(1, min(max_bytes, SEMBLE_READ_FALLBACK_MAX_BYTES)))
-	truncated = raw[:head_bytes]
+def _append_read_fallback_block(output: list[str], rel: str, truncated: bytes, raw_size: int) -> int:
 	if b"\x00" in truncated:
 		output.extend([f"--- FILE: {rel} (binary skipped) ---", ""])
 		return 0
@@ -426,7 +426,9 @@ def emit_context(
 					repo_root,
 				)
 				if success and payload is not None:
-					overflow_rendered_bytes += _append_semble_block(output, rel, raw_size, payload)
+					rendered_bytes = _append_semble_block(output, rel, raw_size, payload)
+					overflow_rendered_bytes += rendered_bytes
+					used_bytes += rendered_bytes
 					included += 1
 					semble_rendered += 1
 					continue
@@ -434,9 +436,24 @@ def emit_context(
 					f"SEMBLE_FALLBACK target=overflow file={rel} reason={payload or 'unknown'}",
 					file=sys.stderr,
 				)
-			raw = abs_path.read_bytes()
 			if semble_fallback == "read":
-				overflow_rendered_bytes += _append_read_fallback_block(output, rel, raw, raw_size, max_bytes)
+				remaining_bytes = max_bytes - used_bytes
+				if remaining_bytes <= 0:
+					output.extend([
+						f"--- FILE: {rel} ({raw_size} bytes; would overflow total "
+						f"budget — read with read tool, max_bytes={max_bytes}, "
+						f"used={used_bytes}) ---",
+						"",
+					])
+					skipped_too_large.append((rel, raw_size))
+					included += 1
+					continue
+				head_bytes = min(raw_size, min(remaining_bytes, SEMBLE_READ_FALLBACK_MAX_BYTES))
+				with abs_path.open("rb") as handle:
+					truncated = handle.read(head_bytes)
+				rendered_bytes = _append_read_fallback_block(output, rel, truncated, raw_size)
+				overflow_rendered_bytes += rendered_bytes
+				used_bytes += rendered_bytes
 				included += 1
 				read_fallback_rendered += 1
 				continue
