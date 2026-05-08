@@ -78,6 +78,10 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
@@ -129,6 +133,9 @@ DEFAULT_HEADER_TEXT = (
 # the header (which can scroll off the model's effective attention on
 # long prompts).
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
+SEMBLE_TIMEOUT_SECS = 5
+DEFAULT_SEMBLE_MAX_CHUNKS = 6
+NO_RESULTS_TEXT = "No results found."
 
 
 def is_probable_path(value: str) -> bool:
@@ -265,17 +272,145 @@ def parse_paths_arg(arg: str) -> list[str]:
 	return found
 
 
+def _stderr_log(message: str) -> None:
+	print(message, file=sys.stderr)
+
+
+def _sanitize_one_line(value: str) -> str:
+	return re.sub(r"\s+", " ", value).strip()
+
+
+def _overflow_marker(rel: str, raw_size: int, max_bytes: int, used_bytes: int) -> list[str]:
+	return [
+		f"--- FILE: {rel} ({raw_size} bytes; would overflow total budget — read with read tool, max_bytes={max_bytes}, used={used_bytes}) ---",
+		"",
+	]
+
+
+def _read_semble_query_text(query_file: str | None, rel: str) -> tuple[str | None, str | None]:
+	if not query_file:
+		return None, "query_text_unset"
+	try:
+		query_body = Path(query_file).read_text(encoding="utf-8", errors="replace").strip()
+	except OSError:
+		return None, "query_text_unreadable"
+	if not query_body:
+		return None, "query_text_empty"
+	return f"Target file: {rel}\n{query_body}", None
+
+
+def _resolve_semble_bin(semble_bin: str | None) -> tuple[str | None, str | None]:
+	if semble_bin:
+		bin_path = Path(semble_bin)
+		if bin_path.is_file() and os.access(bin_path, os.X_OK):
+			return str(bin_path), None
+		return None, "missing_binary"
+	resolved = shutil.which("semble")
+	if resolved:
+		return resolved, None
+	return None, "missing_binary"
+
+
+def _validate_semble_index(semble_index: str | None) -> tuple[Path | None, str | None]:
+	if not semble_index:
+		return None, "index_unavailable"
+	index_dir = Path(semble_index)
+	if not index_dir.is_dir() or not (index_dir / "repo_root").is_file():
+		return None, "index_unavailable"
+	return index_dir, None
+
+
+def _retrieve_semble_overflow(
+	rel: str,
+	raw_size: int,
+	remaining_bytes: int,
+	semble_bin: str | None,
+	semble_index: str | None,
+	semble_query_from: str | None,
+	semble_max_chunks: int,
+) -> tuple[list[str] | None, int, str | None]:
+	query_text, reason = _read_semble_query_text(semble_query_from, rel)
+	if not query_text:
+		return None, 0, reason
+	resolved_bin, reason = _resolve_semble_bin(semble_bin)
+	if not resolved_bin:
+		return None, 0, reason
+	index_dir, reason = _validate_semble_index(semble_index)
+	if not index_dir:
+		return None, 0, reason
+
+	start = time.monotonic()
+	try:
+		proc = subprocess.run(
+			[
+				resolved_bin,
+				"query",
+				query_text,
+				"--index",
+				str(index_dir),
+				"--top-k",
+				str(semble_max_chunks),
+				"--format",
+				"text",
+			],
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			timeout=SEMBLE_TIMEOUT_SECS,
+			check=False,
+		)
+	except subprocess.TimeoutExpired:
+		return None, 0, "query_timeout"
+
+	elapsed_ms = int((time.monotonic() - start) * 1000)
+	if proc.returncode != 0:
+		detail = _sanitize_one_line(proc.stderr)
+		if detail:
+			return None, 0, f"query_failed detail={detail}"
+		return None, 0, "query_failed"
+
+	output_body = proc.stdout.strip()
+	if not output_body or output_body == NO_RESULTS_TEXT:
+		return None, 0, "no_results"
+	if rel not in output_body and Path(rel).name not in output_body:
+		return None, 0, "target_mismatch"
+
+	response_bytes = len(output_body.encode("utf-8"))
+	if response_bytes > remaining_bytes:
+		return None, 0, "response_too_large"
+
+	_stderr_log(
+		f"SEMBLE_QUERY target={rel} chunks={semble_max_chunks} bytes={response_bytes} ms={elapsed_ms}"
+	)
+	return [
+		f"--- FILE: {rel} ({raw_size} bytes; chunk-retrieved via Semble) ---",
+		*output_body.splitlines(),
+		f"--- END FILE: {rel} ---",
+		"",
+	], response_bytes, None
+
+
 def emit_context(
 	paths: list[str],
 	repo_root: Path,
 	max_bytes: int,
 	header_text: str = DEFAULT_HEADER_TEXT,
+	*,
+	semble_bin: str | None = None,
+	semble_index: str | None = None,
+	semble_query_from: str | None = None,
+	semble_max_chunks: int = DEFAULT_SEMBLE_MAX_CHUNKS,
+	semble_fallback: str = "marker",
 ) -> str:
 	output: list[str] = []
 	included = 0
 	inlined = 0
+	chunk_retrieved = 0
+	marker_only = 0
 	used_bytes = 0
 	skipped_too_large: list[tuple[str, int]] = []
+	retrieved_via_semble: list[tuple[str, int, int]] = []
 
 	output.append("=== TARGETED FILE CONTEXT ===")
 	output.append(header_text)
@@ -286,6 +421,10 @@ def emit_context(
 		return "\n".join(output) + "\n"
 
 	repo_root_resolved = repo_root.resolve()
+	fallback_mode = "off" if semble_fallback == "off" else "marker"
+
+	if semble_max_chunks <= 0:
+		semble_max_chunks = DEFAULT_SEMBLE_MAX_CHUNKS
 
 	for rel in paths:
 		abs_path = (repo_root / rel).resolve()
@@ -298,27 +437,45 @@ def emit_context(
 		if not abs_path.is_file():
 			output.extend([f"--- FILE: {rel} (missing) ---", ""])
 			included += 1
+			marker_only += 1
 			continue
 		raw_size = abs_path.stat().st_size
 		if used_bytes + raw_size > max_bytes:
-			# Including this file would overflow the total budget. Mark
-			# rather than head-truncate — a truncated head of a 500KB
-			# file misleads the editor when the edit target lives at
-			# the bottom. Tell the model to read it normally with its
-			# read tool instead.
-			output.extend([
-				f"--- FILE: {rel} ({raw_size} bytes; would overflow total "
-				f"budget — read with read tool, max_bytes={max_bytes}, "
-				f"used={used_bytes}) ---",
-				"",
-			])
+			remaining_bytes = max_bytes - used_bytes
+			chunk_lines = None
+			retrieved_bytes = 0
+			reason = None
+			if remaining_bytes > 0 and semble_index and semble_query_from:
+				chunk_lines, retrieved_bytes, reason = _retrieve_semble_overflow(
+					rel,
+					raw_size,
+					remaining_bytes,
+					semble_bin,
+					semble_index,
+					semble_query_from,
+					semble_max_chunks,
+				)
+			if chunk_lines is not None:
+				output.extend(chunk_lines)
+				included += 1
+				chunk_retrieved += 1
+				used_bytes += retrieved_bytes
+				retrieved_via_semble.append((rel, raw_size, retrieved_bytes))
+				continue
+			if reason:
+				_stderr_log(f"SEMBLE_FALLBACK target={rel} reason={reason}")
+			if fallback_mode == "off":
+				continue
+			output.extend(_overflow_marker(rel, raw_size, max_bytes, used_bytes))
 			skipped_too_large.append((rel, raw_size))
 			included += 1
+			marker_only += 1
 			continue
 		raw = abs_path.read_bytes()
 		if b"\x00" in raw:
 			output.extend([f"--- FILE: {rel} (binary skipped) ---", ""])
 			included += 1
+			marker_only += 1
 			continue
 		text = raw.decode("utf-8", errors="replace")
 		used_bytes += len(raw)
@@ -352,9 +509,17 @@ def emit_context(
 	else:
 		summary = (
 			f"Included {included} entr{'y' if included == 1 else 'ies'} "
-			f"({inlined} inlined, {included - inlined} marker-only), "
+			f"({inlined} inlined, {chunk_retrieved} chunk-retrieved-via-Semble, {marker_only} marker-only), "
 			f"{used_bytes} byte(s) of source content."
 		)
+		if retrieved_via_semble:
+			retrieved_summary = ", ".join(
+				f"{path} ({raw_bytes} bytes -> {chunk_bytes} bytes)"
+				for path, raw_bytes, chunk_bytes in retrieved_via_semble[:5]
+			)
+			if len(retrieved_via_semble) > 5:
+				retrieved_summary += f", +{len(retrieved_via_semble) - 5} more"
+			summary += f" Chunk-retrieved via Semble: {retrieved_summary}."
 		if skipped_too_large:
 			skipped_summary = ", ".join(f"{p} ({n} bytes)" for p, n in skipped_too_large[:5])
 			if len(skipped_too_large) > 5:
@@ -382,6 +547,11 @@ def main() -> int:
 	parser.add_argument("--repo-root", default=os.getcwd())
 	parser.add_argument("--max-bytes", type=positive_int, default=102400)
 	parser.add_argument("--header-text", default=DEFAULT_HEADER_TEXT)
+	parser.add_argument("--semble-bin", default=None)
+	parser.add_argument("--semble-index", default=None)
+	parser.add_argument("--semble-query-from", default=None)
+	parser.add_argument("--semble-max-chunks", type=positive_int, default=DEFAULT_SEMBLE_MAX_CHUNKS)
+	parser.add_argument("--semble-fallback", choices=("marker", "read", "off"), default="marker")
 	parser.add_argument("--output", required=True)
 	args = parser.parse_args()
 
@@ -410,6 +580,11 @@ def main() -> int:
 		Path(args.repo_root),
 		args.max_bytes,
 		args.header_text,
+		semble_bin=args.semble_bin,
+		semble_index=args.semble_index,
+		semble_query_from=args.semble_query_from,
+		semble_max_chunks=args.semble_max_chunks,
+		semble_fallback=args.semble_fallback,
 	)
 	Path(args.output).write_text(context, encoding="utf-8")
 	return 0

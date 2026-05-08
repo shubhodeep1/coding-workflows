@@ -111,6 +111,7 @@ jobs:
             echo "ISSUE_SUMMARY_PROMPT_FILE=${RUNTIME_DIR}/issue_summary_prompt.txt"
             echo "ISSUE_SUMMARY_FILE=${RUNTIME_DIR}/issue_summary.md"
             echo "IMPLEMENTATION_CONTEXT_FILE=${RUNTIME_DIR}/implementation_context.txt"
+            echo "IMPLEMENTATION_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/implementation_semble_query.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
             echo "IMPLEMENT_DIAGNOSE_PROMPT_FILE=${RUNTIME_DIR}/implement_diagnose_prompt.txt"
@@ -899,6 +900,20 @@ jobs:
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${IMPLEMENTATION_CONTEXT_FILE}"
 
+      - name: Build implementation Semble query file
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "ISSUE DESCRIPTION"
+            printf '%s\n\n' "${ISSUE_BODY}"
+            echo "CLARIFICATION ANSWERS"
+            cat "${CLARIFICATION_ANSWERS_FILE}"
+            echo
+            echo "APPROVED IMPLEMENTATION PLAN"
+            cat "${PLAN_FILE}"
+          } > "${IMPLEMENTATION_SEMBLE_QUERY_FILE}"
+
       - name: Create Codex config
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -1038,6 +1053,10 @@ jobs:
               --plan-file "${PLAN_FILE}" \
               --repo-root "${GITHUB_WORKSPACE}" \
               --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
+              --semble-index "${SEMBLE_INDEX_DIR:-}" \
+              --semble-query-from "${IMPLEMENTATION_SEMBLE_QUERY_FILE}" \
+              --semble-max-chunks "${SEMBLE_TARGETED_FILE_MAX_CHUNKS:-6}" \
+              --semble-fallback marker \
               --output "${TARGETED_FILES_CONTEXT_FILE}" || \
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
           fi
