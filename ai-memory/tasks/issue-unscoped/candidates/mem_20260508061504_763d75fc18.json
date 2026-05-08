@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/internal-review.yml:50 | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: github.actor on pull_request.synchronize does not identify the push actor, so the bot exemption does not work as intended.\n  WHY: On autofix-triggered synchronize runs, the actor resolves to the PR author rather than the bot login, so the condition remains true and still cancels the earlier run.\n- .github/workflows/internal-review.yml:50 (new expression on cancel-in-progress) | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Comparing github.actor directly to the bot login can miss bot-formatted names such as codex[bot], so bot-triggered events may still evaluate as cancellable.\n  WHY: The expression lacks normalization for GitHub's bot login variants, which can make the != check true unexpectedly.\n- .github/workflows/internal-review.yml:50 (vars.AUTOFIX_BOT_LOGIN || 'codex') | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Using vars.AUTOFIX_BOT_LOGIN || 'codex' prevents explicitly emptying the variable, so the repo cannot disable the default fallback by unsetting it.\n  WHY: The expression coalesces falsy values to 'codex' instead of preserving an empty or intentionally disabled setting.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/internal-review.yml:50 | confidence=5\n  PROBLEM: github.actor for pull_request events resolves to the PR author, not the push actor, so this guard does not detect autofix-bot synchronize runs.\n  WHY: On a pull_request.synchronize event caused by the autofix bot's push, github.actor still names the PR creator, so the expression stays true and Run 1 is still cancelled.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/internal-review.yml:50 (new expression on cancel-in-progress) | confidence=3\n  PROBLEM: Expression assumes github.actor exactly matches the bot login string, but GitHub may append [bot] suffixes in some contexts, making the comparison fail.\n  WHY: Raw login comparison without normalization can evaluate true unexpectedly for bot-triggered events.\n- .github/workflows/internal-review.yml:50 (vars.AUTOFIX_BOT_LOGIN || 'codex') | confidence=4\n  PROBLEM: No fallback handling if vars.AUTOFIX_BOT_LOGIN is explicitly set to empty string or falsy value, so the repo cannot disable the codex default by unsetting it.\n  WHY: The `||` expression coalesces empty values to 'codex' instead of preserving an explicit empty setting.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "71b437f840ed96d0c1ecbbc2c25c47bab182f84f1da2ccc451cf43e8fc7cae7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2266,
+    "run_id": "25539369871",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25539369871",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508061504_763d75fc18",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2266,
+    "run_id": "25539369871"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-08T06:15:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
