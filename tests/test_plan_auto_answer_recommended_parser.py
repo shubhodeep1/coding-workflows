@@ -279,6 +279,20 @@ def test_structured_block_detector_rejects_input_with_no_qid() -> None:
 	)
 
 
+def test_structured_block_detector_rejects_prose_bullets_without_recommended() -> None:
+	# Without `(RECOMMENDED)` on the bullet, a single-letter prose item
+	# after a Q-ID-shaped line must not falsely trigger the heuristic —
+	# otherwise the workflow sets needs_clarification=true and runs the
+	# auto-answer parser on output that is not a real clarification.
+	for body in (
+		"Q1: How does this work?\n- A. Just a single-letter prose item\n",
+		"Q1: How does this work?\n- A) Some context here, no recommended marker\n",
+		"Q1: How does this work?\n- A: caption text\n",
+		"Q1: How does this work?\n- A — text without the marker\n",
+	):
+		assert not _run_structured_block_detector(body), body
+
+
 def test_structured_block_detector_skips_lines_inside_code_fences() -> None:
 	# A bullet inside ``` ... ``` should not satisfy the heuristic on its
 	# own; only a Q-ID followed by an out-of-fence bullet should match.
@@ -327,6 +341,27 @@ def test_poll_parser_joins_multiple_recommended_with_plus() -> None:
 	)
 	out = _run_poll_parser(body)
 	assert out.strip() == "Q1: A+C", out
+
+
+def test_poll_parser_accepts_same_line_chord() -> None:
+	# The prompt rules call out `A+C` as a valid letter-only answer.
+	# When Codex emits a same-line chord recommendation
+	# (`- A+B — text (Recommended)`), the parser must capture the chord
+	# rather than silently skip the bullet (previously the single-letter
+	# capture rejected the line because `+` isn't in the separator class).
+	body = "Q1: Pick one\n- A+B — text (Recommended)\n"
+	out = _run_poll_parser(body)
+	assert out.strip() == "Q1: A+B", out
+
+
+def test_poll_parser_combines_same_line_chord_with_other_recommended_bullets() -> None:
+	body = (
+		"Q1: Pick one\n"
+		"- A+B — chord option (Recommended)\n"
+		"- C — third (RECOMMENDED)\n"
+	)
+	out = _run_poll_parser(body)
+	assert out.strip() == "Q1: A+B+C", out
 
 
 def test_poll_parser_silent_on_no_recommended() -> None:

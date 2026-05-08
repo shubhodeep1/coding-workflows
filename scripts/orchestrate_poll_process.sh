@@ -7138,7 +7138,7 @@ extract_recommended_answers() {
       }
       $qid = $1;
     }
-    if (defined $qid && /^\s*-\s*(?:\*\*)?([A-Za-z])(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
+    if (defined $qid && /^\s*-\s*(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
       push @{$rec{$qid}}, uc($1);
     }
     END {
