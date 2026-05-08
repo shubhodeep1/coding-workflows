@@ -18,7 +18,7 @@ review_log()
 # way to improve quality; prompt fixes often recover more performance."
 # Override via env if a particular repo wants to escalate reasoning.
 REVIEW_CONSOLIDATOR_MODEL="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4}"
-REVIEW_CONSOLIDATOR_REASONING="${REVIEW_CONSOLIDATOR_REASONING:-low}"
+REVIEW_CONSOLIDATOR_REASONING="${REVIEW_CONSOLIDATOR_REASONING:-xhigh}"
 REVIEW_CONSOLIDATOR_TIMEOUT_SECS="${REVIEW_CONSOLIDATOR_TIMEOUT_SECS:-300}"
 REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT="${REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT:-16000}"
 
@@ -35,8 +35,8 @@ CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 case "${REVIEW_CONSOLIDATOR_REASONING}" in
 	xhigh|high|medium|low|none) ;;
 	*)
-		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=low"
-		REVIEW_CONSOLIDATOR_REASONING="low"
+		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=xhigh"
+		REVIEW_CONSOLIDATOR_REASONING="xhigh"
 		;;
 esac
 

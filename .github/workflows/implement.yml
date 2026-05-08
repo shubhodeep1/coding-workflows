@@ -13,7 +13,7 @@ name: AI Implement
 
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'medium' }}
+  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
   # prompt guide that step is research/synthesis, not coding. The implement
@@ -21,10 +21,10 @@ env:
   # env var is preserved so operators can route diagnose to a different model
   # (e.g. a cheaper mini variant) without affecting the editor.
   MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-5.4' }}
-  MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'medium' }}
+  MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'xhigh' }}
   # Repair phases are narrow execution-heavy tasks (apply a known fix to a
   # known location). Per the guide we drop reasoning to low for them.
-  MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'low' }}
+  MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
@@ -1793,12 +1793,12 @@ jobs:
           # `codex exec` honors it (the CLI has no --reasoning-effort
           # flag). Validate against the known set first; fall back with a
           # warning on a typo.
-          REPAIR_REASONING="${MODEL_REPAIR_REASONING_EFFORT:-low}"
+          REPAIR_REASONING="${MODEL_REPAIR_REASONING_EFFORT:-xhigh}"
           case "${REPAIR_REASONING}" in
             xhigh|high|medium|low|none) ;;
             *)
-              echo "::warning::Invalid MODEL_REPAIR_REASONING_EFFORT='${REPAIR_REASONING}'. Falling back to 'low'."
-              REPAIR_REASONING="low"
+              echo "::warning::Invalid MODEL_REPAIR_REASONING_EFFORT='${REPAIR_REASONING}'. Falling back to 'xhigh'."
+              REPAIR_REASONING="xhigh"
               ;;
           esac
           REPAIR_CODEX_CONFIG="${HOME:-/root}/.codex/config.toml"

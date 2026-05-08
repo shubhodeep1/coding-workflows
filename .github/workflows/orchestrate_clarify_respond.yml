@@ -50,7 +50,7 @@ jobs:
       # Clarify-respond is execution-heavy (derive an answer from the
       # repo using a documented derivation ladder) → low reasoning per
       # the OpenAI prompt guide.
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'low' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'xhigh' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CLARIFY_RESPOND || 'low' }}
       ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}

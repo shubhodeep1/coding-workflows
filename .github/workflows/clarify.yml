@@ -35,9 +35,9 @@ jobs:
       # → low reasoning is sufficient. The smoke override below is now a
       # noop because the default is already low; kept for parity with
       # other phases that still flip from medium → low on smoke.
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'low' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'xhigh' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CLARIFY || 'low' }}
-      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'low' }}
+      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'xhigh' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
     steps:

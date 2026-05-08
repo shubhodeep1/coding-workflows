@@ -35,10 +35,10 @@ MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.4}"
 # right default. Earlier revisions defaulted to `none`, which (a) is not
 # in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
 # for the gpt-5.x family, and (b) silently differed from `validate.yml`'s
-# workflow-level `THINKING_LEVEL_VALIDATE || 'medium'`. CI runs were
+# workflow-level `THINKING_LEVEL_VALIDATE || 'xhigh'`. CI runs were
 # unaffected (the workflow exports the env), but standalone / local
 # invocations now match CI behaviour.
-MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-medium}"
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
 # Discover is a low-volume execution-heavy task (read repo metadata,
 # emit `.ai/validate.yml` hints) → drop reasoning to `low` per the
 # OpenAI guide. Mirrors the per-phase pattern used in implement.yml
@@ -46,7 +46,7 @@ MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-medium}"
 # The discover step temporarily patches ~/.codex/config.toml before its
 # codex exec call and restores `MODEL_REASONING_EFFORT` after — see the
 # "Validation hint discovery attempt" loop further down.
-MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-low}"
+MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-xhigh}"
 # `none` is intentionally rejected here: the parent MODEL_REASONING_EFFORT
 # rationale above cites the catalog (`scripts/codex_model_catalog.json`)
 # not advertising `none` for the gpt-5.x family, so accepting it for the
@@ -55,8 +55,8 @@ MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-low}"
 case "${MODEL_REASONING_EFFORT_DISCOVER}" in
   xhigh|high|medium|low) ;;
   *)
-    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'low'."
-    MODEL_REASONING_EFFORT_DISCOVER="low"
+    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'xhigh'."
+    MODEL_REASONING_EFFORT_DISCOVER="xhigh"
     ;;
 esac
 # Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)

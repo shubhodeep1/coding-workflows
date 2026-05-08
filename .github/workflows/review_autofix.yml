@@ -99,7 +99,7 @@ env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   # Reviewer is research-heavy (read PR diff + cross-check against repo
   # state, emit grounded findings) → medium per the OpenAI prompt guide.
-  REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'medium' }}
+  REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}
   # Pass-2 diff-size gate (review_run_reviewers.sh): when LAST_RUN_DIFF
   # is "large" (≥ REVIEWER_PASS2_DIFF_LARGE_LOC added+removed lines, default
@@ -111,7 +111,7 @@ env:
   # The operator override (THINKING_LEVEL_REVIEWER / smoke-set
   # REVIEWER_REASONING_EFFORT) always wins over the gate.
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
-  REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'medium' }}
+  REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'xhigh' }}
   REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
   # Editor (codex apply-fixes loop). Production and smoke both run at
   # `medium` per the OpenAI gpt-5.4 prompt guide — see the smoke override
@@ -126,7 +126,7 @@ env:
   # — the per-reviewer CODEX_HOME copies used during the reviewer passes
   # are isolated and never read by the editor. Keep this knob
   # configurable for repos that want to override.
-  EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'medium' }}
+  EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to scripts/
@@ -2250,7 +2250,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-          echo "Reviewer reasoning effort: ${REVIEWER_REASONING_EFFORT:-medium}"
+          echo "Reviewer reasoning effort: ${REVIEWER_REASONING_EFFORT:-xhigh}"
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
@@ -3730,7 +3730,7 @@ jobs:
           # [ai-merge-resolve] commit was aborted. Pin the resolver to a
           # workflow-controlled effort so the smoke override never starves
           # it.
-          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'medium' }}
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'xhigh' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
@@ -3890,7 +3890,7 @@ jobs:
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           JUDGE_FIX_COUNT: ${{ steps.retrigger_guard.outputs.judge_fix_count }}
-          JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'medium' }}
+          JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'xhigh' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |

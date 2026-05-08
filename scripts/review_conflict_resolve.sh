@@ -188,7 +188,7 @@ RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
 # (set by the workflow step's env, defaults to "medium"). Also ensure
 # model_reasoning_summary = "auto" is present — same diagnostic +
 # anti-empty-stdout rationale as the editor step.
-_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-medium}"
+_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}"
 # Validate against known reasoning levels before interpolating into sed —
 # CONFLICT_RESOLVER_REASONING_EFFORT comes from a repo var
 # (vars.THINKING_LEVEL_CONFLICT_RESOLVER) so an unexpected value would
@@ -198,8 +198,8 @@ _resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-medium}"
 case "${_resolver_reasoning_effort}" in
   xhigh|high|medium|none) ;;
   *)
-    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to medium."
-    _resolver_reasoning_effort="medium"
+    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to xhigh."
+    _resolver_reasoning_effort="xhigh"
     ;;
 esac
 _codex_config="${HOME}/.codex/config.toml"

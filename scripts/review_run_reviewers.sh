@@ -1165,12 +1165,12 @@ build_cross_pollination_summary() {
 if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "Two-pass review enabled."
 
-  # ── PASS 1: broad sweep at medium thinking ──
-  echo "=== PASS 1: Broad sweep (medium reasoning) ==="
+  # ── PASS 1: broad sweep at xhigh thinking ──
+  echo "=== PASS 1: Broad sweep (xhigh reasoning) ==="
   PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
   assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
 
-  pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "medium")"
+  pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
   echo "Pass 1 complete: ${pass1_successful} reviewers successful."
 
   # Check for PR closure after pass 1
@@ -1225,11 +1225,11 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     echo "::warning::Invalid REVIEWER_PASS2_DIFF_LARGE_LOC='${PASS2_DIFF_LARGE_LOC}'. Falling back to 200."
     PASS2_DIFF_LARGE_LOC=200
   fi
-  PASS2_REASONING_SMALL="${REVIEWER_PASS2_REASONING_SMALL:-medium}"
+  PASS2_REASONING_SMALL="${REVIEWER_PASS2_REASONING_SMALL:-xhigh}"
   PASS2_REASONING_LARGE="${REVIEWER_PASS2_REASONING_LARGE:-xhigh}"
   case "${PASS2_REASONING_SMALL}" in xhigh|high|medium|low|none) ;; *)
-    echo "::warning::Invalid REVIEWER_PASS2_REASONING_SMALL='${PASS2_REASONING_SMALL}'. Falling back to medium."
-    PASS2_REASONING_SMALL="medium" ;;
+    echo "::warning::Invalid REVIEWER_PASS2_REASONING_SMALL='${PASS2_REASONING_SMALL}'. Falling back to xhigh."
+    PASS2_REASONING_SMALL="xhigh" ;;
   esac
   case "${PASS2_REASONING_LARGE}" in xhigh|high|medium|low|none) ;; *)
     echo "::warning::Invalid REVIEWER_PASS2_REASONING_LARGE='${PASS2_REASONING_LARGE}'. Falling back to xhigh."
@@ -1258,10 +1258,10 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
 
   # Operator override always wins: if vars.THINKING_LEVEL_REVIEWER (which
   # populates REVIEWER_REASONING_EFFORT) is set in repo vars, honour it.
-  # The implicit/default value is "medium" — use the diff-size gate only
+  # The implicit/default value is "xhigh" — use the diff-size gate only
   # when the env is at the default; otherwise the operator's explicit
-  # choice (low for smoke, xhigh for forced-deep, etc.) is final.
-  if [ -n "${REVIEWER_REASONING_EFFORT:-}" ] && [ "${REVIEWER_REASONING_EFFORT}" != "medium" ]; then
+  # choice (low for smoke, medium for forced-shallow, etc.) is final.
+  if [ -n "${REVIEWER_REASONING_EFFORT:-}" ] && [ "${REVIEWER_REASONING_EFFORT}" != "xhigh" ]; then
     PASS2_REASONING="${REVIEWER_REASONING_EFFORT}"
     PASS2_GATE_NOTE="explicit override from REVIEWER_REASONING_EFFORT=${REVIEWER_REASONING_EFFORT}"
   elif [ "${PASS2_DIFF_LOC}" -ge "${PASS2_DIFF_LARGE_LOC}" ]; then
