@@ -40,12 +40,15 @@ MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.4}"
 # invocations now match CI behaviour.
 MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
 # Discover is a low-volume execution-heavy task (read repo metadata,
-# emit `.ai/validate.yml` hints) → drop reasoning to `low` per the
-# OpenAI guide. Mirrors the per-phase pattern used in implement.yml
-# (MODEL_REPAIR_REASONING_EFFORT, MODEL_DIAGNOSE_REASONING_EFFORT).
-# The discover step temporarily patches ~/.codex/config.toml before its
-# codex exec call and restores `MODEL_REASONING_EFFORT` after — see the
-# "Validation hint discovery attempt" loop further down.
+# emit `.ai/validate.yml` hints). It now defaults to `xhigh` to match
+# the repo-wide gpt-5.4 reasoning-level policy; the per-phase override
+# knob is retained so operators can drop discover's level independently
+# of the parent MODEL_REASONING_EFFORT (mirrors the per-phase pattern
+# used in implement.yml — MODEL_REPAIR_REASONING_EFFORT,
+# MODEL_DIAGNOSE_REASONING_EFFORT). The discover step temporarily
+# patches ~/.codex/config.toml before its codex exec call and restores
+# `MODEL_REASONING_EFFORT` after — see the "Validation hint discovery
+# attempt" loop further down.
 MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-xhigh}"
 # `none` is intentionally rejected here: the parent MODEL_REASONING_EFFORT
 # rationale above cites the catalog (`scripts/codex_model_catalog.json`)
