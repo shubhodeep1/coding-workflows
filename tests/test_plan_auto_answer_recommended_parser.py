@@ -201,6 +201,20 @@ def test_plan_parser_handles_real_codex_output_from_issue_2812() -> None:
 	assert r.get("answer") == "Q1: A", r
 
 
+def test_plan_parser_rejects_utf8_punctuation_sharing_em_dash_leading_byte() -> None:
+	# The em-dash "—" is U+2014 = bytes E2 80 94 in UTF-8; en-dash "–" is
+	# U+2013 = E2 80 93. A naive byte-mode character class like
+	# ``[—–\-)\.:]`` decomposes to the byte set {E2, 80, 93, 94, -, ),
+	# ., :} and accidentally matches the leading byte of unrelated UTF-8
+	# punctuation such as U+2018 (left single quote, bytes E2 80 98).
+	# The alternation form ``(?:—|–|[-)\.:])`` matches em-/en-dash as
+	# whole 3-byte sequences and avoids the false positive.
+	body = "Q1: Pick one\n- A ‘foo’ (Recommended)\n"
+	r = _run_plan_parser(body)
+	assert r.get("status") == "error", r
+	assert r.get("reason") == "Missing recommended option for Q1", r
+
+
 def test_plan_parser_skips_recommended_lines_inside_code_fences() -> None:
 	body = (
 		"Q1: Real question\n"
@@ -260,6 +274,14 @@ def test_poll_parser_uppercases_lowercase_letter() -> None:
 	body = "Q1: Pick one\n- a) first (Recommended)\n"
 	out = _run_poll_parser(body)
 	assert out.strip() == "Q1: A", out
+
+
+def test_poll_parser_rejects_utf8_punctuation_sharing_em_dash_leading_byte() -> None:
+	# Same byte-class hazard as the plan.yml parser: ensure the script's
+	# alternation form does not falsely accept U+2018 etc.
+	body = "Q1: Pick one\n- A ‘foo’ (Recommended)\n"
+	out = _run_poll_parser(body)
+	assert out.strip() == "", out
 
 
 def test_prompt_template_documents_canonical_recommended_form() -> None:
