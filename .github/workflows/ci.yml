@@ -138,6 +138,9 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_contracts.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reviewer_prompt_semble.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_prompt_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_semble.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
 
       - name: Validation self-test unit tests
         run: |
