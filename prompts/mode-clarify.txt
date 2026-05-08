@@ -44,6 +44,12 @@ Rules:
   (`A`, `B`, `C`, or `A+C`).
 - One decision per Q-ID. Mark at least one option `(RECOMMENDED)`.
 - Do not use numeric numbering (1, 2, 3) — only Q-IDs.
+- Each option line MUST be exactly `- **A** — <description> (RECOMMENDED)`
+  on the recommended option: bullet `-`, bold letter `**A**`, em-dash `—`,
+  and the literal uppercase token `(RECOMMENDED)`. Do not substitute
+  `A)`, `A.`, `A:`, lowercase `(recommended)`, or any other separator
+  — the auto-answer parser tolerates common drift but still depends on
+  this canonical form.
 
 Output contract (exact headings):
 STATUS: NEEDS_CLARIFICATION | CLEAR

@@ -7120,11 +7120,15 @@ extract_recommended_answers() {
 
   # Parse Q-blocks and pick the (RECOMMENDED) letter(s) for each.
   # When multiple options are recommended, combine with "+" (e.g. "A+C").
-  # Expected format per question:
+  # Canonical format per question:
   #   **Q1: <question>**
   #   Choices:
   #   - **A** — <desc> (RECOMMENDED)
   #   - **B** — <desc>
+  # The bullet regex also tolerates LLM drift: optional bold around the
+  # letter, and any of "—", "–", "-", ")", ".", ":" as the separator
+  # between the letter and the description (so "- A) text (Recommended)"
+  # is accepted as well as "- **A** — text (RECOMMENDED)").
   printf '%s' "${clarify_body}" | perl -ne '
     BEGIN { @order = (); %rec = (); $qid = undef; }
     if (/^\s*\*?\*?Q(\d+)/i) {
@@ -7134,8 +7138,8 @@ extract_recommended_answers() {
       }
       $qid = $1;
     }
-    if (defined $qid && /^\s*-\s*\*\*([A-Z])\*\*\s*.*\(RECOMMENDED\)/i) {
-      push @{$rec{$qid}}, $1;
+    if (defined $qid && /^\s*-\s*(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
+      push @{$rec{$qid}}, uc($1);
     }
     END {
       # Flush the last question
