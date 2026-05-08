@@ -13,6 +13,7 @@ plus a manual `main()` runner so CI can execute the file with
 """
 from __future__ import annotations
 
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -26,6 +27,11 @@ from targeted_file_context import (  # noqa: E402
 	parse_paths_arg,
 	parse_paths_file,
 )
+
+
+def _write_executable(path: Path, body: str) -> None:
+	path.write_text(body, encoding="utf-8")
+	path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
 def test_extracts_files_likely_to_change_section_only() -> None:
@@ -287,6 +293,80 @@ def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
 		# Every path appears (inlined or marker) — no silent drops.
 		for name in ("src/a.py", "src/b.py", "src/c.py", "src/d.py"):
 			assert name in context, f"path {name} missing from output"
+
+
+def test_total_budget_overflow_uses_semble_when_enabled() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "huge.py").write_text("x = 1\n" * 6000, encoding="utf-8")
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		query_file = root / "query.txt"
+		query_file.write_text("implementation context\nplan details\n", encoding="utf-8")
+		semble_bin = root / "semble"
+		_write_executable(
+			semble_bin,
+			"#!/usr/bin/env bash\n"
+			"[ \"$1\" = query ] || exit 9\n"
+			"[ \"$3\" = --index ] || exit 10\n"
+			"[ \"$5\" = --top-k ] || exit 11\n"
+			"[ \"$6\" = 2 ] || exit 12\n"
+			"[ \"$7\" = --format ] || exit 13\n"
+			"[ \"$8\" = text ] || exit 14\n"
+			"printf 'retrieved chunk one\\nretrieved chunk two\\n'\n",
+		)
+
+		context = emit_context(
+			["src/huge.py"],
+			root,
+			max_bytes=1024,
+			semble_bin=str(semble_bin),
+			semble_index=str(index_dir),
+			semble_query_from=str(query_file),
+			semble_max_chunks=2,
+			semble_fallback="marker",
+		)
+
+		assert "chunk-retrieved via semble" in context
+		assert "retrieved chunk one" in context
+		assert "retrieved chunk two" in context
+		assert "--- END FILE: src/huge.py ---" in context
+		assert "read with read tool, max_bytes=" not in context
+		assert "Marker-only (would overflow):" not in context
+
+
+def test_total_budget_overflow_semble_failure_falls_back_to_legacy_marker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "huge.py").write_text("x = 1\n" * 6000, encoding="utf-8")
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		query_file = root / "query.txt"
+		query_file.write_text("implementation context\nplan details\n", encoding="utf-8")
+		semble_bin = root / "semble"
+		_write_executable(
+			semble_bin,
+			"#!/usr/bin/env bash\n"
+			"echo 'backend exploded' >&2\n"
+			"exit 7\n",
+		)
+
+		context = emit_context(
+			["src/huge.py"],
+			root,
+			max_bytes=1024,
+			semble_bin=str(semble_bin),
+			semble_index=str(index_dir),
+			semble_query_from=str(query_file),
+			semble_max_chunks=2,
+			semble_fallback="marker",
+		)
+
+		assert "would overflow total budget" in context
+		assert "chunk-retrieved via semble" not in context
+		assert "Marker-only (would overflow): src/huge.py" in context
 
 
 def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:

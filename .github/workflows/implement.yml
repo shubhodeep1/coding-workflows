@@ -899,6 +899,22 @@ jobs:
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${IMPLEMENTATION_CONTEXT_FILE}"
 
+      - name: Build Semble targeted-context query
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          TARGETED_FILE_CONTEXT_QUERY_FILE="${RUNTIME_DIR}/targeted_file_context_query.txt"
+          {
+            echo "ISSUE DESCRIPTION"
+            printf '%s\n\n' "${ISSUE_BODY}"
+            echo "CLARIFICATION ANSWERS"
+            cat "${CLARIFICATION_ANSWERS_FILE}"
+            echo
+            echo "APPROVED IMPLEMENTATION PLAN"
+            cat "${PLAN_FILE}"
+          } > "${TARGETED_FILE_CONTEXT_QUERY_FILE}"
+          echo "TARGETED_FILE_CONTEXT_QUERY_FILE=${TARGETED_FILE_CONTEXT_QUERY_FILE}" >> "$GITHUB_ENV"
+
       - name: Create Codex config
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -1037,6 +1053,11 @@ jobs:
             python3 scripts/targeted_file_context.py \
               --plan-file "${PLAN_FILE}" \
               --repo-root "${GITHUB_WORKSPACE}" \
+              --semble-bin "$(command -v semble 2>/dev/null || true)" \
+              --semble-index "${SEMBLE_INDEX_DIR:-}" \
+              --semble-query-from "${TARGETED_FILE_CONTEXT_QUERY_FILE:-}" \
+              --semble-max-chunks "${TARGETED_FILE_CONTEXT_SEMBLE_MAX_CHUNKS:-3}" \
+              --semble-fallback marker \
               --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
               --output "${TARGETED_FILES_CONTEXT_FILE}" || \
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"

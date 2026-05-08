@@ -303,6 +303,7 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	body = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 	assert "write_codex_config.sh install_semble.sh semble_helpers.sh; do" in body, "workflow must stage the Semble support scripts"
 	assert "SEMBLE_ENABLED" in body, "workflow must expose SEMBLE_ENABLED"
+	assert 'TARGETED_FILE_CONTEXT_QUERY_FILE="${RUNTIME_DIR}/targeted_file_context_query.txt"' in body, "workflow must derive a runtime-local Semble query file"
 	setup_step = _workflow_step_block("Setup uv for Semble")
 	assert "uses: astral-sh/setup-uv@v3" in setup_step, "workflow must install uv when Semble is enabled"
 	install_step = _workflow_step_block("Install Semble")
@@ -312,6 +313,12 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert "reason=workspace_unavailable" in index_step, "workflow must fail soft when the workspace path is unavailable"
 	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_step, "workflow must build the workspace-local index directory"
 	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in index_step, "workflow must build a real Semble index before advertising it"
+	targeted_context_step = _workflow_step_block("Run Codex implementation")
+	assert "--semble-bin \"$(command -v semble 2>/dev/null || true)\"" in targeted_context_step, "workflow must pass the Semble binary to targeted_file_context.py"
+	assert "--semble-index \"${SEMBLE_INDEX_DIR:-}\"" in targeted_context_step, "workflow must pass the runtime-local Semble index"
+	assert "--semble-query-from \"${TARGETED_FILE_CONTEXT_QUERY_FILE:-}\"" in targeted_context_step, "workflow must pass the deterministic Semble query source"
+	assert "--semble-max-chunks \"${TARGETED_FILE_CONTEXT_SEMBLE_MAX_CHUNKS:-3}\"" in targeted_context_step, "workflow must bound Semble retrieval chunks"
+	assert "--semble-fallback marker" in targeted_context_step, "workflow must preserve legacy marker fallback on Semble failure"
 
 
 def main() -> int:
