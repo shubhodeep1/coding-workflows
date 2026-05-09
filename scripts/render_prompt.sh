@@ -29,6 +29,10 @@ else
 	WORKFLOW_EDIT_RESTRICTION_LINE="- Do not change CI workflows."
 fi
 
+# {{SEMBLE_PREFETCH}} resolves from the optional ${SEMBLE_PREFETCH}
+# environment variable. Prompt consumers set it per render invocation so the
+# bounded Semble block stays in the dynamic prompt section and does not leak
+# across different prompt builds in the same shell process.
 SEMBLE_PREFETCH_IS_SET="false"
 SEMBLE_PREFETCH_BLOCK=""
 if [ "${SEMBLE_PREFETCH+x}" = "x" ]; then

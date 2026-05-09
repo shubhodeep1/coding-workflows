@@ -299,7 +299,8 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          for f in install_semble.sh semble_helpers.sh; do
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"
+          for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"

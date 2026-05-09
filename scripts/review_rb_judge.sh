@@ -18,6 +18,14 @@ rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
+if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
+  if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
+    SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
+  else
+    SUPPORT_ROOT_DIR="${SUPPORT_SCRIPTS_DIR}"
+  fi
+fi
+SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
@@ -147,6 +155,35 @@ unset _pr_state
 
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
+
+append_judge_semble_query_section() {
+  local label="$1"
+  local value="${2:-}"
+  local max_bytes="${3:-4096}"
+
+  [ -n "${value}" ] || return 0
+  if ! [[ "${max_bytes}" =~ ^[0-9]+$ ]]; then
+    max_bytes=4096
+  fi
+  printf '%s\n' "${label}"
+  printf '%s\n' "${value:0:${max_bytes}}"
+}
+
+build_judge_semble_prefetch() {
+  local query_text="${1:-}"
+  local max_chunks="${2:-6}"
+  local header_label="${3:-Review-Blocked Judge Context}"
+
+  if [ -z "${query_text}" ] \
+    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
+    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+    || ! declare -F semble_query_block >/dev/null 2>&1; then
+    return 0
+  fi
+
+  semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
+  return 0
+}
 
 # -----------------------------------------------------------
 # Find linked issues for judge context
