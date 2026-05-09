@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:92-100 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace` body uses literal tab indentation instead of the file's 4-space style.\n  WHY: Python accepts it, but it creates a lint/style hazard and is inconsistent with neighboring functions.\n- tests/test_judge_semble_prefetch_contract.py:107-128 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The `test_render_prompt_resolves_workflow_and_semble_placeholders_together` body uses literal tab indentation instead of the file's 4-space style.\n  WHY: Python accepts it, but it risks W191/E101 lint failures and inconsistent formatting.\n- tests/test_judge_semble_prefetch_contract.py:114-128 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The exact-equality assertion hardcodes the full `{{WORKFLOW_EDIT_RESTRICTION}}` expansion text from `scripts/render_prompt.sh`.\n  WHY: A wording-only change in `render_prompt.sh` will fail this test even if placeholder resolution still works, creating brittle coupling.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_judge_semble_prefetch_contract.py:117-118 | severity=low | confidence=4\n  PROBLEM: The assertion block explicitly compares rendered output against the exact string literal from `scripts/render_prompt.sh` line 27.\n  WHY: If `scripts/render_prompt.sh` is reworded, this test will fail even though placeholder resolution and output ordering still work.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:110-123 | severity=low | confidence=4\n  PROBLEM: The function body uses literal tab characters for indentation, while the rest of the file consistently uses 4-space indentation.\n  WHY: Python accepts both, but this may trigger whitespace linting and creates potential merge conflicts.\n- tests/test_judge_semble_prefetch_contract.py:117-123 | severity=low | confidence=4\n  PROBLEM: The test hardcodes the exact multi-line expansion of `{{WORKFLOW_EDIT_RESTRICTION}}`.\n  WHY: If `scripts/render_prompt.sh` changes the wording in the future, this test will fail even though the placeholder resolution logic remains correct.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:109-122 | severity=low | confidence=4\n  PROBLEM: Uses literal tab characters for indentation while the rest of the file uses 4 spaces, violating the repository's mixed-indentation convention.\n  WHY: Python technically accepts mixed tabs/spaces, but this violates common linting rules and can cause merge conflicts.\n- tests/test_judge_semble_prefetch_contract.py:114-118 | severity=low | confidence=3\n  PROBLEM: Hardcodes the exact multi-line expansion string of `{{WORKFLOW_EDIT_RESTRICTION}}`, making the test brittle to wording changes.\n  WHY: If `scripts/render_prompt.sh` changes the restriction text, this test will fail even though placeholder resolution behavior remains correct.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_judge_semble_prefetch_contract.py:92-100 and 111-123 | severity=low | confidence=5\n  PROBLEM: The `_render_prompt` invocation and assertion bodies use literal tab characters for indentation instead of 4 spaces.\n  WHY: Python executes this correctly, but any linting step that checks indentation will flag it and fail CI.\n- tests/test_judge_semble_prefetch_contract.py:117-122 | severity=low | confidence=4\n  PROBLEM: The exact equality assertion hardcodes the literal expansion string of `{{WORKFLOW_EDIT_RESTRICTION}}`.\n  WHY: Any future edit to that renderer text will break this test even though resolution semantics and placeholder ordering remain correct.\n- tests/test_judge_semble_prefetch_contract.py:109-123 | confidence=3\n  PROBLEM: Advisory hardening note: the test hardcodes the exact resolved value of `{{WORKFLOW_EDIT_RESTRICTION}}` and uses tab indentation.\n  WHY: This is a fragility concern rather than a current correctness bug; a more resilient assertion style would avoid copying renderer prose.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:115-128 | severity=low | confidence=5\n  PROBLEM: The tightened assert hardcodes the full multi-line output of `scripts/render_prompt.sh`, including exact wording, newlines, and chunk text.\n  WHY: Unrelated wording or whitespace changes in `render_prompt.sh` will falsely fail this test despite correct placeholder resolution behavior.\n- tests/test_judge_semble_prefetch_contract.py:107-128 | severity=low | confidence=4\n  PROBLEM: The function body uses literal tabs for indentation while the file standard is 4 spaces.\n  WHY: Python executes successfully, but this risks E101/E111/W191 lint failures in CI and merge conflicts on future edits.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_judge_semble_prefetch_contract.py:107-128 | severity=low | confidence=4\n  PROBLEM: The test function body uses literal tab characters for indentation while neighboring test functions use 4-space indentation.\n  WHY: Python accepts mixed indentation, but this risks lint failures and merge friction.\n- tests/test_judge_semble_prefetch_contract.py:115-124 | severity=low | confidence=5\n  PROBLEM: The test hardcodes the exact multi-line output string from `scripts/render_prompt.sh` line 27, making the contract test brittle to wording changes.\n  WHY: Any future rewording in the renderer will fail CI even though placeholder resolution logic remains correct.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "fb2bd3edd6745041f3c748844e1d40a30264762c0c39ce8ca652dc3e00ca20a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2413,
+    "run_id": "25614627392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25614627392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509235101_cc74fd3596",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2413,
+    "run_id": "25614627392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T23:51:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
