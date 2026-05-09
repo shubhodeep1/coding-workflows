@@ -287,6 +287,7 @@ RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
 RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"
 RB_JUDGE_SEMBLE_PREFETCH=""
+trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'

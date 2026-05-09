@@ -2762,7 +2762,7 @@ invoke_judge_for_integration_conflict() {
   judge_static_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_static.XXXXXX")"
 
   if ! assemble_judge_static_context "${judge_static_file}"; then
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file:-}"
+    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
     return 1
   fi
 
