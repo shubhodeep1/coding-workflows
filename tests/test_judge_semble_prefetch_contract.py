@@ -121,6 +121,7 @@ def test_live_judge_templates_expose_semble_placeholder() -> None:
 	for path in [MODE_JUDGE, MODE_JUDGE_REVIEW_BLOCKED, MODE_JUDGE_STALL_RECOVERY]:
 		text = _read(path)
 		assert "{{SEMBLE_PREFETCH}}" in text, f"Missing Semble placeholder in {path}"
+		assert text.count("{{SEMBLE_PREFETCH}}") == 1, f"Expected one Semble placeholder in {path}"
 
 
 def test_judge_scripts_wire_semble_prefetch_into_dynamic_prompt_builds() -> None:
@@ -138,6 +139,10 @@ def test_judge_scripts_wire_semble_prefetch_into_dynamic_prompt_builds() -> None
 	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in orchestrate
 	assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in orchestrate
 	assert "printf '%s\\n\\n' \"${integration_judge_semble_prefetch}\"" in orchestrate
+	assert 'integration_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in orchestrate
+	assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in orchestrate
+	assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch' not in orchestrate
+	assert "printf '%s\\n' \"${integration_judge_semble_prefetch}\"" not in orchestrate
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in review_rb
 	assert 'build_review_blocked_semble_query()' in review_rb
 	assert 'build_review_blocked_semble_prefetch()' in review_rb

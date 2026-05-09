@@ -73,18 +73,37 @@ extract_diff_file_summary() {
   printf '%s\n' "${diff_text}" \
     | awk '
         /^diff --git / {
-          old=$3
-          new=$4
+          line = $0
+          sub(/^diff --git /, "", line)
+          old = ""
+          new = ""
+          if (line ~ /^"/) {
+            q = "\""
+            mid = index(line, q " " q)
+            if (mid > 0) {
+              old = substr(line, 2, mid - 2)
+              new = substr(line, mid + 3)
+              sub(/"$/, "", new)
+            }
+          } else {
+            split(line, parts, " ")
+            old = parts[1]
+            new = parts[2]
+          }
           sub(/^a\//, "", old)
           sub(/^b\//, "", new)
-          if (old == new) {
-            print old
-          } else {
-            print old " -> " new
+          if (old == "") {
+            next
+          }
+          rendered = (old == new ? old : old " -> " new)
+          if (!seen[rendered]++) {
+            print rendered
+            if (++count >= 40) {
+              exit
+            }
           }
         }
-      ' \
-    | awk '!seen[$0]++ { print; if (++count >= 40) exit }'
+      '
 }
 
 build_review_blocked_semble_query() {
