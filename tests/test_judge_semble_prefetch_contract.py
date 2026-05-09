@@ -89,6 +89,15 @@ def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
     assert rendered == "Before\n\nAfter\n"
 
 
+def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
+    rendered = _render_prompt(
+        "Before {{SEMBLE_PREFETCH}} After\n",
+        "=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+    )
+
+    assert rendered == "Before {{SEMBLE_PREFETCH}} After\n"
+
+
 def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges() -> None:
     workflow = _read(ORCHESTRATE_POLL_WF)
     workspace_block = _step_block(workflow, "Create runtime workspace")
@@ -173,6 +182,7 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 def main() -> int:
     test_render_prompt_replaces_semble_prefetch_and_guards_placeholder()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
+    test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
     test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
     test_live_judge_templates_declare_semble_prefetch_placeholder()
     test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only()
