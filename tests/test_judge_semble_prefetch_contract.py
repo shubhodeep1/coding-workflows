@@ -155,11 +155,11 @@ def test_judge_templates_include_semble_prefetch_near_the_header() -> None:
 	stall = _read(STALL_PROMPT)
 	review_blocked = _read(REVIEW_BLOCKED_PROMPT)
 
-	assert "{{SEMBLE_PREFETCH}}" in judge
+	assert judge.count("{{SEMBLE_PREFETCH}}") == 1
 	assert judge.index("{{SEMBLE_PREFETCH}}") < judge.index("Evaluation criteria:")
-	assert "{{SEMBLE_PREFETCH}}" in stall
+	assert stall.count("{{SEMBLE_PREFETCH}}") == 1
 	assert stall.index("{{SEMBLE_PREFETCH}}") < stall.index("Context provided in the prompt includes:")
-	assert "{{SEMBLE_PREFETCH}}" in review_blocked
+	assert review_blocked.count("{{SEMBLE_PREFETCH}}") == 1
 	assert review_blocked.index("{{SEMBLE_PREFETCH}}") < review_blocked.index("Inspect the PR diff")
 
 
@@ -173,8 +173,12 @@ def test_orchestrate_poll_process_wires_semble_into_all_live_judge_paths() -> No
 	assert 'python3 /dev/fd/3 "${label}" 3<<\'PY\'' in script
 	assert 'integration_judge_semble_prefetch="$(_build_judge_semble_prefetch "${integration_judge_semble_query}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Integration Conflict Judge Context")"' in script
 	assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch "${stall_judge_semble_query}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Stall Judge Context")"' in script
-	assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"' in script
-	assert 'JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Judge Context")"' in script
+	assert 'RB_JUDGE_SEMBLE_PREFETCH="$({' in script
+	assert '} | build_judge_semble_prefetch "review blocked judge pr ${RB_PR} issue ${rb_issue}" 3 "Review-Blocked Context")"' in script
+	assert 'JUDGE_SEMBLE_PREFETCH="$({' in script
+	assert '} | build_judge_semble_prefetch "wave judge tracking ${TRACKING_NUM} wave ${CURRENT_WAVE}" 4 "Judge Context")"' in script
+	assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"' not in script
+	assert 'JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Judge Context")"' not in script
 	assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in script
 	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in script
 	assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in script
@@ -239,6 +243,8 @@ def test_review_rb_judge_wires_semble_prefetch_from_support_scripts() -> None:
 	assert 'append_judge_semble_query_section' in script
 	assert 'build_judge_semble_prefetch' in script
 	assert 'python3 /dev/fd/3 "${label}" 3<<\'PY\'' in script
+	assert 'RB_JUDGE_SEMBLE_PREFETCH="$(build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"' not in script
+	assert 'RB_JUDGE_SEMBLE_PREFETCH="$({' in script
 	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in script
 	assert 'build_rb_judge_semble_prefetch "review blocked judge pr ${PR_NUMBER} issue ${FIRST_ISSUE:-none}" 3 "Review-Blocked Context"' in script
 

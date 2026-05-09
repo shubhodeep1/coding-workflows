@@ -365,16 +365,6 @@ if [ "${PR_META_JSON}" = "{}" ]; then
   PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 fi
 
-RB_JUDGE_SEMBLE_QUERY="$({
-  printf '%s\n' 'Review-blocked judge context.'
-  append_judge_semble_query_section 'Linked issue body:' "${FIRST_ISSUE_BODY}" 5000
-  append_judge_semble_query_section 'PR metadata JSON:' "${PR_META_JSON}" 4000
-  append_judge_semble_query_section 'PR diff excerpt:' "${PR_DIFF}" 10000
-  append_judge_semble_query_section 'PR comments JSON:' "${PR_COMMENTS}" 7000
-  append_judge_semble_query_section 'Inline review comments JSON:' "${PR_REVIEW_COMMENTS}" 7000
-})"
-RB_JUDGE_SEMBLE_PREFETCH="$(build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"
-
 # -----------------------------------------------------------
 # Build judge prompt
 # -----------------------------------------------------------

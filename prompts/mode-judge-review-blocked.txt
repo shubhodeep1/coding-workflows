@@ -13,8 +13,6 @@ You have full access to the repository checkout and all tools (shell,
 file reads). Use them to inspect the actual code — do not rely solely on
 comment summaries.
 
-{{SEMBLE_PREFETCH}}
-
 Inspect the PR diff and all editor summary comments to understand what was fixed and what remains. Check the actual repository code to verify the current state. Assess severity of remaining issues — cosmetic/style-only (typos, naming, formatting), functional but non-critical (edge cases, minor inefficiencies), or critical (build failures, security vulnerabilities, data loss, logic errors affecting core functionality) — then choose one of three actions below.
 
 Decision options:

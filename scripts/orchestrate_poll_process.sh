@@ -9478,16 +9478,6 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
       RB_JUDGE_SEMBLE_PREFETCH=""
 
-      RB_JUDGE_SEMBLE_QUERY="$({
-        printf '%s\n' 'Review-blocked judge context.'
-        _append_judge_semble_query_section 'Issue requirement:' "${ISSUE_BODY}" 5000
-        _append_judge_semble_query_section 'PR metadata JSON:' "${PR_META}" 4000
-        _append_judge_semble_query_section 'PR diff excerpt:' "${PR_DIFF}" 10000
-        _append_judge_semble_query_section 'PR comments JSON:' "${PR_COMMENTS}" 7000
-        _append_judge_semble_query_section 'Inline review comments JSON:' "${PR_REVIEW_COMMENTS}" 7000
-      })"
-      RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"
-
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
@@ -10860,17 +10850,6 @@ ${PR_DIFF}
   if [ -z "${PROJECT_BODY}" ]; then
     PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
   fi
-
-  JUDGE_SEMBLE_QUERY="$({
-    printf '%s\n' 'Wave judge context.'
-    _append_judge_semble_query_section 'Project spec:' "${PROJECT_BODY}" 6000
-    _append_judge_semble_query_section 'Merged PR summaries:' "${MERGED_PR_SUMMARIES}" 10000
-    _append_judge_semble_query_section 'Open PR summaries:' "${OPEN_PR_SUMMARIES}" 8000
-    _append_judge_semble_query_section 'Wave status JSON:' "${WAVE_STATUS}" 6000
-    _append_judge_semble_query_section 'CI status JSON:' "${CI_STATUS}" 3000
-  })"
-  JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Judge Context")"
-
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 

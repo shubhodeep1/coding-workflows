@@ -7,8 +7,6 @@ reads). Inspect the actual merged codebase — don't rely solely on the PR
 summaries. When checking multiple PRs/files, read them in parallel via the
 read tool.
 
-{{SEMBLE_PREFETCH}}
-
 Evaluation criteria:
 1. Does the merged code match what the issue descriptions specified?
 2. Are there regressions, conflicts, or integration gaps between merged PRs?
