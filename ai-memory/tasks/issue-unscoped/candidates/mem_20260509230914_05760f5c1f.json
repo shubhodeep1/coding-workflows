@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:423-439 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The 40-identifier cap is checked after `add_identifier()` in the word-token loop, allowing one extra identifier to be collected beyond the intended budget.\n  WHY: Reviewers agreed the cap check is positioned after the append in the second loop; some noted `identifiers[:40]` trims the result, so the impact is minor and the severity/confidence are disputed.\n- scripts/targeted_file_context.py:141-147 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `\" \".join(str(value).split())` collapses multiline telemetry values into single-line strings, destroying traceback and whitespace structure.\n  WHY: Reviewers disagreed on whether this normalization is acceptable, but both flagged that it removes newline structure from telemetry; the highest stated confidence is 5.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/implement_diagnose_post_codex_failure.sh:404-412 | severity=low | confidence=5\n  PROBLEM: Rejected claim that `.contract` in `file_like_exts` blocks `.yml` contract files.\n  WHY: `.yml` is already present in the allowlist, so the claimed regression is not supported.\n- scripts/implement_diagnose_post_codex_failure.sh:434-439 | severity=low | confidence=2\n  PROBLEM: The word-token loop can add one extra identifier past the 40-item cap because the break check happens after `add_identifier(match)`.\n  WHY: If the first loop already filled `identifiers` to 40, the second loop can append one more before breaking, though `identifiers[:40]` later trims it.\n- scripts/targeted_file_context.py:141-147 | severity=low | confidence=5\n  PROBLEM: Rejected claim that `\" \".join(str(value).split())` destroys multiline telemetry structure.\n  WHY: The change is deliberate normalization to the repository's single-line Semble log shape.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:423-433 | severity=low | confidence=4\n  PROBLEM: The 40-identifier cap is enforced only in the file-regex loop, so the word-token loop can continue adding identifiers beyond the intended budget.\n  WHY: The second loop has no cap check in the reviewer\u2019s reading, so noisy word tokens can crowd out useful identifiers.\n- scripts/targeted_file_context.py:141-147 | severity=low | confidence=4\n  PROBLEM: The change from `repr()` to `\" \".join(str(value).split())` collapses all whitespace, including newlines, into single spaces.\n  WHY: This flattens multiline exception traces and error reasons into unreadable single-line telemetry.\n- scripts/implement_diagnose_post_codex_failure.sh:404-412 | severity=low | confidence=1\n  PROBLEM: Rejected claim that `.contract` in `file_like_exts` blocks `.yml` contract files.\n  WHY: `.yml` is explicitly present in the allowlist, so the claimed issue is not real.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:423-433 | severity=low | confidence=3\n  PROBLEM: The 40-identifier cap check is positioned at the end of the word-token loop body rather than at the beginning.\n  WHY: If the first loop collects exactly 40 identifiers, the second loop can add one more before breaking.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/targeted_file_context.py:141-147 | severity=low | confidence=5\n  PROBLEM: `\" \".join(str(value).split())` collapses all internal whitespace to single spaces, flattening multiline strings into unreadable single lines.\n  WHY: Semble telemetry loses structure for exception reasons and traceback text.\n- scripts/implement_diagnose_post_codex_failure.sh:404-412 | severity=low | confidence=1\n  PROBLEM: Rejected claim that `.contract` in `file_like_exts` blocks `.yml` contract files.\n  WHY: `.yml` contracts still match the allowlist, so there is no runtime impact.\n- scripts/implement_diagnose_post_codex_failure.sh:423-433 | severity=low | confidence=1\n  PROBLEM: Rejected claim that the word-token loop lacks the 40-identifier cap.\n  WHY: The cap check is present after every `add_identifier`, so total identifiers stay within the intended limit.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "aaa1cd0872cac2cda707a6e0b88b1d037959594e6f21897b63cec0a5ad6d9253",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2407,
+    "run_id": "25613752275",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25613752275",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509230914_05760f5c1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2407,
+    "run_id": "25613752275"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T23:09:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
