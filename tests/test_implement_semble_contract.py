@@ -75,12 +75,15 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 
 	install_block = _step_block_text("Install semble")
 	assert "if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'" in install_block
+	assert "continue-on-error: true" in install_block
 	assert "scripts/install_semble.sh" in install_block
 	assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block
+	assert 'echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"' in install_block
 	assert "leaving Semble disabled for this run" in install_block
 
 	index_block = _step_block_text("Build semble index")
 	assert "if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'" in index_block
+	assert "continue-on-error: true" in index_block
 	assert 'echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"' in index_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
 	assert 'if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then' in index_block

@@ -81,6 +81,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
@@ -134,6 +135,13 @@ DEFAULT_HEADER_TEXT = (
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 SEMBLE_QUERY_TIMEOUT_SECS = 30
 SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
+
+
+def _log_semble_event(prefix: str, **fields: object) -> None:
+	parts = [prefix]
+	for key, value in fields.items():
+		parts.append(f"{key}={value}")
+	print(" ".join(parts), file=sys.stderr)
 
 
 def is_probable_path(value: str) -> bool:
@@ -309,12 +317,13 @@ def _run_semble_query(
 	semble_index: str | None,
 	semble_max_chunks: int,
 	repo_root: Path,
-) -> tuple[bool, str | None]:
+	) -> tuple[bool, str | None, int]:
+	start = time.monotonic()
 	resolved_bin = semble_bin or shutil.which("semble")
 	if not resolved_bin:
-		return False, "binary-unavailable"
+		return False, "binary-unavailable", int((time.monotonic() - start) * 1000)
 	if not semble_index:
-		return False, "index-unavailable"
+		return False, "index-unavailable", int((time.monotonic() - start) * 1000)
 	try:
 		result = subprocess.run(
 			[
@@ -334,18 +343,18 @@ def _run_semble_query(
 			timeout=SEMBLE_QUERY_TIMEOUT_SECS,
 		)
 	except (OSError, subprocess.TimeoutExpired) as exc:
-		return False, str(exc)
+		return False, str(exc), int((time.monotonic() - start) * 1000)
 	stderr_text = result.stderr.decode("utf-8", errors="replace")
 	if result.returncode != 0:
 		stderr_tail = stderr_text.strip().splitlines()[-1] if stderr_text.strip() else ""
 		reason = f"exit={result.returncode}"
 		if stderr_tail:
 			reason = f"{reason} {stderr_tail}"
-		return False, reason
+		return False, reason, int((time.monotonic() - start) * 1000)
 	chunk_text = result.stdout.decode("utf-8", errors="replace").strip("\n")
 	if not chunk_text.strip():
-		return False, "empty-result"
-	return True, chunk_text
+		return False, "empty-result", int((time.monotonic() - start) * 1000)
+	return True, chunk_text, int((time.monotonic() - start) * 1000)
 
 
 def _append_semble_block(output: list[str], rel: str, raw_size: int, chunk_text: str) -> int:
@@ -418,7 +427,7 @@ def emit_context(
 		raw_size = abs_path.stat().st_size
 		if used_bytes + raw_size > max_bytes:
 			if semble_query_text:
-				success, payload = _run_semble_query(
+				success, payload, elapsed_ms = _run_semble_query(
 					f"{rel}\n{semble_query_text}",
 					semble_bin,
 					semble_index,
@@ -427,14 +436,25 @@ def emit_context(
 				)
 				if success and payload is not None:
 					rendered_bytes = _append_semble_block(output, rel, raw_size, payload)
+					_log_semble_event(
+						"SEMBLE_QUERY",
+						target="overflow",
+						file=rel,
+						chunks=semble_max_chunks,
+						bytes=rendered_bytes,
+						ms=elapsed_ms,
+					)
 					overflow_rendered_bytes += rendered_bytes
 					used_bytes += rendered_bytes
 					included += 1
 					semble_rendered += 1
 					continue
-				print(
-					f"SEMBLE_FALLBACK target=overflow file={rel} reason={payload or 'unknown'}",
-					file=sys.stderr,
+				_log_semble_event(
+					"SEMBLE_FALLBACK",
+					target="overflow",
+					file=rel,
+					reason=payload or "unknown",
+					ms=elapsed_ms,
 				)
 			if semble_fallback == "read":
 				remaining_bytes = max_bytes - used_bytes
