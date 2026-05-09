@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2383,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2383\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2387\",\"pr_number\":2387,\"branch\":\"ai/issue-2383\",\"run_id\":\"25603498973\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25603498973\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"scripts/review_apply_fixes.sh\",\"scripts/review_conflict_prepare.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_run_reviewers.sh\",\"scripts/targeted_file_context.py\",\"tests/test_review_semble_contract.py\"]}",
+  "fingerprint": "42c9aacb55202ec7a27aaaad79f71f195fb209e08f0388b860522a3ace4ed7f1",
+  "lineage": {
+    "issue_number": 2383,
+    "parent_ids": [],
+    "pr_number": 2387,
+    "run_id": "25603498973",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25603498973",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2387"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260509145519_22501deeca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2383,
+    "level": "run",
+    "pr_number": 2387,
+    "run_id": "25603498973"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2383: https://github.com/shubhodeep1/coding-workflows/pull/2387",
+  "timestamps": {
+    "created_at": "2026-05-09T14:55:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
