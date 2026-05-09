@@ -29,7 +29,7 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
-# shellcheck source=semble_helpers.sh
+# shellcheck source=scripts/semble_helpers.sh
 if [ -f "scripts/semble_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/semble_helpers.sh
@@ -112,7 +112,7 @@ if ! type gh_retry >/dev/null 2>&1; then
 fi
 
 SEMBLE_HELPERS_AVAILABLE="false"
-# shellcheck source=semble_helpers.sh
+# shellcheck source=scripts/semble_helpers.sh
 if [ -f "scripts/semble_helpers.sh" ]; then
   # shellcheck disable=SC1091
   if source scripts/semble_helpers.sh; then
@@ -837,7 +837,10 @@ build_semble_prefetch_block()
 	local max_chunks="${2:-4}"
 	local header_label="${3:-Judge Context}"
 
-	if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+	if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+		|| [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
+		|| [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+		|| [ -z "${query_text}" ]; then
 		return 0
 	fi
 

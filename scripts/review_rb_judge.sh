@@ -37,7 +37,7 @@ fi
 
 SEMBLE_HELPERS_AVAILABLE="false"
 if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
-  # shellcheck source=/dev/null
+  # shellcheck source=scripts/semble_helpers.sh
   if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null; then
     if declare -F semble_query_block >/dev/null 2>&1; then
       SEMBLE_HELPERS_AVAILABLE="true"
@@ -133,7 +133,10 @@ build_review_blocked_semble_prefetch() {
   local max_chunks="${2:-4}"
   local header_label="${3:-Review-Blocked Judge Context}"
 
-  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
+    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+    || [ -z "${query_text}" ]; then
     return 0
   fi
 
