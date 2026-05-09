@@ -90,6 +90,28 @@ def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> No
 	assert rendered == "Before {{SEMBLE_PREFETCH}} After\n"
 
 
+def test_render_prompt_rejects_unresolved_semble_prefetch_placeholder_output() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_semble_render_guard_") as td:
+		tmpdir = Path(td)
+		prompt_file = tmpdir / "prompt.txt"
+		prompt_file.write_text("Role: judge\n{{SEMBLE_PREFETCH}}\nFooter\n", encoding="utf-8")
+
+		env = os.environ.copy()
+		env["SEMBLE_PREFETCH"] = "{{SEMBLE_PREFETCH}}"
+
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode != 0
+	assert "Unresolved SEMBLE_PREFETCH placeholder" in proc.stderr
+
+
 def test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
 	workflow = _read(ORCHESTRATE_POLL_WF)
 	stage_block = _step_block(workflow, "Stage workflow support files")
@@ -147,6 +169,7 @@ def main() -> int:
 	test_render_prompt_injects_semble_prefetch_when_set()
 	test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
 	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
+	test_render_prompt_rejects_unresolved_semble_prefetch_placeholder_output()
 	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
 	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
 	test_live_judge_templates_expose_semble_placeholder()
