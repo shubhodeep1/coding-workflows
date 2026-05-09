@@ -174,38 +174,6 @@ is_truthy() {
   esac
 }
 
-_append_judge_semble_query_section() {
-  local label="$1"
-  local value="${2:-}"
-  local max_bytes="${3:-4096}"
-
-  if [ -z "${value}" ]; then
-    return 0
-  fi
-  if ! [[ "${max_bytes}" =~ ^[0-9]+$ ]]; then
-    max_bytes=4096
-  fi
-
-  printf '%s\n' "${label}"
-  printf '%s\n' "${value:0:${max_bytes}}"
-}
-
-_build_judge_semble_prefetch() {
-  local query_text="${1:-}"
-  local max_chunks="${2:-6}"
-  local header_label="${3:-Judge Context}"
-
-  if [ -z "${query_text}" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
-    || ! declare -F semble_query_block >/dev/null 2>&1; then
-    return 0
-  fi
-
-  semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
-  return 0
-}
-
 assemble_judge_static_context() {
   local out_file="$1"
   local missing=""

@@ -148,7 +148,8 @@ def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only() 
     assert 'if [ -f "scripts/semble_helpers.sh" ]; then' in text
     assert 'SEMBLE_HELPERS_AVAILABLE="false"' in text
     assert 'render_judge_semble_prefetch_from_query_file()' in text
-    assert '_build_judge_semble_prefetch' in text
+    assert '_append_judge_semble_query_section()' not in text
+    assert '_build_judge_semble_prefetch()' not in text
     assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in text
     assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in text
     assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in text
@@ -168,6 +169,9 @@ def test_review_rb_judge_sources_semble_helpers_and_passes_prefetch_to_renderer(
     assert 'SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"' in text
     assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then' in text
     assert 'REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"' in text
+    assert 'append_judge_semble_query_section()' not in text
+    assert 'build_judge_semble_prefetch()' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(build_judge_semble_prefetch' not in text
     assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
     assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in text
 
