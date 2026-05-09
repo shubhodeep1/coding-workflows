@@ -106,11 +106,13 @@ def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> N
 		extra_env={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
 
-	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in rendered
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	assert ".github/workflows/ are permitted" in rendered
-	assert "=== SEMBLE: Judge Context ===" in rendered
-	assert rendered.endswith("Footer\n")
+	assert rendered == (
+		"- CI workflow edits under .github/workflows/ are permitted when required by the approved plan; keep changes inside the plan's stated file scope.\n"
+		"=== SEMBLE: Judge Context ===\n"
+		"chunk\n"
+		"=== END SEMBLE ===\n"
+		"Footer\n"
+	)
 
 
 def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
