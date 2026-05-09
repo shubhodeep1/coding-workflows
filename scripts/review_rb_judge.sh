@@ -26,6 +26,48 @@ source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=/dev/null
+if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null; then
+    if declare -F semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh did not provide semble_query_block; continuing without Semble-backed judge prefetch." >&2
+    fi
+  else
+    echo "::warning::Failed to source ${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh; continuing without Semble-backed judge prefetch." >&2
+  fi
+fi
+
+append_semble_query_text_section() {
+  local label="$1"
+  local text="$2"
+  local max_bytes="${3:-4096}"
+
+  [ -n "${text}" ] || return 0
+  printf '%s\n' "${label}"
+  printf '%s' "${text}" | head -c "${max_bytes}" || true
+  printf '\n'
+}
+
+build_review_blocked_semble_prefetch() {
+  local query_file="$1"
+  local context_file="$2"
+
+  : > "${context_file}"
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+    || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+
+  semble_query_block \
+    "$(cat "${query_file}")" \
+    "${SEMBLE_REVIEW_BLOCKED_JUDGE_PROMPT_CHUNKS:-8}" \
+    "Review-Blocked Judge Context" \
+    > "${context_file}" || true
+}
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else
@@ -233,6 +275,20 @@ fi
 # -----------------------------------------------------------
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
+RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"
+RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context.txt"
+
+: > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+{
+  printf '%s\n' 'Review-blocked judge PR remediation context.'
+  printf '%s\n' "Issue ${FIRST_ISSUE:+#${FIRST_ISSUE}} PR #${PR_NUMBER} retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}."
+  append_semble_query_text_section 'Original requirement:' "${FIRST_ISSUE_BODY}" 4000
+  append_semble_query_text_section 'PR metadata:' "${PR_META_JSON}" 2000
+  append_semble_query_text_section 'PR diff:' "${PR_DIFF}" 6000
+  append_semble_query_text_section 'PR comments:' "${PR_COMMENTS}" 3500
+  append_semble_query_text_section 'PR review comments:' "${PR_REVIEW_COMMENTS}" 2500
+} > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+build_review_blocked_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}"
 
 {
   if [ -f ./pre_assembled_static.txt ]; then
@@ -244,7 +300,8 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
     (
       cd "${SUPPORT_ROOT_DIR}"
-      bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+      SEMBLE_PREFETCH="$(cat "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true)" \
+        bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
     )
   else
     echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."

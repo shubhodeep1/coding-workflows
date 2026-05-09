@@ -29,12 +29,19 @@ else
 	WORKFLOW_EDIT_RESTRICTION_LINE="- Do not change CI workflows."
 fi
 
+SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
+
 line=""
 while IFS= read -r line || [ -n "${line}" ]; do
 	trimmed_line="${line#"${line%%[![:space:]]*}"}"
 	case "${trimmed_line}" in
 		"{{WORKFLOW_EDIT_RESTRICTION}}")
 			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
+			;;
+		"{{SEMBLE_PREFETCH}}")
+			if [ -n "${SEMBLE_PREFETCH_BLOCK}" ]; then
+				printf '%s\n' "${SEMBLE_PREFETCH_BLOCK}"
+			fi
 			;;
 		*)
 			printf '%s\n' "${line}"
@@ -44,6 +51,11 @@ done < "${PROMPT_FILE}" > "${RENDERED_FILE}"
 
 if grep -qE '^[[:space:]]*\{\{WORKFLOW_EDIT_RESTRICTION\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
 	echo "Unresolved WORKFLOW_EDIT_RESTRICTION placeholder in rendered output for ${PROMPT_FILE}" >&2
+	exit 1
+fi
+
+if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi
 
