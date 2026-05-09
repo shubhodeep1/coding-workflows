@@ -73,6 +73,19 @@ def test_render_prompt_rejects_unresolved_semble_placeholder() -> None:
 	assert "Unresolved SEMBLE_PREFETCH placeholder" in result.stderr
 
 
+def test_render_prompt_replaces_semble_prefetch_with_surrounding_whitespace() -> None:
+	result = _run_render(
+		"Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
+		semble_prefetch="=== SEMBLE: Judge Context ===\nchunk",
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stderr == ""
+	assert "{{SEMBLE_PREFETCH}}" not in result.stdout
+	assert "=== SEMBLE: Judge Context ===" in result.stdout
+	assert "chunk" in result.stdout
+	assert result.stdout.endswith("Footer\n")
+
+
 def test_render_prompt_allows_empty_semble_prefetch() -> None:
 	result = _run_render("Role: judge\n{{SEMBLE_PREFETCH}}\nTask body\n", semble_prefetch="")
 	assert result.returncode == 0, result.stderr
@@ -172,6 +185,7 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 def main() -> int:
 	test_render_prompt_replaces_multiline_semble_prefetch()
 	test_render_prompt_rejects_unresolved_semble_placeholder()
+	test_render_prompt_replaces_semble_prefetch_with_surrounding_whitespace()
 	test_render_prompt_allows_empty_semble_prefetch()
 	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
 	test_orchestrate_poll_workflow_bootstraps_semble_for_judges()
