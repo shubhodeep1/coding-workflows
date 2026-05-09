@@ -29,22 +29,24 @@ else
 	WORKFLOW_EDIT_RESTRICTION_LINE="- Do not change CI workflows."
 fi
 
-# {{SEMBLE_PREFETCH}} resolves from the optional ${SEMBLE_PREFETCH}
-# environment variable. Prompt consumers set it per render invocation so the
-# bounded Semble block stays in the dynamic prompt section and does not leak
-# across different prompt builds in the same shell process.
-SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
+trim_surrounding_whitespace()
+{
+	local value="${1-}"
+
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s' "${value}"
+}
 
 line=""
 while IFS= read -r line || [ -n "${line}" ]; do
-	trimmed_line="${line#"${line%%[![:space:]]*}"}"
-	trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
+	trimmed_line="$(trim_surrounding_whitespace "${line}")"
 	case "${trimmed_line}" in
 		"{{WORKFLOW_EDIT_RESTRICTION}}")
 			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 			;;
 		"{{SEMBLE_PREFETCH}}")
-			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK}"
+			printf '%s\n' "${SEMBLE_PREFETCH:-}"
 			;;
 		*)
 			printf '%s\n' "${line}"

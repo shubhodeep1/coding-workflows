@@ -34,7 +34,11 @@ def _step_block(text: str, step_name: str) -> str:
 	return text[start:next_step]
 
 
-def _render_prompt(prompt_text: str, semble_prefetch: str | None) -> str:
+def _render_prompt(
+	prompt_text: str,
+	semble_prefetch: str | None,
+	extra_env: dict[str, str | None] | None = None,
+) -> str:
 	with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
 		tmpdir = Path(td)
 		prompt_file = tmpdir / "prompt.txt"
@@ -45,6 +49,11 @@ def _render_prompt(prompt_text: str, semble_prefetch: str | None) -> str:
 			env.pop("SEMBLE_PREFETCH", None)
 		else:
 			env["SEMBLE_PREFETCH"] = semble_prefetch
+		for key, value in (extra_env or {}).items():
+			if value is None:
+				env.pop(key, None)
+			else:
+				env[key] = value
 
 		proc = subprocess.run(
 			["bash", str(RENDER_PROMPT), str(prompt_file)],
@@ -100,6 +109,26 @@ def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> No
 	)
 
 	assert rendered == "Before {{SEMBLE_PREFETCH}} After\n"
+
+
+def test_render_prompt_preserves_workflow_edit_restriction_contract() -> None:
+	for allow_workflow_edits, expected_line in [
+		("false", "- Do not change CI workflows."),
+		(
+			"true",
+			"- CI workflow edits under .github/workflows/ are permitted when required by the approved plan; keep changes inside the plan's stated file scope.",
+		),
+	]:
+		rendered = _render_prompt(
+			"Role: judge\n{{WORKFLOW_EDIT_RESTRICTION}}\n{{SEMBLE_PREFETCH}}\nFooter\n",
+			"=== SEMBLE: Judge Context ===\nchunk",
+			extra_env={"ALLOW_WORKFLOW_EDITS": allow_workflow_edits},
+		)
+
+		assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in rendered
+		assert expected_line in rendered
+		assert "=== SEMBLE: Judge Context ===" in rendered
+		assert rendered.endswith("Footer\n")
 
 
 def test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
@@ -160,6 +189,7 @@ def main() -> int:
 	test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
 	test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
 	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
+	test_render_prompt_preserves_workflow_edit_restriction_contract()
 	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
 	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
 	test_live_judge_templates_expose_semble_placeholder()
