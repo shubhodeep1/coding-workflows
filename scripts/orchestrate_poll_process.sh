@@ -1013,6 +1013,12 @@ post_tracking_comment() {
   local comment_body="$1"
   local payload_file
   local payload_err_file
+  local body_bytes
+  body_bytes="$(printf '%s' "${comment_body}" | wc -c | tr -d '[:space:]')"
+  if [ "${body_bytes}" -gt 65536 ]; then
+    echo "::warning::Tracking comment body too large for issue #${TRACKING_NUM} (${body_bytes} bytes > 65536 GitHub limit); skipping post." >&2
+    return 0
+  fi
   payload_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload.XXXXXX")"
   payload_err_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload_err.XXXXXX")"
   # Pipe the body through jq's stdin (-Rs reads it as a single raw
