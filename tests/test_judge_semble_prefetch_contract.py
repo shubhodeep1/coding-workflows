@@ -151,6 +151,7 @@ def test_judge_scripts_wire_semble_prefetch_into_dynamic_prompt_builds() -> None
 	assert 'integration_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in orchestrate
 	assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in orchestrate
 	assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch' not in orchestrate
+	assert 'JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch' not in orchestrate
 	assert "printf '%s\\n' \"${integration_judge_semble_prefetch}\"" not in orchestrate
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in review_rb
 	assert 'build_review_blocked_semble_query()' in review_rb

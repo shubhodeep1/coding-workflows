@@ -10930,16 +10930,6 @@ ${PR_DIFF}
     PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
   fi
 
-  JUDGE_SEMBLE_QUERY="$({
-    printf '%s\n' 'Wave judge context.'
-    _append_judge_semble_query_section 'Project spec:' "${PROJECT_BODY}" 6000
-    _append_judge_semble_query_section 'Merged PR summaries:' "${MERGED_PR_SUMMARIES}" 10000
-    _append_judge_semble_query_section 'Open PR summaries:' "${OPEN_PR_SUMMARIES}" 8000
-    _append_judge_semble_query_section 'Wave status JSON:' "${WAVE_STATUS}" 6000
-    _append_judge_semble_query_section 'CI status JSON:' "${CI_STATUS}" 3000
-  })"
-  JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Judge Context")"
-
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
