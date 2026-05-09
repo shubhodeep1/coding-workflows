@@ -96,6 +96,7 @@ def test_orchestrate_poll_workflow_bootstraps_semble_for_judges() -> None:
 	assert "astral-sh/setup-uv@v3" in uv_block
 	assert 'source scripts/install_semble.sh' in install_block
 	assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
+	assert 'echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"' in install_block
 	assert 'echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"' in index_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
 	assert 'if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then' in index_block

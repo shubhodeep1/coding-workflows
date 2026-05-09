@@ -439,6 +439,7 @@ jobs:
             exit 0
           fi
           echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+          echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"
 
       - name: Build semble index
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
