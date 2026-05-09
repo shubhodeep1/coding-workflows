@@ -170,6 +170,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
 
+      - name: Review Semble contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py
+
       - name: Review autofix failure-log upload contract test
         run: |
           set -euo pipefail

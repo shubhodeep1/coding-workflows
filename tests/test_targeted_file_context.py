@@ -354,7 +354,7 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 				semble_bin=str(semble),
 				semble_index=str(root / ".semble-index"),
 				semble_query_text="task summary",
-				semble_max_chunks=2,
+				semble_max_chunks=999,
 			)
 
 		assert "chunk-retrieved via semble" in context
@@ -362,7 +362,7 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 		assert "src/big.py" in context
 		assert "SEMBLE_QUERY" not in context
 		telemetry = stderr.getvalue()
-		assert "SEMBLE_QUERY target=overflow file=src/big.py chunks=2 bytes=" in telemetry
+		assert "SEMBLE_QUERY target=overflow file=src/big.py chunks=20 bytes=" in telemetry
 		assert " ms=" in telemetry
 
 

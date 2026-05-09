@@ -36,6 +36,11 @@
 
 set -euo pipefail
 
+if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
+fi
+
 # Re-derive runtime paths set in the prepare step. Shell variables
 # do not cross step boundaries; RUNTIME_DIR itself is in
 # $GITHUB_ENV so it survives, and both paths are deterministic
@@ -43,6 +48,7 @@ set -euo pipefail
 PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
 CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
+CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"
 
 # ----------------------------------------------------------------------
 # Immediate orchestrator-poll dispatch on resolver bail (Q3: A).
@@ -519,14 +525,28 @@ _verify_fingerprints_soft() {
 # head-truncated copy. Fail-open: any error here continues the resolver
 # loop without the targeted-context block.
 TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/conflict_resolver_semble_context.txt"
+TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
 : > "${TARGETED_FILES_CONTEXT_FILE}"
-if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "scripts/targeted_file_context.py" ]; then
-  python3 scripts/targeted_file_context.py \
-    --paths-file "${RESOLVER_ALLOWLIST_FILE}" \
-    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
-    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
-    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block." \
-    --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ]; then
+  targeted_file_context_args=(
+    python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"
+    --paths-file "${RESOLVER_ALLOWLIST_FILE}"
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
+    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
+    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
+    --output "${TARGETED_FILES_CONTEXT_FILE}"
+  )
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ]; then
+    targeted_file_context_args+=(
+      --semble-bin "${SEMBLE_BIN:-}"
+      --semble-index "${SEMBLE_INDEX_PATH:-}"
+      --semble-query-from "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"
+      --semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"
+      --semble-fallback marker
+    )
+  fi
+  "${targeted_file_context_args[@]}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
 # Append the targeted-context block to the rendered prompt once, so
@@ -535,6 +555,19 @@ fi
 if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+   && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] \
+   && declare -F semble_query_block >/dev/null 2>&1; then
+  semble_query_block \
+    "$(cat "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}")" \
+    "${SEMBLE_CONFLICT_PROMPT_CHUNKS:-8}" \
+    "Conflict Resolver Context" \
+    > "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" || true
+fi
+if [ -s "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" ]; then
+  printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+  cat "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
 fi
 
 attempt=1
@@ -1038,4 +1071,3 @@ if [ -n "$(git status --porcelain)" ]; then
 else
   echo "No conflict resolution changes to commit"
 fi
-
