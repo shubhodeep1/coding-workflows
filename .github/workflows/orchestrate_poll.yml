@@ -299,14 +299,14 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          OPTIONAL_SUPPORT_SCRIPTS="install_semble.sh semble_helpers.sh"
-          for f in ${OPTIONAL_SUPPORT_SCRIPTS}; do
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"
+          for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
             fi
             if [ ! -f "${src}" ]; then
-              echo "::warning::Optional support script '${f}' not available in checked-out support sources; poller will continue without Semble prompt prefetch support."
+              echo "::warning::Optional bootstrap script '${f}' not available in checked-out support sources; poller will continue without Semble prompt prefetch support."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -392,17 +392,19 @@ jobs:
 
       - name: Setup uv for Semble
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
         uses: astral-sh/setup-uv@v3
 
       - name: Install semble
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
 
           echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
 
           if [ ! -f "scripts/install_semble.sh" ]; then
-            echo "::warning::install_semble.sh missing from staged support files at scripts/install_semble.sh; continuing without Semble."
+            echo "::warning::install_semble.sh missing from staged workflow support files at scripts/install_semble.sh; continuing without Semble."
             exit 0
           fi
 
@@ -416,6 +418,7 @@ jobs:
 
       - name: Build semble index
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
 
