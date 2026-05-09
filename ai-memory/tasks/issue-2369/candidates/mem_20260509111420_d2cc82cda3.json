@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #2369\n\nPlanning ref context\n- HEAD: `85defa54d376eb07d25fb61035b12b0ada2cbfce`\n- Checked-out branch: `main`\n- Integration branch metadata: not provided in the planning context, so there is no concrete mismatch to act on.\n\nClarification interpretation\n- No `Q1`/`Q2` clarification batch was needed.\n- The auto-posted `/answer [auto-answered-by-clarify]` maps to: the task is fully specified and planning can proceed without additional input.\n\nActions taken\n- Reviewed the current contents of `tests/e2e_smoke_canary.txt`.\n- Reviewed one representative existing pattern for this exact kind of change:\n  - `.github/workflows/test-and-mark-stable.yml` smoke-task body, which explicitly instructs a full-file overwrite of `tests/e2e_smoke_canary.txt`\n  - `tests/e2e_smoke_canary_spec.txt`, which shows the canonical three-line canary structure and confirms the trailing-newline expectation\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n  - Overwrite the entire file so it contains exactly:\n    - `status: ok`\n    - `run_id: alt-25599659162`\n    - `updated-by: ai-pipeline`\n  - Preserve the expected POSIX trailing newline after the final line.\n- No other files should be modified.\n\nRepresentative pattern to follow\n- Use the existing overwrite pattern already documented in `.github/workflows/test-and-mark-stable.yml`.\n- Use `tests/e2e_smoke_canary_spec.txt` as the structural reference only; do not edit it.\n\n2. Functions or modules to implement\n- None.\n- This is a single-file content update, not a code-path or module change.\n\n3. Data structures affected\n- The plain-text canary record in `tests/e2e_smoke_canary.txt`.\n- The record shape remains unchanged:\n  1. `status`\n  2. `run_id`\n  3. `updated-by`\n- Only the stored value set changes, with the important detail that `run_id` must be the literal `alt-25599659162`.\n\n4. API or interface changes\n- None.\n- No CLI flags, workflow inputs, environment variables, public interfaces, or test contracts need to change.\n\n5. Potential risks or edge cases\n- Exact-content requirement: the file must match the requested three lines exactly, with no extra whitespace, no missing newline, and no leftover lines.\n- Full overwrite vs partial edit: the safest implementation is a full-file replacement, not an in-place line edit, to avoid preserving stale content.\n- Literal `run_id` handling: do not normalize or strip the `alt-` prefix.\n- Scope control: do not touch related reference files such as:\n  - `tests/e2e_smoke_canary_spec.txt`\n  - `.github/workflows/test-and-mark-stable.yml`\n  - any tests referencing the canary file\n\n6. Testing considerations\n- Read back `tests/e2e_smoke_canary.txt` after the edit and verify the file is exactly the requested three-line payload.\n- Confirm there is a trailing newline after the final line.\n- Verify the worktree diff is scoped to `tests/e2e_smoke_canary.txt` only.\n- A lightweight validation is sufficient here; no broader test suite changes are indicated by the issue.\n\nConflicts / codebase notes\n- Current repo state already contains `tests/e2e_smoke_canary.txt`, but its current second line is `run_id: 25596468636`, which does not match the requested target `run_id: alt-25599659162`. This is the intended change, not a blocker.\n- No other factual conflicts between the issue description and the codebase were found.\n\nAssumptions\n- None beyond the issue\u2019s explicit constraints.\n\nMissing-context notes\n- None. The task is fully specified and ready for implementation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9a1296c290c5f666cbfd129be897b7163c112ca4a02c6e21b38f0b7b1c018e7e",
+  "lineage": {
+    "issue_number": 2369,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25599699868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25599699868",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2369"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260509111420_d2cc82cda3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2369,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25599699868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2369",
+  "timestamps": {
+    "created_at": "2026-05-09T11:14:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
