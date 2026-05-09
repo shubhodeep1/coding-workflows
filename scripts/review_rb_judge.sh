@@ -34,7 +34,57 @@ source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
-source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null || true
+REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
+REVIEW_RB_SEMBLE_MAX_CHUNKS="4"
+REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="12000"
+REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES="12000"
+if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1090
+  if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"; then
+    if type semble_query_block >/dev/null 2>&1; then
+      REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh did not provide semble_query_block; continuing without Semble review-blocked judge context." >&2
+    fi
+  else
+    echo "::warning::Failed to source ${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh; continuing without Semble review-blocked judge context." >&2
+  fi
+fi
+
+append_review_rb_semble_query_section() {
+  local label="$1"
+  local text="${2:-}"
+  local max_bytes="${3:-2048}"
+  local truncated_text=""
+
+  [ -n "${text}" ] || return 0
+
+  truncated_text="${text:0:${max_bytes}}"
+  printf '%s\n' "${label}"
+  printf '%s\n' "${truncated_text}"
+}
+
+render_review_rb_semble_prefetch() {
+  local query_file="$1"
+  local header_label="${2:-Review-Blocked Judge Context}"
+  local query_text=""
+  local prefetch_text=""
+
+  if [ "${REVIEW_RB_SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+    || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+
+  query_text="$(cat "${query_file}" 2>/dev/null || true)"
+  query_text="${query_text:0:${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}}"
+  [ -n "${query_text}" ] || return 0
+
+  prefetch_text="$(semble_query_block "${query_text}" "${REVIEW_RB_SEMBLE_MAX_CHUNKS}" "${header_label}" || true)"
+  [ -n "${prefetch_text}" ] || return 0
+
+  printf '%s\n' "${prefetch_text:0:${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}}"
+}
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else
@@ -149,35 +199,6 @@ unset _pr_state
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
 
-append_judge_semble_query_section() {
-  local label="$1"
-  local value="${2:-}"
-  local max_bytes="${3:-4096}"
-
-  [ -n "${value}" ] || return 0
-  if ! [[ "${max_bytes}" =~ ^[0-9]+$ ]]; then
-    max_bytes=4096
-  fi
-  printf '%s\n' "${label}"
-  printf '%s\n' "${value:0:${max_bytes}}"
-}
-
-build_judge_semble_prefetch() {
-  local query_text="${1:-}"
-  local max_chunks="${2:-6}"
-  local header_label="${3:-Review-Blocked Judge Context}"
-
-  if [ -z "${query_text}" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
-    || ! declare -F semble_query_block >/dev/null 2>&1; then
-    return 0
-  fi
-
-  semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
-  return 0
-}
-
 # -----------------------------------------------------------
 # Find linked issues for judge context
 # -----------------------------------------------------------
@@ -266,21 +287,32 @@ if [ "${PR_META_JSON}" = "{}" ]; then
   PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 fi
 
-RB_JUDGE_SEMBLE_QUERY="$({
-  printf '%s\n' 'Review-blocked judge context.'
-  append_judge_semble_query_section 'Linked issue body:' "${FIRST_ISSUE_BODY}" 5000
-  append_judge_semble_query_section 'PR metadata JSON:' "${PR_META_JSON}" 4000
-  append_judge_semble_query_section 'PR diff excerpt:' "${PR_DIFF}" 10000
-  append_judge_semble_query_section 'PR comments JSON:' "${PR_COMMENTS}" 7000
-  append_judge_semble_query_section 'Inline review comments JSON:' "${PR_REVIEW_COMMENTS}" 7000
-})"
-RB_JUDGE_SEMBLE_PREFETCH="$(build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"
-
 # -----------------------------------------------------------
 # Build judge prompt
 # -----------------------------------------------------------
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
+RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"
+RB_JUDGE_SEMBLE_PREFETCH=""
+trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}"' EXIT
+
+{
+  printf '%s\n' 'Review-blocked judge context.'
+  if [ -n "${FIRST_ISSUE_BODY}" ]; then
+    append_review_rb_semble_query_section "Issue body:" "${FIRST_ISSUE_BODY}" 2500
+  else
+    append_review_rb_semble_query_section \
+      "PR title/body:" \
+      "Title: $(jq -r '.title // ""' "${PR_META_FILE}")
+Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")" \
+      2500
+  fi
+  append_review_rb_semble_query_section "PR metadata JSON:" "${PR_META_JSON}" 2000
+  append_review_rb_semble_query_section "PR diff excerpt:" "${PR_DIFF}" 5000
+  append_review_rb_semble_query_section "PR issue comments JSON:" "${PR_COMMENTS}" 2500
+  append_review_rb_semble_query_section "PR review comments JSON:" "${PR_REVIEW_COMMENTS}" 2500
+} > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"
 
 {
   if [ -f ./pre_assembled_static.txt ]; then
@@ -339,6 +371,7 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
     echo "approach is fundamentally wrong."
   fi
 } > "${RB_JUDGE_PROMPT}"
+rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
 # -----------------------------------------------------------
 # Temporarily set judge reasoning effort in codex config
