@@ -140,7 +140,10 @@ SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 def _log_semble_event(prefix: str, **fields: object) -> None:
 	parts = [prefix]
 	for key, value in fields.items():
-		parts.append(f"{key}={value}")
+		rendered = str(value)
+		if not rendered or any(ch.isspace() for ch in rendered):
+			rendered = repr(rendered)
+		parts.append(f"{key}={rendered}")
 	print(" ".join(parts), file=sys.stderr)
 
 
@@ -317,13 +320,12 @@ def _run_semble_query(
 	semble_index: str | None,
 	semble_max_chunks: int,
 	repo_root: Path,
-	) -> tuple[bool, str | None, int]:
-	start = time.monotonic()
+) -> tuple[bool, str | None]:
 	resolved_bin = semble_bin or shutil.which("semble")
 	if not resolved_bin:
-		return False, "binary-unavailable", int((time.monotonic() - start) * 1000)
+		return False, "binary-unavailable"
 	if not semble_index:
-		return False, "index-unavailable", int((time.monotonic() - start) * 1000)
+		return False, "index-unavailable"
 	try:
 		result = subprocess.run(
 			[
@@ -343,18 +345,18 @@ def _run_semble_query(
 			timeout=SEMBLE_QUERY_TIMEOUT_SECS,
 		)
 	except (OSError, subprocess.TimeoutExpired) as exc:
-		return False, str(exc), int((time.monotonic() - start) * 1000)
+		return False, str(exc)
 	stderr_text = result.stderr.decode("utf-8", errors="replace")
 	if result.returncode != 0:
 		stderr_tail = stderr_text.strip().splitlines()[-1] if stderr_text.strip() else ""
 		reason = f"exit={result.returncode}"
 		if stderr_tail:
 			reason = f"{reason} {stderr_tail}"
-		return False, reason, int((time.monotonic() - start) * 1000)
+		return False, reason
 	chunk_text = result.stdout.decode("utf-8", errors="replace").strip("\n")
 	if not chunk_text.strip():
-		return False, "empty-result", int((time.monotonic() - start) * 1000)
-	return True, chunk_text, int((time.monotonic() - start) * 1000)
+		return False, "empty-result"
+	return True, chunk_text
 
 
 def _append_semble_block(output: list[str], rel: str, raw_size: int, chunk_text: str) -> int:
@@ -427,13 +429,15 @@ def emit_context(
 		raw_size = abs_path.stat().st_size
 		if used_bytes + raw_size > max_bytes:
 			if semble_query_text:
-				success, payload, elapsed_ms = _run_semble_query(
+				query_start = time.monotonic()
+				success, payload = _run_semble_query(
 					f"{rel}\n{semble_query_text}",
 					semble_bin,
 					semble_index,
 					semble_max_chunks,
 					repo_root,
 				)
+				elapsed_ms = int((time.monotonic() - query_start) * 1000)
 				if success and payload is not None:
 					rendered_bytes = _append_semble_block(output, rel, raw_size, payload)
 					_log_semble_event(

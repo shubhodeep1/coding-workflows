@@ -425,6 +425,37 @@ jobs:
             echo "Model catalog not on ${script_ref} yet; using local copy."
           fi
 
+          # Semble bootstrap helpers (optional; validation falls back if
+          # absent on the selected script_ref to preserve compatibility
+          # with older stable tags during rollout).
+          if [ ! -f "scripts/install_semble.sh" ]; then
+            if copy_from_ref_or_local "scripts/install_semble.sh" "scripts/install_semble.sh.tmp" "false" "true"; then
+              mv "scripts/install_semble.sh.tmp" "scripts/install_semble.sh"
+              chmod +x "scripts/install_semble.sh"
+              _fetched_scripts+=(install_semble.sh)
+            else
+              rm -f "scripts/install_semble.sh.tmp"
+              echo "Semble installer not on ${script_ref} yet; validation will continue without Semble bootstrap."
+            fi
+          else
+            chmod +x "scripts/install_semble.sh"
+            _fetched_scripts+=(install_semble.sh)
+          fi
+
+          if [ ! -f "scripts/semble_helpers.sh" ]; then
+            if copy_from_ref_or_local "scripts/semble_helpers.sh" "scripts/semble_helpers.sh.tmp" "false" "true"; then
+              mv "scripts/semble_helpers.sh.tmp" "scripts/semble_helpers.sh"
+              chmod +x "scripts/semble_helpers.sh"
+              _fetched_scripts+=(semble_helpers.sh)
+            else
+              rm -f "scripts/semble_helpers.sh.tmp"
+              echo "Semble helper library not on ${script_ref} yet; validation prompts will continue without Semble context."
+            fi
+          else
+            chmod +x "scripts/semble_helpers.sh"
+            _fetched_scripts+=(semble_helpers.sh)
+          fi
+
           # Self-heal helper (optional; self-heal is a no-op if absent on
           # the selected script_ref, for backward compatibility with older
           # stable tags during rollout). Best-effort fetch: skip silently
@@ -536,6 +567,222 @@ jobs:
           else
             echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
           fi
+
+      - name: Determine Semble bootstrap state
+        id: semble_gate
+        env:
+          RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+          VALIDATION_USE_SEMBLE: ${{ vars.VALIDATION_USE_SEMBLE || 'true' }}
+        run: |
+          set -euo pipefail
+
+          enabled="false"
+          case "$(printf '%s' "${VALIDATION_USE_SEMBLE}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              enabled="true"
+              ;;
+          esac
+
+          index_path="${RUNTIME_DIR}/.semble-index"
+          {
+            echo "enabled=${enabled}"
+            echo "index_path=${index_path}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_INDEX_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${index_path}"
+          } >> "$GITHUB_ENV"
+
+          if [ "${enabled}" != "true" ]; then
+            echo "::notice::Validation Semble bootstrap disabled via VALIDATION_USE_SEMBLE=${VALIDATION_USE_SEMBLE}."
+          fi
+
+      - name: setup-uv
+        if: steps.semble_gate.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install semble
+        if: steps.semble_gate.outputs.enabled == 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "scripts/install_semble.sh" ]; then
+            echo "::notice::scripts/install_semble.sh is unavailable; validation will continue without Semble."
+            exit 0
+          fi
+
+          if ! bash scripts/install_semble.sh; then
+            echo "::warning::scripts/install_semble.sh exited non-zero; validation will continue without Semble."
+          fi
+
+      - name: Build semble index
+        if: steps.semble_gate.outputs.enabled == 'true'
+        env:
+          RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+
+          index_path="${RUNTIME_DIR}/.semble-index"
+          wrapper_dir="${RUNTIME_DIR}/semble/bin"
+          wrapper_path="${wrapper_dir}/semble"
+
+          if [ ! -f "scripts/semble_helpers.sh" ]; then
+            echo "::notice::scripts/semble_helpers.sh is unavailable; validation prompts will continue without Semble context."
+            {
+              echo "SEMBLE_INDEX_AVAILABLE=false"
+              echo "SEMBLE_INDEX_PATH=${index_path}"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          rm -f "${index_path}"
+          mkdir -p "${wrapper_dir}"
+
+          # Semble 0.1.3 ships the Python indexing/search primitives we need,
+          # but not the documented query/index CLI surface yet. Build a small
+          # job-local BM25 index here and expose a wrapper binary so the shared
+          # semble_helpers.sh contract stays unchanged and fail-open.
+          if ! python3 - "${GITHUB_WORKSPACE}" "${index_path}" <<'PY'
+          import pickle
+          import sys
+          from pathlib import Path
+
+          import bm25s
+          from semble.index.chunker import chunk_source
+          from semble.index.file_walker import filter_extensions, language_for_path, walk_files
+          from semble.index.sparse import enrich_for_bm25
+          from semble.tokens import tokenize
+          from semble.version import __version__ as semble_version
+
+          repo_root = Path(sys.argv[1]).resolve()
+          index_path = Path(sys.argv[2])
+          extensions = filter_extensions(None, include_text_files=True)
+          MAX_INDEX_FILES = 5000
+          chunks = []
+          indexed_files = 0
+
+          for file_path in walk_files(repo_root, extensions, None):
+              indexed_files += 1
+              if indexed_files > MAX_INDEX_FILES:
+                  raise SystemExit(
+                      f"Semble indexing skipped after {MAX_INDEX_FILES} files; validation will continue without Semble."
+                  )
+              try:
+                  source = file_path.read_text(encoding="utf-8", errors="replace")
+              except OSError:
+                  continue
+              rel_path = file_path.resolve().relative_to(repo_root)
+              chunks.extend(chunk_source(source, str(rel_path), language_for_path(file_path)))
+
+          if not chunks:
+              raise SystemExit("No supported files found for Semble indexing.")
+
+          bm25_index = bm25s.BM25()
+          bm25_index.index([tokenize(enrich_for_bm25(chunk)) for chunk in chunks], show_progress=False)
+
+          index_path.parent.mkdir(parents=True, exist_ok=True)
+          with index_path.open("wb") as handle:
+              pickle.dump(
+                  {
+                      "version": semble_version,
+                      "chunks": chunks,
+                      "bm25_index": bm25_index,
+                  },
+                  handle,
+                  protocol=pickle.HIGHEST_PROTOCOL,
+              )
+          PY
+          then
+            echo "::warning::Semble index build failed; validation will continue without Semble."
+            rm -f "${index_path}"
+            {
+              echo "SEMBLE_INDEX_AVAILABLE=false"
+              echo "SEMBLE_INDEX_PATH=${index_path}"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          cat > "${wrapper_path}" <<'PY'
+          #!/usr/bin/env python3
+          import argparse
+          import os
+          import pickle
+          import sys
+          from pathlib import Path
+
+
+          def _default_index_path() -> Path:
+              return Path(__file__).resolve().parents[2] / ".semble-index"
+
+
+          def _print_version() -> int:
+              index_path = Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))
+              try:
+                  with index_path.open("rb") as handle:
+                      payload = pickle.load(handle)
+                  print(f"semble {payload.get('version', 'unknown')}")
+              except Exception:
+                  print("semble unknown")
+              return 0
+
+
+          def _query(argv: list[str]) -> int:
+              parser = argparse.ArgumentParser(prog="semble query")
+              parser.add_argument("query")
+              parser.add_argument("--index", required=True)
+              parser.add_argument("--top-k", type=int, default=5)
+              parser.add_argument("--format", default="text")
+              args, _extra = parser.parse_known_args(argv)
+
+              if args.format != "text":
+                  print("validation semble wrapper supports only --format text", file=sys.stderr)
+                  return 2
+
+              try:
+                  from semble.search import search_bm25
+                  with open(args.index, "rb") as handle:
+                      payload = pickle.load(handle)
+              except Exception as exc:
+                  print(f"failed to load Semble index: {exc}", file=sys.stderr)
+                  return 1
+
+              results = search_bm25(args.query, payload["bm25_index"], payload["chunks"], args.top_k, selector=None)
+              for idx, result in enumerate(results, start=1):
+                  chunk = result.chunk
+                  if idx > 1:
+                      print()
+                  print(f"[{idx}] {chunk.file_path}:{chunk.start_line}-{chunk.end_line}")
+                  print(chunk.content.rstrip("\n"))
+              return 0
+
+
+          def main() -> int:
+              if len(sys.argv) >= 2 and sys.argv[1] == "--version":
+                  return _print_version()
+              if len(sys.argv) >= 2 and sys.argv[1] == "query":
+                  return _query(sys.argv[2:])
+              print("validation semble wrapper supports only `query` and `--version`.", file=sys.stderr)
+              return 2
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          PY
+          chmod +x "${wrapper_path}"
+          echo "${wrapper_dir}" >> "$GITHUB_PATH"
+          {
+            echo "SEMBLE_AVAILABLE=true"
+            echo "SEMBLE_INDEX_AVAILABLE=true"
+            echo "SEMBLE_INDEX_PATH=${index_path}"
+            echo "SEMBLE_BIN=${wrapper_path}"
+          } >> "$GITHUB_ENV"
+          echo "::notice::Semble index ready at ${index_path}."
 
       - name: Run validation process
         id: validate_run
