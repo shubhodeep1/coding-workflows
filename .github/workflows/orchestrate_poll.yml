@@ -64,6 +64,7 @@ jobs:
             echo "JUDGE_PROMPT_FILE=${RUNTIME_DIR}/judge_prompt.txt"
             echo "JUDGE_OUTPUT_FILE=${RUNTIME_DIR}/judge_output.txt"
             echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_BIN="
             echo "SEMBLE_INDEX_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
           } >> "$GITHUB_ENV"

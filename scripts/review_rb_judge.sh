@@ -18,7 +18,13 @@ rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
-SUPPORT_ROOT_DIR="${SUPPORT_ROOT_DIR:-$(pwd)}"
+if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
+  if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
+    SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
+  else
+    SUPPORT_ROOT_DIR="${SUPPORT_SCRIPTS_DIR}"
+  fi
+fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
@@ -193,6 +199,35 @@ unset _pr_state
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
 
+append_judge_semble_query_section() {
+  local label="$1"
+  local value="${2:-}"
+  local max_bytes="${3:-4096}"
+
+  [ -n "${value}" ] || return 0
+  if ! [[ "${max_bytes}" =~ ^[0-9]+$ ]]; then
+    max_bytes=4096
+  fi
+  printf '%s\n' "${label}"
+  printf '%s\n' "${value:0:${max_bytes}}"
+}
+
+build_judge_semble_prefetch() {
+  local query_text="${1:-}"
+  local max_chunks="${2:-6}"
+  local header_label="${3:-Review-Blocked Judge Context}"
+
+  if [ -z "${query_text}" ] \
+    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
+    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+    || ! declare -F semble_query_block >/dev/null 2>&1; then
+    return 0
+  fi
+
+  semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
+  return 0
+}
+
 # -----------------------------------------------------------
 # Find linked issues for judge context
 # -----------------------------------------------------------
@@ -280,6 +315,16 @@ PR_META_JSON="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/nu
 if [ "${PR_META_JSON}" = "{}" ]; then
   PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 fi
+
+RB_JUDGE_SEMBLE_QUERY="$({
+  printf '%s\n' 'Review-blocked judge context.'
+  append_judge_semble_query_section 'Linked issue body:' "${FIRST_ISSUE_BODY}" 5000
+  append_judge_semble_query_section 'PR metadata JSON:' "${PR_META_JSON}" 4000
+  append_judge_semble_query_section 'PR diff excerpt:' "${PR_DIFF}" 10000
+  append_judge_semble_query_section 'PR comments JSON:' "${PR_COMMENTS}" 7000
+  append_judge_semble_query_section 'Inline review comments JSON:' "${PR_REVIEW_COMMENTS}" 7000
+})"
+RB_JUDGE_SEMBLE_PREFETCH="$(build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"
 
 # -----------------------------------------------------------
 # Build judge prompt
