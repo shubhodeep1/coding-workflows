@@ -1015,7 +1015,17 @@ post_tracking_comment() {
   local payload_err_file
   payload_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload.XXXXXX")"
   payload_err_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload_err.XXXXXX")"
-  if ! jq -n --arg body "${comment_body}" '{body: $body}' > "${payload_file}" 2>"${payload_err_file}"; then
+  # Pipe the body through jq's stdin (-Rs reads it as a single raw
+  # string) rather than passing it via `--arg body "${comment_body}"`.
+  # Large `<!-- ORCHESTRATOR_STATE_V1 ... -->` snapshots for big
+  # projects can exceed 100 KB and trip Linux's per-argv MAX_ARG_STRLEN
+  # cap (128 KB on x86_64), failing with "Argument list too long".
+  # When that happened silently, the orchestrator state never persisted
+  # post-validation, leaving the project pinned at the last successfully
+  # posted state and re-dispatching validation every poll cycle (loop
+  # observed on tracking issue #2263). printf is a bash builtin so the
+  # variable expansion stays in-process and avoids the same cap.
+  if ! printf '%s' "${comment_body}" | jq -Rs '{body: .}' > "${payload_file}" 2>"${payload_err_file}"; then
     echo "::warning::Failed to encode tracking comment JSON payload for issue #${TRACKING_NUM}: $(cat "${payload_err_file}" 2>/dev/null)" >&2
     rm -f "${payload_err_file}"
     rm -f "${payload_file}"
