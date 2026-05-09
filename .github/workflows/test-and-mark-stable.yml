@@ -3431,7 +3431,7 @@ jobs:
     # phases under OpenRouter latency variance can plausibly reach
     # 6–9m), runner queueing, and step setup. Cap at 90m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
-    # still be killed within a sensible budget. Down from 390m before
+    # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
     timeout-minutes: 90
     env:
