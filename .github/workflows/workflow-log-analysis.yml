@@ -594,11 +594,17 @@ jobs:
           fi
           push_attempt=0
           push_max_attempts=5
+          push_backoff_secs=5
           while : ; do
             push_attempt=$((push_attempt + 1))
-            git fetch origin "${TARGET_BRANCH}" --depth=1
+            # Allow a transient fetch failure to be absorbed by the
+            # retry loop instead of killing the step under `set -e`.
+            # When the fetch fails we skip the upstream-collision check
+            # for this iteration; the rebase below does its own fetch.
+            fetch_ok=1
+            git fetch origin "${TARGET_BRANCH}" --depth=1 || fetch_ok=0
 
-            if [ -n "${REPORT_BASE}" ] && git cat-file -e "FETCH_HEAD:${REPORT_FILE}" 2>/dev/null; then
+            if [ "${fetch_ok}" -eq 1 ] && [ -n "${REPORT_BASE}" ] && git cat-file -e "FETCH_HEAD:${REPORT_FILE}" 2>/dev/null; then
               next_suffix=2
               while [ -e "${REPORT_BASE}-${next_suffix}.md" ] \
                  || git cat-file -e "FETCH_HEAD:${REPORT_BASE}-${next_suffix}.md" 2>/dev/null; do
@@ -626,7 +632,14 @@ jobs:
               echo "::error::Could not push workflow log analysis report after ${push_attempt} attempt(s) (target=${TARGET_BRANCH}, file=${REPORT_FILE})."
               exit 1
             fi
-            echo "::warning::Workflow log analysis report push attempt ${push_attempt} failed; retrying."
+            echo "::warning::Workflow log analysis report push attempt ${push_attempt} failed; retrying in ${push_backoff_secs}s."
+            sleep "${push_backoff_secs}"
+            # Exponential backoff capped at 60s so transient flakes don't
+            # exhaust the attempt budget in rapid succession.
+            push_backoff_secs=$(( push_backoff_secs * 2 ))
+            if [ "${push_backoff_secs}" -gt 60 ]; then
+              push_backoff_secs=60
+            fi
           done
 
           echo "committed=true" >> "$GITHUB_OUTPUT"
