@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:86-94 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The body of `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace` is tab-indented instead of space-indented.\n  WHY: Multiple reviewers reported tabs in the function body of the changed test file; some noted Python still parses it, but the indentation is inconsistent with the surrounding code.\n- scripts/targeted_file_context.py:141-149 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `_log_semble_event` renders whitespace-bearing field values with `repr()`, which quotes those values in the emitted log line.\n  WHY: Reviewers reported that quoted `key='value with spaces'` rendering can break downstream consumers expecting simple `key=value` telemetry; other reviewers considered the quoting intentional, so the concern is disputed.\n- tests/test_judge_semble_prefetch_contract.py:143-144 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: There are two consecutive blank lines before the first assert in `test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges`.\n  WHY: Reviewers described this as a PEP 8 style issue with no functional impact.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:86 | severity=critical | confidence=5\n  PROBLEM: The function `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace` uses tab characters for indentation instead of spaces.\n  WHY: The reviewer reported inconsistent indentation in the test file and considered it a critical issue.\n- tests/test_judge_semble_prefetch_contract.py:~144 | confidence=3\n  PROBLEM: There are two blank lines between the variable assignments and the first `assert` statement.\n  WHY: The reviewer reported this as a PEP 8 style issue with no functional impact.\n- scripts/targeted_file_context.py:141-149 | severity=medium | confidence=4\n  PROBLEM: `_log_semble_event` uses `repr()` on fields containing whitespace, which produces quoted values in the log output.\n  WHY: The reviewer reported that the quoted `key='value with spaces'` format can break downstream log parsing.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:86-94 | severity=critical | confidence=4\n  PROBLEM: The function `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace` uses tab characters for indentation while the rest of the file uses 4 spaces.\n  WHY: The reviewer reported mixed indentation in the same Python file and considered it a critical issue.\n- tests/test_judge_semble_prefetch_contract.py:143-144 | confidence=3\n  PROBLEM: There are two consecutive blank lines between the variable assignments and the first `assert` statement.\n  WHY: The reviewer reported this as a PEP 8 style violation with no functional impact.\n- scripts/targeted_file_context.py:141-149 | severity=medium | confidence=3\n  PROBLEM: `_log_semble_event` converts whitespace-containing values to `repr()`, which wraps them in quotes.\n  WHY: The reviewer reported that this may break downstream log parsers expecting unquoted `key=value` fields.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:86-94 | severity=critical | confidence=5\n  PROBLEM: The function body of `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace` uses tab characters for indentation while surrounding code uses spaces.\n  WHY: The reviewer reported mixed indentation in the test file and said it would fail to load under pytest/CI.\n- tests/test_judge_semble_prefetch_contract.py:~144 | confidence=3\n  PROBLEM: There are two consecutive blank lines between the variable assignments and the first `assert` statement.\n  WHY: The reviewer reported this as a style-only PEP 8 violation with no runtime impact.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "80860d6525c22e6af3e8e71c031ca9ceee34cdc7c3dc563473dd6fdf097dd57e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2411,
+    "run_id": "25614362193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25614362193",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509234416_a771d87c18",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2411,
+    "run_id": "25614362193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T23:44:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
