@@ -100,6 +100,7 @@ def test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps() ->
 	assert "astral-sh/setup-uv@v3" in workflow
 	assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in workflow
 	assert 'scripts/install_semble.sh' in workflow
+	assert 'echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"' in workflow
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in workflow
 	assert (
 		'"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' in workflow
@@ -135,7 +136,6 @@ def test_review_rb_judge_wires_semble_prefetch() -> None:
 	text = _read(REVIEW_RB_JUDGE)
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in text
 	assert 'SEMBLE_HELPERS_AVAILABLE="true"' in text
-	assert 'append_judge_semble_query_section' in text
 	assert 'build_judge_semble_prefetch()' in text
 	assert 'RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"' in text
 	assert 'RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context.txt"' in text

@@ -29,12 +29,6 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
-# shellcheck source=semble_helpers.sh
-if [ -f "scripts/semble_helpers.sh" ]; then
-  # shellcheck disable=SC1091
-  source scripts/semble_helpers.sh
-fi
-
 SEMBLE_HELPERS_AVAILABLE="false"
 # shellcheck source=semble_helpers.sh
 if [ -f "scripts/semble_helpers.sh" ]; then
@@ -2855,17 +2849,6 @@ invoke_judge_for_integration_conflict() {
   intent_fingerprints="$(jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" 2>/dev/null || echo "{}")"
   [ -n "${intent_fingerprints}" ] || intent_fingerprints='{}'
 
-  local integration_judge_semble_query=""
-  local integration_judge_semble_prefetch=""
-  integration_judge_semble_query="$({
-    printf '%s\n' 'Integration conflict judge context.'
-    _append_judge_semble_query_section 'Tracking / branch summary:' "tracking=#${TRACKING_NUM:-unknown} final_pr=#${final_pr} integration=${integration_branch} default=${default_branch} retries=${retries}" 400
-    _append_judge_semble_query_section 'Changed files JSON:' "${pr_files}" 5000
-    _append_judge_semble_query_section 'PR diff excerpt:' "${pr_diff}" 10000
-    _append_judge_semble_query_section 'Intent fingerprints JSON:' "${intent_fingerprints}" 7000
-  })"
-  integration_judge_semble_prefetch="$(_build_judge_semble_prefetch "${integration_judge_semble_query}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Integration Conflict Judge Context")"
-
   {
     printf '%s\n' 'Integration conflict judge context.'
     append_semble_query_json 'Final PR changed files:' "${pr_files}" '.' 5000
@@ -2940,10 +2923,6 @@ invoke_judge_for_integration_conflict() {
     echo "   designed to catch."
     echo "5. If conflicts are semantic rather than textual, surface a"
     echo "   short diagnosis in the commit message."
-    if [ -n "${integration_judge_semble_prefetch}" ]; then
-      echo
-      printf '%s\n' "${integration_judge_semble_prefetch}"
-    fi
   } > "${prompt_file}"
 
   if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
@@ -5753,16 +5732,6 @@ invoke_stall_judge() {
       : > "${static_file}"
     fi
   fi
-
-  local stall_judge_semble_query=""
-  local stall_judge_semble_prefetch=""
-  stall_judge_semble_query="$({
-    printf '%s\n' 'Stall recovery judge context.'
-    _append_judge_semble_query_section 'Tracking / issue:' "tracking=#${TRACKING_NUM:-unknown} issue=#${issue_num} local_id=${local_id:-none} phase=${phase} stalled_minutes=${stall_minutes}" 400
-    _append_judge_semble_query_section 'Linked PR:' "pr=${target_pr:-none} state=${pr_state:-unknown} mergeable=${pr_mergeable:-unknown} head=${head_ref:-} base=${base_ref:-}" 400
-    _append_judge_semble_query_section 'Diagnostics JSON:' "${diagnostics}" 7000
-  })"
-  stall_judge_semble_prefetch="$(_build_judge_semble_prefetch "${stall_judge_semble_query}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Stall Judge Context")"
 
   {
     printf '%s\n' 'Stall recovery judge context.'
@@ -9471,16 +9440,6 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query_${rb_issue}.txt"
       RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context_${rb_issue}.txt"
 
-      RB_JUDGE_SEMBLE_QUERY="$({
-        printf '%s\n' 'Review-blocked judge context.'
-        _append_judge_semble_query_section 'Issue requirement:' "${ISSUE_BODY}" 5000
-        _append_judge_semble_query_section 'PR metadata JSON:' "${PR_META}" 4000
-        _append_judge_semble_query_section 'PR diff excerpt:' "${PR_DIFF}" 10000
-        _append_judge_semble_query_section 'PR comments JSON:' "${PR_COMMENTS}" 7000
-        _append_judge_semble_query_section 'Inline review comments JSON:' "${PR_REVIEW_COMMENTS}" 7000
-      })"
-      RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"
-
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
@@ -10854,16 +10813,6 @@ ${PR_DIFF}
   if [ -z "${PROJECT_BODY}" ]; then
     PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
   fi
-
-  JUDGE_SEMBLE_QUERY="$({
-    printf '%s\n' 'Wave judge context.'
-    _append_judge_semble_query_section 'Project spec:' "${PROJECT_BODY}" 6000
-    _append_judge_semble_query_section 'Merged PR summaries:' "${MERGED_PR_SUMMARIES}" 10000
-    _append_judge_semble_query_section 'Open PR summaries:' "${OPEN_PR_SUMMARIES}" 8000
-    _append_judge_semble_query_section 'Wave status JSON:' "${WAVE_STATUS}" 6000
-    _append_judge_semble_query_section 'CI status JSON:' "${CI_STATUS}" 3000
-  })"
-  JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Judge Context")"
 
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
