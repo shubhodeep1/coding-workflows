@@ -1099,7 +1099,7 @@ jobs:
     # the 60m cap couldn't absorb. The workflow-log-analysis-test
     # poller's outer DEADLINE in test-and-mark-stable.yml (dispatch
     # step) still covers the new 90m cap with headroom. (Was
-    # `orphan-workflows-test` before PR #2347 split this dispatch out.)
+    # `orphan-workflows-test` before PR #2351 split this dispatch out.)
     timeout-minutes: 90
     outputs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
