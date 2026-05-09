@@ -141,9 +141,7 @@ SEMBLE_MAX_CHUNKS_CAP = 20
 def _log_semble_event(prefix: str, **fields: object) -> None:
 	parts = [prefix]
 	for key, value in fields.items():
-		rendered = str(value)
-		if not rendered or any(ch.isspace() for ch in rendered):
-			rendered = repr(rendered)
+		rendered = " ".join(str(value).split())
 		parts.append(f"{key}={rendered}")
 	print(" ".join(parts), file=sys.stderr)
 
