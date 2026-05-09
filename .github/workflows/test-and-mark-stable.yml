@@ -3257,6 +3257,7 @@ jobs:
       # non-blocking, but `needs.<job>.result` collapses tolerated
       # failures to `success`, so `notify` consumes this explicit output.
       actual_result: ${{ steps.workflow_log_analysis_actual_result.outputs.result }}
+      workflow_conclusion: ${{ steps.dispatch_log_analysis.outputs.workflow_conclusion || steps.workflow_log_analysis_actual_result.outputs.result }}
     # Split out of `orphan-workflows-test` (follow-up to release v1.8.2
     # which failed when the inner `api-redundancy` job hit its 90m
     # per-job cap and cancelled the dispatch chain). The Codex audit
@@ -3346,12 +3347,19 @@ jobs:
           INPUTS: '{"lookback_days":"1","repos_override":"${{ inputs.test_repo || github.repository }}"}'
         run: |
           set -euo pipefail
+          # Surface audit failures via step outputs + notify instead of
+          # failing this job — workflow-log-analysis is observability-only.
           sleep 4
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
-          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+          if ! gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
             --field lookback_days=1 \
             --field repos_override="${TEST_REPO}" \
-            --field alert_msg_level=SILENT
+            --field alert_msg_level=SILENT; then
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            echo "workflow_conclusion=dispatch_failed" >> "$GITHUB_OUTPUT"
+            echo "::warning::workflow-log-analysis dispatch failed; continuing because this audit is non-blocking"
+            exit 0
+          fi
           # 15600s (260m) covers the 250m worst-case audit chain
           # (collect-logs 25m + analyze-commit-notify 60m + deep-audit
           # 75m + api-redundancy 90m) plus a 10m buffer for runner
@@ -3384,8 +3392,10 @@ jobs:
             sleep 5
           done
           if [ -z "${NEW_ID}" ]; then
-            echo "::error::workflow-log-analysis dispatch did not register"
-            exit 1
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            echo "workflow_conclusion=dispatch_not_registered" >> "$GITHUB_OUTPUT"
+            echo "::warning::workflow-log-analysis dispatch did not register; continuing because this audit is non-blocking"
+            exit 0
           fi
           echo "Watching run #${NEW_ID}"
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
@@ -3395,16 +3405,19 @@ jobs:
             echo "  status=${STATUS} conclusion=${CONCLUSION}"
             if [ "${STATUS}" = "completed" ]; then
               echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+              echo "workflow_conclusion=${CONCLUSION:-unknown}" >> "$GITHUB_OUTPUT"
               if [ "${CONCLUSION}" = "success" ]; then
                 exit 0
               fi
-              echo "::error::workflow-log-analysis run #${NEW_ID} concluded ${CONCLUSION}"
-              exit 1
+              echo "::warning::workflow-log-analysis run #${NEW_ID} concluded ${CONCLUSION}; continuing because this audit is non-blocking"
+              exit 0
             fi
             sleep 15
           done
-          echo "::error::workflow-log-analysis run #${NEW_ID} timed out"
-          exit 1
+          echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
+          echo "workflow_conclusion=timed_out" >> "$GITHUB_OUTPUT"
+          echo "::warning::workflow-log-analysis run #${NEW_ID} timed out; continuing because this audit is non-blocking"
+          exit 0
 
       - name: "Soft-error analyser (workflow-log-analysis)"
         id: soft_error_analysis
@@ -3429,14 +3442,15 @@ jobs:
         id: workflow_log_analysis_actual_result
         if: always()
         env:
+          DISPATCH_RESULT: ${{ steps.dispatch_log_analysis.outputs.workflow_conclusion || '' }}
           DISPATCH_OUTCOME: ${{ steps.dispatch_log_analysis.outcome || '' }}
           ANALYZER_OUTCOME: ${{ steps.soft_error_analysis.outcome || '' }}
         run: |
           set -euo pipefail
           RESULT=failure
-          if [ "${DISPATCH_OUTCOME}" = "success" ] && { [ -z "${ANALYZER_OUTCOME}" ] || [ "${ANALYZER_OUTCOME}" = "success" ] || [ "${ANALYZER_OUTCOME}" = "skipped" ]; }; then
+          if [ "${DISPATCH_RESULT}" = "success" ] && { [ -z "${ANALYZER_OUTCOME}" ] || [ "${ANALYZER_OUTCOME}" = "success" ] || [ "${ANALYZER_OUTCOME}" = "skipped" ]; }; then
             RESULT=success
-          elif [ "${DISPATCH_OUTCOME}" = "cancelled" ] || [ "${ANALYZER_OUTCOME}" = "cancelled" ]; then
+          elif [ "${DISPATCH_RESULT}" = "cancelled" ] || [ "${DISPATCH_OUTCOME}" = "cancelled" ] || [ "${ANALYZER_OUTCOME}" = "cancelled" ]; then
             RESULT=cancelled
           fi
           echo "result=${RESULT}" >> "$GITHUB_OUTPUT"
@@ -5068,11 +5082,12 @@ jobs:
           SCRIPTS="${{ needs.validate-scripts.result }}"
           # workflow-log-analysis-test is intentionally NOT in
           # `validate.needs`, so its result does not gate the release.
-          # It IS reported here so operators see whether the post-hoc
-          # audit pass succeeded alongside the rest of the gate. The
-          # job is `continue-on-error: true`, so use its explicit output
-          # instead of `needs.<job>.result` to preserve failure signal.
-          LOG_ANALYSIS="${{ needs.workflow-log-analysis-test.outputs.actual_result || needs.workflow-log-analysis-test.result }}"
+          # It IS reported here via the non-blocking audit job's output
+          # so operators see whether the post-hoc audit pass succeeded
+          # alongside the rest of the gate. Fall back to the job
+          # result only when the job was skipped or failed before the
+          # dispatch step emitted an outcome.
+          LOG_ANALYSIS="${{ needs.workflow-log-analysis-test.outputs.workflow_conclusion || needs.workflow-log-analysis-test.result }}"
           ORPHANS="${{ needs.orphan-workflows-test.result }}"
           ORCHESTRATE_DECOMPOSE="${{ needs.orchestrate-decompose-test.result }}"
           VALIDATE_STANDALONE="${{ needs.validate-standalone-test.result }}"
