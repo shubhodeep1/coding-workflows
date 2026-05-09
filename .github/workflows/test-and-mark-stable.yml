@@ -3251,6 +3251,12 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      # Job-level `continue-on-error` keeps this post-hoc audit
+      # non-blocking, but `needs.<job>.result` collapses tolerated
+      # failures to `success`, so `notify` consumes this explicit output.
+      actual_result: ${{ steps.workflow_log_analysis_actual_result.outputs.result }}
     # Split out of `orphan-workflows-test` (follow-up to release v1.8.2
     # which failed when the inner `api-redundancy` job hit its 90m
     # per-job cap and cancelled the dispatch chain). The Codex audit
@@ -3401,6 +3407,7 @@ jobs:
           exit 1
 
       - name: "Soft-error analyser (workflow-log-analysis)"
+        id: soft_error_analysis
         if: always() && steps.dispatch_log_analysis.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
         with:
@@ -3418,6 +3425,21 @@ jobs:
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
+      - name: Capture workflow-log-analysis actual result
+        id: workflow_log_analysis_actual_result
+        if: always()
+        env:
+          DISPATCH_OUTCOME: ${{ steps.dispatch_log_analysis.outcome || '' }}
+          ANALYZER_OUTCOME: ${{ steps.soft_error_analysis.outcome || '' }}
+        run: |
+          set -euo pipefail
+          RESULT=failure
+          if [ "${DISPATCH_OUTCOME}" = "success" ] && { [ -z "${ANALYZER_OUTCOME}" ] || [ "${ANALYZER_OUTCOME}" = "success" ] || [ "${ANALYZER_OUTCOME}" = "skipped" ]; }; then
+            RESULT=success
+          elif [ "${DISPATCH_OUTCOME}" = "cancelled" ] || [ "${ANALYZER_OUTCOME}" = "cancelled" ]; then
+            RESULT=cancelled
+          fi
+          echo "result=${RESULT}" >> "$GITHUB_OUTPUT"
   # ──────────────────────────────────────────────────────────────────
   # Job 1c-2: Orphan workflows live-dispatch test
   # Dispatches each user-facing workflow that the e2e smoke test does
@@ -5047,8 +5069,10 @@ jobs:
           # workflow-log-analysis-test is intentionally NOT in
           # `validate.needs`, so its result does not gate the release.
           # It IS reported here so operators see whether the post-hoc
-          # audit pass succeeded alongside the rest of the gate.
-          LOG_ANALYSIS="${{ needs.workflow-log-analysis-test.result }}"
+          # audit pass succeeded alongside the rest of the gate. The
+          # job is `continue-on-error: true`, so use its explicit output
+          # instead of `needs.<job>.result` to preserve failure signal.
+          LOG_ANALYSIS="${{ needs.workflow-log-analysis-test.outputs.actual_result || needs.workflow-log-analysis-test.result }}"
           ORPHANS="${{ needs.orphan-workflows-test.result }}"
           ORCHESTRATE_DECOMPOSE="${{ needs.orchestrate-decompose-test.result }}"
           VALIDATE_STANDALONE="${{ needs.validate-standalone-test.result }}"
