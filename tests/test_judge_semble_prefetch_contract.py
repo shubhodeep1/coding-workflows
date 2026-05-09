@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -33,6 +34,14 @@ def _step_block(text: str, step_name: str) -> str:
 	if next_step == -1:
 		return text[start:]
 	return text[start:next_step]
+
+
+def _function_block(text: str, start_marker: str, end_marker: str) -> str:
+	start = text.find(start_marker)
+	assert start != -1, f"Missing function start: {start_marker}"
+	end = text.find(end_marker, start + len(start_marker))
+	assert end != -1, f"Missing function end marker after: {start_marker}"
+	return text[start:end].rstrip()
 
 
 def _render_prompt(template_text: str, *, semble_prefetch: object = _UNSET) -> subprocess.CompletedProcess[str]:
@@ -117,11 +126,35 @@ def test_orchestrate_poll_process_wires_semble_into_all_live_judge_paths() -> No
 
 	assert 'if [ -f "scripts/semble_helpers.sh" ]' in script
 	assert "build_judge_semble_prefetch()" in script
+	assert 'python3 /dev/fd/3 "${label}" 3<<\'PY\'' in script
 	assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in script
 	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in script
 	assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in script
 	assert 'printf \'%s\\n\\n\' "${integration_judge_semble_prefetch}"' in script
 	assert 'build_judge_semble_prefetch "integration conflict final pr ${final_pr} ${integration_branch} ${default_branch}" 2 "Integration Conflict Context"' in script
+
+
+def test_orchestrate_poll_query_builder_reads_piped_context() -> None:
+	script = _read(ORCHESTRATE_POLL_SCRIPT)
+	function_text = _function_block(script, "build_judge_semble_query() {", "\n\nbuild_judge_semble_prefetch() {")
+	pipe_text = "diff --git a/src/app.py b/src/app.py\nUse `scripts/foo.sh` here\nMeaningful context line for Semble\n"
+	command = (
+		f"{function_text}\n"
+		f"cat <<'EOF' | build_judge_semble_query {shlex.quote('Judge Context')}\n"
+		f"{pipe_text}EOF\n"
+	)
+	result = subprocess.run(
+		["bash", "-lc", command],
+		cwd=str(REPO_ROOT),
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "src/app.py" in result.stdout
+	assert "scripts/foo.sh" in result.stdout
+	assert "Meaningful context line for Semble" in result.stdout
 
 
 def test_review_rb_judge_wires_semble_prefetch_from_support_scripts() -> None:
@@ -130,8 +163,32 @@ def test_review_rb_judge_wires_semble_prefetch_from_support_scripts() -> None:
 	assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]' in script
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in script
 	assert "build_rb_judge_semble_prefetch()" in script
+	assert 'python3 /dev/fd/3 "${label}" 3<<\'PY\'' in script
 	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in script
 	assert 'build_rb_judge_semble_prefetch "review blocked judge pr ${PR_NUMBER} issue ${FIRST_ISSUE:-none}" 3 "Review-Blocked Context"' in script
+
+
+def test_review_rb_judge_query_builder_reads_piped_context() -> None:
+	script = _read(REVIEW_RB_JUDGE)
+	function_text = _function_block(script, "build_rb_judge_semble_query() {", "\n\nbuild_rb_judge_semble_prefetch() {")
+	pipe_text = "diff --git a/src/review.py b/src/review.py\nCheck `scripts/bar.sh` output\nReview-blocked context line\n"
+	command = (
+		f"{function_text}\n"
+		f"cat <<'EOF' | build_rb_judge_semble_query {shlex.quote('Review Blocked Context')}\n"
+		f"{pipe_text}EOF\n"
+	)
+	result = subprocess.run(
+		["bash", "-lc", command],
+		cwd=str(REPO_ROOT),
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "src/review.py" in result.stdout
+	assert "scripts/bar.sh" in result.stdout
+	assert "Review-blocked context line" in result.stdout
 
 
 def main() -> int:
@@ -140,7 +197,9 @@ def main() -> int:
 	test_orchestrate_poll_workflow_bootstraps_semble_for_judge_paths()
 	test_judge_templates_include_semble_prefetch_near_the_header()
 	test_orchestrate_poll_process_wires_semble_into_all_live_judge_paths()
+	test_orchestrate_poll_query_builder_reads_piped_context()
 	test_review_rb_judge_wires_semble_prefetch_from_support_scripts()
+	test_review_rb_judge_query_builder_reads_piped_context()
 	print("OK: judge-family Semble prefetch contract assertions hold")
 	return 0
 

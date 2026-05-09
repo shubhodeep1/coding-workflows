@@ -181,7 +181,7 @@ assemble_judge_static_context() {
 build_judge_semble_query() {
   local label="${1:-judge context}"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${label}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 /dev/fd/3 "${label}" 3<<'PY'
 import re
 import sys
 

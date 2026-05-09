@@ -43,7 +43,7 @@ fi
 build_rb_judge_semble_query() {
   local label="${1:-review blocked judge context}"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${label}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 /dev/fd/3 "${label}" 3<<'PY'
 import re
 import sys
 
