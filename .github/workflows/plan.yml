@@ -50,6 +50,9 @@ jobs:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       PROCESSED_ANSWER_CLAIMED: "false"
       PROCESSED_ANSWER_COMPLETED: "false"
+      SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
+      SEMBLE_AVAILABLE: "false"
+      SEMBLE_INDEX_AVAILABLE: "false"
 
     steps:
       - name: Cache Codex CLI
@@ -244,7 +247,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh write_codex_config.sh; do
+          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh write_codex_config.sh install_semble.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -596,6 +599,59 @@ jobs:
             echo "Deleting clarification comment ${cid}"
             gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${cid}" || true
           done
+
+      - name: Setup uv for Semble
+        if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'
+        id: setup_uv_for_semble
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Semble
+        if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/install_semble.sh
+
+      - name: Build Semble index
+        if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -uo pipefail
+
+          workspace_root="${GITHUB_WORKSPACE:-}"
+          SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+
+          if [ "${SEMBLE_AVAILABLE:-false}" != 'true' ]; then
+            echo "SEMBLE_FALLBACK target=index reason=semble_unavailable" >&2
+            exit 0
+          fi
+
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "SEMBLE_FALLBACK target=index reason=missing_binary_after_install" >&2
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [ -z "${workspace_root}" ] || [ ! -d "${workspace_root}" ]; then
+            echo "SEMBLE_FALLBACK target=index reason=workspace_unavailable" >&2
+            exit 0
+          fi
+
+          if mkdir -p "${SEMBLE_INDEX_DIR}" && \
+             (cd "${workspace_root}" && semble index . --out "${SEMBLE_INDEX_DIR}") && \
+             printf '%s\n' "${workspace_root}" > "${SEMBLE_INDEX_DIR}/repo_root" && \
+             {
+               printf 'created_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+               printf 'semble_bin=%s\n' "$(command -v semble)"
+             } > "${SEMBLE_INDEX_DIR}/metadata.env"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_DIR=${SEMBLE_INDEX_DIR}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX target=plan path=${SEMBLE_INDEX_DIR}" >&2
+          else
+            echo "SEMBLE_FALLBACK target=index reason=build_failed" >&2
+          fi
 
       - name: Extract clarification answers and questions
         if: env.SKIP_PLAN != 'true'

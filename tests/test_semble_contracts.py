@@ -16,16 +16,29 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+	sys.path.insert(0, str(SCRIPTS_DIR))
+
+import cost_audit
+
+
 INSTALL_SCRIPT = REPO_ROOT / "scripts" / "install_semble.sh"
 HELPERS_SCRIPT = REPO_ROOT / "scripts" / "semble_helpers.sh"
+CLARIFY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
+PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
+ORCHESTRATE_CLARIFY_RESPOND_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEW_CONSOLIDATE_SCRIPT = REPO_ROOT / "scripts" / "review_consolidate.sh"
+WORKFLOW_ANALYSIS_PROMPT = REPO_ROOT / "prompts" / "mode-workflow-analysis.txt"
 
 
 def _workflow_step_block_from(workflow_path: Path, step_name: str) -> str:
@@ -39,6 +52,37 @@ def _workflow_step_block_from(workflow_path: Path, step_name: str) -> str:
 
 def _workflow_step_block(step_name: str) -> str:
 	return _workflow_step_block_from(IMPLEMENT_WORKFLOW, step_name)
+
+
+def _assert_semble_foundation(
+	workflow_path: Path,
+	*,
+	guard: str,
+	index_target: str,
+	before_marker: str,
+	after_marker: str,
+) -> None:
+	body = workflow_path.read_text(encoding="utf-8")
+	assert "SEMBLE_ENABLED" in body, f"{workflow_path.name} must expose SEMBLE_ENABLED"
+	assert 'SEMBLE_AVAILABLE: "false"' in body, f"{workflow_path.name} must default SEMBLE_AVAILABLE to false"
+	assert 'SEMBLE_INDEX_AVAILABLE: "false"' in body, f"{workflow_path.name} must default SEMBLE_INDEX_AVAILABLE to false"
+	assert "install_semble.sh semble_helpers.sh" in body, f"{workflow_path.name} must stage the Semble support scripts"
+	assert body.index(before_marker) < body.index("Setup uv for Semble") < body.index(after_marker), (
+		f"{workflow_path.name} must place Semble setup after '{before_marker}' and before '{after_marker}'"
+	)
+	setup_block = _workflow_step_block_from(workflow_path, "Setup uv for Semble")
+	assert guard in setup_block, f"{workflow_path.name} must gate uv setup on the expected guard"
+	assert "uses: astral-sh/setup-uv@v3" in setup_block, f"{workflow_path.name} must install uv when Semble is enabled"
+	install_block = _workflow_step_block_from(workflow_path, "Install Semble")
+	assert guard in install_block, f"{workflow_path.name} must gate Semble install on the expected guard"
+	assert "bash scripts/install_semble.sh" in install_block, f"{workflow_path.name} must run the shared install helper"
+	index_block = _workflow_step_block_from(workflow_path, "Build Semble index")
+	assert guard in index_block, f"{workflow_path.name} must gate Semble indexing on the expected guard"
+	assert 'workspace_root="${GITHUB_WORKSPACE:-}"' in index_block, f"{workflow_path.name} must guard the workspace path before indexing"
+	assert "reason=workspace_unavailable" in index_block, f"{workflow_path.name} must fail soft when the workspace path is unavailable"
+	assert 'SEMBLE_INDEX_DIR="${RUNTIME_DIR}/.semble-index"' in index_block, f"{workflow_path.name} must build the workspace-local index directory"
+	assert f'SEMBLE_INDEX target={index_target} path=${{SEMBLE_INDEX_DIR}}' in index_block, f"{workflow_path.name} must log the workflow-specific Semble index target"
+	assert 'semble index . --out "${SEMBLE_INDEX_DIR}"' in index_block, f"{workflow_path.name} must build a real Semble index before advertising it"
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -434,6 +478,46 @@ def test_implement_workflow_stages_and_gates_semble_foundation() -> None:
 	assert '--semble-fallback marker' in body, "targeted-file-context must keep marker fallback as the default fail-open behavior"
 
 
+def test_clarify_workflow_stages_and_gates_semble_foundation() -> None:
+	_assert_semble_foundation(
+		CLARIFY_WORKFLOW,
+		guard="if: steps.clarify_route.outputs.skip_codex != 'true' && env.SEMBLE_ENABLED == 'true'",
+		index_target="clarify",
+		before_marker="Decide clarify route",
+		after_marker="Fetch issue comments",
+	)
+
+
+def test_plan_workflow_stages_and_gates_semble_foundation() -> None:
+	_assert_semble_foundation(
+		PLAN_WORKFLOW,
+		guard="if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'",
+		index_target="plan",
+		before_marker="Delete clarification question comments",
+		after_marker="Extract clarification answers and questions",
+	)
+
+
+def test_orchestrate_workflow_stages_and_gates_semble_foundation() -> None:
+	_assert_semble_foundation(
+		ORCHESTRATE_WORKFLOW,
+		guard="if: env.SEMBLE_ENABLED == 'true'",
+		index_target="orchestrate",
+		before_marker="Stage workflow support files",
+		after_marker="Create Codex config",
+	)
+
+
+def test_orchestrate_clarify_respond_workflow_stages_and_gates_semble_foundation() -> None:
+	_assert_semble_foundation(
+		ORCHESTRATE_CLARIFY_RESPOND_WORKFLOW,
+		guard="if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && env.SEMBLE_ENABLED == 'true'",
+		index_target="orchestrate_clarify_respond",
+		before_marker="Create runtime workspace",
+		after_marker="Fetch issue and tracking context",
+	)
+
+
 def test_review_autofix_workflow_stages_and_gates_semble_foundation() -> None:
 	body = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
 	assert "SEMBLE_ENABLED" in body, "review workflow must expose SEMBLE_ENABLED"
@@ -459,6 +543,72 @@ def test_review_consolidate_uses_additive_semble_context() -> None:
 	assert 'cat "${CONSOLIDATOR_SEMBLE_CONTEXT_FILE}"' in body, (
 		"review_consolidate.sh must append the additive Semble block into the prompt body when available."
 	)
+
+
+def test_cost_audit_parse_log_tracks_semble_bytes_and_prefers_phase_buckets() -> None:
+	parsed = cost_audit.parse_log(
+		"\n".join(
+			[
+				"SEMBLE_QUERY target=Implement Context chunks=3 bytes=120 ms=40",
+				"SEMBLE_QUERY target=validate phase=diagnose chunks=6 bytes=456 ms=90",
+				"SEMBLE_FALLBACK target=validate phase=diagnose reason=no_results",
+				"SEMBLE_FALLBACK target=index reason=build_failed",
+			]
+		)
+	)
+	assert parsed["semble_query_bytes"] == 576, parsed
+	assert parsed["semble_query_events"] == 2, parsed
+	assert parsed["semble_fallbacks"] == 2, parsed
+	assert parsed["semble_buckets"]["target=Implement Context"]["query_bytes"] == 120, parsed
+	assert parsed["semble_buckets"]["target=Implement Context"]["query_events"] == 1, parsed
+	assert parsed["semble_buckets"]["phase=diagnose"]["query_bytes"] == 456, parsed
+	assert parsed["semble_buckets"]["phase=diagnose"]["query_events"] == 1, parsed
+	assert parsed["semble_buckets"]["phase=diagnose"]["fallbacks"] == 1, parsed
+	assert parsed["semble_buckets"]["target=index"]["fallbacks"] == 1, parsed
+
+
+def test_cost_audit_parse_log_accepts_prefixed_semble_fallback_lines() -> None:
+	parsed = cost_audit.parse_log(
+		"2026-05-09T02:15:20Z [job]\tSEMBLE_FALLBACK target=overflow file=src/big.py reason=binary_unavailable"
+	)
+	assert parsed["semble_fallbacks"] == 1, parsed
+	assert parsed["semble_buckets"]["target=overflow"]["fallbacks"] == 1, parsed
+	assert "unscoped" not in parsed["semble_buckets"], parsed
+
+
+def test_cost_audit_parse_log_counts_lifecycle_fallbacks_without_inflating_bytes() -> None:
+	parsed = cost_audit.parse_log(
+		"\n".join(
+			[
+				"SEMBLE_INSTALL target=install status=installed version=0.1.3",
+				"SEMBLE_INDEX target=validate path=/tmp/semble-index",
+				"SEMBLE_QUERY target=Plan Context bytes=not-a-number ms=10",
+				"SEMBLE_QUERY target=Missing Bytes chunks=2",
+				"SEMBLE_FALLBACK target=install reason=uv_unavailable",
+				"SEMBLE_FALLBACK",
+			]
+		)
+	)
+	assert parsed["semble_query_bytes"] == 0, parsed
+	assert parsed["semble_query_events"] == 0, parsed
+	assert parsed["semble_fallbacks"] == 1, parsed
+	assert parsed["semble_buckets"]["target=install"]["fallbacks"] == 1, parsed
+
+
+def test_cost_audit_parse_log_keeps_target_bucket_when_file_field_is_present() -> None:
+	parsed = cost_audit.parse_log(
+		"SEMBLE_FALLBACK target=overflow file=src/big.py reason=binary_unavailable"
+	)
+	assert parsed["semble_fallbacks"] == 1, parsed
+	assert parsed["semble_buckets"]["target=overflow"]["fallbacks"] == 1, parsed
+	assert "unscoped" not in parsed["semble_buckets"], parsed
+
+
+def test_workflow_analysis_prompt_mentions_semble_hotspots() -> None:
+	body = WORKFLOW_ANALYSIS_PROMPT.read_text(encoding="utf-8")
+	assert "Semble prompt-byte contribution" in body, "workflow analysis prompt must mention Semble byte hotspots"
+	assert "SEMBLE_FALLBACK" in body, "workflow analysis prompt must mention Semble fallback hotspots"
+	assert "legacy path is doing the real work" in body, "workflow analysis prompt must call out hidden fallback-heavy legacy-path execution"
 
 
 def main() -> int:
