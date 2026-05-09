@@ -586,6 +586,15 @@ def test_cost_audit_parse_log_counts_lifecycle_fallbacks_without_inflating_bytes
 	assert parsed["semble_buckets"]["target=install"]["fallbacks"] == 1, parsed
 
 
+def test_cost_audit_parse_log_keeps_target_bucket_when_file_field_is_present() -> None:
+	parsed = cost_audit.parse_log(
+		"SEMBLE_FALLBACK target=overflow file=src/big.py reason=binary_unavailable"
+	)
+	assert parsed["semble_fallbacks"] == 1, parsed
+	assert parsed["semble_buckets"]["target=overflow"]["fallbacks"] == 1, parsed
+	assert "unscoped" not in parsed["semble_buckets"], parsed
+
+
 def test_workflow_analysis_prompt_mentions_semble_hotspots() -> None:
 	body = WORKFLOW_ANALYSIS_PROMPT.read_text(encoding="utf-8")
 	assert "Semble prompt-byte contribution" in body, "workflow analysis prompt must mention Semble byte hotspots"
