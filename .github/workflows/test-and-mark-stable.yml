@@ -27,8 +27,9 @@ name: Test & Mark Stable Release
       dry_run:
         description: >
           Validate only — do not push tags or create release. Also skips every
-          live-dispatch e2e job (smoke, orphan-workflows, orchestrate-decompose,
-          validate-standalone, clarify-rejects-unsolvable, alt-model) so a
+          live-dispatch e2e job (smoke, workflow-log-analysis, orphan-workflows,
+          orchestrate-decompose, validate-standalone, clarify-rejects-unsolvable,
+          alt-model) so a
           dry run never mutates the test repo. Static checks (validate-scripts)
           still run so the gate can verify scripts/lint/yaml health without
           burning live test resources or polluting GitHub state. Use
@@ -3241,50 +3242,48 @@ jobs:
       - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
-  # Job 1c: Orphan workflows live-dispatch test
-  # Dispatches each user-facing workflow that the e2e smoke test does
-  # NOT exercise (workflow-log-analysis, validation-refresh,
-  # update_workflows, memory_maintenance) and waits for completion.
-  # cancel_on_pr_close is exercised inside e2e-smoke-test Phase 7.
+  # Job 1c-1: Workflow-log-analysis live-dispatch smoke gate
+  # Split out of `orphan-workflows-test` so its Codex-driven long tail
+  # cannot block `validate` / `release` / `sync-to-main`. See the
+  # in-job comment below for cap derivation and the bump protocol.
   # ──────────────────────────────────────────────────────────────────
-  orphan-workflows-test:
+  workflow-log-analysis-test:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # 45m was sized for the original 2-job workflow-log-analysis. The
-    # workflow now has four sequential jobs (collect-logs 25m,
-    # analyze-commit-notify 60m, deep-audit 75m, api-redundancy 90m —
-    # ceiling ~250m), and run #25088541089 cancelled at 30m 16s on
-    # `deep-audit` (its previous 30m timeout-minutes), so deep-audit
-    # was bumped to 45m in workflow-log-analysis.yml:603. Run #25115192726
-    # then cancelled at 30m 19s on api-redundancy with that job's prior
-    # 30m cap, so api-redundancy was bumped to 60m. Run #25200117236
-    # cancelled at 60m 11s on api-redundancy with that 60m cap (Codex
-    # still in "Plan update → Draft" phase), so api-redundancy was
-    # bumped to 90m. Run #25474659590 cancelled at 45m 16s on deep-audit
-    # (a slow ~24m attempt + forced retry), so deep-audit was bumped
-    # 45 → 75m in workflow-log-analysis.yml. Run #25558885206 cancelled
-    # at 30m 14s on analyze-commit-notify with its prior 30m cap (Codex
-    # pass alone ran ~26m 31s vs the 9–13m successful-neighbour norm),
-    # so analyze-commit-notify was bumped 30 → 60m. Sum of in-step
-    # DEADLINEs below (workflow-log-analysis 15600 + validation-refresh
-    # 2400 + update_workflows 600 + memory-maintenance 900 = 19500s ≈ 325m).
-    # This job also spends
-    # additional wall time outside those DEADLINE windows on prerequisite
-    # validation, checkout, and the per-phase run-soft-error-analyzer
-    # composite actions (each waits up to wait_for_completion_secs=120s
-    # and then runs an OpenRouter call via scripts/analyze_soft_errors.py;
-    # log1 of run #25200117236 observed ~40s for one phase, so 4 phases
-    # under OpenRouter latency variance can plausibly reach 8–12m), so
-    # keep extra headroom for that work as well as runner queueing and
-    # step setup. Per Copilot review on PR #1842. Bumped 330 → 360
-    # alongside the deep-audit 45 → 75m bump (run #25474659590), which
-    # raised sum-of-in-step-DEADLINEs from 265m to 295m; restoring the
-    # original ~65m of headroom for soft-error analyzers + queueing.
-    # Bumped 360 → 390 alongside the analyze-commit-notify 30 → 60m bump
-    # (run #25558885206), which raised sum-of-in-step-DEADLINEs from
-    # 295m to 325m; preserving the same ~65m headroom.
-    timeout-minutes: 390
+    # Split out of `orphan-workflows-test` (follow-up to release v1.8.2
+    # which failed when the inner `api-redundancy` job hit its 90m
+    # per-job cap and cancelled the dispatch chain). The Codex audit
+    # chain has a Codex-driven long tail that periodically blows past
+    # whatever cap the watcher uses, and a cancelled audit pass does
+    # not invalidate the release artefact — the audit is a post-hoc
+    # log inspector, not a release-correctness check. To stop those
+    # cancellations from blocking `validate` / `release` /
+    # `sync-to-main`, this dispatch lives in its own job that is
+    # intentionally NOT in `validate.needs`. It still feeds the
+    # `notify` job so operators see its result in the Telegram release
+    # message and the soft-error report artifact still flows into the
+    # consolidated report.
+    # Cap derivation: 260m in-step DEADLINE (covers 250m audit chain
+    # = collect-logs 25m + analyze-commit-notify 60m + deep-audit 75m
+    # + api-redundancy 90m + 10m queue buffer) + ~20m headroom for
+    # checkout, prerequisite validation, the run-soft-error-analyzer
+    # composite (wait_for_completion_secs=120s + an OpenRouter call
+    # ≈ 2–3m under latency variance) and runner queueing ≈ 280m.
+    # Previously this work lived inside orphan-workflows-test which
+    # had a 390m cap covering workflow-log-analysis +
+    # validation-refresh + update_workflows + memory_maintenance
+    # combined; the per-job split lets each cap track only its own
+    # dispatch chain.
+    # When workflow-log-analysis.yml's per-job timeouts are bumped
+    # again (deep-audit 30→45→75m, api-redundancy 30→60→90m,
+    # analyze-commit-notify 30→60m, etc.), bump the in-step DEADLINE
+    # and step timeout-minutes in this job too so the watcher outlives
+    # the new worst case.
+    # Bumped 250 → 280 alongside the analyze-commit-notify 30 → 60m
+    # bump (run #25558885206), which raised the in-step DEADLINE from
+    # 230m to 260m; preserving the same ~20m headroom.
+    timeout-minutes: 280
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -3293,7 +3292,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::GH_PAT secret is required for orphan-workflow dispatch"
+            echo "::error::GH_PAT secret is required for workflow-log-analysis dispatch"
             exit 1
           fi
 
@@ -3304,21 +3303,17 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      # Generic helper: dispatch a workflow_dispatch workflow by file name
-      # and capture the resulting run id, then wait for completion. Each
-      # invocation runs in its own step so failures attribute to the
-      # specific workflow.
-      #
-      # Rate-limit shaping: each dispatch step opens with a brief 4s
-      # sleep so concurrent gate jobs (e2e-smoke-test, alt-model,
-      # orchestrate-decompose, etc.) don't all hit the
-      # `actions/workflows/.../runs` and `actions/runs/...` endpoints in
-      # the same instant when they happen to start within seconds of
-      # each other. The PR-review concern was that simultaneous
-      # dispatches collide; this stagger plus the existing 5–15 s polling
-      # intervals keep total API spend well below GH_PAT's 5000/hr budget.
       - name: Dispatch & watch — workflow-log-analysis
         id: dispatch_log_analysis
+        # Rate-limit shaping: the script below opens with a brief 4s
+        # sleep so concurrent gate jobs (e2e-smoke-test, alt-model,
+        # orchestrate-decompose, etc.) don't all hit the
+        # `actions/workflows/.../runs` and `actions/runs/...` endpoints
+        # in the same instant when they happen to start within seconds
+        # of each other. Combined with the existing 5–15s polling
+        # intervals this keeps total API spend well below GH_PAT's
+        # 5000/hr budget.
+        #
         # Per-step backstop in case the in-script `DEADLINE` math goes
         # off (e.g. the `date` command behaves unexpectedly on a future
         # runner image). The job-level cap is the outer safety net,
@@ -3412,12 +3407,81 @@ jobs:
           phase_runs: |
             workflow_log_analysis=${{ steps.dispatch_log_analysis.outputs.run_id }}
           repo: ${{ env.TEST_REPO }}
+          # Artifact name preserved verbatim (was emitted by the same
+          # name when this step lived inside orphan-workflows-test);
+          # the notify-job consolidator's
+          # `pattern: soft-error-report-${{ github.run_id }}-*` glob
+          # still picks it up unchanged.
           artifact_name: soft-error-report-${{ github.run_id }}-workflow_log_analysis
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
+  # ──────────────────────────────────────────────────────────────────
+  # Job 1c-2: Orphan workflows live-dispatch test
+  # Dispatches each user-facing workflow that the e2e smoke test does
+  # NOT exercise — except `workflow-log-analysis`, which now lives in
+  # its own job (`workflow-log-analysis-test`) so its Codex-driven long
+  # tail can no longer block `validate` / `release` / `sync-to-main`.
+  # Remaining dispatches: validation-refresh, update_workflows,
+  # memory_maintenance.
+  # cancel_on_pr_close is exercised inside e2e-smoke-test Phase 7.
+  # ──────────────────────────────────────────────────────────────────
+  orphan-workflows-test:
+    needs: [resolve-version]
+    if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
+    # update_workflows 600s + memory-maintenance 900s = 3900s ≈ 65m).
+    # Add headroom for prerequisite validation, checkout, and the
+    # per-phase run-soft-error-analyzer composite actions (each waits
+    # up to wait_for_completion_secs=120s and then runs an OpenRouter
+    # call; log1 of run #25200117236 observed ~40s per phase, so 3
+    # phases under OpenRouter latency variance can plausibly reach
+    # 6–9m), runner queueing, and step setup. Cap at 90m so a runaway
+    # validation-refresh / update_workflows / memory_maintenance can
+    # still be killed within a sensible budget. Down from 360m before
+    # the workflow-log-analysis split-out.
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TEST_REPO: ${{ inputs.test_repo || github.repository }}
+    steps:
+      - name: Validate prerequisites
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::GH_PAT secret is required for orphan-workflow dispatch"
+            exit 1
+          fi
+
+      # Required for the run-soft-error-analyzer composite action below.
+      - name: Checkout repository (for soft-error analyser)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
+      # Generic helper: dispatch a workflow_dispatch workflow by file name
+      # and capture the resulting run id, then wait for completion. Each
+      # invocation runs in its own step so failures attribute to the
+      # specific workflow.
+      #
+      # Rate-limit shaping: each dispatch step opens with a brief 4s
+      # sleep so concurrent gate jobs (e2e-smoke-test, alt-model,
+      # orchestrate-decompose, etc.) don't all hit the
+      # `actions/workflows/.../runs` and `actions/runs/...` endpoints in
+      # the same instant when they happen to start within seconds of
+      # each other. The PR-review concern was that simultaneous
+      # dispatches collide; this stagger plus the existing 5–15 s polling
+      # intervals keep total API spend well below GH_PAT's 5000/hr budget.
+      #
+      # Note: the `workflow-log-analysis` dispatch lives in its own
+      # `workflow-log-analysis-test` job (split out so its Codex-driven
+      # long tail can no longer block `validate` / `release` /
+      # `sync-to-main`). The dispatches that remain here are the short,
+      # deterministic ones whose failures still gate the release.
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
         timeout-minutes: 42
@@ -4740,7 +4804,7 @@ jobs:
   # Job 4: Combined Telegram notification (runs after ALL jobs)
   # ──────────────────────────────────────────────────────────────────
   notify:
-    needs: [resolve-version, e2e-smoke-test, validate-scripts, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release, sync-to-main]
+    needs: [resolve-version, e2e-smoke-test, validate-scripts, workflow-log-analysis-test, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release, sync-to-main]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -4749,8 +4813,9 @@ jobs:
       # Replaces the historical Phase 8 LLM re-summarisation that lived
       # inside `e2e-smoke-test`. Two reasons for moving this here:
       #   1. Coverage: `notify` `needs:` every smoke-test job, so it can
-      #      see the per-phase artifacts emitted by orphan-workflows-test
-      #      (workflow_log_analysis, validation_refresh, update_workflows,
+      #      see the per-phase artifacts emitted by
+      #      workflow-log-analysis-test (workflow_log_analysis),
+      #      orphan-workflows-test (validation_refresh, update_workflows,
       #      memory_maintenance), orchestrate-decompose-test,
       #      validate-standalone-test, clarify-rejects-unsolvable-test,
       #      and e2e-alt-model-test (alt_*). Phase 8 only saw the 6 e2e
@@ -4979,6 +5044,11 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           E2E="${{ needs.e2e-smoke-test.result }}"
           SCRIPTS="${{ needs.validate-scripts.result }}"
+          # workflow-log-analysis-test is intentionally NOT in
+          # `validate.needs`, so its result does not gate the release.
+          # It IS reported here so operators see whether the post-hoc
+          # audit pass succeeded alongside the rest of the gate.
+          LOG_ANALYSIS="${{ needs.workflow-log-analysis-test.result }}"
           ORPHANS="${{ needs.orphan-workflows-test.result }}"
           ORCHESTRATE_DECOMPOSE="${{ needs.orchestrate-decompose-test.result }}"
           VALIDATE_STANDALONE="${{ needs.validate-standalone-test.result }}"
@@ -4987,6 +5057,9 @@ jobs:
           VALIDATE="${{ needs.validate.result }}"
           RELEASE="${{ needs.release.result }}"
 
+          # `LOG_ANALYSIS` is deliberately omitted from `all_supplemental_ok`
+          # — its failure must NOT flip the overall message to "FAILED".
+          # The release path is independent of it (see `validate.needs`).
           all_supplemental_ok=true
           for r in "$ORPHANS" "$ORCHESTRATE_DECOMPOSE" "$VALIDATE_STANDALONE" "$CLARIFY_REJECTS" "$ALT_MODEL"; do
             if [ -n "$r" ] && [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
@@ -4994,17 +5067,28 @@ jobs:
             fi
           done
 
+          # Render an icon for log-analysis using the same scheme as the
+          # FAILED branch loop below, so the SUCCEEDED line surfaces a
+          # real ✓/⊘/✗ for the post-hoc audit even when release passed.
+          case "$LOG_ANALYSIS" in
+            success) LOG_ANALYSIS_ICON="✓" ;;
+            skipped) LOG_ANALYSIS_ICON="⊘" ;;
+            "") LOG_ANALYSIS_ICON="-" ;;
+            *) LOG_ANALYSIS_ICON="✗" ;;
+          esac
+
           # Determine overall status
           if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ] && [ "$all_supplemental_ok" = "true" ]; then
             MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
-            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ✓"
+            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ✓ log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             STATUS_LINE=""
-            for JOB_NAME in e2e-smoke-test validate-scripts orphan-workflows-test orchestrate-decompose-test validate-standalone-test clarify-rejects-unsolvable-test e2e-alt-model-test validate release; do
+            for JOB_NAME in e2e-smoke-test validate-scripts workflow-log-analysis-test orphan-workflows-test orchestrate-decompose-test validate-standalone-test clarify-rejects-unsolvable-test e2e-alt-model-test validate release; do
               case "$JOB_NAME" in
                 e2e-smoke-test) RESULT="$E2E" ;;
                 validate-scripts) RESULT="$SCRIPTS" ;;
+                workflow-log-analysis-test) RESULT="$LOG_ANALYSIS" ;;
                 orphan-workflows-test) RESULT="$ORPHANS" ;;
                 orchestrate-decompose-test) RESULT="$ORCHESTRATE_DECOMPOSE" ;;
                 validate-standalone-test) RESULT="$VALIDATE_STANDALONE" ;;
