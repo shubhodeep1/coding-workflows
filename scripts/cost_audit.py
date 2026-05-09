@@ -72,7 +72,7 @@ OPENROUTER_RE = re.compile(
 )
 
 SEMBLE_FIELD_RE = re.compile(
-    r"(?:^|\s)(?P<key>target|phase|chunks|bytes|ms|reason|detail|path|status|version|source)="
+	r"(?:^|\s)(?P<key>target|phase|chunks|bytes|ms|reason|detail|path|status|version|source|file)="
 )
 
 
