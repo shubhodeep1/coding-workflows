@@ -135,6 +135,7 @@ DEFAULT_HEADER_TEXT = (
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 SEMBLE_QUERY_TIMEOUT_SECS = 30
 SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
+SEMBLE_MAX_CHUNKS_CAP = 20
 
 
 def _log_semble_event(prefix: str, **fields: object) -> None:
@@ -311,6 +312,14 @@ def _read_optional_query_text(path_str: str | None) -> str | None:
 	return stripped or None
 
 
+def _normalize_semble_max_chunks(value: int) -> int:
+	if value <= 0:
+		return 1
+	if value > SEMBLE_MAX_CHUNKS_CAP:
+		return SEMBLE_MAX_CHUNKS_CAP
+	return value
+
+
 def _run_semble_query(
 	query_text: str,
 	semble_bin: str | None,
@@ -401,6 +410,7 @@ def emit_context(
 	read_fallback_rendered = 0
 	off_suppressed = 0
 	overflow_rendered_bytes = 0
+	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 
 	output.append("=== TARGETED FILE CONTEXT ===")
 	output.append(header_text)

@@ -66,7 +66,7 @@ def test_semble_query_block_success_keeps_stdout_prompt_only() -> None:
 		result = _run_bash(
 			(
 				f"source {HELPERS}\n"
-				"semble_query_block $'issue summary\\nwith newline' 2 'Reviewer Context' --extra-flag value"
+				"semble_query_block $'issue summary\\nwith newline' 999 'Reviewer Context' --extra-flag value"
 			),
 			root,
 			env={
@@ -79,7 +79,7 @@ def test_semble_query_block_success_keeps_stdout_prompt_only() -> None:
 
 		assert result.returncode == 0, result.stderr
 		assert result.stdout == "=== SEMBLE: Reviewer Context ===\nchunk 1\nchunk 2\n=== END SEMBLE ===\n"
-		assert "SEMBLE_QUERY target=reviewer-context chunks=2 bytes=" in result.stderr
+		assert "SEMBLE_QUERY target=reviewer-context chunks=20 bytes=" in result.stderr
 		assert "SEMBLE_FALLBACK" not in result.stderr
 		assert "SEMBLE_QUERY" not in result.stdout
 		assert "SEMBLE_FALLBACK" not in result.stdout

@@ -67,6 +67,25 @@ _semble_cleanup_tempfiles()
 	rm -f "$@"
 }
 
+_semble_normalize_max_chunks()
+{
+	local raw="${1:-0}"
+	local normalized="${raw}"
+	case "${raw}" in
+		''|*[!0-9]*) printf '1\n' ;;
+		*)
+			normalized="${normalized#"${normalized%%[!0]*}"}"
+			if [ -z "${normalized}" ]; then
+				printf '1\n'
+			elif [ "${#normalized}" -gt 2 ] || [ "${normalized}" -gt 20 ]; then
+				printf '20\n'
+			else
+				printf '%s\n' "${normalized}"
+			fi
+			;;
+	esac
+}
+
 semble_query_block()
 {
 	local query_text="${1:-}"
@@ -90,6 +109,7 @@ semble_query_block()
 		return 1
 	fi
 	shift 3 || return 1
+	max_chunks="$(_semble_normalize_max_chunks "${max_chunks}")"
 
 	target="$(_semble_target_slug "${header_label}")"
 
