@@ -115,6 +115,13 @@ patch_diagnose_reasoning_into_config
 
 echo "handled=false" >> "$GITHUB_OUTPUT"
 
+issue_meta_matches_issue() {
+  local meta_file="${1:-}"
+  [ -n "${meta_file}" ] || return 1
+  [ -s "${meta_file}" ] || return 1
+  jq -er --arg issue_num "${ISSUE_NUMBER}" '(.number | tostring) == $issue_num' "${meta_file}" >/dev/null 2>&1
+}
+
 # Reuse the cached issue snapshot when available — see the
 # "Fetch issue metadata" step.  Falls back to a fresh API
 # call when the file is missing OR jq fails to parse it
@@ -122,7 +129,7 @@ echo "handled=false" >> "$GITHUB_OUTPUT"
 # itself falls back to '[]' so the failure path still
 # degrades safely.
 ISSUE_LABELS_JSON=""
-if [ -s "${ISSUE_META_FILE:-}" ]; then
+if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
   ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
 fi
 if [ -z "${ISSUE_LABELS_JSON}" ]; then
@@ -223,7 +230,7 @@ if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
   # truncated/partial file) falls through to the API path
   # rather than killing the step under set -euo pipefail.
   : > "${ISSUE_BODY_FILE}"
-  if [ -s "${ISSUE_META_FILE:-}" ]; then
+  if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
     jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
   fi
   if [ ! -s "${ISSUE_BODY_FILE}" ]; then
@@ -344,6 +351,99 @@ Keep the response focused on actionable diagnosis grounded in the supplied evide
 EOF
 fi
 
+if [ -f scripts/semble_helpers.sh ]; then
+  # shellcheck source=/dev/null
+  source scripts/semble_helpers.sh 2>/dev/null || true
+fi
+
+build_diagnose_semble_query() {
+  local output_file="$1"
+  : > "${output_file}"
+  python3 - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}" <<'PY' || true
+import os
+import re
+import sys
+
+failed_step_name, capture_path, output_path = sys.argv[1:4]
+
+try:
+    with open(capture_path, "r", encoding="utf-8", errors="replace") as handle:
+        capture_lines = handle.read().splitlines()
+except OSError:
+    capture_lines = []
+
+tail_lines = capture_lines[-120:]
+tail_text = "\n".join(tail_lines)
+
+seen: set[str] = set()
+identifiers: list[str] = []
+stop_words = {
+    "action",
+    "build",
+    "captured",
+    "command",
+    "diagnose",
+    "diff",
+    "error",
+    "errors",
+    "failed",
+    "failure",
+    "file",
+    "from",
+    "implement",
+    "line",
+    "lines",
+    "name",
+    "post",
+    "step",
+    "syntax",
+    "tail",
+    "the",
+    "unknown",
+    "validate",
+    "validation",
+    "with",
+}
+
+
+def add_identifier(value: str) -> None:
+    value = value.strip()
+    if not value or value in seen:
+        return
+    seen.add(value)
+    identifiers.append(value)
+
+
+add_identifier(failed_step_name)
+
+for match in re.findall(r"(?:[A-Za-z0-9_.-]+/)*([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)", tail_text):
+    add_identifier(match)
+    add_identifier(os.path.basename(match))
+
+for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", tail_text):
+    if match.lower() in stop_words:
+        continue
+    add_identifier(match)
+    if len(identifiers) >= 40:
+        break
+
+parts: list[str] = ["Implement post-failure diagnosis"]
+if failed_step_name:
+    parts.append(f"Failed step:\n{failed_step_name}")
+if identifiers:
+    parts.append("Failure-tail identifiers:\n" + "\n".join(identifiers[:40]))
+
+query_text = "\n\n".join(part for part in parts if part).strip()
+if query_text:
+    with open(output_path, "w", encoding="utf-8") as handle:
+        handle.write(query_text)
+        handle.write("\n")
+PY
+}
+
+DIAGNOSE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/implement_diagnose_semble_query.txt"
+build_diagnose_semble_query "${DIAGNOSE_SEMBLE_QUERY_FILE}"
+
 {
   if [ -s "${DIAGNOSE_STATIC_PREFIX_FILE}" ]; then
     cat "${DIAGNOSE_STATIC_PREFIX_FILE}"
@@ -376,6 +476,10 @@ fi
   echo
   echo "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ==="
   cat "${CAPTURE_FILE}"
+  echo
+  if [ -s "${DIAGNOSE_SEMBLE_QUERY_FILE}" ] && declare -F semble_query_block >/dev/null 2>&1; then
+    semble_query_block "$(cat "${DIAGNOSE_SEMBLE_QUERY_FILE}")" 6 "Implement Diagnose Context" || true
+  fi
 } > "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
 
 extract_last_json_with_key() {
