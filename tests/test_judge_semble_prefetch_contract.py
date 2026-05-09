@@ -63,6 +63,35 @@ def _render_prompt(template_text: str, *, semble_prefetch: object = _UNSET) -> s
 		)
 
 
+def _run_bash(command: str, *, env_updates: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	env = dict(os.environ)
+	if env_updates:
+		env.update(env_updates)
+	return subprocess.run(
+		["bash", "-lc", command],
+		cwd=str(REPO_ROOT),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+
+
+def _run_large_pipe(function_text: str, invocation: str, *, env_updates: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	command = (
+		"set -euo pipefail\n"
+		f"{function_text}\n"
+		f"python3 - <<'PY' | {invocation}\n"
+		"import sys\n"
+		"sys.stdout.write('diff --git a/src/app.py b/src/app.py\\n')\n"
+		"sys.stdout.write('Use `scripts/foo.sh` here\\n')\n"
+		"sys.stdout.write('Meaningful context line for Semble\\n')\n"
+		"sys.stdout.write('x' * 200000)\n"
+		"PY\n"
+	)
+	return _run_bash(command, env_updates=env_updates)
+
+
 def test_render_prompt_replaces_semble_prefetch_when_value_is_supplied() -> None:
 	result = _render_prompt(
 		"before\n{{SEMBLE_PREFETCH}}\nafter\n",
@@ -157,6 +186,29 @@ def test_orchestrate_poll_query_builder_reads_piped_context() -> None:
 	assert "Meaningful context line for Semble" in result.stdout
 
 
+def test_orchestrate_poll_query_builder_drains_large_piped_context() -> None:
+	script = _read(ORCHESTRATE_POLL_SCRIPT)
+	function_text = _function_block(script, "build_judge_semble_query() {", "\n\nbuild_judge_semble_prefetch() {")
+	result = _run_large_pipe(function_text, f"build_judge_semble_query {shlex.quote('Judge Context')}")
+
+	assert result.returncode == 0, result.stderr
+	assert "src/app.py" in result.stdout
+	assert "scripts/foo.sh" in result.stdout
+
+
+def test_orchestrate_poll_prefetch_degrades_cleanly_without_helpers() -> None:
+	script = _read(ORCHESTRATE_POLL_SCRIPT)
+	function_text = _function_block(script, "build_judge_semble_prefetch() {", "\n\n# ---------------------------------------------------------------")
+	result = _run_large_pipe(
+		function_text,
+		f"build_judge_semble_prefetch {shlex.quote('Judge Context')} 3 {shlex.quote('Judge Context')}",
+		env_updates={"JUDGE_SEMBLE_HELPERS_AVAILABLE": "false"},
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ""
+
+
 def test_review_rb_judge_wires_semble_prefetch_from_support_scripts() -> None:
 	script = _read(REVIEW_RB_JUDGE)
 
@@ -191,6 +243,29 @@ def test_review_rb_judge_query_builder_reads_piped_context() -> None:
 	assert "Review-blocked context line" in result.stdout
 
 
+def test_review_rb_judge_query_builder_drains_large_piped_context() -> None:
+	script = _read(REVIEW_RB_JUDGE)
+	function_text = _function_block(script, "build_rb_judge_semble_query() {", "\n\nbuild_rb_judge_semble_prefetch() {")
+	result = _run_large_pipe(function_text, f"build_rb_judge_semble_query {shlex.quote('Review Blocked Context')}")
+
+	assert result.returncode == 0, result.stderr
+	assert "src/app.py" in result.stdout
+	assert "scripts/foo.sh" in result.stdout
+
+
+def test_review_rb_judge_prefetch_degrades_cleanly_without_helpers() -> None:
+	script = _read(REVIEW_RB_JUDGE)
+	function_text = _function_block(script, "build_rb_judge_semble_prefetch() {", "\n\nif [ -f \"${SUPPORT_SCRIPTS_DIR}/label_helpers.sh\" ]")
+	result = _run_large_pipe(
+		function_text,
+		f"build_rb_judge_semble_prefetch {shlex.quote('Review Blocked Context')} 3 {shlex.quote('Review-Blocked Context')}",
+		env_updates={"RB_JUDGE_SEMBLE_HELPERS_AVAILABLE": "false"},
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ""
+
+
 def main() -> int:
 	test_render_prompt_replaces_semble_prefetch_when_value_is_supplied()
 	test_render_prompt_rejects_unresolved_semble_prefetch_placeholder()
@@ -198,8 +273,12 @@ def main() -> int:
 	test_judge_templates_include_semble_prefetch_near_the_header()
 	test_orchestrate_poll_process_wires_semble_into_all_live_judge_paths()
 	test_orchestrate_poll_query_builder_reads_piped_context()
+	test_orchestrate_poll_query_builder_drains_large_piped_context()
+	test_orchestrate_poll_prefetch_degrades_cleanly_without_helpers()
 	test_review_rb_judge_wires_semble_prefetch_from_support_scripts()
 	test_review_rb_judge_query_builder_reads_piped_context()
+	test_review_rb_judge_query_builder_drains_large_piped_context()
+	test_review_rb_judge_prefetch_degrades_cleanly_without_helpers()
 	print("OK: judge-family Semble prefetch contract assertions hold")
 	return 0
 

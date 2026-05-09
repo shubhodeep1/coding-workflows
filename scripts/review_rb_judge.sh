@@ -48,7 +48,10 @@ import re
 import sys
 
 label = sys.argv[1].strip() or "review blocked judge context"
-raw = sys.stdin.buffer.read(65536).decode("utf-8", "replace")
+sample = sys.stdin.buffer.read(65536)
+for _ in iter(lambda: sys.stdin.buffer.read(8192), b""):
+    pass
+raw = sample.decode("utf-8", "replace")
 path_tokens = []
 interesting_lines = []
 
@@ -110,11 +113,13 @@ build_rb_judge_semble_prefetch() {
   local query_text=""
 
   if [ "${RB_JUDGE_SEMBLE_HELPERS_AVAILABLE}" != "true" ]; then
+    cat >/dev/null 2>/dev/null || true
     return 0
   fi
 
   query_text="$(build_rb_judge_semble_query "${query_label}")"
   if [ -z "${query_text}" ]; then
+    cat >/dev/null 2>/dev/null || true
     return 0
   fi
 
