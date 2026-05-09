@@ -239,6 +239,146 @@ if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  if source scripts/semble_helpers.sh; then
+    if type semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble prompt context." >&2
+    fi
+  else
+    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble prompt context." >&2
+  fi
+fi
+
+VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS="${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+  echo "::warning::VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}); defaulting to 3."
+  VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS="3"
+fi
+
+VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS="${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+  echo "::warning::VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}); defaulting to 3."
+  VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS="3"
+fi
+
+build_validate_semble_query()
+{
+  local label="${1:-validation}"
+  shift || true
+
+  python3 - "${label}" "$@" <<'PY'
+import pathlib
+import re
+import sys
+
+label = sys.argv[1].strip() or "validation"
+raw_inputs = sys.argv[2:]
+path_tokens = []
+interesting_lines = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\."
+    r"(?:py|sh|ya?ml|json|toml|js|jsx|ts|tsx|go|rs|java|kt|rb|php|sql|md|txt)"
+    r"(?![A-Za-z0-9_./-])"
+)
+special_file_re = re.compile(r"\b(?:Dockerfile(?:\.[A-Za-z0-9_.-]+)?|Makefile|Procfile)\b")
+
+def append_unique(bucket, value, *, limit):
+    value = value.strip()
+    if not value or value in bucket or len(bucket) >= limit:
+        return
+    bucket.append(value)
+
+def iter_source_texts(values):
+    for raw in values:
+        if not raw:
+            continue
+        candidate_path = pathlib.Path(raw)
+        if "\n" not in raw and len(raw) < 512 and candidate_path.is_file():
+            try:
+                yield candidate_path.read_text(encoding="utf-8", errors="replace")[:12000]
+            except OSError:
+                yield raw[:12000]
+        else:
+            yield raw[:12000]
+
+for text in iter_source_texts(raw_inputs):
+    if not text.strip():
+        continue
+
+    for token in re.findall(r"`([^`\n]+)`", text):
+        token = token.strip()
+        if "/" in token or "." in pathlib.Path(token).name or token in {"Dockerfile", "Makefile", "Procfile"}:
+            append_unique(path_tokens, token, limit=10)
+
+    for token in path_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+    for token in special_file_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or line.startswith(("===", "---", "```", "#")):
+            continue
+        if len(line) < 8:
+            continue
+        append_unique(interesting_lines, line[:180], limit=8)
+
+query_parts = [label]
+if path_tokens:
+    query_parts.append("files " + " ".join(path_tokens[:8]))
+if interesting_lines:
+    query_parts.extend(interesting_lines[:6])
+
+query = " ; ".join(part for part in query_parts if part)
+query = query[:700].strip(" ;")
+if query:
+    print(query)
+PY
+}
+
+build_validate_discover_semble_query()
+{
+  build_validate_semble_query \
+    "validation discover context" \
+    "validation harness docker compose canary runtime validation" \
+    "${VALIDATION_COMPOSE_FILE}" \
+    "${PROJECT_SPEC_FILE}"
+}
+
+build_validate_diagnose_semble_query()
+{
+  build_validate_semble_query \
+    "validation diagnose failure context" \
+    "runtime validation failure diagnose failing tests" \
+    "${FIRST_FAILURE:-}" \
+    "${VALIDATION_RESULT_FILE}" \
+    "${VALIDATION_LOG_TAIL_FILE}" \
+    "${CONTAINER_LOG_TAIL_FILE}" \
+    "${VALIDATE_HINTS_FILE}"
+}
+
+append_validate_semble_context()
+{
+  local query_text="${1:-}"
+  local max_chunks="${2:-3}"
+  local header_label="${3:-Validation Context}"
+
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  echo
+  if semble_query_block "${query_text}" "${max_chunks}" "${header_label}"; then
+    echo
+  fi
+}
+
 # attempt_self_heal_and_reexec — last-chance interception before a hard
 # validation failure. If the self-heal LLM proposes a patch to one of the
 # four validation prompt files and the patch applies cleanly, we re-exec
@@ -2069,6 +2209,7 @@ else
   if [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
     echo "::warning::Cached validation hints at ${VALIDATE_HINTS_CACHE_FILE} failed sanity checks; falling back to codex discovery." >&2
   fi
+discover_semble_query="$(build_validate_discover_semble_query || true)"
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
@@ -2081,6 +2222,7 @@ else
   echo "=== PROJECT SPEC ==="
     cat "${PROJECT_SPEC_FILE}"
     echo
+    append_validate_semble_context "${discover_semble_query}" "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" "Validate Discover Context"
     echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
   } > "${DISCOVER_PROMPT_FILE}"
 
@@ -2772,6 +2914,7 @@ fi
 # ---------------------------------------------------------------
 # Phase 4: Diagnose failures
 # ---------------------------------------------------------------
+diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
@@ -2795,6 +2938,7 @@ fi
   echo
   echo "=== VALIDATION HINTS ==="
   cat "${VALIDATE_HINTS_FILE}"
+  append_validate_semble_context "${diagnose_semble_query}" "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" "Validate Diagnose Context"
 } > "${DIAGNOSE_PROMPT_FILE}"
 
 DIAGNOSE_SUCCESS=false
