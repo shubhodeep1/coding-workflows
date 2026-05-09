@@ -74,6 +74,23 @@ def test_render_prompt_injects_semble_prefetch_when_set() -> None:
 	assert rendered.endswith("Footer\n")
 
 
+def test_render_prompt_preserves_multiline_semble_prefetch_verbatim() -> None:
+	rendered = _render_prompt(
+		"Before\n{{SEMBLE_PREFETCH}}\nAfter\n",
+		"=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===",
+	)
+
+	assert rendered == (
+		"Before\n"
+		"=== SEMBLE: Judge Context ===\n"
+		"chunk 1\n"
+		"\n"
+		"chunk 2\n"
+		"=== END SEMBLE ===\n"
+		"After\n"
+	)
+
+
 def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
 	rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", None)
 
@@ -136,6 +153,7 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 
 def main() -> int:
 	test_render_prompt_injects_semble_prefetch_when_set()
+	test_render_prompt_preserves_multiline_semble_prefetch_verbatim()
 	test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
 	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
 	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
