@@ -3243,36 +3243,9 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1c-1: Workflow-log-analysis live-dispatch smoke gate
-  # Split out of `orphan-workflows-test` (PR #2347, follow-up to release
-  # v1.8.2 which failed when the inner `api-redundancy` job hit its 90m
-  # per-job cap and cancelled the dispatch chain). The Codex audit chain
-  # has a Codex-driven long tail that periodically blows past whatever
-  # cap the watcher uses, and a cancelled audit pass does not invalidate
-  # the release artefact — the audit is a post-hoc log inspector, not a
-  # release-correctness check. To stop those cancellations from blocking
-  # `validate` / `release` / `sync-to-main`, this dispatch lives in its
-  # own job that is intentionally NOT in `validate.needs`. It still feeds
-  # the `notify` job so operators see its result in the Telegram release
-  # message and the soft-error report artifact still flows into the
-  # consolidated report.
-  # Sum of in-step DEADLINEs below (workflow-log-analysis 15600s = 260m)
-  # plus headroom for prerequisite validation, checkout, and the
-  # run-soft-error-analyzer composite (each waits up to
-  # wait_for_completion_secs=120s and runs an OpenRouter call via
-  # scripts/analyze_soft_errors.py; log1 of run #25200117236 observed
-  # ~40s, so under OpenRouter latency variance plausibly 2–3m). The
-  # 265m step timeout-minutes attributes a hang to the dispatch step;
-  # the job-level cap below is the outer safety net.
-  # Cap derivation: 260m DEADLINE + 5m runner queueing + 3m soft-error
-  # analyser ≈ 268m → round to 280m for headroom. Previously this work
-  # lived inside orphan-workflows-test which had a 390m cap covering
-  # workflow-log-analysis + validation-refresh + update_workflows +
-  # memory_maintenance combined; the per-job split lets each cap track
-  # only its own dispatch chain.
-  # When workflow-log-analysis.yml's per-job timeouts are bumped again
-  # (deep-audit 30→45→75m, api-redundancy 30→60→90m, analyze-commit-notify
-  # 30→60m so far), bump the in-step DEADLINE and step timeout-minutes
-  # in this job too so the watcher outlives the new worst case.
+  # Split out of `orphan-workflows-test` so its Codex-driven long tail
+  # cannot block `validate` / `release` / `sync-to-main`. See the
+  # in-job comment below for cap derivation and the bump protocol.
   # ──────────────────────────────────────────────────────────────────
   workflow-log-analysis-test:
     needs: [resolve-version]
