@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_semble_contracts.py:21-24 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Unconditional module-level sys.path.insert(0) shadows site-packages and stdlib modules for every test in this file.\n  WHY: Adding any future scripts/cost_audit.py-conflicting module could silently break imports across all tests; current import works but this is a packaging invariant risk.\n- tests/test_semble_contracts.py:586-595, 637-646 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Test inputs use unprefixed \"SEMBLE_FALLBACK target=...\" strings, but real GHA logs may prefix helper output with step names.\n  WHY: The tests do not exercise prefixed runner output, so they do not verify robustness when arbitrary leading text appears before the marker.\n- docs/semble-integration-plan.md:\u00a75.5 (Phase 5 \u2014 Consumer-repo propagation via @stable release) | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: PR changed-files list omits validate.yml, review_autofix.yml, orchestrate_poll.yml from reusable workflows requiring Semble foundation steps.\n  WHY: Missing workflows could run SEMBLE_ENABLED=true without index, causing fallback and violating the phase 5 propagation contract.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_semble_contracts.py:21-24 | confidence=3\n  PROBLEM: Unconditional module-level sys.path.insert(0) shadows site-packages and stdlib modules for every test in this file.\n  WHY: Adding any future scripts/cost_audit.py-conflicting module (e.g. scripts/re.py, scripts/os.py) silently breaks imports across all tests; current import cost_audit works but violates packaging invariants and risks non-local breakage.\n- tests/test_semble_contracts.py:586-595, 637-646 | confidence=4\n  PROBLEM: Test inputs use unprefixed \"SEMBLE_FALLBACK target=...\" strings, but real GHA logs prefix helper output with step names (e.g. \"Run bash scripts/install_semble.sh\\n\\nSEMBLE_FALLBACK ...\").\n  WHY: split(\"SEMBLE_FALLBACK \",1)[1] captures payload correctly only if prefix ends in space; arbitrary prefixes (no space, tab, multi-line) yield malformed fields or zero fallbacks counted, under-testing _parse_semble_fields robustness.\n- docs/semble-integration-plan.md:\u00a75.5 (Phase 5 \u2014 Consumer-repo propagation via @stable release) | confidence=5\n  PROBLEM: PR changed-files list omits validate.yml, review_autofix.yml, orchestrate_poll.yml from reusable workflows requiring Semble foundation steps; tests/test_semble_contracts.py asserts presence in some but verification requires direct file read.\n  WHY: Missing workflows run SEMBLE_ENABLED=true without index, forcing all Semble callers to fallback (unmeasured token waste); phase 5 smoke fails consumer propagation contract.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ae52a6e9917865113bd56478c23299922dad252024d34b7d97fbe183754f6a6a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2338,
+    "run_id": "25588871781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25588871781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509023143_cd92b9c622",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2338,
+    "run_id": "25588871781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-09T02:31:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
