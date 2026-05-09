@@ -18,6 +18,8 @@ rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
+SUPPORT_ROOT_DIR="${SUPPORT_ROOT_DIR:-$(pwd)}"
+SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
@@ -26,6 +28,56 @@ source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
+REVIEW_RB_SEMBLE_MAX_CHUNKS="4"
+REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="12000"
+REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES="12000"
+if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1090
+  if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"; then
+    if type semble_query_block >/dev/null 2>&1; then
+      REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh did not provide semble_query_block; continuing without Semble review-blocked judge context." >&2
+    fi
+  else
+    echo "::warning::Failed to source ${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh; continuing without Semble review-blocked judge context." >&2
+  fi
+fi
+
+append_review_rb_semble_query_section() {
+  local label="$1"
+  local text="${2:-}"
+  local max_bytes="${3:-2048}"
+  local truncated_text=""
+
+  [ -n "${text}" ] || return 0
+
+  truncated_text="${text:0:${max_bytes}}"
+  printf '%s\n' "${label}"
+  printf '%s\n' "${truncated_text}"
+}
+
+render_review_rb_semble_prefetch() {
+  local query_file="$1"
+  local header_label="${2:-Review-Blocked Judge Context}"
+  local query_text=""
+  local prefetch_text=""
+
+  if [ "${REVIEW_RB_SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+    || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+
+  query_text="$(head -c "${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}" "${query_file}" 2>/dev/null || true)"
+  [ -n "${query_text}" ] || return 0
+
+  prefetch_text="$(semble_query_block "${query_text}" "${REVIEW_RB_SEMBLE_MAX_CHUNKS}" "${header_label}" || true)"
+  [ -n "${prefetch_text}" ] || return 0
+
+  printf '%s\n' "${prefetch_text:0:${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}}"
+}
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else
@@ -233,6 +285,26 @@ fi
 # -----------------------------------------------------------
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
+RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"
+RB_JUDGE_SEMBLE_PREFETCH=""
+
+{
+  printf '%s\n' 'Review-blocked judge context.'
+  if [ -n "${FIRST_ISSUE_BODY}" ]; then
+    append_review_rb_semble_query_section "Issue body:" "${FIRST_ISSUE_BODY}" 2500
+  else
+    append_review_rb_semble_query_section \
+      "PR title/body:" \
+      "Title: $(jq -r '.title // ""' "${PR_META_FILE}")
+Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")" \
+      2500
+  fi
+  append_review_rb_semble_query_section "PR metadata JSON:" "${PR_META_JSON}" 2000
+  append_review_rb_semble_query_section "PR diff excerpt:" "${PR_DIFF}" 5000
+  append_review_rb_semble_query_section "PR issue comments JSON:" "${PR_COMMENTS}" 2500
+  append_review_rb_semble_query_section "PR review comments JSON:" "${PR_REVIEW_COMMENTS}" 2500
+} > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"
 
 {
   if [ -f ./pre_assembled_static.txt ]; then
@@ -244,7 +316,7 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
     (
       cd "${SUPPORT_ROOT_DIR}"
-      bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+      SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
     )
   else
     echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
@@ -291,6 +363,7 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
     echo "approach is fundamentally wrong."
   fi
 } > "${RB_JUDGE_PROMPT}"
+rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
 # -----------------------------------------------------------
 # Temporarily set judge reasoning effort in codex config
