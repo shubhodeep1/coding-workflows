@@ -70,7 +70,8 @@ render_review_rb_semble_prefetch() {
     return 0
   fi
 
-  query_text="$(head -c "${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}" "${query_file}" 2>/dev/null || true)"
+  query_text="$(cat "${query_file}" 2>/dev/null || true)"
+  query_text="${query_text:0:${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}}"
   [ -n "${query_text}" ] || return 0
 
   prefetch_text="$(semble_query_block "${query_text}" "${REVIEW_RB_SEMBLE_MAX_CHUNKS}" "${header_label}" || true)"

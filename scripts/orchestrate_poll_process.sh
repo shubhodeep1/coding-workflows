@@ -151,7 +151,8 @@ render_judge_semble_prefetch_from_query_file() {
     return 0
   fi
 
-  query_text="$(head -c "${JUDGE_SEMBLE_QUERY_MAX_BYTES}" "${query_file}" 2>/dev/null || true)"
+  query_text="$(cat "${query_file}" 2>/dev/null || true)"
+  query_text="${query_text:0:${JUDGE_SEMBLE_QUERY_MAX_BYTES}}"
   [ -n "${query_text}" ] || return 0
 
   prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
