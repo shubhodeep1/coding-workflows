@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:1921-1933 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The Python heredoc in `build_repair_semble_query` is indented, so Python receives module-level code with leading spaces and raises `IndentationError` at runtime.\n  WHY: Four reviewers independently reported the same runtime failure in the workflow heredoc; the warning path only surfaces the breakage and the repair query never gets built.\n- scripts/implement_diagnose_post_codex_failure.sh:351-449 | severity=critical | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The Python heredoc in `build_diagnose_semble_query` is indented, so Python raises `IndentationError` before building the Semble query.\n  WHY: The reviewer reported the heredoc body reaches Python with leading spaces and the query file remains empty when the function runs.\n- .github/workflows/implement.yml:1929 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new warning handler can emit a GitHub Actions warning when the Python heredoc builder exits non-zero, including the reviewer-described empty/short-input cases.\n  WHY: The reviewer said this spams logs with spurious warnings and obscures real query-builder failures.\n- scripts/implement_diagnose_post_codex_failure.sh:359-360 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The warning handler can emit spurious GitHub Actions warnings when the Python heredoc exits non-zero on empty/short-input cases.\n  WHY: Both reviewers said legitimate no-Semble cases can trigger the warning and clutter logs.\n- tests/test_implement_semble_contract.py:145-153 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The Semble contract test is standalone and not invoked by the CI workflow lists, so regressions can pass silently.\n  WHY: Both reviewers said the test file is not wired into CI invocations.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:~1933 | severity=critical | confidence=5\n  PROBLEM: The Python code inside the heredoc has leading spaces, causing `IndentationError: unexpected indent` at runtime.\n  WHY: The reviewer confirmed the heredoc preserves indentation and said the repair prompt will never get Semble context.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:1933 | severity=critical | confidence=5\n  PROBLEM: The Python heredoc body is indented with 10 leading spaces, so `python3` raises `IndentationError: unexpected indent`.\n  WHY: The reviewer said the repair query builder fails and the repair prompt never gets Semble context.\n- scripts/implement_diagnose_post_codex_failure.sh:359-360 | confidence=3\n  PROBLEM: The warning is emitted on any non-zero Python heredoc exit, including expected empty/short-input cases.\n  WHY: The reviewer said this could produce spurious warnings in logs.\n- tests/test_implement_semble_contract.py | confidence=3\n  PROBLEM: The contract test is standalone executable but absent from CI invocations.\n  WHY: The reviewer said Semble wiring regressions could pass CI silently.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/implement.yml:1921-1933 | severity=critical | confidence=5\n  PROBLEM: Python heredoc body carries YAML block indentation, causing `IndentationError: unexpected indent` at runtime.\n  WHY: The reviewer reported that `python3` receives indented module-level code and the repair prompt loses Semble context.\n- scripts/implement_diagnose_post_codex_failure.sh:351-449 | severity=critical | confidence=5\n  PROBLEM: Python heredoc body carries shell function indentation, causing `IndentationError: unexpected indent` at runtime.\n  WHY: The reviewer reported that `python3` receives indented module-level code and the diagnose prompt loses Semble context.\n- tests/test_implement_semble_contract.py:145-153 | confidence=4\n  PROBLEM: The contract test is standalone executable but is absent from CI invocations.\n  WHY: The reviewer said Semble wiring regressions could pass CI silently.\n- .github/workflows/implement.yml:1929 | confidence=3\n  PROBLEM: The warning is emitted on any Python heredoc non-zero exit, including legitimate empty/short-input cases.\n  WHY: The reviewer said this can spam GitHub Actions logs with spurious warnings.\n- scripts/implement_diagnose_post_codex_failure.sh:359 | confidence=3\n  PROBLEM: The warning is emitted on any Python heredoc non-zero exit, including legitimate empty/short-input cases.\n  WHY: The reviewer said this can spam GitHub Actions logs with spurious warnings.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/implement.yml:1933 | severity=critical | confidence=5\n  PROBLEM: The Python heredoc body has leading spaces on each line, causing `IndentationError: unexpected indent`.\n  WHY: The reviewer said the repair query builder fails before any repair logic runs and the Semble context is never built.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "302db82dfbb388c9d2468968bf3e6c0070229e269420279ccf37849db3ec022e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2389,
+    "run_id": "25605627992",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25605627992",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509163438_7155c501e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2389,
+    "run_id": "25605627992"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T16:34:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
