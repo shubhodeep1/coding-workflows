@@ -83,15 +83,15 @@ def test_render_prompt_replaces_semble_prefetch_and_guards_placeholder() -> None
 
 
 def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
-	rendered = _render_prompt(
-		"Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
-		"=== SEMBLE: Judge Context ===\nchunk",
-	)
+    rendered = _render_prompt(
+        "Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
+        "=== SEMBLE: Judge Context ===\nchunk",
+    )
 
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	assert "=== SEMBLE: Judge Context ===" in rendered
-	assert "chunk" in rendered
-	assert rendered.endswith("Footer\n")
+    assert "{{SEMBLE_PREFETCH}}" not in rendered
+    assert "=== SEMBLE: Judge Context ===" in rendered
+    assert "chunk" in rendered
+    assert rendered.endswith("Footer\n")
 
 
 def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
@@ -140,7 +140,6 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     setup_block = _step_block(workflow, "setup-uv")
     install_block = _step_block(workflow, "Install semble")
     index_block = _step_block(workflow, "Build semble index")
-
 
     assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
     assert 'echo "SEMBLE_AVAILABLE=false"' in workspace_block
