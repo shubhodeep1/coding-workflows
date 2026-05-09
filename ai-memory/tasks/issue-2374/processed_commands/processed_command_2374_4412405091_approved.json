@@ -5,13 +5,26 @@
   "entry_id": "processed_command_2374_4412405091_approved",
   "issue_number": 2374,
   "metadata": {
+    "branch": "ai/issue-2374",
+    "changed_files": [
+      "scripts/install_semble.sh",
+      "scripts/semble_helpers.sh",
+      "scripts/targeted_file_context.py",
+      "tests/test_semble_helpers.py",
+      "tests/test_targeted_file_context.py"
+    ],
+    "issue_number": 2374,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2374",
+    "pr_number": 2378,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2378",
+    "run_attempt": "1",
+    "run_id": "25599929471",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25599929471"
   },
   "run_attempt": 1,
   "run_id": "25599929471",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-09T11:24:22Z",
+  "status": "completed",
+  "timestamp": "2026-05-09T11:41:40Z",
   "workflow": "implement"
 }
