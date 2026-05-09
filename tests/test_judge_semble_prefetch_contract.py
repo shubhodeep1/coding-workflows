@@ -107,9 +107,39 @@ def test_render_prompt_replaces_semble_prefetch_when_value_is_supplied() -> None
 	assert "{{SEMBLE_PREFETCH}}" not in result.stdout
 	assert "retrieved context" in result.stdout
 
-	empty_result = _render_prompt("before\n{{SEMBLE_PREFETCH}}\nafter\n", semble_prefetch="")
-	assert empty_result.returncode == 0, empty_result.stderr
-	assert empty_result.stdout == "before\n\nafter\n"
+
+def test_render_prompt_injects_semble_prefetch_when_set() -> None:
+	result = _render_prompt(
+		"Role: judge\n{{SEMBLE_PREFETCH}}\nFooter\n",
+		semble_prefetch="=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "{{SEMBLE_PREFETCH}}" not in result.stdout
+	assert "=== SEMBLE: Judge Context ===" in result.stdout
+	assert "chunk" in result.stdout
+	assert result.stdout.endswith("Footer\n")
+
+
+def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
+	result = _render_prompt(
+		"Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
+		semble_prefetch="=== SEMBLE: Judge Context ===\nchunk",
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "{{SEMBLE_PREFETCH}}" not in result.stdout
+	assert "=== SEMBLE: Judge Context ===" in result.stdout
+	assert "chunk" in result.stdout
+	assert result.stdout.endswith("Footer\n")
+
+
+def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
+	result = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", semble_prefetch="")
+
+	assert result.returncode == 0, result.stderr
+	assert "{{SEMBLE_PREFETCH}}" not in result.stdout
+	assert result.stdout == "Before\n\nAfter\n"
 
 
 def test_render_prompt_rejects_unresolved_semble_prefetch_placeholder() -> None:
@@ -117,6 +147,16 @@ def test_render_prompt_rejects_unresolved_semble_prefetch_placeholder() -> None:
 
 	assert result.returncode != 0, "render_prompt.sh should fail when SEMBLE_PREFETCH is not supplied"
 	assert "Unresolved SEMBLE_PREFETCH placeholder" in result.stderr
+
+
+def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
+	result = _render_prompt(
+		"Before {{SEMBLE_PREFETCH}} After\n",
+		semble_prefetch="=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "Before {{SEMBLE_PREFETCH}} After\n"
 
 
 def test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
@@ -304,7 +344,11 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 
 def main() -> int:
 	test_render_prompt_replaces_semble_prefetch_when_value_is_supplied()
+	test_render_prompt_injects_semble_prefetch_when_set()
+	test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
+	test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
 	test_render_prompt_rejects_unresolved_semble_prefetch_placeholder()
+	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
 	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
 	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
 	test_judge_templates_include_semble_prefetch_near_the_header()
