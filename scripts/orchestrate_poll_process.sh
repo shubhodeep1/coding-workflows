@@ -106,6 +106,21 @@ if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  if source scripts/semble_helpers.sh; then
+    if declare -F semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble judge prompt context." >&2
+    fi
+  else
+    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble judge prompt context." >&2
+  fi
+fi
+
 is_truthy() {
   local value
   value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
@@ -718,6 +733,149 @@ _jq_field()
 	else
 		echo "${val}"
 	fi
+}
+
+append_semble_query_section()
+{
+	local label="${1:-}"
+	local value="${2:-}"
+	local max_bytes="${3:-2048}"
+	local trimmed=""
+
+	[ -n "${label}" ] || return 0
+	[ -n "${value}" ] || return 0
+
+	trimmed="$(printf '%s' "${value}" | head -c "${max_bytes}" 2>/dev/null || true)"
+	[ -n "${trimmed}" ] || return 0
+
+	printf '%s\n' "${label}"
+	printf '%s\n' "${trimmed}"
+	printf '\n'
+}
+
+extract_diff_file_summary()
+{
+	local diff_text="${1:-}"
+
+	[ -n "${diff_text}" ] || return 0
+	printf '%s\n' "${diff_text}" \
+		| awk '
+			/^diff --git / {
+				old=$3
+				new=$4
+				sub(/^a\//, "", old)
+				sub(/^b\//, "", new)
+				if (old == new) {
+					print old
+				} else {
+					print old " -> " new
+				}
+			}
+		' \
+		| awk '!seen[$0]++ { print; if (++count >= 40) exit }'
+}
+
+build_semble_prefetch_block()
+{
+	local query_text="${1:-}"
+	local max_chunks="${2:-4}"
+	local header_label="${3:-Judge Context}"
+
+	if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+		return 0
+	fi
+
+	semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
+}
+
+build_wave_judge_semble_query()
+{
+	local project_body="${1:-}"
+	local wave_status="${2:-}"
+	local merged_pr_summaries="${3:-}"
+	local open_pr_summaries="${4:-}"
+	local ci_status="${5:-}"
+
+	{
+		printf '%s\n\n' 'Wave judge context.'
+		append_semble_query_section "Project spec:" "${project_body}" 3500
+		append_semble_query_section "Wave status JSON:" "${wave_status}" 2500
+		append_semble_query_section "Merged PR changed files:" "$(extract_diff_file_summary "${merged_pr_summaries}")" 1800
+		append_semble_query_section "Merged PR diff excerpts:" "${merged_pr_summaries}" 3200
+		append_semble_query_section "Open PR changed files:" "$(extract_diff_file_summary "${open_pr_summaries}")" 1800
+		append_semble_query_section "Open PR diff excerpts:" "${open_pr_summaries}" 2600
+		append_semble_query_section "CI status JSON:" "${ci_status}" 1200
+	}
+}
+
+build_stall_judge_semble_query()
+{
+	local issue_num="${1:-}"
+	local phase="${2:-}"
+	local recovery_count="${3:-}"
+	local stall_minutes="${4:-}"
+	local local_id="${5:-}"
+	local diagnostics="${6:-}"
+
+	{
+		printf '%s\n\n' 'Stall recovery judge context.'
+		append_semble_query_section "Issue summary:" "Issue #${issue_num}
+Local ID: ${local_id:-unknown}
+Phase: ${phase:-unknown}
+Stall minutes: ${stall_minutes:-0}
+Recovery count: ${recovery_count:-0}" 700
+		append_semble_query_section "Stall diagnostics JSON:" "${diagnostics}" 7000
+	}
+}
+
+build_review_blocked_judge_semble_query()
+{
+	local issue_num="${1:-}"
+	local issue_body="${2:-}"
+	local pr_number="${3:-}"
+	local pr_meta="${4:-}"
+	local pr_diff="${5:-}"
+	local pr_comments="${6:-}"
+	local pr_review_comments="${7:-}"
+	local retry_count="${8:-0}"
+	local is_final="${9:-false}"
+	local branch_info="${10:-}"
+
+	{
+		printf '%s\n\n' 'Review-blocked judge context.'
+		append_semble_query_section "Issue requirement:" "${issue_body}" 3200
+		append_semble_query_section "PR summary:" "PR #${pr_number}
+Retry count: ${retry_count}
+Final attempt: ${is_final}
+${branch_info}" 1400
+		append_semble_query_section "PR metadata JSON:" "${pr_meta}" 2400
+		append_semble_query_section "Changed files:" "$(extract_diff_file_summary "${pr_diff}")" 1800
+		append_semble_query_section "PR diff excerpts:" "${pr_diff}" 3200
+		append_semble_query_section "Issue and review comments JSON:" "${pr_comments}" 2600
+		append_semble_query_section "Inline review comments JSON:" "${pr_review_comments}" 2200
+	}
+}
+
+build_integration_conflict_judge_semble_query()
+{
+	local tracking_num="${1:-}"
+	local final_pr="${2:-}"
+	local integration_branch="${3:-}"
+	local default_branch="${4:-}"
+	local retries="${5:-0}"
+	local pr_files="${6:-}"
+	local intent_fingerprints="${7:-}"
+
+	{
+		printf '%s\n\n' 'Integration conflict judge context.'
+		append_semble_query_section "Conflict summary:" "Tracking issue #${tracking_num}
+Final PR: #${final_pr}
+Integration branch: ${integration_branch}
+Default branch: ${default_branch}
+Resolver attempts: ${retries}" 900
+		append_semble_query_section "Changed files JSON:" "${pr_files}" 2600
+		append_semble_query_section "Merged intent fingerprints JSON:" "${intent_fingerprints}" 5000
+	}
 }
 
 ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
@@ -2743,6 +2901,18 @@ invoke_judge_for_integration_conflict() {
   local intent_fingerprints
   intent_fingerprints="$(jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" 2>/dev/null || echo "{}")"
   [ -n "${intent_fingerprints}" ] || intent_fingerprints='{}'
+  local integration_judge_semble_prefetch=""
+  integration_judge_semble_prefetch="$(build_semble_prefetch_block \
+    "$(build_integration_conflict_judge_semble_query \
+      "${TRACKING_NUM}" \
+      "${final_pr}" \
+      "${integration_branch}" \
+      "${default_branch}" \
+      "${retries}" \
+      "${pr_files}" \
+      "${intent_fingerprints}")" \
+    "${JUDGE_SEMBLE_MAX_CHUNKS:-4}" \
+    "Integration Conflict Judge Context")"
 
   {
     cat "${judge_static_file}"
@@ -2764,6 +2934,9 @@ invoke_judge_for_integration_conflict() {
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
+    if [ -n "${integration_judge_semble_prefetch}" ]; then
+      printf '%s\n\n' "${integration_judge_semble_prefetch}"
+    fi
     echo "Context:"
     echo "- Tracking issue: #${TRACKING_NUM}"
     echo "- Final PR number: ${final_pr}"
@@ -5603,6 +5776,18 @@ invoke_stall_judge() {
       }' 2>/dev/null || echo '{"diagnostics_build_failed":true}')"
   fi
 
+  local stall_judge_semble_prefetch=""
+  stall_judge_semble_prefetch="$(build_semble_prefetch_block \
+    "$(build_stall_judge_semble_query \
+      "${issue_num}" \
+      "${phase}" \
+      "${recovery_count}" \
+      "${stall_minutes}" \
+      "${local_id}" \
+      "${diagnostics}")" \
+    "${STALL_JUDGE_SEMBLE_MAX_CHUNKS:-4}" \
+    "Stall Judge Context")"
+
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
   local static_file="${RUNTIME_DIR}/judge_static.txt"
@@ -5621,7 +5806,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -9310,6 +9495,20 @@ ${FOLLOWUP_BLOCK_REASON}"
       # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
+      RB_JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block \
+        "$(build_review_blocked_judge_semble_query \
+          "${rb_issue}" \
+          "${ISSUE_BODY}" \
+          "${RB_PR}" \
+          "${PR_META}" \
+          "${PR_DIFF}" \
+          "${PR_COMMENTS}" \
+          "${PR_REVIEW_COMMENTS}" \
+          "${RETRY_COUNT}" \
+          "${IS_FINAL}" \
+          "${RB_COMBINED_BRANCH_INFO}")" \
+        "${REVIEW_BLOCKED_JUDGE_SEMBLE_MAX_CHUNKS:-4}" \
+        "Review-Blocked Judge Context")"
 
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
@@ -9320,7 +9519,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -10678,13 +10877,23 @@ ${PR_DIFF}
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
+  JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block \
+    "$(build_wave_judge_semble_query \
+      "${PROJECT_BODY}" \
+      "${WAVE_STATUS}" \
+      "${MERGED_PR_SUMMARIES}" \
+      "${OPEN_PR_SUMMARIES}" \
+      "${CI_STATUS}")" \
+    "${JUDGE_SEMBLE_MAX_CHUNKS:-4}" \
+    "Judge Context")"
+
   # Build judge prompt
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
     echo "=== JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge.txt
+    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
