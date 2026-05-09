@@ -85,6 +85,15 @@ def test_render_prompt_replaces_semble_prefetch_and_existing_placeholder() -> No
 	assert empty_rendered == "Before\n\nAfter\n"
 
 
+def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
+	rendered = _render_prompt(
+		"Before {{SEMBLE_PREFETCH}} After\n",
+		"=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+	)
+
+	assert rendered == "Before {{SEMBLE_PREFETCH}} After\n"
+
+
 def test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
 	workflow = _read(ORCHESTRATE_POLL_WF)
 	stage_block = _step_block(workflow, "Stage workflow support files")
@@ -158,6 +167,7 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 
 def main() -> int:
 	test_render_prompt_replaces_semble_prefetch_and_existing_placeholder()
+	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
 	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
 	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
 	test_live_judge_templates_expose_semble_placeholder()
