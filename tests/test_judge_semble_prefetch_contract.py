@@ -34,13 +34,19 @@ def _step_block(text: str, step_name: str) -> str:
 	return text[start:next_step]
 
 
-def _render_prompt(prompt_text: str, semble_prefetch: str | None) -> str:
+def _render_prompt(
+	prompt_text: str,
+	semble_prefetch: str | None,
+	extra_env: dict[str, str] | None = None,
+) -> str:
 	with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
 		tmpdir = Path(td)
 		prompt_file = tmpdir / "prompt.txt"
 		prompt_file.write_text(prompt_text, encoding="utf-8")
 
 		env = os.environ.copy()
+		if extra_env:
+			env.update(extra_env)
 		if semble_prefetch is None:
 			env.pop("SEMBLE_PREFETCH", None)
 		else:
@@ -91,6 +97,20 @@ def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
 
 	assert "{{SEMBLE_PREFETCH}}" not in rendered
 	assert rendered == "Before\n\nAfter\n"
+
+
+def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> None:
+	rendered = _render_prompt(
+		"{{WORKFLOW_EDIT_RESTRICTION}}\n{{SEMBLE_PREFETCH}}\nFooter\n",
+		"=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+		extra_env={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+
+	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in rendered
+	assert "{{SEMBLE_PREFETCH}}" not in rendered
+	assert ".github/workflows/ are permitted" in rendered
+	assert "=== SEMBLE: Judge Context ===" in rendered
+	assert rendered.endswith("Footer\n")
 
 
 def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
@@ -159,6 +179,7 @@ def main() -> int:
 	test_render_prompt_injects_semble_prefetch_when_set()
 	test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
 	test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
+	test_render_prompt_resolves_workflow_and_semble_placeholders_together()
 	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
 	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
 	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
