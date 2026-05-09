@@ -504,18 +504,18 @@ jobs:
           fi
 
       - name: Setup uv
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
         uses: astral-sh/setup-uv@v3
 
       - name: Install semble
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         run: |
           set -euo pipefail
           bash scripts/install_semble.sh
 
       - name: Build semble index
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         run: |
           set -euo pipefail
           : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"
