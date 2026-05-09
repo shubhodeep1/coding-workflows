@@ -76,6 +76,7 @@ binary_matches_pin()
 	local version_pattern=""
 
 	version_text="$(current_semble_version)" || return 1
+	version_text="${version_text%%$'\n'*}"
 	version_pattern="${SEMBLE_VERSION//./\\.}"
 	if printf '%s\n' "${version_text}" | grep -Eq "(^|[^0-9.])${version_pattern}([^0-9.]|$)"; then
 		return 0

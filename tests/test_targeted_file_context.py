@@ -363,7 +363,7 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 		assert "SEMBLE_QUERY" not in context
 		telemetry = stderr.getvalue()
 		assert "SEMBLE_QUERY target=overflow file=src/big.py chunks=2 bytes=" in telemetry
-		assert " ms=" in telemetry or " ms=".strip() in telemetry
+		assert " ms=" in telemetry
 
 
 def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> None:
