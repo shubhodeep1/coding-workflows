@@ -31,6 +31,7 @@ env:
   # information-dense per the OpenAI prompt guide.
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_ORCHESTRATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
 
 jobs:
   orchestrate:
@@ -265,6 +266,9 @@ jobs:
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
             echo "TRACKING_BODY_FILE=${RUNTIME_DIR}/tracking_body.md"
             echo "STATE_FILE=${RUNTIME_DIR}/state.json"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+            echo "SEMBLE_INDEX_AVAILABLE=false"
           } >> "$GITHUB_ENV"
 
       - name: Resolve workflow support ref
@@ -323,7 +327,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh; do
+          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py install_semble.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -403,6 +407,40 @@ jobs:
           done
 
           rm -rf .codex-workflow-src-main
+
+      - name: Setup uv
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "::warning::Semble binary not found on PATH after install; continuing without index."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          rm -rf "${SEMBLE_INDEX_PATH}"
+          if semble index . --out "${SEMBLE_INDEX_PATH}"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Semble index build failed; continuing without index."
+            rm -rf "${SEMBLE_INDEX_PATH}"
+          fi
 
       - name: Create Codex config
         run: |
