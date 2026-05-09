@@ -83,20 +83,14 @@ def test_render_prompt_replaces_semble_prefetch_and_guards_placeholder() -> None
 
 
 def test_render_prompt_preserves_multiline_semble_prefetch_verbatim() -> None:
-	rendered = _render_prompt(
-		"Before\n{{SEMBLE_PREFETCH}}\nAfter\n",
-		"=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===",
-	)
+    rendered = _render_prompt(
+        "Before\n{{SEMBLE_PREFETCH}}\nAfter\n",
+        "=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===",
+    )
 
-	assert rendered == (
-		"Before\n"
-		"=== SEMBLE: Judge Context ===\n"
-		"chunk 1\n"
-		"\n"
-		"chunk 2\n"
-		"=== END SEMBLE ===\n"
-		"After\n"
-	)
+    assert rendered == (
+        "Before\n=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===\nAfter\n"
+    )
 
 
 def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
