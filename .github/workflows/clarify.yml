@@ -29,6 +29,7 @@ jobs:
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
+      SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
       # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
       # policy. The smoke override below intentionally drops reasoning to
@@ -214,7 +215,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh write_codex_config.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -294,6 +295,9 @@ jobs:
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
             echo "QUESTIONS_FILE=${RUNTIME_DIR}/questions.txt"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+            echo "SEMBLE_INDEX_AVAILABLE=false"
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
@@ -492,6 +496,40 @@ jobs:
             # Comments are already in chronological order (direction=asc fetch).
             jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${ISSUE_CONTEXT_FILE}"
+
+      - name: Setup uv
+        if: steps.clarify_route.outputs.skip_codex != 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: steps.clarify_route.outputs.skip_codex != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: steps.clarify_route.outputs.skip_codex != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "::warning::Semble binary not found on PATH after install; continuing without index."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          rm -rf "${SEMBLE_INDEX_PATH}"
+          if semble index . --out "${SEMBLE_INDEX_PATH}"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Semble index build failed; continuing without index."
+            rm -rf "${SEMBLE_INDEX_PATH}"
+          fi
 
       - name: Create Codex config
         if: steps.clarify_route.outputs.skip_codex != 'true'
