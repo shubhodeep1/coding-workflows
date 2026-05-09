@@ -730,6 +730,12 @@ jobs:
 >    `workflow-templates/ai-*.yml` copies pinned `@stable` and get the
 >    conservative, release-gated channel.
 >
+> **Semble rollout note.** Consumer repos do not need wrapper-template edits
+> to pick up repo-wide Semble bootstrap parity. Their
+> `workflow-templates/ai-*.yml` wrappers already call these reusable
+> workflows by `@stable`, so propagation happens when a new `@stable`
+> release is cut — not by editing `workflow-templates/` in this repo.
+>
 > **Dogfood lint gate.** Because `@main` wrappers run whatever is on `main`,
 > a bad merge can cascade. To catch YAML/schema regressions on PRs before
 > they land on `main`, [`ci.yml`](.github/workflows/ci.yml) runs `yamllint`
@@ -920,16 +926,28 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `ENABLE_LABEL_REPAIR_SWEEP` | `true` | Contract-defined gate for poller label-repair sweep. Current branch status: reserved (not consumed yet); `reconcile_managed_issue_labels` runs every poll cycle for current-wave managed issues. |
 | `LABEL_REPAIR_DRY_RUN` | `false` | Contract-defined dry-run mode for label repair. Current branch status: reserved (not consumed yet); label diffs are applied live when detected. |
 | `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` | `50` | Contract-defined cap for per-cycle label-repair mutations. Current branch status: reserved (not consumed yet); effective scope is the current-wave issue set. |
-| `SEMBLE_ENABLED` | `false` | Opt-in gate for the implement workflow's Semble foundation plumbing. When `true`, the workflow best-effort installs `uv`, installs pinned `semble`, and prepares `${RUNTIME_DIR}/.semble-index`. Failures are fail-soft and preserve the legacy path. |
+| `SEMBLE_ENABLED` | `false` | Opt-in gate for repo-wide reusable-workflow Semble foundation plumbing. When `true`, supported reusable workflows best-effort install `uv`, install pinned `semble`, and prepare `${RUNTIME_DIR}/.semble-index` before any direct Semble usage. Failures are fail-soft and preserve the legacy path. |
 
 ### Semble runtime contract
 
-When the implement workflow runs, it exports these runtime env vars for downstream shell callers:
+When a reusable workflow runs with `SEMBLE_ENABLED=true`, it follows the same best-effort lifecycle — setup `uv`, install pinned `semble`, then build a workspace-local index under `${RUNTIME_DIR}/.semble-index` — and exports these runtime env vars for downstream shell callers:
 
 - `SEMBLE_AVAILABLE` — defaults to `false`; flips to `true` only when the pinned `uv`-managed Semble install is available on `PATH`.
 - `SEMBLE_INDEX_AVAILABLE` — defaults to `false`; flips to `true` only when the workflow successfully prepares the workspace-local `${RUNTIME_DIR}/.semble-index` metadata directory.
+- `SEMBLE_INDEX_DIR` — exported only when `SEMBLE_INDEX_AVAILABLE=true`; points at the workspace-local index directory consumed by shared helper scripts.
 
 Downstream scripts should treat both values as fail-soft capability flags and fall back cleanly when either is not `true`.
+
+Current branch coverage is additive and repo-wide for the reusable workflows that stage Semble today: `clarify.yml`, `plan.yml`, `implement.yml`, `review_autofix.yml`, `validate.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, and `orchestrate_clarify_respond.yml`.
+
+Semble observability uses these stable stderr log prefixes:
+
+- `SEMBLE_INSTALL` — install lifecycle status (`disabled`, `already_installed`, `installed`) and version/source details.
+- `SEMBLE_INDEX` — successful index creation with the workflow target and workspace-local path.
+- `SEMBLE_QUERY` — prompt-retrieval telemetry including target, chunk count, emitted bytes, and latency.
+- `SEMBLE_FALLBACK` — fail-soft reason markers when install, index, or query paths defer to the legacy behavior.
+
+`scripts/cost_audit.py` and workflow-log analysis treat `SEMBLE_QUERY ... bytes=...` as prompt-byte telemetry; install/index lifecycle logs remain observability signals and do not inflate prompt-byte totals.
 
 ## Semantic Cache (Clarification Only)
 

@@ -48,7 +48,6 @@
 
 set -euo pipefail
 source scripts/gh_helpers.sh 2>/dev/null || true
-source scripts/semble_helpers.sh 2>/dev/null || true
 type gh_retry &>/dev/null || gh_retry() { "$@"; }
 type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
   local _tmpf
@@ -115,19 +114,6 @@ patch_diagnose_reasoning_into_config() {
 patch_diagnose_reasoning_into_config
 
 echo "handled=false" >> "$GITHUB_OUTPUT"
-
-if [ -n "${ISSUE_META_FILE:-}" ]; then
-  if [ -n "${RUNTIME_DIR:-}" ]; then
-    case "${ISSUE_META_FILE}" in
-      "${RUNTIME_DIR}"/*) ;;
-      *)
-        ISSUE_META_FILE=""
-        ;;
-    esac
-  else
-    ISSUE_META_FILE=""
-  fi
-fi
 
 # Reuse the cached issue snapshot when available — see the
 # "Fetch issue metadata" step.  Falls back to a fresh API
@@ -255,95 +241,6 @@ UNTRACKED_LIST_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_files.txt"
 UNTRACKED_CONTEXT_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_context.txt"
 git diff HEAD > "${DIFF_FILE}" || true
 git ls-files --others --exclude-standard -z > "${UNTRACKED_LIST_FILE}" || true
-
-build_post_codex_semble_query() {
-  python3 - "${CAPTURE_FILE:-}" "${DIFF_FILE:-}" "${UNTRACKED_CONTEXT_FILE:-}" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-capture_path, diff_path, untracked_path = sys.argv[1:4]
-
-path_re = re.compile(
-    r"(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|sh|js|jsx|ts|tsx|json|ya?ml|toml|md|txt))(?:[:(]\d+(?::\d+)?)?"
-)
-identifier_re = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
-generic_tokens = {
-    "test",
-    "error",
-    "line",
-    "assert",
-    "traceback",
-    "failed",
-    "failure",
-    "python3",
-    "runtime",
-    "validation",
-}
-
-parts = []
-seen = set()
-
-
-def add(value: str, *, limit: int = 180) -> None:
-    value = re.sub(r"\s+", " ", value or "").strip()
-    if not value:
-        return
-    lowered = value.lower()
-    if lowered in seen:
-        return
-    seen.add(lowered)
-    parts.append(value[:limit])
-
-
-def ingest_text(text: str) -> None:
-    compact = re.sub(r"\s+", " ", text or "").strip()
-    if compact:
-        add(compact, limit=220)
-    for match in path_re.findall(text or ""):
-        add(match, limit=120)
-    for token in identifier_re.findall(text or ""):
-        lowered = token.lower()
-        if lowered in generic_tokens:
-            continue
-        if token.isupper() and len(token) <= 3:
-            continue
-        add(token, limit=120)
-
-
-for candidate in (capture_path, diff_path, untracked_path):
-    path = Path(candidate)
-    if not path.is_file() or path.stat().st_size <= 0:
-        continue
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[:80]:
-        ingest_text(line)
-
-query = " ; ".join(part for part in parts[:6] if part)
-query = re.sub(r"\s+", " ", query).strip()
-if len(query) >= 8:
-    print(query[:420])
-PY
-}
-
-append_post_codex_semble_block() {
-  for helper_name in _semble_bool_true _semble_sanitize_one_line semble_query_block_with_target; do
-    if [ "$(type -t "${helper_name}" 2>/dev/null || true)" != "function" ]; then
-      return 0
-    fi
-  done
-  if ! _semble_bool_true "${SEMBLE_ENABLED:-false}"; then
-    return 0
-  fi
-
-  local query_text
-  query_text="$(build_post_codex_semble_query 2>/dev/null || true)"
-  query_text="$(_semble_sanitize_one_line "${query_text}")"
-  if [ -z "${query_text}" ]; then
-    return 0
-  fi
-
-  semble_query_block_with_target "implement-diagnose" "${query_text}" 6 "Implement Diagnose Context" || true
-}
 
 {
   if [ ! -s "${UNTRACKED_LIST_FILE}" ]; then
@@ -479,8 +376,6 @@ fi
   echo
   echo "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ==="
   cat "${CAPTURE_FILE}"
-  echo
-  append_post_codex_semble_block
 } > "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
 
 extract_last_json_with_key() {

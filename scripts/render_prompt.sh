@@ -16,18 +16,6 @@ fi
 RENDERED_FILE="$(mktemp)"
 trap 'rm -f "${RENDERED_FILE}"' EXIT
 
-emit_semble_prefetch()
-{
-	if [ -z "${SEMBLE_PREFETCH_FILE:-}" ] || [ ! -r "${SEMBLE_PREFETCH_FILE}" ]; then
-		return 0
-	fi
-
-	local semble_line=""
-	while IFS= read -r semble_line || [ -n "${semble_line}" ]; do
-		printf '%s\n' "${semble_line}"
-	done < "${SEMBLE_PREFETCH_FILE}"
-}
-
 # {{WORKFLOW_EDIT_RESTRICTION}} resolves to one of two lines based on
 # ${ALLOW_WORKFLOW_EDITS}. The implement-mode prompt previously hard-coded
 # "Do not change CI workflows." which contradicted plans whose `files_touched`
@@ -48,17 +36,14 @@ while IFS= read -r line || [ -n "${line}" ]; do
 		"{{WORKFLOW_EDIT_RESTRICTION}}")
 			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 			;;
-		"{{SEMBLE_PREFETCH}}")
-			emit_semble_prefetch
-			;;
 		*)
 			printf '%s\n' "${line}"
 			;;
 	esac
 done < "${PROMPT_FILE}" > "${RENDERED_FILE}"
 
-if grep -qE '^[[:space:]]*\{\{(WORKFLOW_EDIT_RESTRICTION|SEMBLE_PREFETCH)\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
-	echo "Unresolved prompt placeholder in rendered output for ${PROMPT_FILE}" >&2
+if grep -qE '^[[:space:]]*\{\{WORKFLOW_EDIT_RESTRICTION\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+	echo "Unresolved WORKFLOW_EDIT_RESTRICTION placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi
 
