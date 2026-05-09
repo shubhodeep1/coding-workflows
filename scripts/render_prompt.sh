@@ -38,12 +38,13 @@ SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
 line=""
 while IFS= read -r line || [ -n "${line}" ]; do
 	trimmed_line="${line#"${line%%[![:space:]]*}"}"
+	trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
 	case "${trimmed_line}" in
 		"{{WORKFLOW_EDIT_RESTRICTION}}")
 			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 			;;
 		"{{SEMBLE_PREFETCH}}")
-			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK}"
+			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK%$'\n'}"
 			;;
 		*)
 			printf '%s\n' "${line}"
