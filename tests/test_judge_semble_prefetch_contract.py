@@ -80,6 +80,16 @@ def test_render_prompt_allows_empty_semble_prefetch() -> None:
 	assert result.stdout == "Role: judge\n\nTask body\n"
 
 
+def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
+	result = _run_render(
+		"Before {{SEMBLE_PREFETCH}} After\n",
+		semble_prefetch="=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stderr == ""
+	assert result.stdout == "Before {{SEMBLE_PREFETCH}} After\n"
+
+
 def test_orchestrate_poll_workflow_bootstraps_semble_for_judges() -> None:
 	workflow = _read(ORCHESTRATE_POLL_WORKFLOW)
 	stage_block = _step_block(workflow, "Stage workflow support files")
@@ -163,6 +173,7 @@ def main() -> int:
 	test_render_prompt_replaces_multiline_semble_prefetch()
 	test_render_prompt_rejects_unresolved_semble_placeholder()
 	test_render_prompt_allows_empty_semble_prefetch()
+	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
 	test_orchestrate_poll_workflow_bootstraps_semble_for_judges()
 	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
 	test_live_judge_templates_expose_semble_placeholder()
