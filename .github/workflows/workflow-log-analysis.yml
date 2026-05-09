@@ -200,7 +200,11 @@ jobs:
     #      case becomes observable in those callers.
     timeout-minutes: 60
     outputs:
-      report_file: ${{ steps.analyze.outputs.report_file }}
+      # commit_report may rename REPORT_FILE on a concurrent-write
+      # collision; downstream jobs (deep-audit, api-redundancy) must see
+      # the post-rename path, so prefer commit_report's output and fall
+      # back to analyze.outputs.report_file when commit_report did not run.
+      report_file: ${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file }}
       analysis_status: ${{ steps.analyze.outputs.analysis_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -583,6 +587,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No report changes to commit."
             echo "committed=false" >> "$GITHUB_OUTPUT"
+            echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -592,10 +597,74 @@ jobs:
             commit_msg="chore: add workflow log analysis report"
           fi
           git commit -m "${commit_msg}"
-          git pull --rebase origin "${TARGET_BRANCH}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+
+          # Concurrent runs of this workflow can each pick the same dated
+          # suffix (e.g. "...-3.md") because the suffix is derived from
+          # the local checkout in the analyze step, before Codex runs for
+          # 30+ minutes. By push time, another run may have already
+          # published the same path on TARGET_BRANCH, which makes
+          # `git pull --rebase` abort with an add/add conflict.
+          # Retry-with-rename: fetch the latest tip, and if our path
+          # already exists upstream, rename our report to the next free
+          # suffix (considering both the local checkout and origin),
+          # amend the commit, and retry the rebase + push. The retry
+          # bound covers the small race window between fetch and push.
+          REPORT_BASE=""
+          if [[ "${REPORT_FILE}" =~ ^(analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2})(-[0-9]+)?\.md$ ]]; then
+            REPORT_BASE="${BASH_REMATCH[1]}"
+          fi
+          push_attempt=0
+          push_max_attempts=5
+          push_backoff_secs=5
+          while : ; do
+            push_attempt=$((push_attempt + 1))
+            # Allow a transient fetch failure to be absorbed by the
+            # retry loop instead of killing the step under `set -e`.
+            # When the fetch fails we skip the upstream-collision check
+            # for this iteration; the rebase below does its own fetch.
+            fetch_ok=1
+            git fetch origin "${TARGET_BRANCH}" --depth=1 || fetch_ok=0
+
+            if [ "${fetch_ok}" -eq 1 ] && [ -n "${REPORT_BASE}" ] && git cat-file -e "FETCH_HEAD:${REPORT_FILE}" 2>/dev/null; then
+              next_suffix=2
+              while [ -e "${REPORT_BASE}-${next_suffix}.md" ] \
+                 || git cat-file -e "FETCH_HEAD:${REPORT_BASE}-${next_suffix}.md" 2>/dev/null; do
+                next_suffix=$((next_suffix + 1))
+              done
+              NEW_REPORT_FILE="${REPORT_BASE}-${next_suffix}.md"
+              echo "INFO: '${REPORT_FILE}' already exists on origin/${TARGET_BRANCH}; renaming to '${NEW_REPORT_FILE}' to avoid concurrent-write collision."
+              git mv -- "${REPORT_FILE}" "${NEW_REPORT_FILE}"
+              REPORT_FILE="${NEW_REPORT_FILE}"
+              git commit --amend --no-edit
+            fi
+
+            if git pull --rebase origin "${TARGET_BRANCH}" \
+               && git push origin "HEAD:${TARGET_BRANCH}"; then
+              break
+            fi
+
+            # Clean up an in-progress rebase so the next iteration starts
+            # from a known state.
+            if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+              git rebase --abort || true
+            fi
+
+            if [ "${push_attempt}" -ge "${push_max_attempts}" ]; then
+              echo "::error::Could not push workflow log analysis report after ${push_attempt} attempt(s) (target=${TARGET_BRANCH}, file=${REPORT_FILE})."
+              exit 1
+            fi
+            echo "::warning::Workflow log analysis report push attempt ${push_attempt} failed; retrying in ${push_backoff_secs}s."
+            sleep "${push_backoff_secs}"
+            # Exponential backoff capped at 60s so transient flakes don't
+            # exhaust the attempt budget in rapid succession.
+            push_backoff_secs=$(( push_backoff_secs * 2 ))
+            if [ "${push_backoff_secs}" -gt 60 ]; then
+              push_backoff_secs=60
+            fi
+          done
 
           echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
 
       - name: Send Telegram notification
         if: always()
@@ -618,7 +687,10 @@ jobs:
           source scripts/tg_helpers.sh
 
           ANALYSIS_STATUS="${{ steps.analyze.outputs.analysis_status || '' }}"
-          REPORT_FILE="${{ steps.analyze.outputs.report_file || '' }}"
+          # commit_report may rename REPORT_FILE on a concurrent-write
+          # collision; use its output when present so the Telegram link
+          # points at the file that was actually pushed.
+          REPORT_FILE="${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file || '' }}"
           REPORT_URL=""
           if [ -n "${REPORT_FILE}" ]; then
             REPORT_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
@@ -938,8 +1010,65 @@ jobs:
           fi
 
           git commit -m "chore: append deep audit section to workflow log analysis report"
-          git pull --rebase origin "${TARGET_BRANCH}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+
+          # The deep-audit and api-redundancy jobs both append a section
+          # to the same REPORT_FILE in parallel, so a concurrent push
+          # from the sibling job (or another in-flight run) can land
+          # between our fetch and our push and produce a non-fast-forward
+          # rejection or an end-of-file rebase conflict.
+          # Capture our just-made commit as a patch, then on push
+          # failure: abort any in-progress rebase, hard-reset to the
+          # refreshed origin tip, and re-apply the patch with
+          # `git am --3way` so the additions merge cleanly with whatever
+          # the sibling job published. Bounded retry with exponential
+          # backoff covers transient network failures too.
+          LOCAL_PATCH="$(mktemp)"
+          trap 'rm -f "${LOCAL_PATCH}"' EXIT
+          git format-patch -1 HEAD --stdout > "${LOCAL_PATCH}"
+
+          push_attempt=0
+          push_max_attempts=5
+          push_backoff_secs=5
+          while : ; do
+            push_attempt=$((push_attempt + 1))
+
+            if git pull --rebase origin "${TARGET_BRANCH}" \
+               && git push origin "HEAD:${TARGET_BRANCH}"; then
+              break
+            fi
+
+            if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+              git rebase --abort || true
+            fi
+            if [ -d .git/rebase-apply ]; then
+              git am --abort || true
+            fi
+
+            if [ "${push_attempt}" -ge "${push_max_attempts}" ]; then
+              echo "::error::Could not push deep audit section after ${push_attempt} attempt(s) (target=${TARGET_BRANCH}, file=${REPORT_FILE})."
+              exit 1
+            fi
+
+            fetch_ok=1
+            git fetch origin "${TARGET_BRANCH}" --depth=1 || fetch_ok=0
+            if [ "${fetch_ok}" -eq 1 ] && [ -s "${LOCAL_PATCH}" ]; then
+              git reset --hard FETCH_HEAD
+              if ! git am --3way --keep-cr < "${LOCAL_PATCH}"; then
+                if [ -d .git/rebase-apply ]; then
+                  git am --abort || true
+                fi
+                echo "::error::Could not re-apply deep audit patch onto refreshed origin/${TARGET_BRANCH}; aborting retries."
+                exit 1
+              fi
+            fi
+
+            echo "::warning::Deep audit section push attempt ${push_attempt} failed; retrying in ${push_backoff_secs}s."
+            sleep "${push_backoff_secs}"
+            push_backoff_secs=$(( push_backoff_secs * 2 ))
+            if [ "${push_backoff_secs}" -gt 60 ]; then
+              push_backoff_secs=60
+            fi
+          done
 
       - name: Send Telegram notification
         if: always()
@@ -1252,8 +1381,60 @@ jobs:
           fi
 
           git commit -m "chore: append API redundancy section to workflow log analysis report"
-          git pull --rebase origin "${TARGET_BRANCH}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+
+          # See deep-audit's "Commit and push" step for rationale: this
+          # job races with deep-audit (and any other in-flight run) on
+          # the same REPORT_FILE, so capture the local commit as a
+          # patch, retry with patch-replay (`git am --3way`) on top of
+          # the refreshed origin tip, and use exponential backoff for
+          # transient network failures.
+          LOCAL_PATCH="$(mktemp)"
+          trap 'rm -f "${LOCAL_PATCH}"' EXIT
+          git format-patch -1 HEAD --stdout > "${LOCAL_PATCH}"
+
+          push_attempt=0
+          push_max_attempts=5
+          push_backoff_secs=5
+          while : ; do
+            push_attempt=$((push_attempt + 1))
+
+            if git pull --rebase origin "${TARGET_BRANCH}" \
+               && git push origin "HEAD:${TARGET_BRANCH}"; then
+              break
+            fi
+
+            if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+              git rebase --abort || true
+            fi
+            if [ -d .git/rebase-apply ]; then
+              git am --abort || true
+            fi
+
+            if [ "${push_attempt}" -ge "${push_max_attempts}" ]; then
+              echo "::error::Could not push API redundancy section after ${push_attempt} attempt(s) (target=${TARGET_BRANCH}, file=${REPORT_FILE})."
+              exit 1
+            fi
+
+            fetch_ok=1
+            git fetch origin "${TARGET_BRANCH}" --depth=1 || fetch_ok=0
+            if [ "${fetch_ok}" -eq 1 ] && [ -s "${LOCAL_PATCH}" ]; then
+              git reset --hard FETCH_HEAD
+              if ! git am --3way --keep-cr < "${LOCAL_PATCH}"; then
+                if [ -d .git/rebase-apply ]; then
+                  git am --abort || true
+                fi
+                echo "::error::Could not re-apply API redundancy patch onto refreshed origin/${TARGET_BRANCH}; aborting retries."
+                exit 1
+              fi
+            fi
+
+            echo "::warning::API redundancy section push attempt ${push_attempt} failed; retrying in ${push_backoff_secs}s."
+            sleep "${push_backoff_secs}"
+            push_backoff_secs=$(( push_backoff_secs * 2 ))
+            if [ "${push_backoff_secs}" -gt 60 ]; then
+              push_backoff_secs=60
+            fi
+          done
 
       - name: Send Telegram notification
         if: always()
