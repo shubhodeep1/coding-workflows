@@ -359,7 +359,7 @@ fi
 build_diagnose_semble_query() {
   local output_file="$1"
   : > "${output_file}"
-  python3 - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}" <<'PY' || true
+  python3 - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build diagnose Semble query" >&2; :; }
 import os
 import re
 import sys

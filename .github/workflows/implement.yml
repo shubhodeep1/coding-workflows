@@ -1929,7 +1929,7 @@ jobs:
             build_repair_semble_query() {
               local output_file="$1"
               : > "${output_file}"
-              python3 - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}" <<'PY' || true
+              python3 - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build repair Semble query" >&2; :; }
           import os
           import re
           import sys
