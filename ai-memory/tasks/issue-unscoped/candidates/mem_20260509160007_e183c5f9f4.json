@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:entire file | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The newly added contract test file is not integrated into any CI workflow.\n  WHY: The test file will not execute during CI/release gate runs because it is not listed in `.github/workflows/ci.yml`, `mark-stable.yml`, or `test-and-mark-stable.yml`.\n- .github/workflows/ci.yml:171-176 | severity=critical | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The explicit test list does not include `tests/test_review_semble_contract.py`.\n  WHY: The workflow explicitly lists test files to run, so the new contract test must be added there to execute in CI/release gates.\n- scripts/review_apply_fixes.sh:255-301 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: append_semble_query_section is duplicated verbatim here, in scripts/review_conflict_prepare.sh (lines 444-482), and scripts/review_run_reviewers.sh (lines 727-765).\n  WHY: Future modifications (e.g., byte limit changes, encoding tweaks) must be manually synced across three locations, leading to drift where one prompt path truncates differently from others, causing inconsistent Semble query generation.\n- scripts/targeted_file_context.py:309-354 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The `reason` field in `_run_semble_query` may contain unescaped spaces when `stderr_tail` is appended, breaking the space-separated log format contract.\n  WHY: When a subprocess fails, `reason = f\"{reason} {stderr_tail}\"` can include spaces, so consumers parsing the telemetry line may fail.\n- scripts/targeted_file_context.py:418-436 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Passes raw reason (potentially multi-word from `_run_semble_query`) to space-separated logger without quoting/escaping.\n  WHY: Same parsing breakage as above when reason has spaces (common in stderr like \"no such file\").\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_semble_contract.py:entire file | severity=critical | confidence=5\n  PROBLEM: New contract test file is not integrated into any CI workflow\n  WHY: No `.github/workflows/` entries reference this test file, so it will not run in CI/release gates; without CI integration, Semble wiring regressions will not be caught.\n- scripts/review_apply_fixes.sh:258-267, scripts/review_conflict_prepare.sh:448-457, scripts/review_run_reviewers.sh:730-739 | confidence=5\n  PROBLEM: append_semble_query_section is duplicated across three scripts\n  WHY: Future modifications must be manually synced across three locations, leading to drift.\n- scripts/targeted_file_context.py:346-348 | confidence=4\n  PROBLEM: The `reason` field in `_run_semble_query` may contain unescaped spaces when `stderr_tail` is appended, breaking the space-separated log format contract\n  WHY: The code appends `stderr_tail` to the reason; if stderr contains multi-word messages, the resulting log line becomes ambiguous for space-separated key=value parsing.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_semble_contract.py:entire file | severity=critical | confidence=5\n  PROBLEM: The `tests/test_review_semble_contract.py` file is not integrated into any CI workflow.\n  WHY: The test file will not execute during CI/release gate runs because it is not listed in `.github/workflows/ci.yml`, `mark-stable.yml`, or `test-and-mark-stable.yml`.\n- scripts/targeted_file_context.py:348-350 | confidence=4\n  PROBLEM: The `reason` field in `_run_semble_query` may contain unescaped spaces when `stderr_tail` is appended, breaking the space-separated log format contract.\n  WHY: When a subprocess fails, `reason = f\"{reason} {stderr_tail}\"` can include spaces, so consumers parsing the telemetry line may fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_semble_contract.py:entire new file | severity=critical | confidence=5\n  PROBLEM: The newly added contract test is not wired into any CI workflow.\n  WHY: grep for `test_review_semble_contract` across `.github/workflows/` returns zero hits, so the file will never execute in CI or release gates.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_apply_fixes.sh:255-301, scripts/review_conflict_prepare.sh:444-482, scripts/review_run_reviewers.sh:727-765 | severity=medium | confidence=5\n  PROBLEM: append_semble_query_section is duplicated verbatim here, in scripts/review_conflict_prepare.sh (lines 444-482), and scripts/review_run_reviewers.sh (lines 727-765).\n  WHY: Future modifications (e.g., byte limit changes, encoding tweaks) must be manually synced across three locations, leading to drift where one prompt path truncates differently from others, causing inconsistent Semble query generation.\n- tests/test_review_semble_contract.py:entire file | severity=critical | confidence=5\n  PROBLEM: No integration into CI workflows; absent from explicit `python3 tests/...` invocations in .github/workflows/ci.yml, mark-stable.yml, test-and-mark-stable.yml.\n  WHY: Semble wiring regressions silently pass CI/release gates undetected, as test never executes automatically.\n- scripts/targeted_file_context.py:309-343 | severity=medium | confidence=4\n  PROBLEM: reason field can embed unescaped spaces/newlines from stderr_tail (last line of stderr), breaking space-separated key=value parsing in consumers/tests.\n  WHY: Log parsing fails when stderr text is appended unescaped to the reason value.\n- scripts/targeted_file_context.py:418-436 | severity=medium | confidence=4\n  PROBLEM: Passes raw reason (potentially multi-word from _run_semble_query) to space-separated logger without quoting/escaping.\n  WHY: Same parsing breakage as above when reason has spaces (common in stderr like \"no such file\").\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_review_semble_contract.py:entire new file | severity=critical | confidence=5\n  PROBLEM: The newly added contract test file is not integrated into any CI workflow.\n  WHY: The test will not run in CI/release gates, so Semble wiring regressions would not be caught automatically.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3fd5a4626a9d7e19eb315105917a8d64314a8dfa92d8df2c656f99277ee847db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2387,
+    "run_id": "25604965876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25604965876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509160007_e183c5f9f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2387,
+    "run_id": "25604965876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T16:00:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
