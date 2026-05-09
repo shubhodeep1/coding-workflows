@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1025-1028 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: jq -Rs on potentially multi-line comment_body produces { \"body\": [...] } where body is a JSON array of raw input lines, but GitHub /issues/{num}/comments API requires body as a JSON string.\n  WHY: The claimed array-shaped payload would be rejected by the API, causing the post to fail.\n- scripts/orchestrate_poll_process.sh:1019-1027 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The inline comment claims `-Rs` reads the body as a single raw string and that `printf` being a bash builtin is the reason the cap is avoided.\n  WHY: One reviewer flagged that the builtin detail is incidental and the real fix is the stdin pipe, so the comment can mislead readers about why the workaround works.\n- scripts/orchestrate_poll_process.sh:post_tracking_comment() after jq step (~line 1029)\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: No validation of produced JSON payload shape before gh api POST; jq exit 0 accepts but invalid {body: array} passes unchecked.\n  WHY: The payload can reach gh api even when the JSON shape is wrong, so a malformed request would only fail downstream.\n- scripts/orchestrate_poll_process.sh:gh api call (~line 1030+)\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: gh api failure (e.g. 422) not captured; function continues as if success.\n  WHY: A failed POST can be treated as successful, so the comment never posts and the orchestrator can continue from stale state.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:1019-1027\n  PROBLEM: The inline comment is slightly misleading about `printf`/`-Rs` behavior.\n  WHY: The actual fix is the stdin pipe; the builtin detail is incidental and can distract from the real mechanism.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:1025-1028 | confidence=5\n  PROBLEM: jq -Rs on potentially multi-line comment_body produces { \"body\": [...] } where body is a JSON array of raw input lines, but GitHub /issues/{num}/comments API requires body as a JSON string.\n  WHY: gh api POST would send the wrong JSON shape, leading to a 422 Invalid response and the comment not being posted.\n- scripts/orchestrate_poll_process.sh:1019-1024 | confidence=4\n  PROBLEM: Comment claims \"-Rs reads it as a single raw string\" but -Rs actually slurps raw input lines into array (output is always array even for single line), and attributes avoidance of MAX_ARG_STRLEN solely to printf builtin whereas core fix is stdin pipe (builtin only helps bash expansion).\n  WHY: Misleading doc slows debugging when API 422 reproduces.\n- scripts/orchestrate_poll_process.sh:post_tracking_comment() after jq step (~line 1029)\n  PROBLEM: No validation of produced JSON payload shape before gh api POST; jq exit 0 accepts but invalid {body: array} passes unchecked.\n  WHY: A malformed payload can be generated and then posted without any shape check.\n- scripts/orchestrate_poll_process.sh:gh api call (~line 1030+)\n  PROBLEM: gh api failure (e.g. 422) not captured; function continues as if success.\n  WHY: The function can return success even though the comment post failed, leaving state stale.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "23bc3a80aa7eb332050c7a3f7b877bdb7f1afe327a85401d613393e66333040d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2365,
+    "run_id": "25599100052",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25599100052",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509110407_6b24416d9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2365,
+    "run_id": "25599100052"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T11:04:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
