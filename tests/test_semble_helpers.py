@@ -135,6 +135,31 @@ def test_semble_query_block_command_failure_stays_fail_open() -> None:
 		assert "SEMBLE_QUERY" not in result.stdout
 
 
+def test_semble_elapsed_ms_clamps_negative_duration_to_zero() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fake_date = bin_dir / "date"
+		_write_executable(
+			fake_date,
+			"#!/usr/bin/env bash\n"
+			"exit 1\n",
+		)
+
+		result = _run_bash(
+			f"source {HELPERS}\n_semble_elapsed_ms 1715251234567",
+			root,
+			env={
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			},
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert result.stdout == "0\n"
+		assert result.stderr == ""
+
+
 def test_install_semble_marks_available_when_pinned_binary_exists() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -146,7 +171,7 @@ def test_install_semble_marks_available_when_pinned_binary_exists() -> None:
 			fake_semble,
 			"#!/usr/bin/env bash\n"
 			"if [ \"${1:-}\" = \"--version\" ]; then\n"
-			"\tprintf 'semble 0.1.3\\n'\n"
+			"\tprintf 'Semble CLI v0.1.3 (build 7)\\n'\n"
 			"\texit 0\n"
 			"fi\n"
 			"printf 'unexpected args: %s\\n' \"$*\" >&2\n"
@@ -169,6 +194,44 @@ def test_install_semble_marks_available_when_pinned_binary_exists() -> None:
 		assert result.returncode == 0, result.stderr
 		assert result.stdout == ""
 		assert github_env.read_text(encoding="utf-8") == "SEMBLE_AVAILABLE=true\n"
+
+
+def test_install_semble_rejects_partial_version_match() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fake_semble = bin_dir / "semble"
+		github_env = root / "github.env"
+		_write_executable(
+			fake_semble,
+			"#!/usr/bin/env bash\n"
+			"if [ \"${1:-}\" = \"--version\" ]; then\n"
+			"\tprintf 'semble 10.1.3\\n'\n"
+			"\texit 0\n"
+			"fi\n"
+			"printf 'unexpected args: %s\\n' \"$*\" >&2\n"
+			"exit 2\n",
+		)
+
+		result = subprocess.run(
+			["bash", str(INSTALLER)],
+			cwd=root,
+			env={
+				**os.environ,
+				"PYTHONDONTWRITEBYTECODE": "1",
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"GITHUB_ENV": str(github_env),
+				"SEMBLE_PYTHON_BIN": "missing-python",
+			},
+			capture_output=True,
+			text=True,
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert result.stdout == ""
+		assert github_env.read_text(encoding="utf-8") == "SEMBLE_AVAILABLE=false\n"
+		assert "found non-pinned Semble (semble 10.1.3); attempting install of semble==0.1.3." in result.stderr
 
 
 def test_install_semble_fails_open_and_marks_unavailable_on_install_error() -> None:

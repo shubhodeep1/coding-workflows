@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import io
 import contextlib
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import targeted_file_context as targeted_file_context_module  # noqa: E402
 
 from targeted_file_context import (  # noqa: E402
 	SEMBLE_QUERY_TIMEOUT_SECS,
@@ -493,6 +496,69 @@ def test_semble_query_timeout_falls_back_cleanly() -> None:
 		assert "timed out" in stderr.getvalue().lower()
 
 
+def test_semble_query_oserror_falls_back_cleanly() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
+		original_run = targeted_file_context_module.subprocess.run
+
+		def _raise_oserror(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+			raise OSError("simulated-oserror")
+
+		targeted_file_context_module.subprocess.run = _raise_oserror
+		stderr = io.StringIO()
+		try:
+			with contextlib.redirect_stderr(stderr):
+				context = emit_context(
+					["src/big.py"],
+					root,
+					max_bytes=100,
+					semble_bin=str(root / "fake_semble"),
+					semble_index=str(root / ".semble-index"),
+					semble_query_text="task summary",
+				)
+		finally:
+			targeted_file_context_module.subprocess.run = original_run
+
+		assert "would overflow total budget" in context
+		telemetry = stderr.getvalue()
+		assert "SEMBLE_FALLBACK target=overflow file=src/big.py reason=simulated-oserror" in telemetry
+		assert " ms=" in telemetry
+
+
+def test_semble_query_exception_timeout_falls_back_cleanly() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("x = 1\n" * 2000, encoding="utf-8")
+		original_run = targeted_file_context_module.subprocess.run
+
+		def _raise_timeout(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+			raise subprocess.TimeoutExpired(cmd=["semble", "query"], timeout=SEMBLE_QUERY_TIMEOUT_SECS)
+
+		targeted_file_context_module.subprocess.run = _raise_timeout
+		stderr = io.StringIO()
+		try:
+			with contextlib.redirect_stderr(stderr):
+				context = emit_context(
+					["src/big.py"],
+					root,
+					max_bytes=100,
+					semble_bin=str(root / "fake_semble"),
+					semble_index=str(root / ".semble-index"),
+					semble_query_text="task summary",
+				)
+		finally:
+			targeted_file_context_module.subprocess.run = original_run
+
+		assert "would overflow total budget" in context
+		telemetry = stderr.getvalue()
+		assert "SEMBLE_FALLBACK target=overflow file=src/big.py" in telemetry
+		assert "timed out" in telemetry.lower()
+		assert " ms=" in telemetry
+
+
 def test_overflow_off_fallback_emits_no_representation_and_no_marker_count() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -665,6 +731,20 @@ def main() -> int:
 		except Exception as e:
 			print(f"  FAIL  {name}: {e}")
 			failed += 1
+	# CI workflows run this script directly via an explicit file list.
+	# Delegate the companion Semble helper suite here so its contract
+	# tests are enforced without workflow-YAML edits.
+	companion = subprocess.run(
+		[sys.executable, str(REPO_ROOT / "tests" / "test_semble_helpers.py")],
+		cwd=REPO_ROOT,
+		check=False,
+	)
+	if companion.returncode == 0:
+		print("  PASS  delegated tests/test_semble_helpers.py")
+		passed += 1
+	else:
+		print(f"  FAIL  delegated tests/test_semble_helpers.py: exit {companion.returncode}")
+		failed += 1
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 	return 1 if failed > 0 else 0
 

@@ -42,6 +42,7 @@ _semble_elapsed_ms()
 {
 	local start_ms="${1:-0}"
 	local end_ms=""
+	local diff="0"
 
 	end_ms="$(date +%s%3N 2>/dev/null || printf '0')"
 	case "${start_ms}${end_ms}" in
@@ -50,7 +51,12 @@ _semble_elapsed_ms()
 			return 0
 			;;
 	esac
-	printf '%s\n' "$((end_ms - start_ms))"
+	diff="$((end_ms - start_ms))"
+	if [ "${diff}" -lt 0 ]; then
+		printf '0\n'
+		return 0
+	fi
+	printf '%s\n' "${diff}"
 }
 
 _semble_cleanup_tempfiles()

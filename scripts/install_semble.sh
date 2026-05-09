@@ -73,16 +73,14 @@ current_semble_version()
 binary_matches_pin()
 {
 	local version_text=""
+	local version_pattern=""
 
 	version_text="$(current_semble_version)" || return 1
-	case "${version_text}" in
-		*"${SEMBLE_VERSION}"*)
-			return 0
-			;;
-		*)
-			return 1
-			;;
-	esac
+	version_pattern="${SEMBLE_VERSION//./\\.}"
+	if printf '%s\n' "${version_text}" | grep -Eq "(^|[^0-9.])${version_pattern}([^0-9.]|$)"; then
+		return 0
+	fi
+	return 1
 }
 
 mark_available()
