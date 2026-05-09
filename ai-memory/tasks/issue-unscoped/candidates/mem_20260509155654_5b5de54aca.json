@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_semble_contract.py:38-55 | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `_step_block` uses raw string matching and indentation heuristics, so quoted step names, trailing whitespace, or different YAML styles can break the contract test or extract the wrong block.\n  WHY: Three reviewers independently reported the same pre-existing YAML parser fragility in the test helper.\n- .github/workflows/implement.yml:1921-2084 | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The repair Semble query builder ends with `|| true`, so Python heredoc failures are silently suppressed and the Semble context block can disappear.\n  WHY: Three reviewers independently reported the same silent-error suppression in the repair query builder.\n- scripts/implement_diagnose_post_codex_failure.sh:351-449 | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The diagnose Semble query builder ends with `|| true`, so Python heredoc failures are silently suppressed and the Semble context block can disappear.\n  WHY: Three reviewers independently reported the same silent-error suppression in the diagnose query builder.\n- tests/test_implement_semble_contract.py:entire file | confidence=[5]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The Semble contract test suite is not wired into CI and only runs when manually invoked.\n  WHY: This lets Semble wiring regressions pass CI undetected until an operator runs the test manually.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_implement_semble_contract.py:38-55 | confidence=3\n  PROBLEM: The test uses exact string matching and indentation heuristics to parse YAML workflow steps.\n  WHY: Legitimate workflow formatting changes could cause false test failures and block CI without indicating actual Semble wiring defects.\n- .github/workflows/implement.yml:1932 | confidence=3\n  PROBLEM: The Python heredoc for building repair Semble queries uses `|| true`, which suppresses all errors including syntax errors, file read failures, or regex exceptions.\n  WHY: If the Python script fails, the Semble repair block silently disappears from the prompt without any log evidence.\n- scripts/implement_diagnose_post_codex_failure.sh:362 | confidence=3\n  PROBLEM: The Python heredoc for building diagnose Semble queries also uses `|| true`, which suppresses all errors including file read failures and encoding issues.\n  WHY: If the heredoc crashes, the Semble diagnose block is omitted without trace and diagnose prompts lack relevant code neighborhood context.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_implement_semble_contract.py:38-55 | confidence=4\n  PROBLEM: `_step_block` uses `line.strip() != needle` and indentation heuristics to match steps, which is brittle for quoted names, flow-style YAML, or indentation changes.\n  WHY: Legitimate workflow refactors can make the contract test fail or extract the wrong block, causing false-positive CI failures.\n- .github/workflows/implement.yml:1929-1931 | confidence=3\n  PROBLEM: The Python heredoc that builds the repair Semble query text terminates with `|| true`, which suppresses all stderr and non-zero exits.\n  WHY: If the heredoc fails, the Semble query block silently vanishes from the repair prompt and leaves no diagnostic signal in GitHub Actions logs.\n- scripts/implement_diagnose_post_codex_failure.sh:359-362 | confidence=3\n  PROBLEM: The Python heredoc in `build_diagnose_semble_query()` also terminates with `|| true`, so all errors are silently absorbed.\n  WHY: Diagnose prompts lose Semble neighborhood context silently when the query builder fails.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_implement_semble_contract.py:38-55 | confidence=4\n  PROBLEM: YAML parsing uses heuristic string matching on unquoted `- name: Step` prefixes and exact sibling-step indentation equality without handling quoted names, trailing whitespace, or varying YAML styles.\n  WHY: Contract test falsely fails or extracts incorrect step blocks during workflow refactors, blocking CI merges without validating Semble wiring.\n- .github/workflows/implement.yml:1921-2084 | confidence=4\n  PROBLEM: `python3 - ... <<'PY' || true` discards all Python stdout/stderr, including syntax errors, file open failures, and regex crashes on malformed input.\n  WHY: Semble repair context block can be silently omitted from the post-Codex prompt when the query heuristic fails, degrading repair effectiveness without log visibility.\n- scripts/implement_diagnose_post_codex_failure.sh:351-449 | confidence=4\n  PROBLEM: `python3 - ... <<'PY' || true` suppresses all Python errors and exceptions, including OSError on missing CAPTURE_FILE and non-UTF8 tail_text decode failures.\n  WHY: Semble diagnose context block can vanish from the prompt without evidence when the heuristic crashes, starving implement-diagnose of neighborhood code and producing low-quality fix proposals.\n- tests/test_implement_semble_contract.py:entire file | confidence=5\n  PROBLEM: The contract test suite runs only when manually invoked and is absent from CI workflows.\n  WHY: Semble wiring regressions can pass CI undetected until manual operator checks, allowing broken implement runs in production.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8dc459c6db6a4c1ec73f0a7dbcfd8e34f05ac065adc244b41e2dffe8d17a5713",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2389,
+    "run_id": "25604988652",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25604988652",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509155654_5b5de54aca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2389,
+    "run_id": "25604988652"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T15:56:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
