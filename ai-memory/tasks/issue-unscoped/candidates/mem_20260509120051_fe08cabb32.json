@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3242-3477 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Detailed timeout derivation references specific historical run IDs and DEADLINE sums but omits explicit cross-reference to workflow-log-analysis.yml job timeouts for coordinated bumping.\n  WHY: One reviewer reported a documentation gap; multiple others said the bump protocol is already documented, so this is a disputed low-severity concern.\n- .github/workflows/test-and-mark-stable.yml:4794-4811 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Comment at lines 4737-4803 still mentions \"orphan-workflows-test (workflow_log_analysis, ...)\" despite split-out.\n  WHY: One reviewer flagged a stale cross-reference; other reviewers said the comment was correctly updated, so the concern is disputed and cosmetic.\n- .github/workflows/test-and-mark-stable.yml:5034-5055 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: LOG_ANALYSIS omitted from all_supplemental_ok (intentional non-gate) but included equivalently in FAILED status_line loop and success MSG with icon.\n  WHY: One reviewer called the notification asymmetry misleading; others said it is intentional non-gating behavior, so the concern is cosmetic.\n- scripts/orchestrate_poll_process.sh:1015-1031 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: No pre-pipe length check on comment_body (e.g. < GitHub 1MB limit).\n  WHY: Some reviewers treated this as a hardening-only concern, while others called it a valid low-severity issue; the remaining fail-open path still hides oversized-comment failures.\n- scripts/orchestrate_poll_process.sh:1027-1031 | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Tempfiles are created but could be cleaned up on SIGINT/SIGTERM\n  WHY: Add trap cleanup or automatic cleanup to avoid lingering mktemp files.\n- .github/workflows/test-and-mark-stable.yml:4797-5071 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `notify` job's `needs` list includes `sync-to-main` and `resolve-version`, but neither appears in the FAILED-branch status line loop.\n  WHY: If `sync-to-main` fails, the notify job still runs (due to `if: always()`), but the failure is not enumerated in the Telegram message. Same for `resolve-version`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:1015-1031\n  PROBLEM: Add a size guard before piping to jq\n  WHY: If `comment_body` exceeds GitHub's 65536-byte comment limit, the `gh api` POST fails silently via `|| true`, and the only diagnostic is the absence of the comment on the tracking issue.\n- .github/workflows/test-and-mark-stable.yml:4797-5071\n  PROBLEM: The `notify` job's `needs` list includes `sync-to-main` and `resolve-version`, but neither appears in the FAILED-branch status line loop.\n  WHY: If `sync-to-main` fails, the notify job still runs (due to `if: always()`), but the failure is not enumerated in the Telegram message. Same for `resolve-version`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:1015-1031 | confidence=3\n  PROBLEM: No explicit size check exists before piping to jq\n  WHY: The no-argv fix is correct, but the body can still exceed GitHub's comment limit; this is a valid low-severity hardening concern.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:1015-1031 | confidence=3\n  PROBLEM: No size check on comment_body\n  WHY: The fail-open behavior with warning is consistent with the previous implementation, but GitHub's API can still reject oversized comments.\n- scripts/orchestrate_poll_process.sh:1027-1031\n  PROBLEM: Tempfiles are created but could be cleaned up on SIGINT/SIGTERM\n  WHY: Suggested trap cleanup or automatic cleanup to avoid lingering mktemp files.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:1015-1031 | confidence=3\n  PROBLEM: No size check before piping to jq\n  WHY: The MAX_ARG_STRLEN fix is correct, but GitHub API size rejection is still possible; this is a hardening concern rather than a correctness bug.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:3242-3477 | confidence=2\n  PROBLEM: Detailed timeout derivation references specific historical run IDs and DEADLINE sums but omits explicit cross-reference to workflow-log-analysis.yml job timeouts for coordinated bumping.\n  WHY: Future uncoordinated bumps in workflow-log-analysis.yml could lead to premature job cancellation reported as release failure.\n- .github/workflows/test-and-mark-stable.yml:4794-4811 | confidence=2\n  PROBLEM: Comment at lines 4737-4803 still mentions \"orphan-workflows-test (workflow_log_analysis, ...)\" despite split-out.\n  WHY: This stale historical context could confuse maintainers tracing soft-error reports.\n- .github/workflows/test-and-mark-stable.yml:5034-5055 | confidence=2\n  PROBLEM: LOG_ANALYSIS omitted from all_supplemental_ok (intentional non-gate) but included equivalently in FAILED status_line loop and success MSG with icon.\n  WHY: The notification asymmetry is cosmetic but may mislead rushed operator scans of FAILED Telegram.\n- scripts/orchestrate_poll_process.sh:1015-1031 | confidence=2\n  PROBLEM: No pre-pipe length check on comment_body (e.g. < GitHub 1MB limit).\n  WHY: `printf | jq -Rs` avoids the argv cap, but GitHub can still reject oversized comments server-side and the fail-open path hides that failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:1015-1031 | confidence=3\n  PROBLEM: No size check before piping to jq\n  WHY: GitHub's API still enforces size limits, so the fail-open warning path can mask an oversized-comment rejection.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ac3fc9b58418e4ab08b316ad1d2bc15b3bb4dfc4699290d77591d08c124b83cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2366,
+    "run_id": "25599744090",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25599744090",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509120051_fe08cabb32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2366,
+    "run_id": "25599744090"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T12:00:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
