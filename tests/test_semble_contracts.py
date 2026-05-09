@@ -567,6 +567,15 @@ def test_cost_audit_parse_log_tracks_semble_bytes_and_prefers_phase_buckets() ->
 	assert parsed["semble_buckets"]["target=index"]["fallbacks"] == 1, parsed
 
 
+def test_cost_audit_parse_log_accepts_prefixed_semble_fallback_lines() -> None:
+	parsed = cost_audit.parse_log(
+		"2026-05-09T02:15:20Z [job]\tSEMBLE_FALLBACK target=overflow file=src/big.py reason=binary_unavailable"
+	)
+	assert parsed["semble_fallbacks"] == 1, parsed
+	assert parsed["semble_buckets"]["target=overflow"]["fallbacks"] == 1, parsed
+	assert "unscoped" not in parsed["semble_buckets"], parsed
+
+
 def test_cost_audit_parse_log_counts_lifecycle_fallbacks_without_inflating_bytes() -> None:
 	parsed = cost_audit.parse_log(
 		"\n".join(
