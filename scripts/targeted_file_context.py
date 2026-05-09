@@ -140,7 +140,10 @@ SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 def _log_semble_event(prefix: str, **fields: object) -> None:
 	parts = [prefix]
 	for key, value in fields.items():
-		parts.append(f"{key}={value}")
+		rendered = str(value)
+		if not rendered or any(ch.isspace() for ch in rendered):
+			rendered = repr(rendered)
+		parts.append(f"{key}={rendered}")
 	print(" ".join(parts), file=sys.stderr)
 
 
