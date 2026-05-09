@@ -1,5 +1,7 @@
 Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely). Evaluate the PR and decide how to unblock it.
 
+{{SEMBLE_PREFETCH}}
+
 Context provided below:
 - The PR diff (full change set)
 - All PR comments (editor summaries, reviewer findings, human comments)

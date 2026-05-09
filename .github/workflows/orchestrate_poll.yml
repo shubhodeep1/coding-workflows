@@ -306,7 +306,7 @@ jobs:
               src=".codex-workflow-src-main/scripts/${f}"
             fi
             if [ ! -f "${src}" ]; then
-              echo "::warning::Optional support script '${f}' not available in checked-out support sources; continuing without Semble bootstrap support."
+              echo "::warning::Optional support script ${f} is missing from ${wf_source}@${SCRIPT_REF}; continuing without Semble bootstrap support."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -392,21 +392,23 @@ jobs:
 
       - name: Setup uv for Semble
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
         uses: astral-sh/setup-uv@v3
 
       - name: Install semble
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
 
           if [ ! -f "scripts/install_semble.sh" ]; then
-            echo "::warning::install_semble.sh missing from poll bootstrap; continuing without Semble."
+            echo "::warning::install_semble.sh missing from workflow support bootstrap at scripts/install_semble.sh; continuing without Semble."
             echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
 
           # shellcheck source=/dev/null
-          source scripts/install_semble.sh
+          source "scripts/install_semble.sh"
 
           SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"
           if [ -n "${SEMBLE_BIN_PATH}" ]; then
@@ -415,6 +417,7 @@ jobs:
 
       - name: Build semble index
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
 

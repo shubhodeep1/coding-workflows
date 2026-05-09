@@ -13,11 +13,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RENDER_PROMPT = REPO_ROOT / "scripts" / "render_prompt.sh"
 ORCHESTRATE_POLL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
-ORCHESTRATE_POLL_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 REVIEW_RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 JUDGE_PROMPT = REPO_ROOT / "prompts" / "mode-judge.txt"
 STALL_PROMPT = REPO_ROOT / "prompts" / "mode-judge-stall-recovery.txt"
 REVIEW_BLOCKED_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
+ORCHESTRATE_POLL_JUDGE_PROMPT = REPO_ROOT / "prompts" / "mode-orchestrate-poll-judge.txt"
 
 _UNSET = object()
 
@@ -45,20 +46,23 @@ def _function_block(text: str, start_marker: str, end_marker: str) -> str:
 
 
 def _render_prompt(template_text: str, *, semble_prefetch: object = _UNSET) -> subprocess.CompletedProcess[str]:
-	with tempfile.TemporaryDirectory() as td:
+	with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
 		prompt_path = Path(td) / "prompt.txt"
 		prompt_path.write_text(template_text, encoding="utf-8")
+
 		env = dict(os.environ)
 		if semble_prefetch is _UNSET:
 			env.pop("SEMBLE_PREFETCH", None)
 		else:
 			env["SEMBLE_PREFETCH"] = str(semble_prefetch)
+
 		return subprocess.run(
 			["bash", str(RENDER_PROMPT), str(prompt_path)],
 			cwd=str(REPO_ROOT),
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 			check=False,
 		)
 
@@ -73,6 +77,7 @@ def _run_bash(command: str, *, env_updates: dict[str, str] | None = None) -> sub
 		env=env,
 		capture_output=True,
 		text=True,
+		timeout=60,
 		check=False,
 	)
 
@@ -114,27 +119,35 @@ def test_render_prompt_rejects_unresolved_semble_prefetch_placeholder() -> None:
 	assert "Unresolved SEMBLE_PREFETCH placeholder" in result.stderr
 
 
-def test_orchestrate_poll_workflow_bootstraps_semble_for_judge_paths() -> None:
+def test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
 	workflow = _read(ORCHESTRATE_POLL_WORKFLOW)
-	init_block = _step_block(workflow, "Create runtime workspace")
 	stage_block = _step_block(workflow, "Stage workflow support files")
-	uv_block = _step_block(workflow, "Setup uv for Semble")
-	install_block = _step_block(workflow, "Install semble")
-	index_block = _step_block(workflow, "Build semble index")
+	init_block = _step_block(workflow, "Create runtime workspace")
 
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"' in stage_block
+	assert 'install -m 0755 "${src}" "scripts/${f}"' in stage_block
 	assert 'echo "SEMBLE_AVAILABLE=false"' in init_block
 	assert 'echo "SEMBLE_BIN="' in init_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in init_block
 	assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in init_block
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"' in stage_block
-	assert 'install -m 0755 "${src}" "scripts/${f}"' in stage_block
-	assert "env.SEMBLE_ENABLED == 'true'" in uv_block
+
+
+def test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps() -> None:
+	workflow = _read(ORCHESTRATE_POLL_WORKFLOW)
+	uv_block = _step_block(workflow, "Setup uv for Semble")
+	install_block = _step_block(workflow, "Install semble")
+	index_block = _step_block(workflow, "Build semble index")
+
 	assert "astral-sh/setup-uv@v3" in uv_block
-	assert 'source scripts/install_semble.sh' in install_block
+	assert "env.SEMBLE_ENABLED == 'true'" in uv_block
+	assert "continue-on-error: true" in uv_block
+	assert 'source "scripts/install_semble.sh"' in install_block
+	assert "continue-on-error: true" in install_block
 	assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
 	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' in index_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in index_block
+	assert "continue-on-error: true" in index_block
 
 
 def test_judge_templates_include_semble_prefetch_near_the_header() -> None:
@@ -151,20 +164,26 @@ def test_judge_templates_include_semble_prefetch_near_the_header() -> None:
 
 
 def test_orchestrate_poll_process_wires_semble_into_all_live_judge_paths() -> None:
-	script = _read(ORCHESTRATE_POLL_SCRIPT)
+	script = _read(ORCHESTRATE_POLL_PROCESS)
 
 	assert 'if [ -f "scripts/semble_helpers.sh" ]' in script
-	assert "build_judge_semble_prefetch()" in script
+	assert 'source scripts/semble_helpers.sh' in script
+	assert '_build_judge_semble_prefetch' in script
+	assert 'build_judge_semble_prefetch()' in script
 	assert 'python3 /dev/fd/3 "${label}" 3<<\'PY\'' in script
+	assert 'integration_judge_semble_prefetch="$(_build_judge_semble_prefetch "${integration_judge_semble_query}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Integration Conflict Judge Context")"' in script
+	assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch "${stall_judge_semble_query}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Stall Judge Context")"' in script
+	assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Review-Blocked Judge Context")"' in script
+	assert 'JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${JUDGE_SEMBLE_QUERY}" "${SEMBLE_JUDGE_PROMPT_CHUNKS:-6}" "Judge Context")"' in script
 	assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in script
 	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in script
 	assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in script
 	assert 'printf \'%s\\n\\n\' "${integration_judge_semble_prefetch}"' in script
-	assert 'build_judge_semble_prefetch "integration conflict final pr ${final_pr} ${integration_branch} ${default_branch}" 2 "Integration Conflict Context"' in script
+	assert 'printf \'%s\\n\' "${integration_judge_semble_prefetch}"' in script
 
 
 def test_orchestrate_poll_query_builder_reads_piped_context() -> None:
-	script = _read(ORCHESTRATE_POLL_SCRIPT)
+	script = _read(ORCHESTRATE_POLL_PROCESS)
 	function_text = _function_block(script, "build_judge_semble_query() {", "\n\nbuild_judge_semble_prefetch() {")
 	pipe_text = "diff --git a/src/app.py b/src/app.py\nUse `scripts/foo.sh` here\nMeaningful context line for Semble\n"
 	command = (
@@ -177,6 +196,7 @@ def test_orchestrate_poll_query_builder_reads_piped_context() -> None:
 		cwd=str(REPO_ROOT),
 		capture_output=True,
 		text=True,
+		timeout=60,
 		check=False,
 	)
 
@@ -187,7 +207,7 @@ def test_orchestrate_poll_query_builder_reads_piped_context() -> None:
 
 
 def test_orchestrate_poll_query_builder_drains_large_piped_context() -> None:
-	script = _read(ORCHESTRATE_POLL_SCRIPT)
+	script = _read(ORCHESTRATE_POLL_PROCESS)
 	function_text = _function_block(script, "build_judge_semble_query() {", "\n\nbuild_judge_semble_prefetch() {")
 	result = _run_large_pipe(function_text, f"build_judge_semble_query {shlex.quote('Judge Context')}")
 
@@ -197,7 +217,7 @@ def test_orchestrate_poll_query_builder_drains_large_piped_context() -> None:
 
 
 def test_orchestrate_poll_prefetch_degrades_cleanly_without_helpers() -> None:
-	script = _read(ORCHESTRATE_POLL_SCRIPT)
+	script = _read(ORCHESTRATE_POLL_PROCESS)
 	function_text = _function_block(script, "build_judge_semble_prefetch() {", "\n\n# ---------------------------------------------------------------")
 	result = _run_large_pipe(
 		function_text,
@@ -214,7 +234,10 @@ def test_review_rb_judge_wires_semble_prefetch_from_support_scripts() -> None:
 
 	assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]' in script
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in script
-	assert "build_rb_judge_semble_prefetch()" in script
+	assert 'build_rb_judge_semble_query() {' in script
+	assert 'build_rb_judge_semble_prefetch() {' in script
+	assert 'append_judge_semble_query_section' in script
+	assert 'build_judge_semble_prefetch' in script
 	assert 'python3 /dev/fd/3 "${label}" 3<<\'PY\'' in script
 	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in script
 	assert 'build_rb_judge_semble_prefetch "review blocked judge pr ${PR_NUMBER} issue ${FIRST_ISSUE:-none}" 3 "Review-Blocked Context"' in script
@@ -234,6 +257,7 @@ def test_review_rb_judge_query_builder_reads_piped_context() -> None:
 		cwd=str(REPO_ROOT),
 		capture_output=True,
 		text=True,
+		timeout=60,
 		check=False,
 	)
 
@@ -266,10 +290,17 @@ def test_review_rb_judge_prefetch_degrades_cleanly_without_helpers() -> None:
 	assert result.stdout == ""
 
 
+def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
+	orchestrate = _read(ORCHESTRATE_POLL_PROCESS)
+	assert "mode-orchestrate-poll-judge.txt" not in orchestrate
+	assert ORCHESTRATE_POLL_JUDGE_PROMPT.exists()
+
+
 def main() -> int:
 	test_render_prompt_replaces_semble_prefetch_when_value_is_supplied()
 	test_render_prompt_rejects_unresolved_semble_prefetch_placeholder()
-	test_orchestrate_poll_workflow_bootstraps_semble_for_judge_paths()
+	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
+	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
 	test_judge_templates_include_semble_prefetch_near_the_header()
 	test_orchestrate_poll_process_wires_semble_into_all_live_judge_paths()
 	test_orchestrate_poll_query_builder_reads_piped_context()
@@ -279,6 +310,7 @@ def main() -> int:
 	test_review_rb_judge_query_builder_reads_piped_context()
 	test_review_rb_judge_query_builder_drains_large_piped_context()
 	test_review_rb_judge_prefetch_degrades_cleanly_without_helpers()
+	test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed()
 	print("OK: judge-family Semble prefetch contract assertions hold")
 	return 0
 

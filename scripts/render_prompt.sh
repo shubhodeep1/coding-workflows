@@ -29,10 +29,12 @@ else
 	WORKFLOW_EDIT_RESTRICTION_LINE="- Do not change CI workflows."
 fi
 
-# {{SEMBLE_PREFETCH}} resolves to a bounded, pre-rendered Semble block (or an
+# {{SEMBLE_PREFETCH}} resolves from the per-render ${SEMBLE_PREFETCH}
+# environment variable to a bounded, pre-rendered Semble block (or an
 # explicit empty string when Semble is disabled/unavailable). Callers that
 # render a Semble-enabled prompt must set SEMBLE_PREFETCH, even if the value is
-# empty, so the unresolved-placeholder guard can still catch missed wiring.
+# empty, so the unresolved-placeholder guard can still catch missed wiring
+# across different prompt builds in the same shell process.
 SEMBLE_PREFETCH_IS_SET="false"
 SEMBLE_PREFETCH_BLOCK=""
 if [ "${SEMBLE_PREFETCH+x}" = "x" ]; then
