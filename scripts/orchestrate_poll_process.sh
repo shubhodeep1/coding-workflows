@@ -30,6 +30,21 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   source scripts/memory_helpers.sh
 fi
 
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  if source scripts/semble_helpers.sh; then
+    if declare -F semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble judge prefetch." >&2
+    fi
+  else
+    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble judge prefetch." >&2
+  fi
+fi
+
 # Process-lifetime cache of labels we've already verified exist on the
 # repo.  `ensure_label_exists` is called from 10+ code paths with a
 # small, repeating set of label names; each call used to hit
@@ -161,6 +176,61 @@ assemble_judge_static_context() {
       echo
     fi
   } > "${out_file}"
+}
+
+append_semble_query_text()
+{
+  local label="$1"
+  local text="${2:-}"
+  local max_bytes="${3:-4096}"
+
+  [ -n "${text}" ] || return 0
+  printf '%s\n' "${label}"
+  printf '%s' "${text}" | head -c "${max_bytes}" || true
+  printf '\n'
+}
+
+append_semble_query_json()
+{
+  local label="$1"
+  local json_text="${2:-}"
+  local jq_filter="${3:-.}"
+  local max_bytes="${4:-4096}"
+  local compact=""
+
+  [ -n "${json_text}" ] || return 0
+  compact="$(printf '%s' "${json_text}" | jq -c "${jq_filter}" 2>/dev/null || printf '%s' "${json_text}")"
+  append_semble_query_text "${label}" "${compact}" "${max_bytes}"
+}
+
+build_judge_semble_prefetch()
+{
+  local query_file="$1"
+  local context_file="$2"
+  local header_label="$3"
+  local max_chunks="${4:-4}"
+
+  : > "${context_file}"
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+     || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+     || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+
+  semble_query_block \
+    "$(cat "${query_file}")" \
+    "${max_chunks}" \
+    "${header_label}" \
+    > "${context_file}" || true
+}
+
+render_prompt_with_semble_prefetch()
+{
+  local prompt_file="$1"
+  local prefetch_file="${2:-}"
+
+  SEMBLE_PREFETCH="$(cat "${prefetch_file}" 2>/dev/null || true)" \
+    bash scripts/render_prompt.sh "${prompt_file}"
 }
 
 # ---------------------------------------------------------------
@@ -2703,12 +2773,16 @@ invoke_judge_for_integration_conflict() {
   local prompt_file
   local output_file
   local judge_static_file
+  local integration_semble_query_file
+  local integration_semble_context_file
   prompt_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_prompt.XXXXXX")"
   output_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_output.XXXXXX")"
   judge_static_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_static.XXXXXX")"
+  integration_semble_query_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_semble_query.XXXXXX")"
+  integration_semble_context_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_semble_context.XXXXXX")"
 
   if ! assemble_judge_static_context "${judge_static_file}"; then
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${integration_semble_query_file}" "${integration_semble_context_file}"
     return 1
   fi
 
@@ -2745,10 +2819,22 @@ invoke_judge_for_integration_conflict() {
   [ -n "${intent_fingerprints}" ] || intent_fingerprints='{}'
 
   {
+    printf '%s\n' 'Integration conflict judge context.'
+    append_semble_query_json 'Final PR changed files:' "${pr_files}" '.' 5000
+    append_semble_query_text 'Final PR diff excerpt:' "${pr_diff}" 7000
+    append_semble_query_json 'Merged issue intent fingerprints:' "${intent_fingerprints}" '.' 7000
+  } > "${integration_semble_query_file}"
+  build_judge_semble_prefetch "${integration_semble_query_file}" "${integration_semble_context_file}" "Integration Conflict Judge Context"
+
+  {
     cat "${judge_static_file}"
     echo
     echo "=== INTEGRATION CONFLICT JUDGE TASK ==="
     echo
+    if [ -s "${integration_semble_context_file}" ]; then
+      cat "${integration_semble_context_file}"
+      echo
+    fi
     echo "You are the orchestrator final-merge judge. The automated resolver"
     echo "pipeline has attempted to sync \`${default_branch}\` into"
     echo "\`${integration_branch}\` ${retries} times without producing a"
@@ -2810,12 +2896,12 @@ invoke_judge_for_integration_conflict() {
 
   if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${integration_semble_query_file}" "${integration_semble_context_file}"
     return 0
   fi
 
   echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
-  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${integration_semble_query_file}" "${integration_semble_context_file}"
   return 1
 }
 
@@ -5606,6 +5692,8 @@ invoke_stall_judge() {
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
   local static_file="${RUNTIME_DIR}/judge_static.txt"
+  local stall_semble_query_file="${RUNTIME_DIR}/stall_judge_semble_query_${issue_num}.txt"
+  local stall_semble_context_file="${RUNTIME_DIR}/stall_judge_semble_context_${issue_num}.txt"
 
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
@@ -5615,13 +5703,21 @@ invoke_stall_judge() {
   fi
 
   {
+    printf '%s\n' 'Stall recovery judge context.'
+    append_semble_query_text 'Stall diagnostics JSON:' "${diagnostics}" 9000
+    append_semble_query_text 'Issue and phase summary:' "issue=${issue_num} local_id=${local_id:-} phase=${phase:-} stall_minutes=${stall_minutes:-0} recovery_count=${recovery_count:-0}" 1200
+    append_semble_query_text 'Linked PR summary:' "pr=${target_pr:-} state=${pr_state:-} mergeable=${pr_mergeable:-} head_ref=${head_ref:-} base_ref=${base_ref:-}" 1200
+  } > "${stall_semble_query_file}"
+  build_judge_semble_prefetch "${stall_semble_query_file}" "${stall_semble_context_file}" "Stall Recovery Judge Context"
+
+  {
     cat "${static_file}"
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    render_prompt_with_semble_prefetch prompts/mode-judge-stall-recovery.txt "${stall_semble_context_file}"
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -9310,17 +9406,29 @@ ${FOLLOWUP_BLOCK_REASON}"
       # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
+      RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query_${rb_issue}.txt"
+      RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context_${rb_issue}.txt"
 
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
 
       {
+        printf '%s\n' 'Review-blocked judge context.'
+        append_semble_query_text 'Original issue requirement:' "${ISSUE_BODY}" 5000
+        append_semble_query_json 'PR metadata:' "${PR_META}" '.' 3000
+        append_semble_query_text 'PR diff excerpt:' "${PR_DIFF}" 6000
+        append_semble_query_json 'PR issue comments:' "${PR_COMMENTS}" '.[0:12]' 4000
+        append_semble_query_json 'PR inline review comments:' "${PR_REVIEW_COMMENTS}" '.[0:12]' 4000
+      } > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+      build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" "Review-Blocked Judge Context"
+
+      {
         cat "${RUNTIME_DIR}/judge_static.txt"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        render_prompt_with_semble_prefetch prompts/mode-judge-review-blocked.txt "${RB_JUDGE_SEMBLE_CONTEXT_FILE}"
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -10678,13 +10786,24 @@ ${PR_DIFF}
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
+  JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/judge_semble_query.txt"
+  JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/judge_semble_context.txt"
+  {
+    printf '%s\n' 'Wave judge context.'
+    append_semble_query_text 'Project spec excerpt:' "${PROJECT_BODY}" 5000
+    append_semble_query_json 'Wave completion status:' "${WAVE_STATUS}" '.' 5000
+    append_semble_query_text 'Merged PR summaries:' "${MERGED_PR_SUMMARIES}" 6000
+    append_semble_query_text 'Open PR summaries:' "${OPEN_PR_SUMMARIES}" 6000
+  } > "${JUDGE_SEMBLE_QUERY_FILE}"
+  build_judge_semble_prefetch "${JUDGE_SEMBLE_QUERY_FILE}" "${JUDGE_SEMBLE_CONTEXT_FILE}" "Judge Context"
+
   # Build judge prompt
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
     echo "=== JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge.txt
+    render_prompt_with_semble_prefetch prompts/mode-judge.txt "${JUDGE_SEMBLE_CONTEXT_FILE}"
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
