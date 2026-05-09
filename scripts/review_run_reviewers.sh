@@ -29,6 +29,11 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
   }
 fi
 
+if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
+fi
+
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty; using placeholder context for this run."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -722,6 +727,39 @@ reviewer_prompt_rendered="$(mktemp)"
 ) > "${reviewer_prompt_rendered}"
 mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
+append_semble_query_section() {
+  local label="$1"
+  local path="$2"
+  local max_bytes="${3:-4096}"
+
+  [ -s "${path}" ] || return 0
+  printf '%s\n' "${label}"
+  head -c "${max_bytes}" "${path}"
+  printf '\n'
+}
+
+REVIEWER_SEMBLE_QUERY_FILE="${REVIEWER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/reviewer_semble_query.txt}"
+REVIEWER_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/reviewer_semble_context.txt"
+: > "${REVIEWER_SEMBLE_QUERY_FILE}"
+: > "${REVIEWER_SEMBLE_CONTEXT_FILE}"
+{
+  printf '%s\n' 'Review autofix reviewer context.'
+  printf '%s\n' 'Prioritize the latest AI autofix diff and nearby changed files.'
+  append_semble_query_section 'Symbol diff summary:' "${SYMBOL_DIFF_SUMMARY_FILE}" 4000
+  append_semble_query_section 'Last run changed files:' "${LAST_RUN_CHANGED_FILES_FILE}" 2000
+  append_semble_query_section 'PR changed files:' "${PR_CHANGED_FILES_FILE}" 2000
+} > "${REVIEWER_SEMBLE_QUERY_FILE}"
+
+if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+   && [ -s "${REVIEWER_SEMBLE_QUERY_FILE}" ] \
+   && declare -F semble_query_block >/dev/null 2>&1; then
+  semble_query_block \
+    "$(cat "${REVIEWER_SEMBLE_QUERY_FILE}")" \
+    "${SEMBLE_REVIEWER_PROMPT_CHUNKS:-12}" \
+    "Reviewer Context" \
+    > "${REVIEWER_SEMBLE_CONTEXT_FILE}" || true
+fi
+
 # Assemble the base reviewer prompt (used by both passes in two-pass mode,
 # or as the sole prompt in single-pass mode).
 assemble_reviewer_prompt() {
@@ -748,6 +786,10 @@ assemble_reviewer_prompt() {
     echo "${PROMPT_RUNTIME_CONTEXT_HINT}"
     echo
     cat "${prompt_body_file}"
+    if [ -s "${REVIEWER_SEMBLE_CONTEXT_FILE:-}" ]; then
+      echo
+      cat "${REVIEWER_SEMBLE_CONTEXT_FILE}"
+    fi
     if [ -n "${extra_context_file}" ] && [ -s "${extra_context_file}" ]; then
       echo
       cat "${extra_context_file}"
