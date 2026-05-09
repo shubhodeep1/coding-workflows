@@ -989,8 +989,65 @@ jobs:
           fi
 
           git commit -m "chore: append deep audit section to workflow log analysis report"
-          git pull --rebase origin "${TARGET_BRANCH}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+
+          # The deep-audit and api-redundancy jobs both append a section
+          # to the same REPORT_FILE in parallel, so a concurrent push
+          # from the sibling job (or another in-flight run) can land
+          # between our fetch and our push and produce a non-fast-forward
+          # rejection or an end-of-file rebase conflict.
+          # Capture our just-made commit as a patch, then on push
+          # failure: abort any in-progress rebase, hard-reset to the
+          # refreshed origin tip, and re-apply the patch with
+          # `git am --3way` so the additions merge cleanly with whatever
+          # the sibling job published. Bounded retry with exponential
+          # backoff covers transient network failures too.
+          LOCAL_PATCH="$(mktemp)"
+          trap 'rm -f "${LOCAL_PATCH}"' EXIT
+          git format-patch -1 HEAD --stdout > "${LOCAL_PATCH}"
+
+          push_attempt=0
+          push_max_attempts=5
+          push_backoff_secs=5
+          while : ; do
+            push_attempt=$((push_attempt + 1))
+
+            if git pull --rebase origin "${TARGET_BRANCH}" \
+               && git push origin "HEAD:${TARGET_BRANCH}"; then
+              break
+            fi
+
+            if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+              git rebase --abort || true
+            fi
+            if [ -d .git/rebase-apply ]; then
+              git am --abort || true
+            fi
+
+            if [ "${push_attempt}" -ge "${push_max_attempts}" ]; then
+              echo "::error::Could not push deep audit section after ${push_attempt} attempt(s) (target=${TARGET_BRANCH}, file=${REPORT_FILE})."
+              exit 1
+            fi
+
+            fetch_ok=1
+            git fetch origin "${TARGET_BRANCH}" --depth=1 || fetch_ok=0
+            if [ "${fetch_ok}" -eq 1 ] && [ -s "${LOCAL_PATCH}" ]; then
+              git reset --hard FETCH_HEAD
+              if ! git am --3way --keep-cr < "${LOCAL_PATCH}"; then
+                if [ -d .git/rebase-apply ]; then
+                  git am --abort || true
+                fi
+                echo "::error::Could not re-apply deep audit patch onto refreshed origin/${TARGET_BRANCH}; aborting retries."
+                exit 1
+              fi
+            fi
+
+            echo "::warning::Deep audit section push attempt ${push_attempt} failed; retrying in ${push_backoff_secs}s."
+            sleep "${push_backoff_secs}"
+            push_backoff_secs=$(( push_backoff_secs * 2 ))
+            if [ "${push_backoff_secs}" -gt 60 ]; then
+              push_backoff_secs=60
+            fi
+          done
 
       - name: Send Telegram notification
         if: always()
@@ -1303,8 +1360,60 @@ jobs:
           fi
 
           git commit -m "chore: append API redundancy section to workflow log analysis report"
-          git pull --rebase origin "${TARGET_BRANCH}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+
+          # See deep-audit's "Commit and push" step for rationale: this
+          # job races with deep-audit (and any other in-flight run) on
+          # the same REPORT_FILE, so capture the local commit as a
+          # patch, retry with patch-replay (`git am --3way`) on top of
+          # the refreshed origin tip, and use exponential backoff for
+          # transient network failures.
+          LOCAL_PATCH="$(mktemp)"
+          trap 'rm -f "${LOCAL_PATCH}"' EXIT
+          git format-patch -1 HEAD --stdout > "${LOCAL_PATCH}"
+
+          push_attempt=0
+          push_max_attempts=5
+          push_backoff_secs=5
+          while : ; do
+            push_attempt=$((push_attempt + 1))
+
+            if git pull --rebase origin "${TARGET_BRANCH}" \
+               && git push origin "HEAD:${TARGET_BRANCH}"; then
+              break
+            fi
+
+            if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+              git rebase --abort || true
+            fi
+            if [ -d .git/rebase-apply ]; then
+              git am --abort || true
+            fi
+
+            if [ "${push_attempt}" -ge "${push_max_attempts}" ]; then
+              echo "::error::Could not push API redundancy section after ${push_attempt} attempt(s) (target=${TARGET_BRANCH}, file=${REPORT_FILE})."
+              exit 1
+            fi
+
+            fetch_ok=1
+            git fetch origin "${TARGET_BRANCH}" --depth=1 || fetch_ok=0
+            if [ "${fetch_ok}" -eq 1 ] && [ -s "${LOCAL_PATCH}" ]; then
+              git reset --hard FETCH_HEAD
+              if ! git am --3way --keep-cr < "${LOCAL_PATCH}"; then
+                if [ -d .git/rebase-apply ]; then
+                  git am --abort || true
+                fi
+                echo "::error::Could not re-apply API redundancy patch onto refreshed origin/${TARGET_BRANCH}; aborting retries."
+                exit 1
+              fi
+            fi
+
+            echo "::warning::API redundancy section push attempt ${push_attempt} failed; retrying in ${push_backoff_secs}s."
+            sleep "${push_backoff_secs}"
+            push_backoff_secs=$(( push_backoff_secs * 2 ))
+            if [ "${push_backoff_secs}" -gt 60 ]; then
+              push_backoff_secs=60
+            fi
+          done
 
       - name: Send Telegram notification
         if: always()
