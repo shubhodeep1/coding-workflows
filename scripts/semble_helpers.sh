@@ -93,7 +93,7 @@ semble_query_block()
 
 	target="$(_semble_target_slug "${header_label}")"
 
-	if [ "${SEMBLE_AVAILABLE:-true}" != "true" ]; then
+	if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
 		_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=binary-unavailable"
 		return 1
 	fi
