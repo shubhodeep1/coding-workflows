@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:257-269 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: render_prompt_with_semble_prefetch unconditionally cats the prefetch file even when the second argument is omitted or empty, which can hang future callers.\n  WHY: Three reviewers flagged the empty-argument path in the command substitution as a runtime hang risk for judge prompt assembly.\n- tests/test_judge_semble_prefetch_contract.py:118-161 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The contract tests assert exact shell snippets, so cosmetic refactors or variable-name changes can fail CI even when the wiring is unchanged.\n  WHY: Both reviewers noted that the tests match literal shell text rather than behavior, making them fragile to harmless formatting changes.\n- scripts/review_rb_judge.sh:318-328 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The review-blocked judge hardcodes chunk count \"4\" in the live semble_query_block call instead of using the configurable chunk limit used by the other judge path.\n  WHY: All three reviewers observed that this path ignores the shared chunk-count configuration and therefore behaves inconsistently across judge types.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:258-265 | severity=critical | confidence=4\n  PROBLEM: render_prompt_with_semble_prefetch defaults prefetch_file to an empty string and then runs cat \"${prefetch_file}\", which can hang if the helper is called without the second argument.\n  WHY: The helper is unsafe for future callers because the command substitution would wait on stdin when prefetch_file is omitted.\n- tests/test_judge_semble_prefetch_contract.py:131-140, 148-161 | severity=medium | confidence=4\n  PROBLEM: The contract tests use exact string matches against shell text, so harmless whitespace or refactoring changes can break CI.\n  WHY: The assertions encode literal shell snippets, which makes the tests brittle even when behavior stays the same.\n- scripts/review_rb_judge.sh:322-323 | severity=low | confidence=3\n  PROBLEM: The review-blocked judge hardcodes the chunk count to \"4\" instead of using a configurable default.\n  WHY: This creates inconsistent behavior versus the other judge path, which uses a helper default tied to chunk configuration.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:257-265 | severity=critical | confidence=5\n  PROBLEM: render_prompt_with_semble_prefetch can hang when called without a second argument because it defaults prefetch_file to empty and still runs cat \"${prefetch_file}\".\n  WHY: If the helper is invoked with a missing prefetch file argument, the command substitution can block waiting for stdin during prompt assembly.\n- scripts/review_rb_judge.sh:318-328 | severity=low | confidence=4\n  PROBLEM: The review-blocked judge hardcodes chunk count \"4\" in the direct semble_query_block call instead of using the configurable limit used elsewhere.\n  WHY: Operators setting a higher chunk limit for other judge paths will still get only 4 chunks in the review-blocked path, creating inconsistent behavior.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:257-269 | severity=critical | confidence=5\n  PROBLEM: render_prompt_with_semble_prefetch defaults prefetch_file=\"${2:-}\" and unconditionally executes cat \"${prefetch_file}\", which can hang indefinitely when called without arg2.\n  WHY: All current call sites pass the second argument, but the helper is unsafe to reuse because the empty-argument path can deadlock prompt assembly.\n- scripts/review_rb_judge.sh:322-328 | severity=low | confidence=3\n  PROBLEM: The review-blocked judge hardcodes chunk count \"4\" in the live semble_query_block call instead of using the configurable helper/default.\n  WHY: This makes review-blocked judge behavior inconsistent with other judge paths that respect the chunk-count setting.\n- tests/test_judge_semble_prefetch_contract.py:118-157 | severity=medium | confidence=4\n  PROBLEM: The contract tests use exact shell snippets with embedded variable names, quotes, and escapes, so harmless refactors can fail the tests.\n  WHY: The assertions lock in text structure instead of behavior, which can produce false-positive CI failures on cosmetic changes.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "54ee9735d94f9392f01505d32f515ee2937b7cffe0faf72313721af696aa806b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2398,
+    "run_id": "25613161991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25613161991",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509223551_5b14c258d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2398,
+    "run_id": "25613161991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T22:35:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
