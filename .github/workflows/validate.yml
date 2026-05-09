@@ -663,9 +663,16 @@ jobs:
           repo_root = Path(sys.argv[1]).resolve()
           index_path = Path(sys.argv[2])
           extensions = filter_extensions(None, include_text_files=True)
+          MAX_INDEX_FILES = 5000
           chunks = []
+          indexed_files = 0
 
           for file_path in walk_files(repo_root, extensions, None):
+              indexed_files += 1
+              if indexed_files > MAX_INDEX_FILES:
+                  raise SystemExit(
+                      f"Semble indexing skipped after {MAX_INDEX_FILES} files; validation will continue without Semble."
+                  )
               try:
                   source = file_path.read_text(encoding="utf-8", errors="replace")
               except OSError:
@@ -704,12 +711,24 @@ jobs:
           cat > "${wrapper_path}" <<'PY'
           #!/usr/bin/env python3
           import argparse
+          import os
           import pickle
           import sys
+          from pathlib import Path
+
+
+          def _default_index_path() -> Path:
+              return Path(__file__).resolve().parents[2] / ".semble-index"
 
 
           def _print_version() -> int:
-              print("semble 0.1.3")
+              index_path = Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))
+              try:
+                  with index_path.open("rb") as handle:
+                      payload = pickle.load(handle)
+                  print(f"semble {payload.get('version', 'unknown')}")
+              except Exception:
+                  print("semble unknown")
               return 0
 
 

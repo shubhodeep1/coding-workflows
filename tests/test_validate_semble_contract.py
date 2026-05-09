@@ -48,10 +48,16 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert "- name: Install semble" in wf
 	assert "bash scripts/install_semble.sh" in wf
 	assert "- name: Build semble index" in wf
+	assert "MAX_INDEX_FILES = 5000" in wf
+	assert 'Semble indexing skipped after {MAX_INDEX_FILES} files; validation will continue without Semble.' in wf
 	assert 'echo "SEMBLE_AVAILABLE=true"' in wf
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=true"' in wf
 	assert 'echo "SEMBLE_BIN=${wrapper_path}"' in wf
 	assert 'echo "::notice::Semble index ready at ${index_path}."' in wf
+	assert "def _default_index_path() -> Path:" in wf
+	assert 'Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))' in wf
+	assert "payload.get('version', 'unknown')" in wf
+	assert 'print("semble 0.1.3")' not in wf
 
 
 def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
