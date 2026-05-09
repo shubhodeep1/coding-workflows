@@ -314,18 +314,21 @@ def test_non_overflow_output_stays_legacy_shape_even_with_semble_flags_present()
 		query_file.write_text("find relevant chunks\n", encoding="utf-8")
 
 		legacy = emit_context(["src/ok.py"], root, max_bytes=1024)
-		with_semble_args = emit_context(
-			["src/ok.py"],
-			root,
-			max_bytes=1024,
-			semble_bin="/does/not/matter",
-			semble_index=str(root / ".semble-index"),
-			semble_query_text=query_file.read_text(encoding="utf-8"),
-			semble_max_chunks=3,
-			semble_fallback="read",
-		)
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			with_semble_args = emit_context(
+				["src/ok.py"],
+				root,
+				max_bytes=1024,
+				semble_bin="/does/not/matter",
+				semble_index=str(root / ".semble-index"),
+				semble_query_text=query_file.read_text(encoding="utf-8"),
+				semble_max_chunks=3,
+				semble_fallback="read",
+			)
 
 		assert with_semble_args == legacy
+		assert stderr.getvalue() == ""
 
 
 def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
@@ -339,19 +342,25 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 			stdout="chunk 1\n# lines 10-20\nchunk 2\n",
 		)
 
-		context = emit_context(
-			["src/big.py"],
-			root,
-			max_bytes=100,
-			semble_bin=str(semble),
-			semble_index=str(root / ".semble-index"),
-			semble_query_text="task summary",
-			semble_max_chunks=2,
-		)
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/big.py"],
+				root,
+				max_bytes=100,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=2,
+			)
 
 		assert "chunk-retrieved via semble" in context
 		assert "--- FILE: src/big.py (12000 bytes; would overflow total budget" not in context
 		assert "src/big.py" in context
+		assert "SEMBLE_QUERY" not in context
+		telemetry = stderr.getvalue()
+		assert "SEMBLE_QUERY target=overflow file=src/big.py chunks=2 bytes=" in telemetry
+		assert " ms=" in telemetry or " ms=".strip() in telemetry
 
 
 def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> None:
@@ -373,6 +382,7 @@ def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> N
 
 		assert "would overflow total budget" in context
 		assert "chunk-retrieved via semble" not in context
+		assert "SEMBLE_FALLBACK" not in context
 		assert "SEMBLE_FALLBACK target=overflow file=src/big.py" in stderr.getvalue()
 
 
@@ -396,6 +406,7 @@ def test_overflow_read_fallback_emits_bounded_head_body() -> None:
 		assert "overflow fallback read head" in context
 		assert "truncated to 128 byte(s)" in context
 		assert "line\nline\nline\n" in context
+		assert "SEMBLE_FALLBACK" not in context
 		assert "--- FILE: src/big.py (15000 bytes; would overflow total budget" not in context
 
 
