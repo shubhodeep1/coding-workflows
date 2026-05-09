@@ -106,6 +106,21 @@ if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 
+JUDGE_SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  if source scripts/semble_helpers.sh; then
+    if declare -F semble_query_block >/dev/null 2>&1; then
+      JUDGE_SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble-backed judge context." >&2
+    fi
+  else
+    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble-backed judge context." >&2
+  fi
+fi
+
 is_truthy() {
   local value
   value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
@@ -161,6 +176,87 @@ assemble_judge_static_context() {
       echo
     fi
   } > "${out_file}"
+}
+
+build_judge_semble_query() {
+  local label="${1:-judge context}"
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${label}" <<'PY'
+import re
+import sys
+
+label = sys.argv[1].strip() or "judge context"
+raw = sys.stdin.buffer.read(65536).decode("utf-8", "replace")
+path_tokens = []
+interesting_lines = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\."
+    r"(?:py|sh|ya?ml|json|toml|js|jsx|ts|tsx|go|rs|java|kt|rb|php|sql|md|txt)"
+    r"(?![A-Za-z0-9_./-])"
+)
+special_file_re = re.compile(r"\b(?:Dockerfile(?:\.[A-Za-z0-9_.-]+)?|Makefile|Procfile)\b")
+diff_path_re = re.compile(r"^diff --git a/(.+?) b/")
+
+
+def append_unique(bucket, value, *, limit):
+    value = value.strip()
+    if not value or value in bucket or len(bucket) >= limit:
+        return
+    bucket.append(value)
+
+
+for raw_line in raw.splitlines():
+    diff_match = diff_path_re.match(raw_line)
+    if diff_match:
+        append_unique(path_tokens, diff_match.group(1), limit=10)
+
+    for token in re.findall(r"`([^`\n]+)`", raw_line):
+        token = token.strip()
+        if "/" in token or "." in token or token in {"Dockerfile", "Makefile", "Procfile"}:
+            append_unique(path_tokens, token, limit=10)
+
+    for token in path_re.findall(raw_line):
+        append_unique(path_tokens, token, limit=10)
+    for token in special_file_re.findall(raw_line):
+        append_unique(path_tokens, token, limit=10)
+
+    line = re.sub(r"\s+", " ", raw_line).strip()
+    if not line or line.startswith(("===", "---", "```", "#")):
+        continue
+    if len(line) < 8:
+        continue
+    append_unique(interesting_lines, line[:180], limit=8)
+
+query_parts = [label]
+if path_tokens:
+    query_parts.append("files " + " ".join(path_tokens[:8]))
+if interesting_lines:
+    query_parts.extend(interesting_lines[:6])
+
+query = " ; ".join(part for part in query_parts if part)
+query = query[:700].strip(" ;")
+if query:
+    print(query)
+PY
+}
+
+build_judge_semble_prefetch() {
+  local query_label="${1:-judge context}"
+  local max_chunks="${2:-3}"
+  local header_label="${3:-Judge Context}"
+  local query_text=""
+
+  if [ "${JUDGE_SEMBLE_HELPERS_AVAILABLE}" != "true" ]; then
+    return 0
+  fi
+
+  query_text="$(build_judge_semble_query "${query_label}")"
+  if [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
 }
 
 # ---------------------------------------------------------------
@@ -2731,6 +2827,7 @@ invoke_judge_for_integration_conflict() {
   [ -n "${pr_files}" ] || pr_files='[]'
   local retries
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
+  local integration_judge_semble_prefetch=""
 
   # Pull the structured per-sub-issue intent fingerprints from state so
   # the judge gets the same hard verification contract the resolver
@@ -2743,6 +2840,13 @@ invoke_judge_for_integration_conflict() {
   local intent_fingerprints
   intent_fingerprints="$(jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" 2>/dev/null || echo "{}")"
   [ -n "${intent_fingerprints}" ] || intent_fingerprints='{}'
+
+  integration_judge_semble_prefetch="$({
+    printf '%s\n' "integration conflict judge final pr #${final_pr} ${integration_branch} ${default_branch}"
+    printf '%s\n' "${pr_files}"
+    printf '%s\n' "${pr_diff}"
+    printf '%s\n' "${intent_fingerprints}"
+  } | build_judge_semble_prefetch "integration conflict final pr ${final_pr} ${integration_branch} ${default_branch}" 2 "Integration Conflict Context")"
 
   {
     cat "${judge_static_file}"
@@ -2764,6 +2868,9 @@ invoke_judge_for_integration_conflict() {
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
+    if [ -n "${integration_judge_semble_prefetch}" ]; then
+      printf '%s\n\n' "${integration_judge_semble_prefetch}"
+    fi
     echo "Context:"
     echo "- Tracking issue: #${TRACKING_NUM}"
     echo "- Final PR number: ${final_pr}"
@@ -5606,6 +5713,7 @@ invoke_stall_judge() {
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
   local static_file="${RUNTIME_DIR}/judge_static.txt"
+  local stall_judge_semble_prefetch=""
 
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
@@ -5614,6 +5722,11 @@ invoke_stall_judge() {
     fi
   fi
 
+  stall_judge_semble_prefetch="$({
+    printf '%s\n' "stall recovery judge issue #${issue_num} phase ${phase}"
+    printf '%s\n' "${diagnostics}"
+  } | build_judge_semble_prefetch "stall recovery issue ${issue_num} ${phase}" 3 "Stall Recovery Context")"
+
   {
     cat "${static_file}"
     echo
@@ -5621,7 +5734,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -9310,17 +9423,27 @@ ${FOLLOWUP_BLOCK_REASON}"
       # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
+      RB_JUDGE_SEMBLE_PREFETCH=""
 
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
+
+      RB_JUDGE_SEMBLE_PREFETCH="$({
+        printf '%s\n' "review-blocked judge issue #${rb_issue} pr #${RB_PR}"
+        printf '%s\n' "${ISSUE_BODY}"
+        printf '%s\n' "${PR_META}"
+        printf '%s\n' "${PR_DIFF}"
+        printf '%s\n' "${PR_COMMENTS}"
+        printf '%s\n' "${PR_REVIEW_COMMENTS}"
+      } | build_judge_semble_prefetch "review blocked judge pr ${RB_PR} issue ${rb_issue}" 3 "Review-Blocked Context")"
 
       {
         cat "${RUNTIME_DIR}/judge_static.txt"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -10678,13 +10801,21 @@ ${PR_DIFF}
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
+  JUDGE_SEMBLE_PREFETCH="$({
+    printf '%s\n' "wave judge tracking issue #${TRACKING_NUM} wave ${CURRENT_WAVE} of ${TOTAL_WAVES}"
+    printf '%s\n' "${PROJECT_BODY}"
+    printf '%s\n' "${MERGED_PR_SUMMARIES}"
+    printf '%s\n' "${OPEN_PR_SUMMARIES}"
+    printf '%s\n' "${WAVE_STATUS}"
+  } | build_judge_semble_prefetch "wave judge tracking ${TRACKING_NUM} wave ${CURRENT_WAVE}" 4 "Judge Context")"
+
   # Build judge prompt
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
     echo "=== JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge.txt
+    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo

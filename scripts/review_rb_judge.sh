@@ -26,6 +26,101 @@ source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+RB_JUDGE_SEMBLE_HELPERS_AVAILABLE="false"
+if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"; then
+    if declare -F semble_query_block >/dev/null 2>&1; then
+      RB_JUDGE_SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh did not provide semble_query_block; continuing without Semble-backed review-blocked context." >&2
+    fi
+  else
+    echo "::warning::Failed to source ${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh; continuing without Semble-backed review-blocked context." >&2
+  fi
+fi
+
+build_rb_judge_semble_query() {
+  local label="${1:-review blocked judge context}"
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${label}" <<'PY'
+import re
+import sys
+
+label = sys.argv[1].strip() or "review blocked judge context"
+raw = sys.stdin.buffer.read(65536).decode("utf-8", "replace")
+path_tokens = []
+interesting_lines = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\."
+    r"(?:py|sh|ya?ml|json|toml|js|jsx|ts|tsx|go|rs|java|kt|rb|php|sql|md|txt)"
+    r"(?![A-Za-z0-9_./-])"
+)
+special_file_re = re.compile(r"\b(?:Dockerfile(?:\.[A-Za-z0-9_.-]+)?|Makefile|Procfile)\b")
+diff_path_re = re.compile(r"^diff --git a/(.+?) b/")
+
+
+def append_unique(bucket, value, *, limit):
+    value = value.strip()
+    if not value or value in bucket or len(bucket) >= limit:
+        return
+    bucket.append(value)
+
+
+for raw_line in raw.splitlines():
+    diff_match = diff_path_re.match(raw_line)
+    if diff_match:
+        append_unique(path_tokens, diff_match.group(1), limit=10)
+
+    for token in re.findall(r"`([^`\n]+)`", raw_line):
+        token = token.strip()
+        if "/" in token or "." in token or token in {"Dockerfile", "Makefile", "Procfile"}:
+            append_unique(path_tokens, token, limit=10)
+
+    for token in path_re.findall(raw_line):
+        append_unique(path_tokens, token, limit=10)
+    for token in special_file_re.findall(raw_line):
+        append_unique(path_tokens, token, limit=10)
+
+    line = re.sub(r"\s+", " ", raw_line).strip()
+    if not line or line.startswith(("===", "---", "```", "#")):
+        continue
+    if len(line) < 8:
+        continue
+    append_unique(interesting_lines, line[:180], limit=8)
+
+query_parts = [label]
+if path_tokens:
+    query_parts.append("files " + " ".join(path_tokens[:8]))
+if interesting_lines:
+    query_parts.extend(interesting_lines[:6])
+
+query = " ; ".join(part for part in query_parts if part)
+query = query[:700].strip(" ;")
+if query:
+    print(query)
+PY
+}
+
+build_rb_judge_semble_prefetch() {
+  local query_label="${1:-review blocked judge context}"
+  local max_chunks="${2:-3}"
+  local header_label="${3:-Review-Blocked Context}"
+  local query_text=""
+
+  if [ "${RB_JUDGE_SEMBLE_HELPERS_AVAILABLE}" != "true" ]; then
+    return 0
+  fi
+
+  query_text="$(build_rb_judge_semble_query "${query_label}")"
+  if [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
+}
+
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else
@@ -233,6 +328,14 @@ fi
 # -----------------------------------------------------------
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
+RB_JUDGE_SEMBLE_PREFETCH="$({
+  printf '%s\n' "review-blocked judge issue #${FIRST_ISSUE:-none} pr #${PR_NUMBER}"
+  printf '%s\n' "${FIRST_ISSUE_BODY}"
+  printf '%s\n' "${PR_META_JSON}"
+  printf '%s\n' "${PR_DIFF}"
+  printf '%s\n' "${PR_COMMENTS}"
+  printf '%s\n' "${PR_REVIEW_COMMENTS}"
+} | build_rb_judge_semble_prefetch "review blocked judge pr ${PR_NUMBER} issue ${FIRST_ISSUE:-none}" 3 "Review-Blocked Context")"
 
 {
   if [ -f ./pre_assembled_static.txt ]; then
@@ -244,7 +347,7 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
     (
       cd "${SUPPORT_ROOT_DIR}"
-      bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+      SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
     )
   else
     echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."

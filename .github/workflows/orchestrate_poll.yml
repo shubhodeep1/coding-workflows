@@ -33,6 +33,7 @@ env:
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver
   # path) via this workflow-level env block. Without this export, the
@@ -62,6 +63,10 @@ jobs:
             echo "STATE_FILE=${RUNTIME_DIR}/state.json"
             echo "JUDGE_PROMPT_FILE=${RUNTIME_DIR}/judge_prompt.txt"
             echo "JUDGE_OUTPUT_FILE=${RUNTIME_DIR}/judge_output.txt"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_BIN="
+            echo "SEMBLE_INDEX_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
           } >> "$GITHUB_ENV"
 
       - name: Find active tracking issues
@@ -281,6 +286,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"
           for f in gh_helpers.sh git_ref_health_check.sh ai_labels.py orchestrate_lib.py orchestrate_poll_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -289,6 +295,19 @@ jobs:
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Optional support script '${f}' not available in checked-out support sources; continuing without Semble bootstrap support."
+              continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -370,6 +389,58 @@ jobs:
           done
 
           rm -rf .codex-workflow-src-main
+
+      - name: Setup uv for Semble
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "scripts/install_semble.sh" ]; then
+            echo "::warning::install_semble.sh missing from poll bootstrap; continuing without Semble."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # shellcheck source=/dev/null
+          source scripts/install_semble.sh
+
+          SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"
+          if [ -n "${SEMBLE_BIN_PATH}" ]; then
+            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build semble index
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+
+          SEMBLE_BIN_PATH="${SEMBLE_BIN:-$(command -v semble 2>/dev/null || true)}"
+          if [ -z "${SEMBLE_BIN_PATH}" ]; then
+            echo "::warning::Semble binary unavailable after install step; skipping index build."
+            exit 0
+          fi
+
+          rm -rf "${SEMBLE_INDEX_PATH}"
+          mkdir -p "$(dirname "${SEMBLE_INDEX_PATH}")"
+          if "${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then
+            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "Built Semble index at ${SEMBLE_INDEX_PATH}"
+          else
+            echo "::warning::Semble index build failed; continuing without Semble-backed judge context."
+            tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+          fi
 
       - name: Record poll run start
         if: always()
