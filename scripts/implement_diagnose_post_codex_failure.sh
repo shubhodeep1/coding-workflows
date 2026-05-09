@@ -430,11 +430,11 @@ for match in re.findall(r"(?:[A-Za-z0-9_.-]+/)*([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+
     add_identifier(match)
 
 for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", tail_text):
+    if len(identifiers) >= 40:
+        break
     if match.lower() in stop_words:
         continue
     add_identifier(match)
-    if len(identifiers) >= 40:
-        break
 
 parts: list[str] = ["Implement post-failure diagnosis"]
 if failed_step_name:
