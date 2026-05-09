@@ -52,10 +52,10 @@ def test_target_workflows_order_semble_steps_before_codex_config() -> None:
 		wf = _workflow_text(workflow_name)
 		stage_idx = wf.find("- name: Stage workflow support files")
 		runtime_idx = wf.find("SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index")
-		setup_idx = wf.find("- name: Setup uv")
-		install_idx = wf.find("- name: Install semble")
-		build_idx = wf.find("- name: Build semble index")
-		config_idx = wf.find("- name: Create Codex config")
+		setup_idx = wf.find("- name: Setup uv", max(stage_idx, runtime_idx) + 1)
+		install_idx = wf.find("- name: Install semble", setup_idx + 1)
+		build_idx = wf.find("- name: Build semble index", install_idx + 1)
+		config_idx = wf.find("- name: Create Codex config", build_idx + 1)
 
 		assert stage_idx != -1, f"{workflow_name} missing support-file staging step"
 		assert runtime_idx != -1, f"{workflow_name} missing runtime Semble index path contract"
