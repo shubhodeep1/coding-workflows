@@ -185,10 +185,13 @@ jobs:
     # 30 → 60m precedent (run #25115192726). When this is bumped again,
     # also propagate the +Δ minutes through every caller that watches a
     # dispatched run of this workflow:
-    #   1. test-and-mark-stable.yml's `orphan-workflows-test` →
+    #   1. test-and-mark-stable.yml's `workflow-log-analysis-test` →
     #      `Dispatch & watch — workflow-log-analysis` step (in-script
     #      DEADLINE in seconds, step timeout-minutes, and the job-level
-    #      timeout-minutes with its sum-of-DEADLINEs comment).
+    #      timeout-minutes with its sum-of-DEADLINEs comment). This was
+    #      `orphan-workflows-test` before PR #2347 split the dispatch
+    #      out so its Codex-driven long tail no longer blocks
+    #      `validate` / `release` / `sync-to-main`.
     #   2. comprehensive-test-and-release.yml's
     #      `phase2-collect-and-analyze-logs` (and the downstream
     #      `phase3-...` job that reuses the same watcher pattern) —
@@ -1117,9 +1120,10 @@ jobs:
     # fired. Audit-prompt input size has not grown materially since the
     # 30 → 60 bump (report file 51 KB this run vs. 33–58 KB pre-bump);
     # the structural cause is xhigh deliberation latency variance, which
-    # the 60m cap couldn't absorb. The orphan-workflows poller's outer
-    # DEADLINE in test-and-mark-stable.yml (dispatch step) still covers
-    # the new 90m cap with headroom.
+    # the 60m cap couldn't absorb. The workflow-log-analysis-test
+    # poller's outer DEADLINE in test-and-mark-stable.yml (dispatch
+    # step) still covers the new 90m cap with headroom. (Was
+    # `orphan-workflows-test` before PR #2347 split this dispatch out.)
     timeout-minutes: 90
     outputs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
