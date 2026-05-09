@@ -462,13 +462,21 @@ jobs:
             exit 0
           fi
 
+          semble_index_log="${RUNTIME_DIR}/semble_index.log"
           mkdir -p "$(dirname "${semble_index_path}")"
           rm -rf "${semble_index_path}"
-          if "${semble_bin}" index . --out "${semble_index_path}"; then
-            echo "SEMBLE_BIN=${semble_bin}" >> "$GITHUB_ENV"
-            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          if (
+            if "${semble_bin}" index . --out "${semble_index_path}"; then
+              echo "SEMBLE_BIN=${semble_bin}" >> "$GITHUB_ENV"
+              echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            else
+              exit 1
+            fi
+          ) > "${semble_index_log}" 2>&1; then
+            :
           else
             echo "::warning::Semble index build failed; continuing without judge prefetch."
+            tail -n 20 "${semble_index_log}" 2>/dev/null | sed 's/^/semble index: /' || true
             rm -rf "${semble_index_path}"
           fi
 
