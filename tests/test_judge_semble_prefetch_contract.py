@@ -145,6 +145,9 @@ def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only() 
     assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in text
     assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"' in text
     assert "printf '%s\\n' \"${judge_semble_prefetch}\"" in text
+    assert 'integration_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in text
+    assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch "${stall_judge_semble_query}"' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}"' not in text
     assert 'bash scripts/render_prompt.sh prompts/mode-orchestrate-poll-judge.txt' not in text
 
 
