@@ -5,13 +5,32 @@
   "entry_id": "processed_command_2337_4410731788_approved",
   "issue_number": 2337,
   "metadata": {
+    "branch": "ai/issue-2337",
+    "changed_files": [
+      ".github/workflows/clarify.yml",
+      ".github/workflows/orchestrate.yml",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      ".github/workflows/plan.yml",
+      "README.md",
+      "prompts/mode-workflow-analysis.txt",
+      "scripts/cost_audit.py",
+      "scripts/implement_diagnose_post_codex_failure.sh",
+      "scripts/render_prompt.sh",
+      "scripts/targeted_file_context.py",
+      "tests/test_semble_contracts.py"
+    ],
+    "issue_number": 2337,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2337",
+    "pr_number": 2338,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2338",
+    "run_attempt": "1",
+    "run_id": "25585989691",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25585989691"
   },
   "run_attempt": 1,
   "run_id": "25585989691",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-09T00:19:49Z",
+  "status": "completed",
+  "timestamp": "2026-05-09T00:50:54Z",
   "workflow": "implement"
 }
