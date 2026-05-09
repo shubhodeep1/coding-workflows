@@ -5,13 +5,31 @@
   "entry_id": "processed_command_2390_4413186316_approved",
   "issue_number": 2390,
   "metadata": {
+    "branch": "ai/issue-2390",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      "prompts/mode-judge-review-blocked.txt",
+      "prompts/mode-judge-stall-recovery.txt",
+      "prompts/mode-judge.txt",
+      "scripts/implement_diagnose_post_codex_failure.sh",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/render_prompt.sh",
+      "scripts/review_rb_judge.sh",
+      "scripts/targeted_file_context.py",
+      "tests/test_judge_semble_prefetch_contract.py"
+    ],
+    "issue_number": 2390,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2390",
+    "pr_number": 2392,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2392",
+    "run_attempt": "1",
+    "run_id": "25607789609",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25607789609"
   },
   "run_attempt": 1,
   "run_id": "25607789609",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-09T17:51:49Z",
+  "status": "completed",
+  "timestamp": "2026-05-09T18:15:19Z",
   "workflow": "implement"
 }
