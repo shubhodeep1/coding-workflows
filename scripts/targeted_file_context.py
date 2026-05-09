@@ -78,6 +78,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
@@ -129,6 +132,8 @@ DEFAULT_HEADER_TEXT = (
 # the header (which can scroll off the model's effective attention on
 # long prompts).
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
+SEMBLE_QUERY_TIMEOUT_SECS = 30
+SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 
 
 def is_probable_path(value: str) -> bool:
@@ -265,17 +270,128 @@ def parse_paths_arg(arg: str) -> list[str]:
 	return found
 
 
+def _render_inlined_file_header(rel: str, size: int, ext: str) -> str:
+	if ext in PLAIN_TEXT_HINT_EXTENSIONS:
+		return (
+			f"--- FILE: {rel} ({size} bytes; plain-text — for a "
+			f"fully specified overwrite, `printf ... > {rel}` or a "
+			f"heredoc write is acceptable) ---"
+		)
+	return f"--- FILE: {rel} ({size} bytes) ---"
+
+
+def _append_inlined_file_block(output: list[str], rel: str, raw: bytes) -> None:
+	text = raw.decode("utf-8", errors="replace")
+	output.append(_render_inlined_file_header(rel, len(raw), Path(rel).suffix.lower()))
+	# Unnumbered: emit the file content verbatim. Line numbers were
+	# the apply_patch context shape and biased the OpenRouter +
+	# OpenAI-slug failure path; the model reads unnumbered content
+	# fine.
+	output.extend(text.splitlines())
+	output.append(f"--- END FILE: {rel} ---")
+	output.append("")
+
+
+def _read_optional_query_text(path_str: str | None) -> str | None:
+	if not path_str:
+		return None
+	try:
+		text = Path(path_str).read_text(encoding="utf-8", errors="replace")
+	except OSError:
+		return None
+	stripped = text.strip()
+	return stripped or None
+
+
+def _run_semble_query(
+	query_text: str,
+	semble_bin: str | None,
+	semble_index: str | None,
+	semble_max_chunks: int,
+	repo_root: Path,
+) -> tuple[bool, str | None]:
+	resolved_bin = semble_bin or shutil.which("semble")
+	if not resolved_bin:
+		return False, "binary-unavailable"
+	if not semble_index:
+		return False, "index-unavailable"
+	try:
+		result = subprocess.run(
+			[
+				resolved_bin,
+				"query",
+				query_text,
+				"--index",
+				semble_index,
+				"--top-k",
+				str(semble_max_chunks),
+				"--format",
+				"text",
+			],
+			check=False,
+			capture_output=True,
+			cwd=str(repo_root),
+			timeout=SEMBLE_QUERY_TIMEOUT_SECS,
+		)
+	except (OSError, subprocess.TimeoutExpired) as exc:
+		return False, str(exc)
+	stderr_text = result.stderr.decode("utf-8", errors="replace")
+	if result.returncode != 0:
+		stderr_tail = stderr_text.strip().splitlines()[-1] if stderr_text.strip() else ""
+		reason = f"exit={result.returncode}"
+		if stderr_tail:
+			reason = f"{reason} {stderr_tail}"
+		return False, reason
+	chunk_text = result.stdout.decode("utf-8", errors="replace").strip("\n")
+	if not chunk_text.strip():
+		return False, "empty-result"
+	return True, chunk_text
+
+
+def _append_semble_block(output: list[str], rel: str, raw_size: int, chunk_text: str) -> int:
+	output.append(f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble) ---")
+	output.extend(chunk_text.splitlines())
+	output.append(f"--- END FILE: {rel} ---")
+	output.append("")
+	return len(chunk_text.encode("utf-8"))
+
+
+def _append_read_fallback_block(output: list[str], rel: str, truncated: bytes, raw_size: int) -> int:
+	if b"\x00" in truncated:
+		output.extend([f"--- FILE: {rel} (binary skipped) ---", ""])
+		return 0
+	text = truncated.decode("utf-8", errors="replace")
+	output.append(
+		f"--- FILE: {rel} ({raw_size} bytes; overflow fallback read head, "
+		f"truncated to {len(truncated)} byte(s)) ---"
+	)
+	output.extend(text.splitlines())
+	output.append(f"--- END FILE: {rel} ---")
+	output.append("")
+	return len(truncated)
+
+
 def emit_context(
 	paths: list[str],
 	repo_root: Path,
 	max_bytes: int,
 	header_text: str = DEFAULT_HEADER_TEXT,
+	*,
+	semble_bin: str | None = None,
+	semble_index: str | None = None,
+	semble_query_text: str | None = None,
+	semble_max_chunks: int = 6,
+	semble_fallback: str = "marker",
 ) -> str:
 	output: list[str] = []
 	included = 0
 	inlined = 0
 	used_bytes = 0
 	skipped_too_large: list[tuple[str, int]] = []
+	semble_rendered = 0
+	read_fallback_rendered = 0
+	off_suppressed = 0
+	overflow_rendered_bytes = 0
 
 	output.append("=== TARGETED FILE CONTEXT ===")
 	output.append(header_text)
@@ -301,6 +417,49 @@ def emit_context(
 			continue
 		raw_size = abs_path.stat().st_size
 		if used_bytes + raw_size > max_bytes:
+			if semble_query_text:
+				success, payload = _run_semble_query(
+					f"{rel}\n{semble_query_text}",
+					semble_bin,
+					semble_index,
+					semble_max_chunks,
+					repo_root,
+				)
+				if success and payload is not None:
+					rendered_bytes = _append_semble_block(output, rel, raw_size, payload)
+					overflow_rendered_bytes += rendered_bytes
+					used_bytes += rendered_bytes
+					included += 1
+					semble_rendered += 1
+					continue
+				print(
+					f"SEMBLE_FALLBACK target=overflow file={rel} reason={payload or 'unknown'}",
+					file=sys.stderr,
+				)
+			if semble_fallback == "read":
+				remaining_bytes = max_bytes - used_bytes
+				if remaining_bytes <= 0:
+					output.extend([
+						f"--- FILE: {rel} ({raw_size} bytes; would overflow total "
+						f"budget — read with read tool, max_bytes={max_bytes}, "
+						f"used={used_bytes}) ---",
+						"",
+					])
+					skipped_too_large.append((rel, raw_size))
+					included += 1
+					continue
+				head_bytes = min(raw_size, min(remaining_bytes, SEMBLE_READ_FALLBACK_MAX_BYTES))
+				with abs_path.open("rb") as handle:
+					truncated = handle.read(head_bytes)
+				rendered_bytes = _append_read_fallback_block(output, rel, truncated, raw_size)
+				overflow_rendered_bytes += rendered_bytes
+				used_bytes += rendered_bytes
+				included += 1
+				read_fallback_rendered += 1
+				continue
+			if semble_fallback == "off":
+				off_suppressed += 1
+				continue
 			# Including this file would overflow the total budget. Mark
 			# rather than head-truncate — a truncated head of a 500KB
 			# file misleads the editor when the edit target lives at
@@ -320,41 +479,31 @@ def emit_context(
 			output.extend([f"--- FILE: {rel} (binary skipped) ---", ""])
 			included += 1
 			continue
-		text = raw.decode("utf-8", errors="replace")
 		used_bytes += len(raw)
-		# Plain-text small files (.txt / .csv / .md) get a per-file hint
-		# that a shell `printf` / heredoc write is acceptable. This was
-		# load-bearing in the 2026-05-07 ablation suite — the per-file
-		# marker reaches the model even when the header scrolls past the
-		# attention window on long prompts. Code files keep the bare
-		# header and the model's normal edit-tool choice.
-		ext = abs_path.suffix.lower()
-		if ext in PLAIN_TEXT_HINT_EXTENSIONS:
-			output.append(
-				f"--- FILE: {rel} ({len(raw)} bytes; plain-text — for a "
-				f"fully specified overwrite, `printf ... > {rel}` or a "
-				f"heredoc write is acceptable) ---"
-			)
-		else:
-			output.append(f"--- FILE: {rel} ({len(raw)} bytes) ---")
-		# Unnumbered: emit the file content verbatim. Line numbers were
-		# the apply_patch context shape and biased the OpenRouter +
-		# OpenAI-slug failure path; the model reads unnumbered content
-		# fine.
-		output.extend(text.splitlines())
-		output.append(f"--- END FILE: {rel} ---")
-		output.append("")
+		_append_inlined_file_block(output, rel, raw)
 		included += 1
 		inlined += 1
 
-	if included == 0:
+	if included == 0 and off_suppressed == 0:
 		output.append("(no existing target files could be inlined)")
 	else:
-		summary = (
-			f"Included {included} entr{'y' if included == 1 else 'ies'} "
-			f"({inlined} inlined, {included - inlined} marker-only), "
-			f"{used_bytes} byte(s) of source content."
-		)
+		if semble_rendered == 0 and read_fallback_rendered == 0 and off_suppressed == 0:
+			summary = (
+				f"Included {included} entr{'y' if included == 1 else 'ies'} "
+				f"({inlined} inlined, {included - inlined} marker-only), "
+				f"{used_bytes} byte(s) of source content."
+			)
+		else:
+			summary = (
+				f"Included {included} entr{'y' if included == 1 else 'ies'} "
+				f"({inlined} inlined, {len(skipped_too_large)} marker-only, "
+				f"{semble_rendered} semble, {read_fallback_rendered} read), "
+				f"{used_bytes} byte(s) of source content."
+			)
+			if overflow_rendered_bytes:
+				summary += f" Overflow-rendered content: {overflow_rendered_bytes} byte(s)."
+			if off_suppressed:
+				summary += f" Suppressed overflow entries: {off_suppressed}."
 		if skipped_too_large:
 			skipped_summary = ", ".join(f"{p} ({n} bytes)" for p, n in skipped_too_large[:5])
 			if len(skipped_too_large) > 5:
@@ -382,11 +531,17 @@ def main() -> int:
 	parser.add_argument("--repo-root", default=os.getcwd())
 	parser.add_argument("--max-bytes", type=positive_int, default=102400)
 	parser.add_argument("--header-text", default=DEFAULT_HEADER_TEXT)
+	parser.add_argument("--semble-bin", default=None)
+	parser.add_argument("--semble-index", default=None)
+	parser.add_argument("--semble-query-from", default=None)
+	parser.add_argument("--semble-max-chunks", type=positive_int, default=6)
+	parser.add_argument("--semble-fallback", choices=("marker", "read", "off"), default="marker")
 	parser.add_argument("--output", required=True)
 	args = parser.parse_args()
 
 	merged: list[str] = []
 	seen: set[str] = set()
+	plan_text = ""
 
 	def _extend(items: list[str]) -> None:
 		for item in items:
@@ -410,6 +565,11 @@ def main() -> int:
 		Path(args.repo_root),
 		args.max_bytes,
 		args.header_text,
+		semble_bin=args.semble_bin,
+		semble_index=args.semble_index,
+		semble_query_text=_read_optional_query_text(args.semble_query_from) or (plan_text.strip() or None),
+		semble_max_chunks=args.semble_max_chunks,
+		semble_fallback=args.semble_fallback,
 	)
 	Path(args.output).write_text(context, encoding="utf-8")
 	return 0
