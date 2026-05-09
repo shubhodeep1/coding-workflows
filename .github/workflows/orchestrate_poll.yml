@@ -32,8 +32,8 @@ env:
   # policy. Override per-repo via vars.THINKING_LEVEL_JUDGE.
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
-  OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
+  OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver
   # path) via this workflow-level env block. Without this export, the
@@ -299,8 +299,7 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"
-          for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
+          for f in install_semble.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"

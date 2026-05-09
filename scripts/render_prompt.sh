@@ -50,7 +50,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
 			;;
 		"{{SEMBLE_PREFETCH}}")
 			if [ "${SEMBLE_PREFETCH_IS_SET}" = "true" ]; then
-				printf '%s\n' "${SEMBLE_PREFETCH_BLOCK}"
+				printf '%s\n' "${SEMBLE_PREFETCH_BLOCK%$'\n'}"
 			else
 				printf '%s\n' "${line}"
 			fi

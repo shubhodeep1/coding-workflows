@@ -22,7 +22,7 @@ _UNSET = object()
 
 
 def _read(path: Path) -> str:
-	return path.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8")
 
 
 def _run_render(prompt_text: str, *, semble_prefetch: object = _UNSET) -> subprocess.CompletedProcess[str]:
@@ -47,13 +47,13 @@ def _run_render(prompt_text: str, *, semble_prefetch: object = _UNSET) -> subpro
 
 
 def _step_block(text: str, step_name: str) -> str:
-	marker = f"- name: {step_name}"
-	start = text.find(marker)
-	assert start != -1, f"Missing workflow step: {step_name}"
-	next_step = text.find("\n      - name:", start + len(marker))
-	if next_step == -1:
-		return text[start:]
-	return text[start:next_step]
+    marker = f"- name: {step_name}"
+    start = text.find(marker)
+    assert start != -1, f"Missing workflow step: {step_name}"
+    next_step = text.find("\n      - name:", start + len(marker))
+    if next_step == -1:
+        return text[start:]
+    return text[start:next_step]
 
 
 def test_render_prompt_replaces_multiline_semble_prefetch() -> None:
@@ -109,7 +109,10 @@ def test_orchestrate_poll_workflow_bootstraps_semble_for_judges() -> None:
 	init_block = _step_block(workflow, "Create runtime workspace")
 
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"' in stage_block
+	assert (
+		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"' in stage_block
+		or "for f in install_semble.sh semble_helpers.sh; do" in stage_block
+	)
 	assert "Optional Semble support script ${f} is unavailable" in stage_block
 	assert 'echo "SEMBLE_AVAILABLE=false"' in init_block
 	assert 'echo "SEMBLE_BIN="' in init_block
@@ -199,4 +202,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-	raise SystemExit(main())
+    raise SystemExit(main())

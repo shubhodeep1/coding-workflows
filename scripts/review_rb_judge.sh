@@ -156,35 +156,6 @@ unset _pr_state
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
 
-append_judge_semble_query_section() {
-  local label="$1"
-  local value="${2:-}"
-  local max_bytes="${3:-4096}"
-
-  [ -n "${value}" ] || return 0
-  if ! [[ "${max_bytes}" =~ ^[0-9]+$ ]]; then
-    max_bytes=4096
-  fi
-  printf '%s\n' "${label}"
-  printf '%s\n' "${value:0:${max_bytes}}"
-}
-
-build_judge_semble_prefetch() {
-  local query_text="${1:-}"
-  local max_chunks="${2:-6}"
-  local header_label="${3:-Review-Blocked Judge Context}"
-
-  if [ -z "${query_text}" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
-    || ! declare -F semble_query_block >/dev/null 2>&1; then
-    return 0
-  fi
-
-  semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true
-  return 0
-}
-
 # -----------------------------------------------------------
 # Find linked issues for judge context
 # -----------------------------------------------------------
@@ -295,7 +266,6 @@ append_semble_query_json_section() {
   compact="$(printf '%s' "${json_text}" | jq -c "${jq_filter}" 2>/dev/null || printf '%s' "${json_text}")"
   append_semble_query_section "${label}" "${compact}" "${max_bytes}"
 }
-
 # -----------------------------------------------------------
 # Build judge prompt
 # -----------------------------------------------------------
@@ -382,6 +352,7 @@ fi
     echo "approach is fundamentally wrong."
   fi
 } > "${RB_JUDGE_PROMPT}"
+rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
 # -----------------------------------------------------------
 # Temporarily set judge reasoning effort in codex config
