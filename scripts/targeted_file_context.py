@@ -454,6 +454,7 @@ def emit_context(
 					target="overflow",
 					file=rel,
 					reason=payload or "unknown",
+					ms=elapsed_ms,
 				)
 			if semble_fallback == "read":
 				remaining_bytes = max_bytes - used_bytes

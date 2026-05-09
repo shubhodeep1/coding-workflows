@@ -131,6 +131,7 @@ def test_semble_query_block_command_failure_stays_fail_open() -> None:
 		assert result.returncode != 0
 		assert result.stdout == ""
 		assert "SEMBLE_FALLBACK target=editor-context reason=exit=7 raw failure from semble" in result.stderr
+		assert " ms=" in result.stderr
 		assert "SEMBLE_QUERY" not in result.stdout
 
 

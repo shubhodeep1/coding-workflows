@@ -136,22 +136,22 @@ semble_query_block()
 	if [ "${status}" -ne 0 ]; then
 		if [ "${status}" -eq 124 ] || [ "${status}" -eq 137 ]; then
 			_semble_cleanup_tempfiles "${tmp_stdout}" "${tmp_stderr}"
-			_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=timeout"
+			_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=timeout" "ms=${elapsed_ms}"
 			return 1
 		fi
 		stderr_tail="$(tail -n 1 "${tmp_stderr}" 2>/dev/null || true)"
 		_semble_cleanup_tempfiles "${tmp_stdout}" "${tmp_stderr}"
 		if [ -n "${stderr_tail}" ]; then
-			_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=exit=${status} ${stderr_tail}"
+			_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=exit=${status} ${stderr_tail}" "ms=${elapsed_ms}"
 		else
-			_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=exit=${status}"
+			_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=exit=${status}" "ms=${elapsed_ms}"
 		fi
 		return 1
 	fi
 
 	if ! grep -q '[^[:space:]]' "${tmp_stdout}" 2>/dev/null; then
 		_semble_cleanup_tempfiles "${tmp_stdout}" "${tmp_stderr}"
-		_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=empty-result"
+		_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=empty-result" "ms=${elapsed_ms}"
 		return 1
 	fi
 

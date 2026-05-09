@@ -383,7 +383,9 @@ def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> N
 		assert "would overflow total budget" in context
 		assert "chunk-retrieved via semble" not in context
 		assert "SEMBLE_FALLBACK" not in context
-		assert "SEMBLE_FALLBACK target=overflow file=src/big.py" in stderr.getvalue()
+		telemetry = stderr.getvalue()
+		assert "SEMBLE_FALLBACK target=overflow file=src/big.py" in telemetry
+		assert " ms=" in telemetry
 
 
 def test_overflow_read_fallback_emits_bounded_head_body() -> None:
