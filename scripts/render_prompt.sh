@@ -44,7 +44,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
 			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 			;;
 		"{{SEMBLE_PREFETCH}}")
-			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK}"
+			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK%$'\n'}"
 			;;
 		*)
 			printf '%s\n' "${line}"

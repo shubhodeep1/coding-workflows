@@ -21,63 +21,71 @@ MODE_ORCHESTRATE_POLL_JUDGE = REPO_ROOT / "prompts" / "mode-orchestrate-poll-jud
 
 
 def _read(path: Path) -> str:
-	return path.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8")
 
 
 def _step_block(text: str, step_name: str) -> str:
-	marker = f"- name: {step_name}"
-	start = text.find(marker)
-	assert start != -1, f"Missing workflow step: {step_name}"
-	next_step = text.find("\n      - name:", start + len(marker))
-	if next_step == -1:
-		return text[start:]
-	return text[start:next_step]
+    marker = f"- name: {step_name}"
+    start = text.find(marker)
+    assert start != -1, f"Missing workflow step: {step_name}"
+    next_step = text.find("\n      - name:", start + len(marker))
+    if next_step == -1:
+        return text[start:]
+    return text[start:next_step]
 
 
 def _render_prompt(
-	prompt_text: str,
-	semble_prefetch: str | None,
-	extra_env: dict[str, str] | None = None,
+    prompt_text: str,
+    semble_prefetch: str | None,
+    extra_env: dict[str, str] | None = None,
 ) -> str:
-	with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
-		tmpdir = Path(td)
-		prompt_file = tmpdir / "prompt.txt"
-		prompt_file.write_text(prompt_text, encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
+        tmpdir = Path(td)
+        prompt_file = tmpdir / "prompt.txt"
+        prompt_file.write_text(prompt_text, encoding="utf-8")
 
-		env = os.environ.copy()
-		if extra_env:
-			env.update(extra_env)
-		if semble_prefetch is None:
-			env.pop("SEMBLE_PREFETCH", None)
-		else:
-			env["SEMBLE_PREFETCH"] = semble_prefetch
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if semble_prefetch is None:
+            env.pop("SEMBLE_PREFETCH", None)
+        else:
+            env["SEMBLE_PREFETCH"] = semble_prefetch
 
-		proc = subprocess.run(
-			["bash", str(RENDER_PROMPT), str(prompt_file)],
-			cwd=str(REPO_ROOT),
-			env=env,
-			text=True,
-			capture_output=True,
-			timeout=60,
-		)
-		assert proc.returncode == 0, (
-			f"render_prompt.sh failed with {proc.returncode}\n"
-			f"stdout:\n{proc.stdout}\n\n"
-			f"stderr:\n{proc.stderr}"
-		)
-		return proc.stdout
+        proc = subprocess.run(
+            ["bash", str(RENDER_PROMPT), str(prompt_file)],
+            cwd=str(REPO_ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        assert proc.returncode == 0, (
+            f"render_prompt.sh failed with {proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\n\n"
+            f"stderr:\n{proc.stderr}"
+        )
+        return proc.stdout
 
 
-def test_render_prompt_injects_semble_prefetch_when_set() -> None:
-	rendered = _render_prompt(
-		"Role: judge\n{{SEMBLE_PREFETCH}}\nFooter\n",
-		"=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
-	)
+def test_render_prompt_replaces_semble_prefetch_and_guards_placeholder() -> None:
+    rendered = _render_prompt(
+        "Header\n{{SEMBLE_PREFETCH}}\nFooter\n",
+        "=== SEMBLE: Judge Context ===\nchunk one\n=== END SEMBLE ===\n",
+    )
 
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	assert "=== SEMBLE: Judge Context ===" in rendered
-	assert "chunk" in rendered
-	assert rendered.endswith("Footer\n")
+    assert rendered == (
+        "Header\n"
+        "=== SEMBLE: Judge Context ===\n"
+        "chunk one\n"
+        "=== END SEMBLE ===\n"
+        "Footer\n"
+    )
+
+    render_text = _read(RENDER_PROMPT)
+    assert '"{{SEMBLE_PREFETCH}}")' in render_text
+    assert "Unresolved SEMBLE_PREFETCH placeholder" in render_text
 
 
 def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
@@ -93,10 +101,10 @@ def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> 
 
 
 def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
-	rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", None)
+    rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", None)
 
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	assert rendered == "Before\n\nAfter\n"
+    assert "{{SEMBLE_PREFETCH}}" not in rendered
+    assert rendered == "Before\n\nAfter\n"
 
 
 def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> None:
@@ -116,81 +124,113 @@ def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> N
 
 
 def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
-	rendered = _render_prompt(
-		"Before {{SEMBLE_PREFETCH}} After\n",
-		"=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
-	)
+    rendered = _render_prompt(
+        "Before {{SEMBLE_PREFETCH}} After\n",
+        "=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+    )
 
-	assert rendered == "Before {{SEMBLE_PREFETCH}} After\n"
-
-
-def test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
-	workflow = _read(ORCHESTRATE_POLL_WF)
-	stage_block = _step_block(workflow, "Stage workflow support files")
-	init_block = _step_block(workflow, "Create runtime workspace")
-
-	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"' in stage_block
-	assert 'echo "SEMBLE_AVAILABLE=false"' in init_block
-	assert 'echo "SEMBLE_BIN="' in init_block
-	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in init_block
-	assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in init_block
+    assert rendered == "Before {{SEMBLE_PREFETCH}} After\n"
 
 
-def test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps() -> None:
-	workflow = _read(ORCHESTRATE_POLL_WF)
-	uv_block = _step_block(workflow, "Setup uv for Semble")
-	install_block = _step_block(workflow, "Install semble")
-	index_block = _step_block(workflow, "Build semble index")
+def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges() -> None:
+    workflow = _read(ORCHESTRATE_POLL_WF)
+    workspace_block = _step_block(workflow, "Create runtime workspace")
+    stage_block = _step_block(workflow, "Stage workflow support files")
+    setup_block = _step_block(workflow, "setup-uv")
+    install_block = _step_block(workflow, "Install semble")
+    index_block = _step_block(workflow, "Build semble index")
 
-	assert "astral-sh/setup-uv@v3" in uv_block
-	assert "env.SEMBLE_ENABLED == 'true'" in uv_block
-	assert 'source "scripts/install_semble.sh"' in install_block
-	assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
-	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' in index_block
-	assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in index_block
+    assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
+    assert 'echo "SEMBLE_AVAILABLE=false"' in workspace_block
+    assert 'echo "SEMBLE_BIN="' in workspace_block
+    assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block
+    assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workspace_block
+
+    assert "for f in install_semble.sh semble_helpers.sh; do" in stage_block
+    assert "Optional Semble support script ${f} is unavailable" in stage_block
+    assert "legacy path remains active" in stage_block
+
+    assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in setup_block
+    assert "uses: astral-sh/setup-uv@v3" in setup_block
+    assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in install_block
+    assert 'if [ ! -f scripts/install_semble.sh ]; then' in install_block
+    assert 'if ! bash scripts/install_semble.sh; then' in install_block
+    assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block
+    assert 'SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"' in install_block
+    assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
+    assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in index_block
+    assert 'semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"' in index_block
+    assert 'echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"' in index_block
+    assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
+    assert 'if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then' in index_block
+    assert 'if "${semble_bin}" index . --out "${semble_index_path}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then' in index_block
+    assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in index_block
+
+    assert workflow.find("- name: setup-uv") < workflow.find("- name: Process each tracking issue")
+    assert workflow.find("- name: Install semble") < workflow.find("- name: Process each tracking issue")
+    assert workflow.find("- name: Build semble index") < workflow.find("- name: Process each tracking issue")
 
 
-def test_live_judge_templates_expose_semble_placeholder() -> None:
-	for path in [MODE_JUDGE, MODE_JUDGE_REVIEW_BLOCKED, MODE_JUDGE_STALL_RECOVERY]:
-		text = _read(path)
-		assert "{{SEMBLE_PREFETCH}}" in text, f"Missing Semble placeholder in {path}"
+def test_live_judge_templates_declare_semble_prefetch_placeholder() -> None:
+    for path in [MODE_JUDGE, MODE_JUDGE_REVIEW_BLOCKED, MODE_JUDGE_STALL_RECOVERY]:
+        assert "{{SEMBLE_PREFETCH}}" in _read(path), f"missing Semble placeholder in {path.name}"
 
 
-def test_judge_scripts_wire_semble_prefetch_into_dynamic_prompt_builds() -> None:
-	orchestrate = _read(ORCHESTRATE_POLL_PROCESS)
-	review_rb = _read(REVIEW_RB_JUDGE)
+def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only() -> None:
+    text = _read(ORCHESTRATE_POLL_PROCESS)
 
-	assert 'source scripts/semble_helpers.sh' in orchestrate
-	assert '_build_judge_semble_prefetch' in orchestrate
-	assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in orchestrate
-	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in orchestrate
-	assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in orchestrate
-	assert 'printf \'%s\\n\' "${integration_judge_semble_prefetch}"' in orchestrate
-	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in review_rb
-	assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in review_rb
+    assert 'if [ -f "scripts/semble_helpers.sh" ]; then' in text
+    assert 'SEMBLE_HELPERS_AVAILABLE="false"' in text
+    assert 'render_judge_semble_prefetch_from_query_file()' in text
+    assert '_append_judge_semble_query_section()' not in text
+    assert '_build_judge_semble_prefetch()' not in text
+    assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in text
+    assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in text
+    assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in text
+    assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"' in text
+    assert "printf '%s\\n' \"${judge_semble_prefetch}\"" in text
+    assert 'integration_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in text
+    assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch "${stall_judge_semble_query}"' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}"' not in text
+    assert 'bash scripts/render_prompt.sh prompts/mode-orchestrate-poll-judge.txt' not in text
+
+
+def test_review_rb_judge_sources_semble_helpers_and_passes_prefetch_to_renderer() -> None:
+    text = _read(REVIEW_RB_JUDGE)
+
+    assert 'if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then' in text
+    assert 'if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then' in text
+    assert 'SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"' in text
+    assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then' in text
+    assert 'REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"' in text
+    assert 'append_judge_semble_query_section()' not in text
+    assert 'build_judge_semble_prefetch()' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(build_judge_semble_prefetch' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
+    assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in text
 
 
 def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
-	orchestrate = _read(ORCHESTRATE_POLL_PROCESS)
-	assert "mode-orchestrate-poll-judge.txt" not in orchestrate
-	assert MODE_ORCHESTRATE_POLL_JUDGE.exists()
+    orchestrate = _read(ORCHESTRATE_POLL_PROCESS)
+
+    assert "mode-orchestrate-poll-judge.txt" not in orchestrate
+    assert MODE_ORCHESTRATE_POLL_JUDGE.exists()
 
 
 def main() -> int:
-	test_render_prompt_injects_semble_prefetch_when_set()
-	test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
-	test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
-	test_render_prompt_resolves_workflow_and_semble_placeholders_together()
-	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
-	test_orchestrate_poll_workflow_bootstrap_and_runtime_defaults_wire_semble()
-	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
-	test_live_judge_templates_expose_semble_placeholder()
-	test_judge_scripts_wire_semble_prefetch_into_dynamic_prompt_builds()
-	test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed()
-	print("OK: judge Semble prefetch contract assertions hold")
-	return 0
+    test_render_prompt_replaces_semble_prefetch_and_guards_placeholder()
+    test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
+    test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
+    test_render_prompt_resolves_workflow_and_semble_placeholders_together()
+    test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
+    test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
+    test_live_judge_templates_declare_semble_prefetch_placeholder()
+    test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only()
+    test_review_rb_judge_sources_semble_helpers_and_passes_prefetch_to_renderer()
+    test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed()
+    print("OK: judge Semble prefetch contract assertions hold")
+    return 0
 
 
 if __name__ == "__main__":
-	raise SystemExit(main())
+    raise SystemExit(main())
