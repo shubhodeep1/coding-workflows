@@ -131,7 +131,32 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          gh pr list --repo "${{ github.repository }}" --search "issue:${ISSUE_NUMBER}" --state open --json number,url --jq '.[] | "#\(.number) \(.url)"' > "${PR_EXISTS_FILE}" || true
+          # Resolve "is there already an open PR for this issue?" via the
+          # issue timeline cross-reference events — the same shape used by
+          # plan.yml's "Skip when issue already has a PR" step. Do NOT use
+          # `gh pr list --search "issue:${ISSUE_NUMBER}"`: GitHub has no
+          # `issue:` PR-search qualifier, so the query degrades to fuzzy
+          # free-text and false-positive matches any open PR whose body or
+          # comments contain the digit string (e.g. an unrelated PR with a
+          # review comment referencing line N of a file). Fail-open on a
+          # timeline lookup miss is acceptable here: the downstream
+          # `Create Pull Request` step uses `gh pr create --head
+          # "${TARGET_BRANCH}"`, which GitHub itself rejects when an open
+          # PR already exists on the same head — see the recovery branch
+          # at the `gh pr create` failure handler below.
+          gh api --paginate \
+            "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
+            --jq '
+              [.[]
+                | select(.event == "cross-referenced")
+                | select(.source.issue.pull_request != null)
+                | select(.source.issue.state == "open")
+                | .source.issue
+              ]
+              | unique_by(.number)
+              | .[]
+              | "#\(.number) \(.html_url)"
+            ' > "${PR_EXISTS_FILE}" || true
 
           if [ -s "${PR_EXISTS_FILE}" ]; then
             echo "existing_pr=true" >> "$GITHUB_OUTPUT"
@@ -2836,6 +2861,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           # Atomically apply force-review + e2e-smoke-test labels at PR
           # creation time when this is a smoke-test run. Applying them
@@ -2864,7 +2891,27 @@ jobs:
             if [ -s "${RUNTIME_DIR}/created_pr_url.err" ]; then
               cat "${RUNTIME_DIR}/created_pr_url.err"
             fi
-            EXISTING_PR="$(gh pr list --repo "${{ github.repository }}" --search "issue:${ISSUE_NUMBER}" --state open --json url --jq '.[0].url // ""')"
+            # See the rationale on the "Safety check for existing PR" step
+            # above: `--search "issue:${N}"` is fuzzy free-text. Use the
+            # issue timeline cross-reference query instead so a recovery
+            # after a failed `gh pr create` returns a genuinely linked PR.
+            # `gh_retry` here so a transient API blip does not block the
+            # recovery — site 1 has the same lookup but cannot use
+            # `gh_retry` (gh_helpers.sh is staged later in the workflow).
+            # Leave stderr unredirected so gh/jq diagnostics surface in
+            # the workflow log on failure (otherwise `EXISTING_PR=""`
+            # is indistinguishable from "no linked PR exists").
+            EXISTING_PR="$(gh_retry gh api --paginate \
+              "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
+              --jq '
+                [.[]
+                  | select(.event == "cross-referenced")
+                  | select(.source.issue.pull_request != null)
+                  | select(.source.issue.state == "open")
+                  | .source.issue.html_url
+                ]
+                | .[0] // ""
+              ' || echo "")"
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"

@@ -19,7 +19,10 @@ production script with awk, source them, and exercise with a controlled
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -28,6 +31,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -437,3 +441,376 @@ def test_surface_noops_when_reissue_has_at_least_one_pr():
 		assert r.returncode == 0, r.stderr
 		assert "REISSUE_CLOSED_WITHOUT_PR" not in r.stdout
 		assert comment_log.read_text(encoding="utf-8").strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Gap 3: implement.yml "Safety check for existing PR" — false-positive guard
+#
+# Regression for a consumer-side reproduction (bitsafe.io issue #141 stuck in
+# /approved ↔ stall-recovery loop because the safety check used
+# `gh pr list --search "issue:${ISSUE_NUMBER}"`. GitHub has no `issue:`
+# PR-search qualifier, so the query degraded to fuzzy text match and returned
+# any open PR whose body or comments contained the digit string — including
+# unrelated PRs whose Copilot review comments referenced a migration line
+# number that happened to match the issue number). The fix mirrors plan.yml's
+# "Skip when issue already has a PR" step: walk the issue timeline for
+# `cross-referenced` events that point at OPEN PullRequests. The tests below
+# extract the workflow step's run-block as text and exercise it under a
+# minimal `gh` stub so a future revert to the buggy `--search` form is
+# caught at CI.
+# ---------------------------------------------------------------------------
+
+
+def _workflow_step_block(workflow_path: Path, step_name: str) -> list[str]:
+	lines = workflow_path.read_text(encoding="utf-8").splitlines()
+	needle = f"- name: {step_name}"
+	for idx, line in enumerate(lines):
+		if line.strip() != needle:
+			continue
+		step_indent = len(line) - len(line.lstrip(" "))
+		end = len(lines)
+		for j in range(idx + 1, len(lines)):
+			candidate = lines[j]
+			if candidate.strip().startswith("- name:"):
+				ind = len(candidate) - len(candidate.lstrip(" "))
+				if ind == step_indent:
+					end = j
+					break
+		return lines[idx:end]
+	raise AssertionError(f"step not found in {workflow_path}: {step_name}")
+
+
+def _extract_run_script(workflow_path: Path, step_name: str) -> str:
+	"""Pull a `run: |` block out of a workflow step. Mirrors
+	`tests/test_implement_post_codex_recovery.py:_extract_run_script`."""
+	block = _workflow_step_block(workflow_path, step_name)
+	run_idx = -1
+	run_indent = 0
+	for i, line in enumerate(block):
+		if line.strip() == "run: |":
+			run_idx = i
+			run_indent = len(line) - len(line.lstrip(" "))
+			break
+	if run_idx == -1:
+		raise AssertionError(f"step has no `run: |` block: {step_name}")
+	out: list[str] = []
+	for line in block[run_idx + 1 :]:
+		if line.strip() == "":
+			out.append("")
+			continue
+		ind = len(line) - len(line.lstrip(" "))
+		if ind <= run_indent:
+			break
+		prefix = " " * (run_indent + 2)
+		if line.startswith(prefix):
+			out.append(line[len(prefix) :])
+		else:
+			out.append(line.lstrip())
+	return "\n".join(out).rstrip() + "\n"
+
+
+def _render_repository_expression(script: str, repository: str = "owner/repo") -> str:
+	rendered = re.sub(
+		r"\$\{\{\s*github\.repository\s*\}\}",
+		repository,
+		script,
+	)
+	assert "${{" not in rendered, f"unrendered GitHub expression(s) in script:\n{rendered}"
+	return rendered
+
+
+_GH_STUB_TIMELINE = """#!/usr/bin/env python3
+# Minimal `gh` stub for `gh api ... timeline ... --jq <FILTER>` only.
+# Reads canned timeline JSON from MOCK_GH_TIMELINE_JSON, applies the
+# caller's --jq filter via the host `jq`, and writes to stdout.
+import os, sys, subprocess
+args = sys.argv[1:]
+if not args or args[0] != "api":
+	sys.stderr.write(f"gh-stub: unsupported invocation: {args}\\n")
+	sys.exit(2)
+jq_filter = None
+for i, a in enumerate(args):
+	if a == "--jq" and i + 1 < len(args):
+		jq_filter = args[i + 1]
+		break
+canned = os.environ.get("MOCK_GH_TIMELINE_JSON", "[]")
+if jq_filter is None:
+	sys.stdout.write(canned)
+	sys.exit(0)
+proc = subprocess.run(
+	["jq", "-r", jq_filter],
+	input=canned,
+	capture_output=True,
+	text=True,
+)
+sys.stdout.write(proc.stdout)
+sys.stderr.write(proc.stderr)
+sys.exit(proc.returncode)
+"""
+
+
+def _install_timeline_gh_stub(bin_dir: Path) -> None:
+	if shutil.which("jq") is None:
+		raise RuntimeError(
+			"jq is required to run the Gap-3 safety-check tests "
+			"(_GH_STUB_TIMELINE applies --jq filters via the host jq). "
+			"Install jq (apt: `apt-get install jq`; brew: `brew install jq`) "
+			"and re-run. CI runners already have jq via the workflow "
+			"prerequisite check; this guard exists for local dev environments."
+		)
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	gh_path = bin_dir / "gh"
+	gh_path.write_text(_GH_STUB_TIMELINE, encoding="utf-8")
+	gh_path.chmod(0o755)
+
+
+def _run_safety_check(
+	tmp: Path,
+	issue_number: str,
+	timeline: list[dict],
+) -> tuple[subprocess.CompletedProcess, str, str]:
+	"""Extract and execute the "Safety check for existing PR" step under a
+	stubbed `gh`. Returns (proc, pr_exists_file_contents, github_output_contents)."""
+	bin_dir = tmp / "bin"
+	_install_timeline_gh_stub(bin_dir)
+
+	script = _render_repository_expression(
+		_extract_run_script(IMPLEMENT_WORKFLOW, "Safety check for existing PR")
+	)
+	script_path = tmp / "safety_check.sh"
+	script_path.write_text(script, encoding="utf-8")
+
+	pr_exists_file = tmp / "existing_prs.txt"
+	github_output = tmp / "github_output"
+	github_output.write_text("", encoding="utf-8")
+
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+	env["ISSUE_NUMBER"] = issue_number
+	env["PR_EXISTS_FILE"] = str(pr_exists_file)
+	env["GITHUB_OUTPUT"] = str(github_output)
+	env["MOCK_GH_TIMELINE_JSON"] = json.dumps(timeline)
+
+	proc = subprocess.run(
+		["bash", str(script_path)],
+		cwd=str(tmp),
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=30,
+	)
+	pr_exists = pr_exists_file.read_text(encoding="utf-8") if pr_exists_file.exists() else ""
+	gh_out = github_output.read_text(encoding="utf-8")
+	return proc, pr_exists, gh_out
+
+
+def test_safety_check_skips_text_only_mention():
+	"""The original failure mode: a PR whose body or comments contain the
+	issue's digit string (e.g. a Copilot review comment referencing line N
+	of a migration file) but does NOT cross-reference the issue must NOT
+	trigger the existing-PR skip. Reproduces the bitsafe.io#141 ↔ PR#135
+	stall-recovery loop. The buggy `gh pr list --search "issue:${N}"` form
+	would surface PR#135 here; the timeline-based form must not."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		# Timeline contains only events that should NOT count as a linked PR:
+		# - a `labeled` event (irrelevant kind)
+		# - a cross-reference to a different ISSUE (`pull_request` is null)
+		# Critically, no cross-reference event for PR#135 — because PR#135
+		# closes a different issue and only mentions "141" inside a review
+		# comment, which does not generate a timeline cross-ref event on
+		# issue #141.
+		timeline = [
+			{"event": "labeled", "label": {"name": "ai:awaiting-approval"}},
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 999,
+						"html_url": "https://github.com/owner/repo/issues/999",
+						"state": "open",
+						"pull_request": None,
+					}
+				},
+			},
+		]
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert pr_exists == "", f"expected empty PR_EXISTS_FILE; got: {pr_exists!r}"
+		assert "existing_pr=false" in gh_out, gh_out
+		assert "existing_pr=true" not in gh_out, gh_out
+
+
+def test_safety_check_finds_real_cross_referenced_open_pr():
+	"""A PR that genuinely cross-references the issue (e.g. via "Closes #N"
+	in its body, or via a commit message — both produce a `cross-referenced`
+	event whose `source.issue.pull_request` is non-null) MUST be detected
+	and surfaced in PR_EXISTS_FILE."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 200,
+						"html_url": "https://github.com/owner/repo/pull/200",
+						"state": "open",
+						"pull_request": {"url": "https://api.github.com/.../pulls/200"},
+					}
+				},
+			},
+		]
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert "#200 https://github.com/owner/repo/pull/200" in pr_exists, pr_exists
+		assert "existing_pr=true" in gh_out, gh_out
+
+
+def test_safety_check_dedupes_multiple_cross_refs_to_same_pr():
+	"""GitHub may emit more than one `cross-referenced` event for the same
+	PR (PR creation, subsequent commits referencing the issue, manual
+	'Linked issues' edits). The output must list each PR once."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		shared_pr = {
+			"number": 200,
+			"html_url": "https://github.com/owner/repo/pull/200",
+			"state": "open",
+			"pull_request": {"url": "x"},
+		}
+		timeline = [
+			{"event": "cross-referenced", "source": {"issue": shared_pr}},
+			{"event": "cross-referenced", "source": {"issue": shared_pr}},
+			{"event": "cross-referenced", "source": {"issue": shared_pr}},
+		]
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		lines = [ln for ln in pr_exists.splitlines() if ln.strip()]
+		assert lines == ["#200 https://github.com/owner/repo/pull/200"], lines
+		assert "existing_pr=true" in gh_out, gh_out
+
+
+def test_safety_check_ignores_closed_prs():
+	"""A cross-referenced PR that is already CLOSED (merged or rejected) is
+	not a blocking duplicate for a fresh implement run — the workflow
+	must proceed. Without this filter, the existing-PR skip would loop
+	forever on an issue whose previous attempt was merged but the issue
+	never advanced."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 199,
+						"html_url": "https://github.com/owner/repo/pull/199",
+						"state": "closed",
+						"pull_request": {"url": "x", "merged_at": "2026-01-01T00:00:00Z"},
+					}
+				},
+			},
+		]
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert pr_exists == "", f"closed PR must not block; got: {pr_exists!r}"
+		assert "existing_pr=false" in gh_out, gh_out
+
+
+def test_safety_check_ignores_cross_referenced_issues_not_prs():
+	"""Cross-references to plain issues (not PRs) must be ignored — only
+	`source.issue.pull_request != null` counts. Without this guard, an
+	issue that got linked from another tracking issue's comment would
+	trigger a skip."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 42,
+						"html_url": "https://github.com/owner/repo/issues/42",
+						"state": "open",
+						"pull_request": None,
+					}
+				},
+			},
+		]
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert pr_exists == "", f"issue cross-ref must not block; got: {pr_exists!r}"
+		assert "existing_pr=false" in gh_out, gh_out
+
+
+def test_implement_workflow_does_not_use_buggy_search_form():
+	"""Belt-and-braces: scan implement.yml for the historic buggy pattern.
+	If a future change reverts to `gh pr list --search "issue:${N}"` (or any
+	`--search issue:...` variant — including single-quoted, unquoted, or
+	`--search=` syntax), this test fails with a clear pointer to the
+	regression. The literal `issue:` substring is allowed inside YAML
+	comments (those document why the form is buggy)."""
+	# Match `gh pr list` followed (anywhere on the same line) by
+	# `--search` with optional `=` and optional surrounding whitespace,
+	# followed by an optional opening quote (single or double) and the
+	# `issue:` token. Catches:
+	#   --search "issue:..."     (double-quoted, the original form)
+	#   --search 'issue:...'     (single-quoted)
+	#   --search issue:...       (unquoted, bash treats as single token)
+	#   --search="issue:..."     (= syntax)
+	#   --search='issue:...'     (= + single-quote)
+	#   --search=issue:...       (= + unquoted)
+	# Case-insensitive on the `gh pr list` prefix because YAML allows
+	# weird casing in rare authoring styles.
+	buggy_pattern = re.compile(
+		r"\bgh\s+pr\s+list\b.*?--search[\s=]+[\"']?issue:",
+		re.IGNORECASE,
+	)
+	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	for lineno, line in enumerate(text.splitlines(), start=1):
+		stripped = line.lstrip()
+		if stripped.startswith("#"):
+			continue
+		if buggy_pattern.search(stripped):
+			raise AssertionError(
+				f"{IMPLEMENT_WORKFLOW.name}:{lineno} reverted to buggy "
+				f"`gh pr list --search issue:...` form (any quoting). "
+				f"GitHub has no `issue:` PR-search qualifier; use the "
+				f"issue timeline cross-reference API instead. See "
+				f"plan.yml's \"Skip when issue already has a PR\" step "
+				f"for precedent.\n  matched line: {line.rstrip()}"
+			)
+
+
+# ---------------------------------------------------------------------------
+# Direct-invocation entrypoint
+#
+# `.github/workflows/ci.yml` runs each test as `python3 tests/<file>.py` from
+# an explicit allowlist (no pytest discovery). Without this block, the file
+# would import successfully and exit 0 without running any of the test_*
+# functions — silently passing in CI. Mirrors the pattern in
+# `tests/test_implement_post_codex_recovery.py`.
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
