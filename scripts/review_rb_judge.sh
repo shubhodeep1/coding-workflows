@@ -307,8 +307,11 @@ if [ "${SEMBLE_HELPERS_AVAILABLE}" = "true" ] \
     "Review-Blocked Judge Context" \
     > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" || true
   if [ -s "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" ]; then
-    head -c "${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" 2>/dev/null || true
-    mv -f "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true
+    if head -c "${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" 2>/dev/null; then
+      mv -f "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true
+    else
+      rm -f "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" 2>/dev/null || true
+    fi
   fi
 fi
 
