@@ -29,7 +29,6 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
-SEMBLE_HELPERS_AVAILABLE="false"
 # shellcheck source=semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
 JUDGE_SEMBLE_MAX_CHUNKS="4"
@@ -5737,19 +5736,9 @@ invoke_stall_judge() {
 
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
-  local stall_judge_semble_query_file="${RUNTIME_DIR}/stall_judge_semble_query_${issue_num}.txt"
-  local stall_judge_semble_prefetch=""
   local static_file="${RUNTIME_DIR}/judge_static.txt"
   local stall_semble_query_file="${RUNTIME_DIR}/stall_judge_semble_query_${issue_num}.txt"
   local stall_semble_context_file="${RUNTIME_DIR}/stall_judge_semble_context_${issue_num}.txt"
-
-  {
-    printf '%s\n' 'Stall recovery judge context.'
-    append_judge_semble_query_text "Issue summary:" "issue #${issue_num}; local id ${local_id}; phase ${phase}; stall minutes ${stall_minutes}; recovery count ${recovery_count}; fallback action ${fallback_action}" 900
-    append_judge_semble_query_text "Linked PR summary:" "target_pr ${target_pr}; pr_state ${pr_state}; mergeable ${pr_mergeable}; head_ref ${head_ref}; base_ref ${base_ref}" 900
-    append_judge_semble_query_text "Diagnostics JSON:" "${diagnostics}" 7000
-  } > "${stall_judge_semble_query_file}"
-  stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context")"
 
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
@@ -5798,8 +5787,6 @@ invoke_stall_judge() {
     fi
     sleep $(( 8 * attempt ))
   done
-
-  rm -f "${stall_judge_semble_query_file}"
 
   if [ "${judge_success}" != "true" ]; then
     echo "::warning::Stall judge failed for issue #${issue_num}; falling back to ${fallback_action}."
@@ -9255,18 +9242,6 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
       fi
       ISSUE_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
-      RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query_${rb_issue}.txt"
-      RB_JUDGE_SEMBLE_PREFETCH=""
-      {
-        printf '%s\n' 'Review-blocked judge context.'
-        append_judge_semble_query_text "Issue body:" "${ISSUE_BODY}" 2500
-        append_judge_semble_query_text "PR metadata JSON:" "${PR_META}" 2000
-        append_judge_semble_query_text "PR diff excerpt:" "${PR_DIFF}" 5000
-        append_judge_semble_query_text "PR issue comments JSON:" "${PR_COMMENTS}" 2500
-        append_judge_semble_query_text "PR review comments JSON:" "${PR_REVIEW_COMMENTS}" 2500
-      } > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
-      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"
-
       # Determine if this is a final decision (retries exhausted) or a fix attempt
       IS_FINAL="false"
       if [ "${RETRY_COUNT}" -ge "${MAX_REVIEW_BLOCKED_RETRIES}" ]; then
