@@ -927,6 +927,54 @@ def test_create_pr_recovery_ignores_closed_pr():
 		assert "pr_url=" not in gh_out, gh_out
 
 
+def test_create_pr_recovery_picks_first_open_pr_when_multiple_present():
+	"""When multiple OPEN PRs cross-reference the issue (rare but
+	possible — e.g. a stale human-authored PR alongside a fresh
+	orchestrator-created one, both still open), recovery must pin
+	deterministically to a single URL. The jq filter ends in
+	`.[0] // ""`, so the FIRST cross-reference event wins. This test
+	guards against a regression that would broaden the selection
+	(e.g. `.[] |` instead of `.[0] |`) and write multiple
+	`pr_url=<URL>` lines to $GITHUB_OUTPUT, which the GHA spec treats
+	as later-line-wins for the same output key — silently changing
+	which PR the caller redirects to."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 200,
+						"html_url": "https://github.com/owner/repo/pull/200",
+						"state": "open",
+						"pull_request": {"url": "https://api.github.com/.../pulls/200"},
+					}
+				},
+			},
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 201,
+						"html_url": "https://github.com/owner/repo/pull/201",
+						"state": "open",
+						"pull_request": {"url": "https://api.github.com/.../pulls/201"},
+					}
+				},
+			},
+		]
+		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		assert proc.returncode == 0, (
+			f"recovery should succeed; stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=https://github.com/owner/repo/pull/200" in gh_out, gh_out
+		assert "pr_url=https://github.com/owner/repo/pull/201" not in gh_out, gh_out
+		# Exactly one pr_url line — broaden-selection regression guard.
+		pr_url_lines = [ln for ln in gh_out.splitlines() if ln.startswith("pr_url=")]
+		assert len(pr_url_lines) == 1, pr_url_lines
+
+
 def test_implement_workflow_does_not_use_buggy_search_form():
 	"""Belt-and-braces: scan implement.yml for the historic buggy pattern.
 	If a future change reverts to `gh pr list --search "issue:${N}"` (or any
