@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -549,6 +550,14 @@ sys.exit(proc.returncode)
 
 
 def _install_timeline_gh_stub(bin_dir: Path) -> None:
+	if shutil.which("jq") is None:
+		raise RuntimeError(
+			"jq is required to run the Gap-3 safety-check tests "
+			"(_GH_STUB_TIMELINE applies --jq filters via the host jq). "
+			"Install jq (apt: `apt-get install jq`; brew: `brew install jq`) "
+			"and re-run. CI runners already have jq via the workflow "
+			"prerequisite check; this guard exists for local dev environments."
+		)
 	bin_dir.mkdir(parents=True, exist_ok=True)
 	gh_path = bin_dir / "gh"
 	gh_path.write_text(_GH_STUB_TIMELINE, encoding="utf-8")
@@ -739,21 +748,39 @@ def test_safety_check_ignores_cross_referenced_issues_not_prs():
 def test_implement_workflow_does_not_use_buggy_search_form():
 	"""Belt-and-braces: scan implement.yml for the historic buggy pattern.
 	If a future change reverts to `gh pr list --search "issue:${N}"` (or any
-	`--search "issue:..."` variant) on an executable line, this test fails
-	with a clear pointer to the regression. The literal `issue:` substring
-	is allowed inside YAML comments (those document why the form is buggy)."""
+	`--search issue:...` variant — including single-quoted, unquoted, or
+	`--search=` syntax), this test fails with a clear pointer to the
+	regression. The literal `issue:` substring is allowed inside YAML
+	comments (those document why the form is buggy)."""
+	# Match `gh pr list` followed (anywhere on the same line) by
+	# `--search` with optional `=` and optional surrounding whitespace,
+	# followed by an optional opening quote (single or double) and the
+	# `issue:` token. Catches:
+	#   --search "issue:..."     (double-quoted, the original form)
+	#   --search 'issue:...'     (single-quoted)
+	#   --search issue:...       (unquoted, bash treats as single token)
+	#   --search="issue:..."     (= syntax)
+	#   --search='issue:...'     (= + single-quote)
+	#   --search=issue:...       (= + unquoted)
+	# Case-insensitive on the `gh pr list` prefix because YAML allows
+	# weird casing in rare authoring styles.
+	buggy_pattern = re.compile(
+		r"\bgh\s+pr\s+list\b.*?--search[\s=]+[\"']?issue:",
+		re.IGNORECASE,
+	)
 	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 	for lineno, line in enumerate(text.splitlines(), start=1):
 		stripped = line.lstrip()
 		if stripped.startswith("#"):
 			continue
-		if "gh pr list" in stripped and '--search "issue:' in stripped:
+		if buggy_pattern.search(stripped):
 			raise AssertionError(
 				f"{IMPLEMENT_WORKFLOW.name}:{lineno} reverted to buggy "
-				f'`gh pr list --search "issue:..."` form. GitHub has no '
-				f"`issue:` PR-search qualifier; use the issue timeline "
-				f"cross-reference API instead. See plan.yml's "
-				f'"Skip when issue already has a PR" step for precedent.'
+				f"`gh pr list --search issue:...` form (any quoting). "
+				f"GitHub has no `issue:` PR-search qualifier; use the "
+				f"issue timeline cross-reference API instead. See "
+				f"plan.yml's \"Skip when issue already has a PR\" step "
+				f"for precedent.\n  matched line: {line.rstrip()}"
 			)
 
 
