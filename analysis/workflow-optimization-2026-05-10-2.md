@@ -758,3 +758,162 @@ If you want, I can turn this report into a prioritized implementation checklist 
 | Code modularization | 7–9 | Large |
 | Expression size reduction | 4–6 | Medium |
 | Medium/Low fixes | 4–5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-10)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation can be implemented directly without changing call semantics; `NEEDS_VERIFICATION` means the overlap is real but a human or follow-up analysis must prove freshness/error-handling/caller-contract safety first; `RISKY_SKIP` means the redundancy is visible but sits in a pagination/race/retry-sensitive path that must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — NEEDS_VERIFICATION
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:512-529` and `.github/workflows/review_autofix.yml:537-544`
+- **Current call count** — On the body/title-fallback branch, **N extra per-issue label lookups** after the initial linked-issue discovery call.
+- **Proposed call count** — **1 batched label lookup** for the same fallback issue set.
+- **Endpoint(s)** — Existing GraphQL `pullRequest(number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } }`; current fallback per-issue label reads via `gh issue view ... --json labels`; proposed aliased GraphQL `issue(number: N) { labels(first: 100) { nodes { name } } }`.
+- **Evidence** — The step already does one batched GraphQL fetch with labels, but when `closingIssuesReferences` is empty it degrades to a numbers-only JSON array and then re-fetches labels one issue at a time:
+  ```bash
+  issue_nodes_json="$(gh api graphql \
+    ... \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+
+  if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
+    ...
+    issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0)) | map({number: tonumber, labels: null})')"
+  fi
+
+  if [ "${labels_known}" != "true" ]; then
+    issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null || true)"
+  fi
+  ```
+- **Proposed fix** — In the `Dispatch standalone validate for orchestrator short-circuit issues` step, once `issue_numbers` is synthesized at `.github/workflows/review_autofix.yml:519-529`, issue one aliased GraphQL batch to populate `{number, labels}` for all fallback issues before the `while` loop. Reuse the existing batching style from `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`, and keep the current per-issue `gh issue view` only as a fail-open fallback if the batch query fails or returns null nodes.
+- **Safety rationale** — `NEEDS_VERIFICATION` is required because this changes per-issue fail-open behavior into a batched query, and static reading alone does not prove that missing/closed/inaccessible issues will be handled identically before workflow dispatch and label removal.
+- **Downstream signal** — Verify on at least one fallback-heavy merged PR that batched GraphQL label results exactly match the current `gh issue view` decisions for: existing issue with label, existing issue without label, missing issue, and closed issue; only then replace the N-loop.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — RISKY_SKIP
+- **Safety tag** — `RISKY_SKIP`
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:1430-1444`; `scripts/review_rb_judge.sh:214-216`; `scripts/review_rb_judge.sh:274-282`; `scripts/review_rb_judge.sh:307-308`; `scripts/review_rb_judge.sh:343-344`
+- **Current call count** — **2 additional logical PR-context fetches** in the common `review_rb_judge.sh` path on top of the earlier `Collect PR metadata` step: one `/pulls/{PR_NUMBER}` title/body fetch plus one `gh_pr_with_all_comments(...)` fetch. On helper fallback, that second fetch can expand into paginated REST comment calls.
+- **Proposed call count** — **0 additional common-path fetches** if the judge consumes the already-materialized PR files, retaining the current network path only as a missing-file/unreadable-file fallback.
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr}`; GraphQL/REST PR comment hydration via `gh_pr_with_all_comments`; paginated REST `/repos/{repo}/issues/{pr}/comments` and `/repos/{repo}/pulls/{pr}/comments` on helper fallback.
+- **Evidence** — `Collect PR metadata` already materializes the raw PR payload and comment files:
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
+  gh_retry /tmp/gh_reviews_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews
+  gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
+  ```
+  But the late judge path re-reads the same PR context instead of consuming those files:
+  ```bash
+  PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+
+  PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
+
+  echo "Title: $(jq -r '.title // ""' "${PR_META_FILE}")"
+  echo "Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")"
+  ```
+  Net-new beyond Deep Audit `API-001`: even after the main metadata hydration is consolidated, the review-blocked judge still performs a second PR-context fetch instead of reading the files the workflow already created.
+- **Proposed fix** — Teach `scripts/review_rb_judge.sh` to prefer `PR_META_FILE` / `PR_PAYLOAD_FILE` for `PR_DATA`, and to assemble `PR_CONTEXT_JSON` from `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEW_COMMENTS_FILE`, and `PR_META_FILE` when those files are present and parseable. Keep `gh_pr_with_all_comments` only as a fallback for missing/unreadable files.
+- **Safety rationale** — `RISKY_SKIP` is mandatory because the current path includes paginated comment hydration, and the judge runs late enough that collapsing to the earlier snapshot can change both page-boundary semantics and freshness in a path that informs terminal PR handling.
+- **Downstream signal** — Do **not** auto-implement. Manual review must decide whether `review_rb_judge.sh` is allowed to use the earlier PR snapshot; if yes, retain the current network fetches only as a missing-file/unreadable-file fallback and validate against a long-running PR where new human comments land after the initial metadata snapshot.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:15-23`; `.github/workflows/review_autofix.yml:74-84`; `.github/workflows/review_autofix.yml:519-520`; `.github/workflows/internal-review.yml:57-63`
+- **Current call count** — On the `closingIssuesReferences == []` post-merge fallback path, **1 extra `GET /pulls/{PR_NUMBER}`** to recover PR title/body.
+- **Proposed call count** — **0 extra `GET /pulls/{PR_NUMBER}`** on the repo’s normal `pull_request.closed` wrapper path; keep the current API read only when `inputs.pr_title` and `inputs.pr_body` are blank (for direct/manual callers).
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr}` for `.title + " " + (.body // "")`.
+- **Evidence** — The reusable workflow already accepts `pr_title` / `pr_body`, and the in-repo wrapper passes them through:
+  ```yaml
+  # .github/workflows/review_autofix.yml
+  pr_title:
+    description: "PR title for [skip ai] gating (passed by wrapper workflows)"
+  pr_body:
+    description: "PR body for [skip ai] gating (passed by wrapper workflows)"
+  ```
+  ```yaml
+  # .github/workflows/internal-review.yml
+  pr_title: >-
+    ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
+  pr_body: >-
+    ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
+  ```
+  Yet the merged-PR fallback step still re-fetches the same two fields:
+  ```bash
+  pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  ```
+- **Proposed fix** — In `post-merge-validate-dispatch`, build `pr_data` from `${{ inputs.pr_title }}` / `${{ inputs.pr_body }}` first, and call `gh api /pulls/${PR_NUMBER}` only if both are blank. Keep the existing direct-API fallback for `workflow_dispatch` / nonstandard callers, because `.github/workflows/review_autofix.yml:74-84` does not declare `pr_title` / `pr_body` for direct dispatch.
+- **Safety rationale** — `NEEDS_VERIFICATION` is appropriate because the in-repo caller clearly provides the data, but static reading alone does not prove that every supported caller that can reach `post_merge_dispatch == true` does the same.
+- **Downstream signal** — Verify every supported caller that can trigger the merged-PR path passes non-empty `pr_title` / `pr_body`; if yes, switch this step to input-first and preserve the current API call only for blank-input cases.
+
+#### REUSE-003 — NEEDS_VERIFICATION
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/implement.yml:66-89`; `.github/workflows/implement.yml:607-621`
+- **Current call count** — **2 calls** to `GET /repos/{repo}/issues/{ISSUE_NUMBER}` before implementation starts.
+- **Proposed call count** — **1 full issue fetch** on the reuse path, with any second fetch narrowed or removed only if verification shows live refresh is unnecessary.
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence** — The workflow first fetches issue state + labels to decide whether to skip:
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ```
+  Then, after install/setup, it fetches the same issue again to get the full payload:
+  ```bash
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+  ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+  ```
+- **Proposed fix** — Either move `Create runtime workspace` ahead of `Precheck approval phase label` so the first fetch can be written directly to `${ISSUE_META_FILE}`, or write the precheck payload to a temp file under `${RUNNER_TEMP}` and promote it later. If a second read must remain, narrow it to only the fields that truly need a fresh read instead of re-fetching the whole issue.
+- **Safety rationale** — `NEEDS_VERIFICATION` is required because the second read currently happens after setup/install and under different retry behavior (`gh api` vs `gh_retry gh api`), so static reading does not prove that the first snapshot is fresh enough for downstream steps.
+- **Downstream signal** — Verify whether any automation or human edit between `Precheck approval phase label` and `Fetch issue metadata` must be visible before Codex runs; if not, persist the first payload and delete the second GET, otherwise keep only a narrow refresh for the mutable fields.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — NEEDS_VERIFICATION
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/issue_pr_status.yml:180-182`; `.github/workflows/issue_pr_status.yml:205-208`; `.github/workflows/internal-issue-pr-status.yml:4-12`
+- **Current call count** — **1 latent fallback call site** to `GET /pulls/{PR_NUMBER}` on the “PR title/body empty” branch.
+- **Proposed call count** — **0 latent fallback call sites** after removal, or **0 on the repo’s normal wrapper path** if the fallback is hidden behind an explicit compatibility guard.
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr}` for `.title + " " + (.body // "")`
+- **Evidence** — The workflow already has PR title/body from the event:
+  ```bash
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_BODY: ${{ github.event.pull_request.body || '' }}
+
+  PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+  And the only in-repo caller is a `pull_request.closed` wrapper:
+  ```yaml
+  on:
+    pull_request:
+      types: [closed]
+
+  jobs:
+    sync-status:
+      uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@main
+  ```
+- **Proposed fix** — Remove the fallback PR fetch for the repo’s standard wrapper path, or gate it behind an explicit “nonstandard caller” compatibility flag so the reusable workflow only performs that API read when a caller truly cannot provide pull-request event title/body.
+- **Safety rationale** — `NEEDS_VERIFICATION` is the correct tag because the dead branch is evident for the in-repo wrapper, but changing a reusable workflow without checking external consumers could remove a compatibility fallback that some out-of-repo caller still depends on.
+- **Downstream signal** — Verify that every supported caller of `issue_pr_status.yml` triggers it from a `pull_request.closed` event with populated `github.event.pull_request.title/body`; only then delete this fallback or move it behind an explicit compatibility switch.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — real overlap, but the proposed consolidation touches paginated PR comment/review hydration and must preserve the helper’s page-boundary + fail-open fallback contract.
+- API-002: NEEDS_VERIFICATION — the cached linked-issue classification should be reusable, but alert suppression behavior still depends on whether later issue-body changes are intentionally meant to affect the Telegram step.
+- API-003: RISKY_SKIP — the duplicate `/pulls/{PR_NUMBER}` reads live inside a stability/polling loop, so collapsing them changes the race-detection observation points.
+- BATCH-001: RISKY_SKIP — the fallback path paginates timeline data after GraphQL failure, so batching must preserve both fail-open behavior and cross-reference enrichment semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | MERGE-001, REUSE-002, REUSE-003, DEAD-API-001 |
+| RISKY_SKIP | 1 | REUSE-001 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
