@@ -178,13 +178,16 @@ def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges() -> No
     assert 'JUDGE_SEMBLE_MAX_CHUNKS="4"' in text
     assert 'append_judge_semble_query_text()' in text
     assert 'render_judge_semble_prefetch_from_query_file()' in text
-    assert 'build_semble_prefetch_block()' in text
-    assert 'build_wave_judge_semble_query()' in text
-    assert 'build_stall_judge_semble_query()' in text
-    assert 'build_review_blocked_judge_semble_query()' in text
-    assert 'build_integration_conflict_judge_semble_query()' in text
     assert '_append_judge_semble_query_section()' not in text
     assert '_build_judge_semble_prefetch()' not in text
+    assert 'judge_semble_prefetch="$(_build_judge_semble_prefetch' not in text
+    assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch' not in text
+    assert 'JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch' not in text
+    assert 'judge_semble_prefetch="$(build_semble_prefetch_block' not in text
+    assert 'stall_judge_semble_prefetch="$(build_semble_prefetch_block' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block' not in text
+    assert 'JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block' not in text
     assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"' in text
     assert 'stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context")"' in text
     assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
