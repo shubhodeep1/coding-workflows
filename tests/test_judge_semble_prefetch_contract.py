@@ -71,6 +71,25 @@ def test_render_prompt_renders_and_removes_semble_prefetch_block() -> None:
 	assert "{{SEMBLE_PREFETCH}}" not in filled_render
 
 
+def test_render_prompt_rejects_inline_unresolved_semble_prefetch_placeholder() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_judge_semble_prefetch_inline_") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("Header\nContext: {{SEMBLE_PREFETCH}}\nFooter\n", encoding="utf-8")
+		env = os.environ.copy()
+		env["ALLOW_WORKFLOW_EDITS"] = "false"
+		env.pop("SEMBLE_PREFETCH", None)
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode != 0
+		assert "Unresolved SEMBLE_PREFETCH placeholder" in proc.stderr
+
+
 def test_live_judge_prompt_templates_include_placeholder() -> None:
 	for prompt_file in PROMPT_FILES:
 		text = _read(prompt_file)
@@ -79,12 +98,16 @@ def test_live_judge_prompt_templates_include_placeholder() -> None:
 
 def test_orchestrate_poll_workflow_bootstraps_semble_for_judge_runs() -> None:
 	workflow = _read(ORCHESTRATE_POLL_WORKFLOW)
+	optional_block_start = workflow.index('OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"')
+	optional_block_end = workflow.index("mkdir -p ai-memory/schemas", optional_block_start)
+	optional_block = workflow[optional_block_start:optional_block_end]
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
 	assert 'echo "SEMBLE_AVAILABLE=false"' in workflow
 	assert 'echo "SEMBLE_BIN="' in workflow
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workflow
 	assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workflow
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh semble_helpers.sh"' in workflow
+	assert '_fetched_scripts+=("${f}")' in optional_block
 	assert "- name: Setup uv for Semble" in workflow
 	assert "uses: astral-sh/setup-uv@v3" in workflow
 	assert "- name: Install semble" in workflow

@@ -310,6 +310,7 @@ jobs:
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
           done
 
           mkdir -p ai-memory/schemas

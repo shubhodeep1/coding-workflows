@@ -49,12 +49,12 @@ while IFS= read -r line || [ -n "${line}" ]; do
 	esac
 done < "${PROMPT_FILE}" > "${RENDERED_FILE}"
 
-if grep -qE '^[[:space:]]*\{\{WORKFLOW_EDIT_RESTRICTION\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+if grep -Fq '{{WORKFLOW_EDIT_RESTRICTION}}' "${RENDERED_FILE}"; then
 	echo "Unresolved WORKFLOW_EDIT_RESTRICTION placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi
 
-if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+if grep -Fq '{{SEMBLE_PREFETCH}}' "${RENDERED_FILE}"; then
 	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi

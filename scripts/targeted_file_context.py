@@ -81,6 +81,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
@@ -134,6 +135,17 @@ DEFAULT_HEADER_TEXT = (
 PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 SEMBLE_QUERY_TIMEOUT_SECS = 30
 SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
+SEMBLE_MAX_CHUNKS_CAP = 20
+
+
+def _log_semble_event(prefix: str, **fields: object) -> None:
+	parts = [prefix]
+	for key, value in fields.items():
+		rendered = str(value)
+		if not rendered or any(ch.isspace() for ch in rendered):
+			rendered = repr(rendered)
+		parts.append(f"{key}={rendered}")
+	print(" ".join(parts), file=sys.stderr)
 
 
 def is_probable_path(value: str) -> bool:
@@ -303,6 +315,14 @@ def _read_optional_query_text(path_str: str | None) -> str | None:
 	return stripped or None
 
 
+def _normalize_semble_max_chunks(value: int) -> int:
+	if value <= 0:
+		return 1
+	if value > SEMBLE_MAX_CHUNKS_CAP:
+		return SEMBLE_MAX_CHUNKS_CAP
+	return value
+
+
 def _run_semble_query(
 	query_text: str,
 	semble_bin: str | None,
@@ -392,6 +412,7 @@ def emit_context(
 	read_fallback_rendered = 0
 	off_suppressed = 0
 	overflow_rendered_bytes = 0
+	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 
 	output.append("=== TARGETED FILE CONTEXT ===")
 	output.append(header_text)
@@ -418,6 +439,7 @@ def emit_context(
 		raw_size = abs_path.stat().st_size
 		if used_bytes + raw_size > max_bytes:
 			if semble_query_text:
+				query_start = time.monotonic()
 				success, payload = _run_semble_query(
 					f"{rel}\n{semble_query_text}",
 					semble_bin,
@@ -425,16 +447,28 @@ def emit_context(
 					semble_max_chunks,
 					repo_root,
 				)
+				elapsed_ms = int((time.monotonic() - query_start) * 1000)
 				if success and payload is not None:
 					rendered_bytes = _append_semble_block(output, rel, raw_size, payload)
+					_log_semble_event(
+						"SEMBLE_QUERY",
+						target="overflow",
+						file=rel,
+						chunks=semble_max_chunks,
+						bytes=rendered_bytes,
+						ms=elapsed_ms,
+					)
 					overflow_rendered_bytes += rendered_bytes
 					used_bytes += rendered_bytes
 					included += 1
 					semble_rendered += 1
 					continue
-				print(
-					f"SEMBLE_FALLBACK target=overflow file={rel} reason={payload or 'unknown'}",
-					file=sys.stderr,
+				_log_semble_event(
+					"SEMBLE_FALLBACK",
+					target="overflow",
+					file=rel,
+					reason=payload or "unknown",
+					ms=elapsed_ms,
 				)
 			if semble_fallback == "read":
 				remaining_bytes = max_bytes - used_bytes

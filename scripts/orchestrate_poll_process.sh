@@ -121,17 +121,6 @@ if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 
-append_semble_query_section() {
-  local label="$1"
-  local path="$2"
-  local max_bytes="${3:-4096}"
-
-  [ -s "${path}" ] || return 0
-  printf '%s\n' "${label}"
-  head -c "${max_bytes}" "${path}"
-  printf '\n'
-}
-
 append_semble_query_text_section() {
   local label="$1"
   local text="$2"
