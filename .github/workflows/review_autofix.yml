@@ -3726,7 +3726,25 @@ jobs:
           # [ai-merge-resolve] commit was aborted. Pin the resolver to a
           # workflow-controlled effort so the smoke override never starves
           # it.
-          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'xhigh' }}
+          #
+          # Default lowered from 'xhigh' to 'high' after runs 25627236793
+          # (PR shubhodeep1/tele-funtoken-msg-scoring#2874) and
+          # 25627316961 (PR #2867) on the orchestrator/project-2840
+          # stack hit a hung-thinking failure mode at 'xhigh': Codex
+          # consumed the full 1080s per-attempt budget enumerating
+          # duplicate helper definitions outside the conflict markers
+          # and was SIGTERMed by `timeout` before invoking apply_patch
+          # on all three retry attempts (markers=0,
+          # fingerprint_violations=0 on every retry — the unambiguous
+          # signature of `timeout` firing pre-patch). 'high' trades some
+          # merge depth for finishing inside the per-attempt budget on
+          # degenerate orchestrator-stack integrations. The smoke-test
+          # starvation rationale above still holds at 'high'; the only
+          # level that triggered it was 'none'. Consumers can override
+          # per-repo via vars.THINKING_LEVEL_CONFLICT_RESOLVER; valid
+          # levels (review_conflict_resolve.sh) are
+          # xhigh|high|medium|none.
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"

@@ -180,15 +180,19 @@ RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
 # that value; for smoke PRs that's fine since "low" doesn't trip the
 # empty-stdout failure mode. The pin here exists so that future changes
 # to the smoke override level don't accidentally starve the resolver:
-# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "xhigh"
+# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "high"
 # repo-wide) overrides config.toml unconditionally before the resolver
 # runs. PR #2058 / run 25300219172 originally hit this with override=none.
+# Default was lowered from "xhigh" to "high" after runs 25627236793 and
+# 25627316961 hit a hung-thinking failure mode at "xhigh" — see the
+# comment block on review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT
+# env var for the full rationale.
 #
 # Override config.toml here using CONFLICT_RESOLVER_REASONING_EFFORT
-# (set by the workflow step's env, defaults to "xhigh"). Also ensure
+# (set by the workflow step's env, defaults to "high"). Also ensure
 # model_reasoning_summary = "auto" is present — same diagnostic +
 # anti-empty-stdout rationale as the editor step.
-_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}"
+_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-high}"
 # Validate against known reasoning levels before interpolating into sed —
 # CONFLICT_RESOLVER_REASONING_EFFORT comes from a repo var
 # (vars.THINKING_LEVEL_CONFLICT_RESOLVER) so an unexpected value would
@@ -198,8 +202,8 @@ _resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}"
 case "${_resolver_reasoning_effort}" in
   xhigh|high|medium|none) ;;
   *)
-    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to xhigh."
-    _resolver_reasoning_effort="xhigh"
+    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to high."
+    _resolver_reasoning_effort="high"
     ;;
 esac
 _codex_config="${HOME}/.codex/config.toml"
@@ -398,6 +402,23 @@ _build_retry_prompt() {
   local _prev_attempt="$1"
   local _marker_file="$2"
   local _fp_file="$3"
+  # Outcome of the previous exec attempt. One of:
+  #   timeout     - codex was SIGTERMed/SIGKILLed by the per-attempt
+  #                 `timeout` wrapper before producing any patch.
+  #                 Violation files are empty because soft validation
+  #                 never ran; we prepend an apply_patch-first notice
+  #                 so the next attempt does not waste budget on the
+  #                 same hung-thinking loop.
+  #   error       - codex exited non-zero for another reason (network,
+  #                 auth, panic). Not yet observed enough to warrant
+  #                 a tailored hint; the standard reflexion is used.
+  #   ran         - codex exited 0 (with or without stdout); soft
+  #                 validation produced violation files. Standard
+  #                 reflexion lists those for the model to address.
+  #   violations  - synonym for the post-validation case; default for
+  #                 backwards compatibility with callers that do not
+  #                 pass the 4th arg yet.
+  local _prev_outcome="${4:-violations}"
   local _prelude_tpl="${SUPPORT_PROMPTS_DIR:-prompts}/integration-sync-conflict-resolver-retry-prelude.txt"
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] || [ ! -f "${_prelude_tpl}" ]; then
     if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then
@@ -416,6 +437,14 @@ _build_retry_prompt() {
     _fp_count="$(wc -l < "${_fp_file}" | tr -d '[:space:]')"
     _fp_details="$(sed 's/^/          - /' "${_fp_file}")"
   fi
+  # Build the timeout-aware notice. Non-empty only when the previous
+  # attempt was killed by `timeout`; otherwise empty so the existing
+  # violations-focused prelude stays intact byte-for-byte.
+  local _timeout_notice=""
+  if [ "${_prev_outcome}" = "timeout" ]; then
+    local _budget="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-1080}"
+    _timeout_notice=$'\n*** TIMEOUT NOTICE — read this FIRST ***\n\nYour previous attempt was KILLED at the per-attempt time limit ('"${_budget}"$'s) before it produced any apply_patch tool call. Soft validation never ran on that attempt, so the violation lists below report 0 and "(none)" — that is NOT a sign of progress, only that the previous attempt emitted no edits to validate. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nTo finish inside the next per-attempt budget:\n  1. Emit your first apply_patch tool call within the first 2–3 minutes.\n  2. Do NOT re-enumerate duplicate helpers across the file or trace every helper'"'"$'s call sites. If a file has duplicate function definitions outside the conflict markers (a known orchestrator-stack integration shape; originating runs 25627236793 / 25627316961), pick whichever side is consistent with the surrounding code in a single apply_patch hunk and move on.\n  3. Prose belongs AFTER the patches, not before.\n\n*** END TIMEOUT NOTICE ***'
+  fi
   # Render via python3 (same substitution pattern as
   # review_conflict_prepare.sh) so multi-line values with shell
   # metacharacters do not need quoting gymnastics.
@@ -427,7 +456,8 @@ _build_retry_prompt() {
     MARKER_VIOLATION_FILES="${_marker_list}" \
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
-    python3 -c "import os,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8').read(); keys=['PREVIOUS_ATTEMPT_NUMBER','MAX_ATTEMPTS','MARKER_VIOLATION_COUNT','MARKER_VIOLATION_FILES','FINGERPRINT_VIOLATION_COUNT','FINGERPRINT_VIOLATION_DETAILS']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+    PREVIOUS_TIMEOUT_NOTICE="${_timeout_notice}" \
+    python3 -c "import os,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8').read(); keys=['PREVIOUS_ATTEMPT_NUMBER','MAX_ATTEMPTS','MARKER_VIOLATION_COUNT','MARKER_VIOLATION_FILES','FINGERPRINT_VIOLATION_COUNT','FINGERPRINT_VIOLATION_DETAILS','PREVIOUS_TIMEOUT_NOTICE']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
 }
 
@@ -547,7 +577,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     _restore_attempt_base || echo "::warning::Resolver retry-base restore reported a non-fatal error; continuing."
     _build_retry_prompt "$((attempt - 1))" \
       "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
-      "${RESOLVER_FP_VIOLATIONS_FILE}"
+      "${RESOLVER_FP_VIOLATIONS_FILE}" \
+      "${_prev_attempt_outcome:-violations}"
     _effective_prompt_file="${RESOLVER_RETRY_PROMPT_FILE}"
     if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
       _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
@@ -591,9 +622,28 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   fi
   # `--` terminates `timeout`'s option parsing so a leading '-' in DURATION
   # cannot be mistaken for an option (defence-in-depth on top of the regex).
-  if ! timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-       codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}"; then
+  # Capture the exit code (instead of the bare `if !`) so we can distinguish
+  # the `timeout`-killed path (124 on SIGTERM, 137 on post-`--kill-after`
+  # SIGKILL) from codex-internal failures. The next retry's reflexion prompt
+  # uses this distinction: on timeout the violation files are empty (soft
+  # validation never ran), so the standard "fix the violations below" framing
+  # is misleading and we prepend an apply_patch-first hint. PR #2058 / runs
+  # 25627236793 + 25627316961 are the originating failure mode (xhigh +
+  # degenerate orchestrator-stack integration → 3× SIGTERM with markers=0
+  # fingerprint_violations=0 on every retry).
+  _codex_exit_code=0
+  timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+       codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+       || _codex_exit_code=$?
+  if [ "${_codex_exit_code}" -ne 0 ]; then
     rm -f "${tmp_output}"
+    if [ "${_codex_exit_code}" -eq 124 ] || [ "${_codex_exit_code}" -eq 137 ]; then
+      _prev_attempt_outcome="timeout"
+      echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by timeout (exit ${_codex_exit_code}) after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; next retry's reflexion prompt will hint apply_patch-first."
+    else
+      _prev_attempt_outcome="error"
+      echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} exited with code ${_codex_exit_code} (not a timeout); next retry will use the standard reflexion prompt."
+    fi
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       echo "Conflict resolver failed after retries."
       exit 1
@@ -602,6 +652,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     sleep 2
     continue
   fi
+  _prev_attempt_outcome="ran"
   # Empty stdout is no longer treated as a hard failure on its own.
   # The editor model can invoke apply_patch tool calls without emitting
   # any final assistant text (PR #2086 documents the same signature on

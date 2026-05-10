@@ -1,4 +1,4 @@
-=== PREVIOUS ATTEMPT VIOLATIONS (attempt {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}) ===
+=== PREVIOUS ATTEMPT VIOLATIONS (attempt {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}) ==={{PREVIOUS_TIMEOUT_NOTICE}}
 
 Your previous attempt at resolving these merge conflicts produced output
 that failed post-resolve validation.  The working tree has been
