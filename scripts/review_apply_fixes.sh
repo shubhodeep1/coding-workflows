@@ -811,7 +811,18 @@ _cleanup_prompt_budget
 editor_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
-  bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
+  # `SEMBLE_PREFETCH=""` opts this caller out of the unresolved-
+  # `{{SEMBLE_PREFETCH}}` guard in scripts/render_prompt.sh. The editor
+  # heredoc above does NOT itself use the placeholder, but
+  # targeted_file_context.py inlines prompt-template files (e.g.
+  # prompts/mode-judge.txt) verbatim into the editor prompt body, and
+  # those judge templates legitimately contain a standalone
+  # `{{SEMBLE_PREFETCH}}` line. Without an explicit empty value, the
+  # render script's `[ "${SEMBLE_PREFETCH+x}" = "x" ]` check stays false,
+  # the case statement passes the line through unchanged, and the final
+  # guard regex aborts the editor stage on data leakage rather than
+  # genuine wiring drift (run 25613659201 / PR #2392).
+  SEMBLE_PREFETCH="" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
 ) > "${editor_prompt_rendered}"
 mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 
