@@ -410,6 +410,9 @@ file_like_exts = {
     ".rb", ".rs", ".sh", ".sol", ".sql", ".svelte", ".toml", ".ts", ".tsx", ".txt",
     ".vue", ".xml", ".yaml", ".yml",
 }
+# Keep this source-oriented so dotted log artifacts such as error.message and
+# runtime byproducts such as foo.pyc / uv.lock do not crowd out likely code
+# files in the bounded Semble diagnose query.
 
 
 def add_identifier(value: str) -> None:

@@ -141,6 +141,10 @@ SEMBLE_MAX_CHUNKS_CAP = 20
 def _log_semble_event(prefix: str, **fields: object) -> None:
 	parts = [prefix]
 	for key, value in fields.items():
+		# Keep the Python-side overflow telemetry aligned with
+		# scripts/semble_helpers.sh: single-line, unquoted key=value fields on
+		# stderr. Normalizing whitespace prevents multiline exception payloads
+		# from spilling extra log lines while preserving the shared log shape.
 		rendered = " ".join(str(value).split())
 		parts.append(f"{key}={rendered}")
 	print(" ".join(parts), file=sys.stderr)
