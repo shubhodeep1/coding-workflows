@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:536-597 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The python3 heredoc writes directly to `${RESOLVER_RETRY_PROMPT_FILE}` through shell redirection, so a non-zero renderer exit can still leave an empty or truncated retry prompt file behind.\n  WHY: The shell redirection succeeds independently of the Python process, so the function can proceed as if prompt rendering succeeded even when the renderer failed.\n- scripts/review_conflict_resolve.sh:568-573 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The fail-loud guard can false-positive if a substitution value reintroduces `{{#IF_VIOLATIONS}}` or `{{/IF_VIOLATIONS}}` into the rendered template.\n  WHY: The guard checks for leftover marker substrings after substitution, so a marker-like payload value can trigger a warning even when the template stripping itself worked.\n- scripts/review_conflict_resolve.sh:~line 791 in the diff | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The `_codex_exit_code=$?` capture records `timeout`'s own 125 when the wrapper itself fails before Codex runs, so the retry banner can describe a wrapper failure as a Codex exit.\n  WHY: The classification is still correct for retry branching, but the emitted banner can be misleading even though the integer validation elsewhere already makes this unlikely.\n- scripts/review_conflict_resolve.sh:532-603 | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: If a template edit reintroduces `{{/IF_VIOLATIONS}}` inside the body text, the DOTALL regex can stop early and leave partial body content behind.\n  WHY: The non-greedy match is designed to strip the first marker pair, and a malformed template can therefore produce a partial strip rather than a clean suppression.\n- scripts/review_conflict_resolve.sh:448-530 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The suppression marker regexes do not match markers with interior spaces like `{{# IF_VIOLATIONS }}`, so suppression fails if the template is edited that way.\n  WHY: The current patterns only tolerate whitespace around the full marker, not inside the marker token itself.\n- scripts/review_conflict_resolve.sh:716-750 | confidence=1\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: If truncating the violations files fails on ENOSPC or EROFS, stale contents can remain on disk and feed inconsistent retry state.\n  WHY: The truncation is best-effort and the warning path does not guarantee the files are cleared, so later reads can see old contents.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:536-597 | confidence=3\n  PROBLEM: The python3 heredoc writes directly to `${RESOLVER_RETRY_PROMPT_FILE}` through shell redirection, so a non-zero renderer exit can still leave an empty or truncated retry prompt file behind.\n  WHY: The shell redirection succeeds independently of the Python process, so the function can proceed as if prompt rendering succeeded even when the renderer failed.\n- scripts/review_conflict_resolve.sh:568-573 | confidence=2\n  PROBLEM: The fail-loud guard can false-positive if a substitution value reintroduces `{{#IF_VIOLATIONS}}` or `{{/IF_VIOLATIONS}}` into the rendered template.\n  WHY: The guard checks for leftover marker substrings after substitution, so a marker-like payload value can trigger a warning even when the template stripping itself worked.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_conflict_resolve.sh:~line 791 in the diff | confidence=2\n  PROBLEM: The `_codex_exit_code=$?` capture records `timeout`'s own 125 when the wrapper itself fails before Codex runs, so the retry banner can describe a wrapper failure as a Codex exit.\n  WHY: The classification is still correct for retry branching, but the emitted banner can be misleading even though the integer validation elsewhere already makes this unlikely.\n- scripts/review_conflict_resolve.sh:532-603 | confidence=3\n  PROBLEM: If a template edit reintroduces `{{/IF_VIOLATIONS}}` inside the body text, the DOTALL regex can stop early and leave partial body content behind.\n  WHY: The non-greedy match is designed to strip the first marker pair, and a malformed template can therefore produce a partial strip rather than a clean suppression.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:448-530 | confidence=2\n  PROBLEM: The suppression marker regexes do not match markers with interior spaces like `{{# IF_VIOLATIONS }}`, so suppression fails if the template is edited that way.\n  WHY: The current patterns only tolerate whitespace around the full marker, not inside the marker token itself.\n- scripts/review_conflict_resolve.sh:716-750 | confidence=1\n  PROBLEM: If truncating the violations files fails on ENOSPC or EROFS, stale contents can remain on disk and feed inconsistent retry state.\n  WHY: The truncation is best-effort and the warning path does not guarantee the files are cleared, so later reads can see old contents.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7085111ba6f115c545465b12b69f3c693561866e289d5e9b66ef0eb041b915eb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25634077438",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25634077438",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510170540_c91b442d31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25634077438"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T17:05:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
