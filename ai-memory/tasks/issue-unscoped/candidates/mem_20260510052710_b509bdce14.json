@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/verify_integration_fingerprints.py:119-159 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `_substring_overlap_drops` performs an O(N\u00d7M) nested-loop substring scan over per-issue fingerprints.\n  WHY: qwen and x-ai treat this as a low-impact performance concern, while deepseek/minimax/z-ai dismiss it as non-issue because `FINGERPRINT_PER_FILE_CAP=12` bounds new captures; the disagreement is only about impact, not the code path.\n- scripts/orchestrate_poll_process.sh:2569-2603 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: The capture-side substring filter runs alongside the Counter-based exact-match dedup and only drops proper substrings.\n  WHY: both reviewers verified that identical strings are left for the Counter pass and subsuming extensions are removed correctly.\n- scripts/verify_integration_fingerprints.py:119-159,177-199,267-292 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus, moonshotai_kimi-k2_5]\n  PROBLEM: `_substring_overlap_drops` is shared by `verify()` and `list_violated_files()`, with `list_violated_files()` staying silent and `verify()` emitting `::warning::` annotations.\n  WHY: reviewers say this matches the stdout contract and rescues legacy state files without corrupting file-path-only output.\n- tests/test_orchestrate_poll_process.py:6214-6471 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The new tests cover both capture-side and verifier-side substring dedup paths, including the `redirect_stdout` fix for the custom runner.\n  WHY: reviewers say the suite provides positive/negative controls, warning capture, and non-regression coverage for the added behavior.\n- README.md:1078-1087 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The README now documents the net-no-op filter, substring-overlap filter, and verifier rescue path.\n  WHY: reviewers say the description matches the implementation and the real-world example.\n- tests/test_orchestrate_poll_process.py:~6460-6500 post-change | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The verifier test is fragile because it only asserts the warning is present and rc==0 on one synthetic case.\n  WHY: x-ai says it can miss cases where a warning is emitted alongside an unrelated failure, and rates it as a hardening concern.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/verify_integration_fingerprints.py:119-159\n  PROBLEM: O(N\u00d7M) performance concern is not a real issue.\n  WHY: With `FINGERPRINT_PER_FILE_CAP=12`, the nested loop is at most 144 Python `in` operations per issue, so the reviewer says it is negligible.\n- scripts/orchestrate_poll_process.sh:2569-2603 and scripts/verify_integration_fingerprints.py:119-159\n  PROBLEM: `_substring_overlap_drops` is correct and consistent with the shell-side filter.\n  WHY: reviewer traced both code paths and says `re.escape` preserves substring containment.\n- tests/test_orchestrate_poll_process.py:6214,6279,6417,6471\n  PROBLEM: The tests are comprehensive and correctly structured.\n  WHY: reviewer says the four new tests cover positive/negative cases, warning emission, and non-regression.\n- scripts/verify_integration_fingerprints.py:177-199\n  PROBLEM: `list_violated_files` dedup is silent per contract.\n  WHY: reviewer says stdout must stay file paths only and warnings belong in verify mode.\n- README.md:1078-1087\n  PROBLEM: README documentation is accurate.\n  WHY: reviewer says it correctly documents both filters and the rescue path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:2572-2602 | confidence=5\n  PROBLEM: Capture-side substring filter is correctly ordered relative to Counter-based exact-match dedup.\n  WHY: the reviewer traced the logic and confirmed the substring filter leaves identical strings for the Counter pass while dropping proper substrings.\n- scripts/verify_integration_fingerprints.py:119-159 and 179, 267-292 | confidence=5\n  PROBLEM: Verifier-side substring dedup uses a single `_substring_overlap_drops` helper shared between `verify()` and `list_violated_files()`.\n  WHY: the reviewer confirmed `list_violated_files()` stays silent to preserve the file-path-only stdout contract while `verify()` emits the warning annotation.\n- tests/test_orchestrate_poll_process.py:6214-6416 | confidence=5\n  PROBLEM: Tests comprehensively cover both capture-side and verifier-side paths.\n  WHY: the reviewer says the four new tests include positive and negative controls, warning capture, and the `redirect_stdout` fix for the custom runner.\n- README.md:1078-1087 | confidence=5\n  PROBLEM: README documentation accurately reflects both filters and the rescue path.\n  WHY: the reviewer says the updated paragraph names the net-no-op and substring-overlap filters and explains the verifier-side rescue behavior.\n- scripts/verify_integration_fingerprints.py:119-159 | confidence=2\n  PROBLEM: O(N\u00d7M) nested-loop complexity in `_substring_overlap_drops`.\n  WHY: the reviewer treats this as a forward-looking efficiency note, not a correctness bug, and says the existing cap keeps it bounded for new captures.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_orchestrate_poll_process.py:~6460-6500 post-change | confidence=3\n  PROBLEM: The test captures stdout via `redirect_stdout(io.StringIO())` and asserts presence of `::warning::Fingerprint substring-overlap dedup`.\n  WHY: the reviewer says the assertion is fragile because it only checks presence and can miss cases where a warning is emitted alongside an unrelated failure.\n- scripts/verify_integration_fingerprints.py:119-159 | confidence=3\n  PROBLEM: `_substring_overlap_drops(mc_with_keys, mnc_with_keys)` uses a nested loop O(len(mc) * len(mnc)) per issue.\n  WHY: the reviewer treats this as a performance concern for oversized legacy fingerprints and says it can slow the verifier path.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e18ea796eb3a88f6ebe51aca9f5d5315915bbef73eb0359c17301d6b261e04b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2426,
+    "run_id": "25620246542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25620246542",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510052710_b509bdce14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2426,
+    "run_id": "25620246542"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T05:27:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
