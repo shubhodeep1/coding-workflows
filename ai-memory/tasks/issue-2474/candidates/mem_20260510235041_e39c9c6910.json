@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What should this issue target?\nChoices:\nA. One specific workflow or script \u2014 name it (for example: clarify, plan, implement, review_autofix, orchestrate_poll, validate) (RECOMMENDED)\nB. Documentation or setup only \u2014 name the exact file(s) to update\nC. A cross-workflow behavior \u2014 name the affected phases and the shared problem (RECOMMENDED)\nQ2. What concrete problem should be solved in that target area?\nChoices:\nA. A reproducible bug or failure \u2014 describe the current behavior, the expected behavior, and any issue/PR/run example (RECOMMENDED)\nB. A reliability or operational problem \u2014 describe the noisy, slow, duplicate, or wasteful behavior and the desired improvement (RECOMMENDED)\nC. A docs or usability gap \u2014 describe what information is missing, wrong, or confusing\nQ3. What reference should planning use to confirm the work is done?\nChoices:\nA. An existing issue, PR, workflow run, or log snippet \u2014 include the number or a short quote (RECOMMENDED)\nB. A plain-language before/after scenario \u2014 describe one concrete example and the expected result (RECOMMENDED)\nC. Exact files or pages to update \u2014 list them if this is primarily documentation or setup work",
+  "fingerprint": "90367043dd4a01f0a0bd1fbfe1a139d0966e667d405b00392a1d7a06ea4e460b",
+  "lineage": {
+    "issue_number": 2474,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25643142711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25643142711",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260510235041_e39c9c6910",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2474,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25643142711"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2474 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-10T23:50:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
