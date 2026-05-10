@@ -6414,7 +6414,7 @@ def test_verify_integration_fingerprints_still_fails_on_real_violation_when_mixe
 		shutil.rmtree(sandbox, ignore_errors=True)
 
 
-def test_verify_integration_fingerprints_substring_dedups_self_contradictory_pairs(capsys):
+def test_verify_integration_fingerprints_substring_dedups_self_contradictory_pairs():
 	# Companion path to test_verify_integration_fingerprints_cross_dedups_self_
 	# contradictory_pairs for state files captured before the capture-side
 	# substring filter landed (capture is idempotent per issue, so an
@@ -6425,6 +6425,8 @@ def test_verify_integration_fingerprints_substring_dedups_self_contradictory_pai
 	# must_contain trivially matches the shorter must_not_contain under
 	# re.search, making the pair structurally unsatisfiable) and emit a
 	# ::warning:: that names the dedup so the upstream cause stays visible.
+	import contextlib
+	import io
 	mod = _verifier_module()
 	short_text = "critic-driven cohort-mix rollouts."
 	long_text = (
@@ -6450,16 +6452,19 @@ def test_verify_integration_fingerprints_substring_dedups_self_contradictory_pai
 	}
 	sandbox, fp = _verifier_sandbox(files, fingerprints)
 	prev_cwd = os.getcwd()
+	stdout_buf = io.StringIO()
 	try:
 		os.chdir(sandbox)
-		assert mod.main([str(fp)]) == 0
+		with contextlib.redirect_stdout(stdout_buf):
+			rc = mod.main([str(fp)])
 	finally:
 		os.chdir(prev_cwd)
 		shutil.rmtree(sandbox, ignore_errors=True)
-	captured = capsys.readouterr()
-	assert "::warning::Fingerprint substring-overlap dedup" in captured.out, (
+	assert rc == 0, f"verify must PASS after substring dedup; got rc={rc}"
+	captured = stdout_buf.getvalue()
+	assert "::warning::Fingerprint substring-overlap dedup" in captured, (
 		"verifier must emit a ::warning:: naming the substring-overlap dedup so the "
-		f"capture-side cause stays visible in the run log; got stdout={captured.out!r}"
+		f"capture-side cause stays visible in the run log; got stdout={captured!r}"
 	)
 
 
