@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:284 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `orchestrate_state_v2.py` is missing from the staged-scripts allowlist.\n  WHY: `scripts/orchestrate_poll_process.sh` calls `python3 scripts/orchestrate_state_v2.py` for pack/extract, and consumer repos only stage scripts from this allowlist, so the helper is absent at runtime.\n- scripts/review_conflict_resolve.sh:588-590 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS` rejects `0` and leading-zero values, forcing the default 1080-second timeout.\n  WHY: The regex `^[1-9][0-9]*$` blocks those inputs and the code warns then falls back; reviewers characterized this as a low-confidence operator-facing bug.\n- scripts/orchestrate_poll_process.sh:1049-1070 | confidence=[5]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: There is no check for `scripts/orchestrate_state_v2.py` before invoking the V2 pack path.\n  WHY: In consumer repos without the helper, `python3` fails, the error is logged, and the function returns 0 while silently falling back to V1.\n- scripts/orchestrate_poll_process.sh:1138-1165 | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: There is no check for `scripts/orchestrate_state_v2.py` before invoking the V2 extract path.\n  WHY: In consumer repos without the helper, `python3` fails, the non-zero exit is swallowed, and the code falls back to V1 without an operator-visible guard.\n- .github/workflows/test-and-mark-stable.yml:3242-3288 | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `workflow-log-analysis-test` job timeout may be too tight for the current inner workflow-log-analysis chain.\n  WHY: The reviewer estimated the inner jobs at roughly 220 minutes plus overhead and noted historical timeout increases, so the 250-minute cap may still cancel the job mid-run.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/orchestrate_poll.yml:284 | confidence=5\n  PROBLEM: `orchestrate_state_v2.py` is missing from the orchestrator poll workflow staged-scripts allowlist.\n  WHY: Consumer repos populate `scripts/` exclusively from this allowlist, so `python3 scripts/orchestrate_state_v2.py` fails at runtime and V2 state persistence is skipped.\n- scripts/review_conflict_resolve.sh:588-590 | confidence=2\n  PROBLEM: `CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS` rejects `0` and leading-zero values, forcing the default 1080-second timeout.\n  WHY: The `^[1-9][0-9]*$` regex blocks those inputs and silently falls back even when the operator may have intended a different value.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/orchestrate_poll.yml:284 | severity=critical | confidence=5\n  PROBLEM: The script staging allowlist does not include `orchestrate_state_v2.py`.\n  WHY: Consumer repositories populate their `scripts/` directory exclusively from this allowlist, so `python3 scripts/orchestrate_state_v2.py pack ...` or `extract ...` fails with `FileNotFoundError` and V2 state persistence is not performed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/orchestrate_poll.yml:284 | severity=critical | confidence=5\n  PROBLEM: The new `orchestrate_state_v2.py` script is missing from the staged support-script allowlist.\n  WHY: Consumer repos populate their `scripts/` directory exclusively from this allowlist loop, so `orchestrate_state_v2.py` will not exist when `orchestrate_poll_process.sh` invokes it and V2 state persistence will fail.\n- scripts/review_conflict_resolve.sh:588-590 | severity=low | confidence=2\n  PROBLEM: The regex validation rejects `0` and values with leading zeros.\n  WHY: The code correctly falls back to the default 1080 when invalid, but operators might expect `0` or `0600` to be accepted, so the intent is silently overridden.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/orchestrate_poll.yml:284 | confidence=5\n  PROBLEM: `scripts/orchestrate_state_v2.py` is missing from the staged-scripts allowlist, but `orchestrate_poll_process.sh` directly calls `python3 scripts/orchestrate_state_v2.py` for pack and extract.\n  WHY: Consumer repos stage scripts only from this allowlist loop, so the helper will be absent and the V2 persistence path will fail at runtime.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/orchestrate_poll.yml:~284 | confidence=5\n  PROBLEM: orchestrate_state_v2.py is not included in the staged support scripts allowlist.\n  WHY: Consumer repos stage scripts/ only from this explicit loop; `orchestrate_poll_process.sh` calls `python3 scripts/orchestrate_state_v2.py` pack/extract, which fails with `FileNotFoundError`.\n- scripts/orchestrate_poll_process.sh:1049-1070 | confidence=5\n  PROBLEM: No check if `scripts/orchestrate_state_v2.py` exists before invoking it.\n  WHY: In consumer repos without the script staged, `python3` fails, `::error::` logs but continues with `return 0`, falling back to V1 silently without alerting operators to the missing dependency.\n- scripts/orchestrate_poll_process.sh:1138-1165 | confidence=4\n  PROBLEM: No check if `scripts/orchestrate_state_v2.py` exists before invoking extract.\n  WHY: The same missing-helper case makes `python3` fail, `_v2_rc` non-zero, and the code falls back to V1 without operator-visible error.\n- .github/workflows/test-and-mark-stable.yml:3242-3288 | confidence=3\n  PROBLEM: Job timeout does not fully cover the worst-case inner workflow-log-analysis chain.\n  WHY: The inner jobs sum to about 220 minutes plus overhead, and the reviewer noted frequent historical increases, so the 250-minute cap can still be too tight.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/orchestrate_poll.yml:284 | severity=critical | confidence=5\n  PROBLEM: `scripts/orchestrate_state_v2.py` is not included in the workflow's staged-scripts allowlist.\n  WHY: `scripts/orchestrate_poll_process.sh` calls `python3 scripts/orchestrate_state_v2.py pack` and `extract`, and consumer repos populate `scripts/` only from this explicit allowlist.\n- scripts/review_conflict_resolve.sh:588-590 | severity=low | confidence=2\n  PROBLEM: The regex validation rejects leading-zero values and `0`.\n  WHY: The code intentionally falls back to 1080 and emits a warning, but that can still override an operator's intended value such as `0600`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3bb39559cc45a61cfab58f805f13ea237d3b2844eb41a42dc295713bcdd8cf84",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2444,
+    "run_id": "25623119752",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25623119752",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510082126_b2901256da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2444,
+    "run_id": "25623119752"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T08:21:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
