@@ -622,6 +622,26 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 1080."
     CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=1080
   fi
+  # Upper bound: the default of 1080s (18 min) is sized for 3 attempts
+  # × 18 min = 54 min inside the 60-min step cap (review_autofix.yml:3711),
+  # leaving ~6 min for soft validation, commit, and the EXIT-trap dispatch.
+  # Operators can raise the env var for a particular PR, but values above
+  # 1800s (30 min, half the step cap) guarantee retry-loop starvation:
+  # a 3600s override would let attempt 1 consume the whole step budget
+  # so the retry loop never iterates, which defeats the point of having
+  # retries.  1800s is the largest value that still permits attempt 2
+  # to start before the step cap fires (attempt 1 ≤ 30 min leaves
+  # ≥ 30 min for the remaining attempts plus the dispatch buffer);
+  # raising the override that high reduces the practical retry count
+  # from 3 to 2, but does not fully starve the loop.  We clamp anything
+  # above 1800s with a `::warning::` rather than rejecting it because a
+  # legitimately-large per-attempt budget on a multi-file conflict set
+  # is occasionally the right tuning, just not at unbounded values.
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS=1800
+  if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
+    echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would starve the retry loop under the 60-min step cap); clamping to ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
+    CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
+  fi
   # `--` terminates `timeout`'s option parsing so a leading '-' in DURATION
   # cannot be mistaken for an option (defence-in-depth on top of the regex).
   if ! timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \

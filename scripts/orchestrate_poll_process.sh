@@ -1115,6 +1115,16 @@ post_state_comment() {
   # Reader (extract_latest_valid_orchestrator_state) tries V2 first and
   # falls back to V1 so existing tracking issues with V1 state comments
   # keep working until the next write supersedes them.
+  #
+  # Defence-in-depth: the helper script is staged into scripts/ by the
+  # workflow's "Stage workflow support files" step alongside this script,
+  # but if the staging list omits it we surface a hard error here rather
+  # than silently swallowing pack failures and falling through to stale
+  # V1 state on the next poll cycle.
+  if [ ! -f "scripts/orchestrate_state_v2.py" ]; then
+    echo "::error::scripts/orchestrate_state_v2.py is missing from the staged scripts tree; V2 state persistence cannot run for issue #${TRACKING_NUM}. Update the workflow's 'Stage workflow support files' loop to include this helper." >&2
+    return 1
+  fi
   local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
   if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
@@ -1122,14 +1132,14 @@ post_state_comment() {
       --out-dir "${pack_dir}" 2>&1)"; then
     echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}: ${manifest_json}" >&2
     rm -rf "${pack_dir}"
-    return 0
+    return 1
   fi
   total="$(printf '%s' "${manifest_json}" | jq -r '.total // 0' 2>/dev/null || echo 0)"
   raw_bytes="$(printf '%s' "${manifest_json}" | jq -r '.raw_bytes // 0' 2>/dev/null || echo 0)"
   if ! [[ "${total}" =~ ^[0-9]+$ ]] || [ "${total}" -lt 1 ]; then
     echo "::error::orchestrate_state_v2 pack returned no chunks for issue #${TRACKING_NUM}: ${manifest_json}" >&2
     rm -rf "${pack_dir}"
-    return 0
+    return 1
   fi
   # Validate the manifest's files array before posting anything.  A
   # mismatched count would otherwise emit a torn V2 chain and then fall
@@ -1138,7 +1148,7 @@ post_state_comment() {
   if ! [[ "${chunk_count}" =~ ^-?[0-9]+$ ]] || [ "${chunk_count}" -ne "${total}" ]; then
     echo "::error::orchestrate_state_v2 pack returned ${chunk_count} chunk file(s) but declared total=${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); skipping torn V2 state write." >&2
     rm -rf "${pack_dir}"
-    return 0
+    return 1
   fi
   chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || echo "")"
   idx=0
@@ -1148,15 +1158,16 @@ post_state_comment() {
     if ! _post_state_comment_v2_chunk "${chunk_file}"; then
       echo "::error::Failed to post V2 state chunk ${idx}/${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
       rm -rf "${pack_dir}"
-      return 0
+      return 1
     fi
   done <<< "${chunk_files}"
   if [ "${idx}" -ne "${total}" ]; then
     echo "::error::Posted ${idx}/${total} V2 state chunks for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
     rm -rf "${pack_dir}"
-    return 0
+    return 1
   fi
   rm -rf "${pack_dir}"
+  return 0
 }
 
 # Posts a single V2 state-chunk comment to the tracking issue.  Unlike
@@ -1167,19 +1178,39 @@ post_state_comment() {
 # size guard does not apply here.
 _post_state_comment_v2_chunk() {
   local chunk_file="$1"
-  local payload_file
+  local payload_file diag_file gh_rc
   payload_file="$(mktemp "${TMPDIR:-/tmp}/orchstate_v2_chunk_payload.XXXXXX")"
   if ! jq -Rs '{body: .}' < "${chunk_file}" > "${payload_file}" 2>/dev/null; then
     rm -f "${payload_file}"
+    echo "::error::_post_state_comment_v2_chunk: jq failed to wrap chunk payload (chunk=${chunk_file})" >&2
     return 1
   fi
-  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+  # Capture stdout+stderr from gh api so failed posts surface HTTP status,
+  # response body, validation errors, and rate-limit details to operators
+  # instead of collapsing into a generic "::error::Failed to post V2 state
+  # chunk" with no diagnostic context.  The success path still drops
+  # stdout (GitHub returns the comment JSON, which is large and not
+  # informative for the caller).
+  diag_file="$(mktemp "${TMPDIR:-/tmp}/orchstate_v2_chunk_diag.XXXXXX")"
+  set +e
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
     --method POST \
-    --input "${payload_file}" >/dev/null 2>&1; then
-    rm -f "${payload_file}"
+    --input "${payload_file}" >"${diag_file}" 2>&1
+  gh_rc=$?
+  set -e
+  rm -f "${payload_file}"
+  if [ "${gh_rc}" -ne 0 ]; then
+    {
+      echo "::error::_post_state_comment_v2_chunk: gh api POST /comments failed (rc=${gh_rc}) for issue #${TRACKING_NUM:-?} chunk ${chunk_file##*/}"
+      echo "----- gh api stdout/stderr (truncated to 4 KiB) -----"
+      head -c 4096 "${diag_file}" 2>/dev/null || true
+      echo
+      echo "----- end gh api diagnostics -----"
+    } >&2
+    rm -f "${diag_file}"
     return 1
   fi
-  rm -f "${payload_file}"
+  rm -f "${diag_file}"
   return 0
 }
 
@@ -1227,11 +1258,31 @@ extract_latest_valid_orchestrator_state() {
     --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
   if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
-    candidate_state="$(cat "${_v2_payload_file}")"
-    if is_valid_orchestrator_state_json "${candidate_state}"; then
-      EXTRACTED_STATE_JSON="${candidate_state}"
-      rm -f "${_v2_comments_file}" "${_v2_payload_file}"
-      return 0
+    # Independent size guard: the extractor enforces its own per-chunk
+    # cap, but the stitched payload itself has no upper bound inside
+    # orchestrate_state_v2.py.  Cap at 8 MiB here so a corrupted manifest
+    # (e.g. forged `total=N` with N near MAX_CHUNKS_PER_MANIFEST) cannot
+    # poison the poller by feeding it an arbitrarily large blob even
+    # after JSON-shape validation.  A healthy state snapshot is ~10s of
+    # KiB; 8 MiB is two orders of magnitude above the worst real case
+    # while still bounding the failure mode.
+    local _v2_payload_bytes
+    _v2_payload_bytes="$(wc -c < "${_v2_payload_file}" 2>/dev/null | tr -d ' \n' || echo "")"
+    # Fail closed: if wc -c fails or returns non-numeric output the size
+    # cap below cannot be evaluated, so reject the payload rather than
+    # bypassing the cap (a hostile/corrupted blob is the very thing we
+    # are trying to keep out of the poller's state).
+    if ! [[ "${_v2_payload_bytes}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::V2 state extract payload byte count unavailable (wc -c output: ${_v2_payload_bytes:-<empty>}); rejecting and falling back to V1 for issue #${TRACKING_NUM:-?}." >&2
+    elif [ "${_v2_payload_bytes}" -gt $((8 * 1024 * 1024)) ]; then
+      echo "::warning::V2 state extract payload is ${_v2_payload_bytes} bytes (>8 MiB cap); rejecting and falling back to V1 for issue #${TRACKING_NUM:-?}." >&2
+    else
+      candidate_state="$(cat "${_v2_payload_file}")"
+      if is_valid_orchestrator_state_json "${candidate_state}"; then
+        EXTRACTED_STATE_JSON="${candidate_state}"
+        rm -f "${_v2_comments_file}" "${_v2_payload_file}"
+        return 0
+      fi
     fi
   fi
   rm -f "${_v2_comments_file}" "${_v2_payload_file}"
@@ -2164,7 +2215,7 @@ mark_integration_branch_missing_failed() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
-  post_state_comment
+  post_state_comment || true
   post_tracking_comment "## ❌ Integration branch missing
 
 ${reason}"
@@ -3264,7 +3315,7 @@ heal_integration_branch_conflict() {
        .integration_sync_status = "failed" |
        .integration_sync_last_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     post_tracking_comment "## ❌ Integration self-healing capped
 
 Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit the lifetime dispatch cap of ${INTEGRATION_CONFLICT_LIFETIME_MAX} resolver+judge attempts. Manual intervention required."
@@ -3316,7 +3367,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did n
        .integration_sync_status = "failed" |
        .integration_sync_last_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     post_tracking_comment "## ❌ Integration self-healing exhausted
 
 Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${effective_max_retries} automated attempts AND a judge escalation that itself failed. Manual intervention required."
@@ -3436,7 +3487,7 @@ sync_default_into_integration_branch() {
             "superseded_at": ((.sync.superseded_at // empty) // $now)
           })' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        post_state_comment
+        post_state_comment || true
         post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}
 
 The integration branch \`${integration_branch}\` is marked as **superseded-by-main**. Sync is intentionally skipped in future poll cycles to avoid repeated conflict churn.
@@ -3459,7 +3510,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
       "last_sync_outcome": "active",
       "affected_paths": []
     })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     sync_status="active"
   fi
 
@@ -3486,7 +3537,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
         "affected_paths": $affected_paths
       })' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}
 
 Skipping sync of \`${default_branch}\` into \`${integration_branch}\` because all tracked child PRs are terminal and the branch is now treated as superseded by \`${default_branch}\`.
@@ -3511,7 +3562,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
         "last_conflict_paths": [],
         "last_conflict_fingerprint": ""
       })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
+      post_state_comment || true
     fi
     mark_integration_sync_clean "${default_branch}"
     return 0
@@ -3546,7 +3597,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
   if [ "${sync_status}" != "conflict" ] || [ "${prev_conflict_fingerprint}" != "${conflict_fingerprint}" ]; then
-    post_state_comment
+    post_state_comment || true
     runbook_url="$(sync_rebuild_runbook_url "${default_branch}")"
     conflict_paths_md="$(format_conflict_paths_markdown "${conflict_paths_json}")"
     post_tracking_comment "## ⚠️ Integration sync conflict
@@ -3592,7 +3643,7 @@ finalize_integration_merge_if_needed() {
 		jq --arg reason "$(jq -r --arg default_branch "${default_branch}" '.sync.superseded_reason // ("Integration branch superseded by " + $default_branch + "; final merge intentionally skipped.")' "${STATE_FILE}")" \
 			'.final_merge_status = "superseded-by-main" | .final_merge_error = $reason' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-		post_state_comment
+		post_state_comment || true
 		return 0
 	fi
 
@@ -3613,7 +3664,7 @@ finalize_integration_merge_if_needed() {
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
       jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
+      post_state_comment || true
       return 0
     fi
   fi
@@ -3658,7 +3709,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
 
   jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "pending" | .final_merge_error = ""' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-  post_state_comment
+  post_state_comment || true
 
   local pr_state
   local pr_mergeable
@@ -3670,7 +3721,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     return 0
   fi
 
@@ -3707,7 +3758,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
        .integration_sync_last_error = "" |
        .integration_conflict_unresolved_ticks = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     post_tracking_comment "## ✅ Final merge complete
 
 Integration branch \`${integration_branch}\` was squash-merged into \`${default_branch}\` via PR #${final_pr}."
@@ -3721,7 +3772,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     return 0
   fi
 
@@ -3917,7 +3968,7 @@ handle_comprehensive_release_callback_if_needed() {
       jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
+      post_state_comment || true
     else
       msg="Comprehensive release callback failed for project #${TRACKING_NUM}."
       msg+=$'\n'"Workflow: test-and-mark-stable.yml"
@@ -3934,7 +3985,7 @@ handle_comprehensive_release_callback_if_needed() {
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
   else
     echo "::warning::Skipping comprehensive release callback for unexpected project status '${project_status}'."
     return 0
@@ -4059,7 +4110,7 @@ dispatch_validation_if_needed() {
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
       '.validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     if [ -n "${integration_branch}" ]; then
       post_tracking_comment "## 🧪 Runtime validation dispatched
 
@@ -4110,7 +4161,7 @@ mark_validation_failed() {
        .validation_active_fix_issues = [] |
        .validation_fix_issues_batch_cycles = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:validation-failed"
@@ -4138,7 +4189,7 @@ Failure class \`${_deterministic_class}\` is environment-deterministic; retrying
        .validation_last_dispatch_cycle = 0 |
        .validation_completed_cycle = null' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     set_tracking_phase_label "ai:validation-recovery"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
     post_tracking_comment "## 🔄 Validation failed — recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}
@@ -4153,7 +4204,7 @@ Transitioning back to judge for re-evaluation."
   # Recovery budget exhausted — terminal failure
   jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | del(.validation_failure_class) | .validation_active_fix_issues = [] | .validation_fix_issues_batch_cycles = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-  post_state_comment
+  post_state_comment || true
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validation-failed"
@@ -4208,7 +4259,7 @@ mark_validation_complete() {
 
     if [ "${merge_attempt_count}" -lt "${MAX_FINAL_MERGE_ATTEMPTS}" ]; then
       echo "  [final-merge] attempt ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} did not land; deferring completion to next poll tick."
-      post_state_comment
+      post_state_comment || true
       tg_notify "Project #${TRACKING_NUM}: final integration→${default_branch} merge attempt ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} did not land; will retry next tick." "WARNING"
       return 0
     fi
@@ -4220,7 +4271,7 @@ mark_validation_complete() {
         | .final_merge_status = "failed"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     _final_status="failed"
-    post_state_comment
+    post_state_comment || true
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:blocked"
@@ -4244,7 +4295,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
      | .validation_completed_cycle = $cycle
      | .final_merge_attempt_count = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-  post_state_comment
+  post_state_comment || true
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
@@ -4402,7 +4453,7 @@ sync_validation_fix_issues_from_comments() {
   fi
 
   set_tracking_phase_label "ai:validation-fixing"
-  post_state_comment
+  post_state_comment || true
 }
 
 # ---------------------------------------------------------------
@@ -7870,7 +7921,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   if [ "${STATE_FALLBACK_USED}" = "true" ] && [ -n "${STATE_JSON}" ]; then
     printf '%s\n' "${STATE_JSON}" > "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     echo "::warning::Detected malformed latest ORCHESTRATOR_STATE_V1 for issue #${TRACKING_NUM}; restored from older valid state and posted healed canonical state."
   fi
 
@@ -7922,7 +7973,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
         STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
-        post_state_comment
+        post_state_comment || true
         echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
         tg_notify "Auto-recovery: rebuilt missing orchestrator state for tracking issue #${TRACKING_NUM}." "DEBUG"
       else
@@ -7978,7 +8029,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
     echo "Project complete!"
     jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:merged"
     post_tracking_comment "Project completed successfully. Issue kept open for manual review."
@@ -8068,7 +8119,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
     if [ "${PROJECT_STATUS}" = "validating" ]; then
       if has_label "${TRACKING_LABELS}" "ai:validation-fixing"; then
         jq '.status = "validation-fixing"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        post_state_comment
+        post_state_comment || true
         continue
       fi
 
@@ -8262,7 +8313,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
       fi
 
       echo "Validation fix-up issues are still in progress (batch cycle ${FIX_BATCH_CYCLES}/${MAX_VALIDATION_FIX_BATCH_CYCLES})."
-      post_state_comment
+      post_state_comment || true
       continue
     fi
 
@@ -8280,7 +8331,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
        .validation_active_fix_issues = [] |
        .validation_fix_issues_batch_cycles = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     set_tracking_phase_label "ai:validating"
 
     if ! dispatch_validation_if_needed "${NEXT_VALIDATION_CYCLE}"; then
@@ -8316,7 +8367,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
          del(.validation_failure_reason) |
          del(.validation_failure_class)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
+      post_state_comment || true
       gh_retry gh issue edit "${TRACKING_NUM}" \
         --repo "${GITHUB_REPOSITORY}" \
         --remove-label "ai:validation-failed" >/dev/null || true
@@ -8397,7 +8448,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
          .judge_stall_cycles = $new_judge_stall |
          .recovery_count = $new_recovery' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
+      post_state_comment || true
       post_tracking_comment "## ▶️ Project resumed via /judge_resume
 
 Counter handling: ${RESUME_SUMMARY}
@@ -8544,7 +8595,7 @@ The poller will resume processing on the next cycle."
       done
     done
     if [ "${PRIOR_WAVE_REMEDIATED}" = "true" ]; then
-      post_state_comment
+      post_state_comment || true
     fi
   fi
 
@@ -8637,7 +8688,7 @@ The poller will resume processing on the next cycle."
     done <<< "${UNCREATED_IDS}"
 
     if [ "${DEFERRED_STATE_CHANGED}" = "true" ]; then
-      post_state_comment
+      post_state_comment || true
       post_tracking_comment "## 🔧 Deferred Issue Creation (Wave ${CURRENT_WAVE})
 
 Issues in this wave had not been created yet (likely from an interrupted initial setup). Created them now:
@@ -10122,7 +10173,7 @@ ${RB_FIX_DESC}
 
     # Persist updated state if any review-blocked issues were handled
     if [ "${REVIEW_BLOCKED_STATE_CHANGED}" = "true" ]; then
-      post_state_comment
+      post_state_comment || true
 
       # Re-check wave status after handling review-blocked issues
       # (some may have been merged or reissued)
@@ -10528,7 +10579,7 @@ REISSUE_EOF
   done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue')
 
 if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
-  post_state_comment
+  post_state_comment || true
 
   # Add labels for any replacement issues created in this cycle.
   REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
@@ -10689,7 +10740,7 @@ with open('${STATE_FILE}', 'w') as f:
     fi
 
     if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ]; then
-      post_state_comment
+      post_state_comment || true
     fi
     if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then
       post_healing_summary_comment
@@ -10794,7 +10845,7 @@ with open('${STATE_FILE}', 'w') as f:
   if [ "${FINAL_PR_PHASE_CAP_BYPASS}" != "true" ] && [ "$((JUDGE_STALL_CYCLES + 1))" -gt "${MAX_JUDGE}" ]; then
     echo "::error::Judge stall cycle limit reached ($((JUDGE_STALL_CYCLES + 1)) > ${MAX_JUDGE}). Marking project as failed."
     jq '.status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    post_state_comment || true
     handle_comprehensive_release_callback_if_needed "failed" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
       -f body="## Project Failed — Judge stall cycle limit exceeded
@@ -11149,7 +11200,7 @@ PRs to revert: ${REVERT_COUNT}"
 
         echo "Project complete!"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        post_state_comment
+        post_state_comment || true
         handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         set_tracking_phase_label "ai:merged"
@@ -11194,7 +11245,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
          .validation_failure_class = null |
          .validation_completed_cycle = null' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
+      post_state_comment || true
       set_tracking_phase_label "ai:validating"
 
       if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
@@ -11210,7 +11261,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
 
         jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-        post_state_comment
+        post_state_comment || true
         handle_comprehensive_release_callback_if_needed "failed" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
         set_tracking_phase_label "ai:blocked"
         post_tracking_comment "## ❌ Judge repeat-fingerprint breaker triggered
@@ -11234,7 +11285,7 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
         echo "Recovery attempts exhausted (${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}). Stopping."
         jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-        post_state_comment
+        post_state_comment || true
         handle_comprehensive_release_callback_if_needed "failed" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
@@ -11353,7 +11404,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
       jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1) | .recovery_count = ((.recovery_count // (if .recovery_attempted == true then 1 else 0 end)) + 1) | .status = "in_progress"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-      post_state_comment
+      post_state_comment || true
 
       tg_notify "Orchestrator auto-recovery ($((RECOVERY_COUNT + 1))/${MAX_RECOVERY_ATTEMPTS}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts." "WARNING"
       ;;
@@ -11435,7 +11486,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
           echo "Current wave issue tracking changed from judge output. Staying on wave ${CURRENT_WAVE} until updated issues complete."
         fi
         jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        post_state_comment
+        post_state_comment || true
         # Skip wave advancement — next poll cycle will re-check this wave
       else
 
@@ -11528,7 +11579,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
 
       # Post updated state
-      post_state_comment
+      post_state_comment || true
 
       fi  # end: current-wave issue-change guard
       ;;
