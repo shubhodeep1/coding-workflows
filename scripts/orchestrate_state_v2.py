@@ -82,6 +82,15 @@ GITHUB_COMMENT_BODY_CAP = 65536
 DEFAULT_FRAMING_HEADROOM = 256
 DEFAULT_CHUNK_SIZE = GITHUB_COMMENT_BODY_CAP - DEFAULT_FRAMING_HEADROOM
 
+# Upper bound on the number of chunks the extractor will track for a
+# single manifest.  A healthy state snapshot is ~10s of KiB and packs
+# into <10 chunks; even a worst-case ~1 MiB snapshot would be ~16
+# chunks.  Cap well above that so legitimate writes are never rejected
+# while a corrupted `part=1/total=999999` comment cannot force the
+# extractor to allocate dict slots up to its declared total before
+# realising the chain is incomplete.
+MAX_CHUNKS_PER_MANIFEST = 1024
+
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
 	re.MULTILINE,
@@ -165,6 +174,11 @@ def _try_parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
 	manifest = m.group(3)
 	if part < 1 or total < 1 or part > total:
 		return None
+	# Bound `total` so a corrupted `part=1/total=999999` cannot force the
+	# extractor to track an unreasonable number of chunks before realising
+	# the chain is incomplete.  See MAX_CHUNKS_PER_MANIFEST docstring.
+	if total > MAX_CHUNKS_PER_MANIFEST:
+		return None
 	# Body slice after the opener line.  The opener was matched as a
 	# full line so m.end() lands just before the trailing newline that
 	# we wrote between opener and chunk.
@@ -196,9 +210,17 @@ def cmd_extract(args: argparse.Namespace) -> int:
 		print(f"comments json not found: {comments_path}", file=sys.stderr)
 		return 2
 	try:
-		comments = json.loads(comments_path.read_text())
+		# GitHub API payloads are always UTF-8.  Pin the decoder explicitly
+		# so a runner with a non-UTF-8 default locale (e.g. C / POSIX)
+		# cannot raise UnicodeDecodeError on snapshots that contain non-
+		# ASCII text in titles / bodies and force a fallback to stale
+		# V1 extraction.
+		comments = json.loads(comments_path.read_text(encoding="utf-8"))
 	except json.JSONDecodeError as e:
 		print(f"comments json is not valid JSON: {e}", file=sys.stderr)
+		return 2
+	except UnicodeDecodeError as e:
+		print(f"comments json is not valid UTF-8: {e}", file=sys.stderr)
 		return 2
 	if not isinstance(comments, list):
 		print("comments json is not a JSON array", file=sys.stderr)
