@@ -755,3 +755,35 @@ def test_implement_workflow_does_not_use_buggy_search_form():
 				f"cross-reference API instead. See plan.yml's "
 				f'"Skip when issue already has a PR" step for precedent.'
 			)
+
+
+# ---------------------------------------------------------------------------
+# Direct-invocation entrypoint
+#
+# `.github/workflows/ci.yml` runs each test as `python3 tests/<file>.py` from
+# an explicit allowlist (no pytest discovery). Without this block, the file
+# would import successfully and exit 0 without running any of the test_*
+# functions — silently passing in CI. Mirrors the pattern in
+# `tests/test_implement_post_codex_recovery.py`.
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
