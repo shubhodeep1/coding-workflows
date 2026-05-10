@@ -59,8 +59,7 @@ if grep -Fq '{{WORKFLOW_EDIT_RESTRICTION}}' "${RENDERED_FILE}"; then
 	exit 1
 fi
 
-if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}" \
-	|| { [ -z "${SEMBLE_PREFETCH_BLOCK}" ] && grep -Fq '{{SEMBLE_PREFETCH}}' "${RENDERED_FILE}"; }; then
+if grep -Fq '{{SEMBLE_PREFETCH}}' "${RENDERED_FILE}"; then
 	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi

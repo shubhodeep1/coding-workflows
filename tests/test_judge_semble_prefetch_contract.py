@@ -101,12 +101,13 @@ def test_render_prompt_trims_placeholder_line_whitespace() -> None:
     assert rendered == "Header\n=== SEMBLE: Judge Context ===\nchunk\nFooter\n"
 
 
-def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged_when_prefetch_present() -> None:
-    rendered = _render_prompt(
+def test_render_prompt_rejects_inline_unresolved_semble_prefetch_placeholder_even_when_prefetch_present() -> None:
+    proc = _run_render_prompt(
         "Before {{SEMBLE_PREFETCH}} After\n",
         "=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
     )
-    assert rendered == "Before {{SEMBLE_PREFETCH}} After\n"
+    assert proc.returncode != 0
+    assert "Unresolved SEMBLE_PREFETCH placeholder" in proc.stderr
 
 
 def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> None:
@@ -131,6 +132,7 @@ def test_live_judge_prompt_templates_include_placeholder() -> None:
     for prompt_file in PROMPT_FILES:
         text = _read(prompt_file)
         assert "{{SEMBLE_PREFETCH}}" in text, f"missing placeholder in {prompt_file}"
+        assert text.count("{{SEMBLE_PREFETCH}}") == 1, f"expected one placeholder in {prompt_file}"
 
 
 def test_orchestrate_poll_workflow_bootstraps_semble_for_judge_runs() -> None:
@@ -160,19 +162,19 @@ def test_orchestrate_poll_process_wires_semble_prefetch_into_all_live_judges() -
     assert 'append_semble_query_text_section() {' in text
     assert 'build_semble_prefetch_context() {' in text
     assert 'render_prompt_with_semble_prefetch() {' in text
-    assert 'append_judge_semble_query_text() {' in text
-    assert 'render_judge_semble_prefetch_from_query_file() {' in text
     assert 'integration_semble_context_file="${RUNTIME_DIR}/integration_judge_semble_context_${final_pr}.txt"' in text
-    assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"' in text
-    assert 'stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context")"' in text
-    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
-    assert 'JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context")"' in text
     assert 'render_prompt_with_semble_prefetch prompts/mode-judge-stall-recovery.txt "${stall_judge_semble_context_file}"' in text
     assert 'render_prompt_with_semble_prefetch prompts/mode-judge-review-blocked.txt "${RB_JUDGE_SEMBLE_CONTEXT_FILE}"' in text
     assert 'render_prompt_with_semble_prefetch prompts/mode-judge.txt "${JUDGE_SEMBLE_CONTEXT_FILE}"' in text
-    assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in text
-    assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in text
-    assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in text
+    assert 'append_judge_semble_query_text() {' not in text
+    assert 'render_judge_semble_prefetch_from_query_file() {' not in text
+    assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file' not in text
+    assert 'stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file' not in text
+    assert 'JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file' not in text
+    assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' not in text
+    assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' not in text
+    assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' not in text
     assert 'append_semble_query_text_section "Wave ${CURRENT_WAVE} completion status:" "${WAVE_STATUS}" 2500' in text
     assert "append_semble_query_text_section 'Stall diagnostics JSON:' \"${diagnostics}\" 7000" in text
 
