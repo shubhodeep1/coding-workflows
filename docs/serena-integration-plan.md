@@ -3,10 +3,13 @@
 > **Status**: NOT STARTED — this branch (`claude/serena-integration-plan-qBL0K`)
 > ships the design only. No `scripts/setup_serena.sh`, no
 > `scripts/mcp_handshake_probe.py`, and no `[mcp_servers.serena]` block exist
-> in the current tree (verified: `grep -rni serena scripts/ prompts/
-> .github/workflows/ workflow-templates/` returns only two capitalized
-> "Serena/MCP" comments in `.github/workflows/test-and-mark-stable.yml`
-> (lines 1082 and 3020) and no other matches). The `[Unreleased]` block in
+> in the current tree (verified case-insensitively via
+> `grep -rni serena scripts/ prompts/ .github/workflows/
+> workflow-templates/` — note `-i` for case-insensitive — which returns
+> only two capitalized "Serena/MCP" comments in
+> `.github/workflows/test-and-mark-stable.yml` (lines 1082 and 3020)
+> and no other matches; equivalent literal search: `grep -rn Serena
+> scripts/ prompts/ .github/workflows/ workflow-templates/`). The `[Unreleased]` block in
 > `CHANGELOG.md` and several `analysis/workflow-optimization-2026-05-0*.md`
 > files describe this integration as if it has shipped (e.g. "269 Serena
 > tool calls", "94% efficiency", "~85% token savings"); those are
@@ -93,7 +96,7 @@ embeddings; symbol resolution is exact, courtesy of the LSP layer.
 | `[mcp_servers.serena]` in `write_codex_config.sh` | **not emitted** |
 | `.serena/project.yml` | **does not exist** (Serena writes / uses this at runtime) |
 | `.gitignore` `.serena/` rule | **already present** — `.gitignore:6` lists `.serena/`; no Phase 1 edit needed in this repo (consumer-repo install guidance still recommends the rule) |
-| `setup-uv` step | already present in `implement.yml`, `validate.yml`, `review_autofix.yml`, `clarify.yml`, `plan.yml`, `orchestrate*.yml` (see §1.5) |
+| `setup-uv` step | already present in `implement.yml`, `validate.yml`, `review_autofix.yml`, `clarify.yml`, `plan.yml`, `orchestrate*.yml` (see §1.5), but **gated on `SEMBLE_ENABLED == 'true'`** in the three in-scope workflows. Phase 1 must broaden the gate to also fire on `SERENA_ENABLED` — see §4.2 |
 | `tests/test_mcp_handshake_probe.py` | **does not exist** |
 | `tests/fixtures/mcp_handshake/` | **does not exist** |
 | `agents.md` "Stable log prefixes" — `SERENA_*` entries | not present |
@@ -327,8 +330,26 @@ edits (e.g. config files, prose).
 `prompts/mode-implement.txt` listing Serena tools available when
 `SERENA_AVAILABLE=true` is exported. Hint section is wrapped in a
 template placeholder `{{SERENA_TOOL_HINTS}}` (rendered by
-`render_prompt.sh`) so it disappears entirely when Serena is off
-— preserving prompt-byte-identical fallback.
+`render_prompt.sh`) so it elides when Serena is off.
+
+**Rendering contract for empty substitution**: today
+`render_prompt.sh`'s placeholder mechanism (e.g. the
+`{{SEMBLE_PREFETCH}}` path) replaces the token in place and leaves the
+surrounding newlines, which means an empty substitution can leave a
+single blank line in the dynamic prompt. That is acceptable here for
+two reasons: (a) the **static prefix** assembled by
+`build_static_context.sh` is unchanged — `{{SERENA_TOOL_HINTS}}` lives
+in the per-issue dynamic-context layer, not the static prefix, so
+prefix-cache hit rate stays at parity (§4.8); (b) the dynamic context
+is per-issue and never cached, so a single blank-line difference there
+costs nothing. If a future need for true byte-identical fallback
+emerges (it is not required by anything in this plan), Phase 2 can
+extend `render_prompt.sh` to elide the *entire line* containing a
+placeholder when the substitution is empty — same change Semble would
+benefit from. Phase 2's `tests/test_implement_prompt_shape.py`
+asserts only the placeholder *content* invariants (present iff
+`SERENA_AVAILABLE=true`), not whole-prompt byte equality, to keep the
+contract honest.
 
 **Fallback**: `SERENA_AVAILABLE=false` makes the placeholder render
 empty and the `[mcp_servers.serena]` block is not written; codex
@@ -506,8 +527,7 @@ rollout PR so future readers see the decision was deliberate.
 
 ### 4.2 Install path
 
-Serena is installed inside `scripts/setup_serena.sh` via `uv` (already
-staged in every in-scope workflow):
+Serena is installed inside `scripts/setup_serena.sh` via `uv`:
 
 - Pinned version: `serena-agent==<X.Y.Z>` (exact pin TBD on first
   stable cut; see §9 open questions).
@@ -516,9 +536,24 @@ staged in every in-scope workflow):
 - Fail-soft: on install failure, set `SERENA_AVAILABLE=false` in
   `$GITHUB_ENV` and exit 0. Every Serena caller respects this flag
   and falls back without the per-site failure-log noise.
-- Optional cache: `~/.cache/uv` is already cached by `setup-uv` in
-  the existing workflows; Serena's wheel benefits from that cache
-  with no plan-side change.
+- Optional cache: `~/.cache/uv` is cached by `setup-uv` whenever
+  that step runs; Serena's wheel benefits from that cache with no
+  plan-side change.
+
+**`setup-uv` gating must broaden in Phase 1.** The `astral-sh/setup-uv`
+step exists in every in-scope workflow today (`implement.yml:555`,
+`review_autofix.yml:1180`, `validate.yml:602`), but it is currently
+gated on Semble being enabled — e.g.
+`if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'`
+in `implement.yml:556` and the equivalent in `review_autofix.yml:1179`.
+With `SERENA_ENABLED=true` and `SEMBLE_ENABLED=false`, those gates
+would skip `setup-uv` and `setup_serena.sh` would have no `uv` to
+call. Phase 1 broadens each gate to fire when *either* flag is on:
+`if: env.SKIP_<GATE> != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')`
+across the three workflows above (and the matching post-`setup-uv`
+install steps that currently share the same gate). Documented as a
+discrete deliverable in §5.1 Phase 1 below; missing this widening is
+a hard install-failure for Serena.
 
 ### 4.3 `.serena/project.yml` lifecycle
 
@@ -641,10 +676,13 @@ spawn an exploration loop. The strip rule already handles future MCP
 servers transparently — Serena gets stripped automatically. No edit
 to `review_run_reviewers.sh` is needed for the carve-out.
 
-A regression test in `tests/test_review_reviewer_strip_mcp.py` (new
-in Phase 1) asserts that after `setup_serena.sh` writes the Serena
-block, the per-reviewer codex-home file produced by
-`review_run_reviewers.sh` contains no `[mcp_servers.serena]` table.
+A regression test in `tests/test_review_reviewer_strip_mcp.py`
+(added in **Phase 3** — see §5.3 and the §11 checklist; the test
+depends on `setup_serena.sh` being wired into `review_autofix.yml`,
+which only happens in Phase 3) asserts that after `setup_serena.sh`
+writes the Serena block, the per-reviewer codex-home file produced
+by `review_run_reviewers.sh` contains no `[mcp_servers.serena]`
+table.
 
 ### 4.6 Lazy bootstrap gating
 
@@ -764,6 +802,24 @@ flag, log-prefix contract.
   `mcp_servers.serena.command` is a string equal to the input
   binary path. Catches regressions to shell-style quoting (the
   `shlex.quote` accident the §4.4 pseudocode warns against).
+- Add `scripts/serena_stats_emit.py`. End-of-job summariser referenced
+  in §8.1: parses codex's tool-call log for Serena MCP tool
+  invocations, computes per-target `SERENA_QUERY` rollup lines
+  (`tool=`, `ms=`, `response_bytes=`, etc.) and per-job aggregate
+  totals, and emits everything to stderr (or `::notice::` workflow
+  commands). Required for the contractual `SERENA_QUERY` log prefix
+  to be emitted at all — the codex tool-call log alone does not
+  carry the `SERENA_QUERY` prefix, so without this script no
+  `SERENA_QUERY` lines appear in workflow logs and `cost_audit.py`
+  has nothing to ingest. Driven from the Setup Serena step's
+  `if: always()` post-step block (§4.7 / §8.3) so cancelled and
+  timed-out runs still preserve stats.
+- Broaden the `setup-uv` step gating in `implement.yml`,
+  `validate.yml`, and `review_autofix.yml` so the step (and its
+  matching post-`setup-uv` install steps) fires when *either*
+  `SEMBLE_ENABLED == 'true'` or `SERENA_ENABLED == 'true'`. See
+  §4.2 for the exact `if:` shape and the failure mode this
+  prevents.
 - Add fixtures under `tests/fixtures/mcp_handshake/`:
   `mock_mcp_close_on_init.py`, `mock_mcp_invalid_json.py`,
   `mock_mcp_id_mismatch.py`, `mock_mcp_happy.py`.
@@ -810,7 +866,12 @@ hints them.
 `SERENA_ENABLED=true` shows Serena tool calls in the codex log
 (`SERENA_QUERY target=implement tool=find_symbol …` lines) and a
 non-empty Serena tool-call count in the end-of-job stats. With
-`SERENA_ENABLED=false`, behaviour is byte-identical to today.
+`SERENA_ENABLED=false`, codex behaviour is identical to today (no
+Serena tools registered, no `SERENA_QUERY` lines emitted, no
+`{{SERENA_TOOL_HINTS}}` content rendered); the static prefix bytes
+are identical (§4.8); the dynamic prompt may differ by a single
+blank line where the placeholder rendered empty (§3.1 rendering
+contract).
 
 ### 5.3 Phase 3 — `implement-diagnose` / `implement-repair` (+`-syntax`) and `review_autofix` editor
 
@@ -1296,11 +1357,17 @@ plan, ordered by dependency:
 - [ ] Phase 1 — `scripts/setup_serena.sh`, `scripts/mcp_handshake_
       probe.py`, `scripts/templates/serena_project.yml.j2` (all
       Serena-supported languages enabled by default per §4.3 / §6.5),
+      `scripts/serena_stats_emit.py` (end-of-job summariser that
+      emits the contractual `SERENA_QUERY` lines — without this no
+      `cost_audit.py` data flows, see §5.1 / §8.1),
       `tests/test_mcp_handshake_probe.py` + fixtures,
       `tests/test_setup_serena_toml.py` (TOML-validity regression for
       the `mcp_servers.serena.command` quoting), `agents.md`
       log-prefix table addition, `implement.yml` Setup Serena step
-      (lazy-bootstrapped) + Guard 0 baseline filter extension,
+      (lazy-bootstrapped) + `if: always()` stats-emit step + Guard 0
+      baseline filter extension, **broaden `setup-uv` gating in
+      `implement.yml` / `validate.yml` / `review_autofix.yml` to
+      fire on `SEMBLE_ENABLED || SERENA_ENABLED` (§4.2)**,
       `probably_unnecessary_but_read_if_stuck.md` Serena section.
       `.gitignore` already lists `.serena/` (line 6); no edit
       required in this repo.
