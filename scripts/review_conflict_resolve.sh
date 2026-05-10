@@ -489,6 +489,23 @@ _build_retry_prompt() {
     # the rendered notice. If you need to interpolate additional
     # values, add another `%s` slot AND another positional arg to
     # the printf call so the slot/arg counts stay balanced.
+    #
+    # Runtime safeguard: scan the template for unescaped `%` not
+    # followed by another `%` or an `s` (the only conversion the
+    # printf call below uses). Strip the valid `%%` and `%s`
+    # tokens first; anything left containing `%` means a literal
+    # percent sign slipped in (e.g. "100% complete") and printf -v
+    # would consume positional args in unexpected ways, corrupting
+    # the rendered notice. Fail-open: emit `::warning::` so the
+    # workflow log surfaces the issue and let the (corrupted)
+    # notice still render — aborting the resolver step on a
+    # documentation-style mistake would block real retries.
+    _template_format_check="${_timeout_template//%%/}"
+    _template_format_check="${_template_format_check//%s/}"
+    if [[ "${_template_format_check}" == *%* ]]; then
+      echo "::warning::Resolver timeout-notice template contains an unescaped \`%\` not followed by another \`%\` or \`s\`. printf -v will consume positional args in unexpected ways and produce a corrupted notice. Escape literal percent signs as \`%%\` in scripts/review_conflict_resolve.sh::_build_retry_prompt::_timeout_template."
+    fi
+    unset _template_format_check
     printf -v _outcome_notice "${_timeout_template}" "${_budget}"
   elif [ "${_prev_outcome}" = "error" ]; then
     _outcome_notice=$'\n*** PREVIOUS ATTEMPT EXITED NON-ZERO — read this FIRST ***\n\nYour previous attempt exited with a non-zero status (not a `timeout`-kill) before producing any apply_patch tool call. Soft validation never ran on that attempt — this prelude therefore contains no violation lists for you to act on. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nCommon causes for this exit shape are codex CLI panic, transient network/auth errors against the model provider, or rate-limit responses; if the same failure recurs the retry loop will exhaust naturally and the orchestrator integration judge will take over.\n\nRead the === ORIGINAL TASK === section below this prelude and proceed as if this were attempt 1.\n\n*** END NOTICE ***'
