@@ -500,6 +500,7 @@ _build_retry_prompt() {
     # workflow log surfaces the issue and let the (corrupted)
     # notice still render — aborting the resolver step on a
     # documentation-style mistake would block real retries.
+    local _template_format_check
     _template_format_check="${_timeout_template//%%/}"
     _template_format_check="${_template_format_check//%s/}"
     if [[ "${_template_format_check}" == *%* ]]; then
