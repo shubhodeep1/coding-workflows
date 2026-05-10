@@ -2898,6 +2898,9 @@ jobs:
             # `gh_retry` here so a transient API blip does not block the
             # recovery — site 1 has the same lookup but cannot use
             # `gh_retry` (gh_helpers.sh is staged later in the workflow).
+            # Leave stderr unredirected so gh/jq diagnostics surface in
+            # the workflow log on failure (otherwise `EXISTING_PR=""`
+            # is indistinguishable from "no linked PR exists").
             EXISTING_PR="$(gh_retry gh api --paginate \
               "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
               --jq '
@@ -2908,7 +2911,7 @@ jobs:
                   | .source.issue.html_url
                 ]
                 | .[0] // ""
-              ' 2>/dev/null || echo "")"
+              ' || echo "")"
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
