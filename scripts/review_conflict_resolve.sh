@@ -466,7 +466,21 @@ _build_retry_prompt() {
   local _outcome_notice=""
   if [ "${_prev_outcome}" = "timeout" ]; then
     local _budget="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-1080}"
-    _outcome_notice=$'\n*** TIMEOUT NOTICE — read this FIRST ***\n\nYour previous attempt was KILLED at the per-attempt time limit ('"${_budget}"$'s) before it produced any apply_patch tool call. Soft validation never ran on that attempt — this prelude therefore contains no violation lists for you to act on. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nTo finish inside the next per-attempt budget:\n  1. Emit your first apply_patch tool call within the first 2–3 minutes.\n  2. Do NOT re-enumerate duplicate helpers across the file or trace every helper'"'"$'s call sites. If a file has duplicate function definitions outside the conflict markers (a known orchestrator-stack integration shape; originating runs 25627236793 / 25627316961), pick whichever side is consistent with the surrounding code in a single apply_patch hunk and move on.\n  3. Prose belongs AFTER the patches, not before.\n\nRead the === ORIGINAL TASK === section below this prelude and proceed from there.\n\n*** END TIMEOUT NOTICE ***'
+    # Single ANSI-C template + printf -v: avoids the prior multi-piece
+    # `$'…'"${_budget}"$'…'"'"$'…'` sandwich (three quoting forms
+    # interleaved) which was hard to maintain. `\047` is the
+    # ANSI-C octal escape for `'` so the apostrophe in
+    # "helper's call sites" no longer needs a `"'"` break-out from
+    # ANSI-C quoting. Budget is interpolated via the lone `%s`
+    # placeholder; the rest of the format string contains no `%`
+    # literals so no double-`%%` escaping is required.
+    local _timeout_template
+    _timeout_template=$'\n*** TIMEOUT NOTICE — read this FIRST ***\n\nYour previous attempt was KILLED at the per-attempt time limit (%ss) before it produced any apply_patch tool call. Soft validation never ran on that attempt — this prelude therefore contains no violation lists for you to act on. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nTo finish inside the next per-attempt budget:\n  1. Emit your first apply_patch tool call within the first 2–3 minutes.\n  2. Do NOT re-enumerate duplicate helpers across the file or trace every helper\047s call sites. If a file has duplicate function definitions outside the conflict markers (a known orchestrator-stack integration shape; originating runs 25627236793 / 25627316961), pick whichever side is consistent with the surrounding code in a single apply_patch hunk and move on.\n  3. Prose belongs AFTER the patches, not before.\n\nRead the === ORIGINAL TASK === section below this prelude and proceed from there.\n\n*** END TIMEOUT NOTICE ***'
+    # shellcheck disable=SC2059  # the format string is a static
+    # template controlled by this function; the only %s slot is
+    # bound to ${_budget}, so this is the documented printf -v
+    # idiom rather than a user-input format-string smell.
+    printf -v _outcome_notice "${_timeout_template}" "${_budget}"
   elif [ "${_prev_outcome}" = "error" ]; then
     _outcome_notice=$'\n*** PREVIOUS ATTEMPT EXITED NON-ZERO — read this FIRST ***\n\nYour previous attempt exited with a non-zero status (not a `timeout`-kill) before producing any apply_patch tool call. Soft validation never ran on that attempt — this prelude therefore contains no violation lists for you to act on. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nCommon causes for this exit shape are codex CLI panic, transient network/auth errors against the model provider, or rate-limit responses; if the same failure recurs the retry loop will exhaust naturally and the orchestrator integration judge will take over.\n\nRead the === ORIGINAL TASK === section below this prelude and proceed as if this were attempt 1.\n\n*** END NOTICE ***'
   fi
@@ -531,15 +545,16 @@ tpl = open(os.environ['PRELUDE_TPL'], encoding='utf-8').read()
 # removing only the marker lines themselves.
 #
 # Whitespace tolerance: the markers are matched with `[ \t]*` around
-# them and `[ \t]*\n` after them so trailing whitespace or the
-# marker line being indented does not cause silent fall-open. The
-# fallback assertion at the end of this block emits a `::warning::`
-# if a marker leaks through to the rendered prompt anyway, so a
-# template edit that breaks both the regex and the fallback fails
-# loudly rather than silently rendering markers in the model's
-# context.
-_marker_open = r'^[ \t]*\{\{#IF_VIOLATIONS\}\}[ \t]*\n'
-_marker_close = r'^[ \t]*\{\{/IF_VIOLATIONS\}\}[ \t]*\n'
+# them, and the trailing newline is optional (`\n?`) so the closing
+# marker on the last line of a template without a final newline
+# still suppresses cleanly. Indented markers and trailing tabs /
+# spaces are also tolerated. The fallback assertion at the end of
+# this block emits a `::warning::` if a marker leaks through to the
+# rendered prompt anyway, so a template edit that breaks both the
+# regex and the fallback fails loudly rather than silently rendering
+# markers in the model's context.
+_marker_open = r'^[ \t]*\{\{#IF_VIOLATIONS\}\}[ \t]*\n?'
+_marker_close = r'^[ \t]*\{\{/IF_VIOLATIONS\}\}[ \t]*\n?'
 if os.environ.get('SUPPRESS_VIOLATIONS_BODY') == '1':
     tpl = re.sub(
         _marker_open + r'.*?' + _marker_close,
