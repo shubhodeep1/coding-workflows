@@ -128,17 +128,27 @@ def test_render_prompt_rejects_unresolved_semble_placeholder() -> None:
 	assert "Unresolved SEMBLE_PREFETCH placeholder" in result.stderr
 
 
-def test_render_prompt_replaces_semble_prefetch_with_surrounding_whitespace() -> None:
-	result = _run_render(
-		"Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
-		semble_prefetch="=== SEMBLE: Judge Context ===\nchunk",
-	)
-	assert result.returncode == 0, result.stderr
-	assert result.stderr == ""
-	assert "{{SEMBLE_PREFETCH}}" not in result.stdout
-	assert "=== SEMBLE: Judge Context ===" in result.stdout
-	assert "chunk" in result.stdout
-	assert result.stdout.endswith("Footer\n")
+def test_render_prompt_preserves_multiline_semble_prefetch_verbatim() -> None:
+    rendered = _render_prompt(
+        "Before\n{{SEMBLE_PREFETCH}}\nAfter\n",
+        "=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===",
+    )
+
+    assert rendered == (
+        "Before\n=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===\nAfter\n"
+    )
+
+
+def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
+    rendered = _render_prompt(
+        "Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
+        "=== SEMBLE: Judge Context ===\nchunk",
+    )
+
+    assert "{{SEMBLE_PREFETCH}}" not in rendered
+    assert "=== SEMBLE: Judge Context ===" in rendered
+    assert "chunk" in rendered
+    assert rendered.endswith("Footer\n")
 
 
 def test_render_prompt_allows_empty_semble_prefetch() -> None:
@@ -274,7 +284,8 @@ def main() -> int:
     test_render_prompt_replaces_semble_prefetch_and_guards_placeholder()
     test_render_prompt_replaces_multiline_semble_prefetch()
     test_render_prompt_rejects_unresolved_semble_placeholder()
-    test_render_prompt_replaces_semble_prefetch_with_surrounding_whitespace()
+    test_render_prompt_preserves_multiline_semble_prefetch_verbatim()
+    test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
     test_render_prompt_allows_empty_semble_prefetch()
     test_render_prompt_resolves_workflow_and_semble_placeholders_together()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()
