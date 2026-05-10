@@ -305,7 +305,7 @@ jobs:
               src=".codex-workflow-src-main/scripts/${f}"
             fi
             if [ ! -f "${src}" ]; then
-              echo "::notice::Optional Semble support script ${f} is unavailable on ${SCRIPT_REF}; judge prompts will use legacy context only."
+              echo "::notice::Optional Semble support script ${f} is unavailable on ${SCRIPT_REF}; legacy path remains active."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"

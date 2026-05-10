@@ -36,11 +36,16 @@ if ! command -v gh_retry >/dev/null 2>&1; then
 fi
 SEMBLE_HELPERS_AVAILABLE="false"
 REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES="12000"
-if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null; then
-  if declare -F semble_query_block >/dev/null 2>&1; then
-    SEMBLE_HELPERS_AVAILABLE="true"
+if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1090
+  if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null; then
+    if declare -F semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh did not provide semble_query_block; continuing without review-blocked Semble prefetch." >&2
+    fi
   else
-    echo "::warning::semble_helpers.sh did not expose semble_query_block; continuing without review-blocked Semble prefetch." >&2
+    echo "::warning::Failed to source ${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh; continuing without review-blocked Semble prefetch." >&2
   fi
 fi
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
