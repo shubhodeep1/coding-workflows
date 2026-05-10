@@ -6751,6 +6751,53 @@ def test_actions_runs_cached_loader_uses_if_none_match_when_stale() -> None:
 	assert result["actions_runs_if_none_match_count"] >= 1
 
 
+def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
+	# scripts/orchestrate_poll_process.sh has a resolver-tooling refresh
+	# allowlist (the `refresh_files=( ... )` array) that controls which
+	# files are re-pulled from default_branch onto the orchestrator's
+	# integration-sync working copy.  Both the standard reflexion prelude
+	# and the timeout-aware reflexion prelude must be in this list — if
+	# either is missing, consumer repos pinning to @stable would not pick
+	# up the prelude after a release and the resolver retry loop would
+	# silently fall back to "retry with original prompt verbatim" on the
+	# specific failure class that the missing prelude was supposed to
+	# handle.  Added after PR #2453's claude-branch-review flagged that
+	# the new timeout prelude needed an explicit pin against future
+	# refactors silently dropping it.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Locate the refresh_files array and ensure both prelude paths
+	# appear inside it (raw substring match is sufficient — there is
+	# only one `refresh_files=(` declaration in the file).
+	assert "refresh_files=(" in poller_body, (
+		"refresh_files=( ... ) array missing from "
+		"scripts/orchestrate_poll_process.sh; the resolver-tooling "
+		"refresh path has been removed or renamed."
+	)
+	for tpl in (
+		"prompts/integration-sync-conflict-resolver-retry-prelude.txt",
+		"prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt",
+	):
+		assert tpl in poller_body, (
+			f"{tpl} missing from refresh_files allowlist in "
+			"scripts/orchestrate_poll_process.sh; consumer repos pinning "
+			"@stable would not pick up this prelude after a release, "
+			"silently disabling the corresponding retry-reflexion path."
+		)
+	# Defence-in-depth: the matching workflow-side bootstrap in
+	# review_autofix.yml must also stage the timeout-prelude file so the
+	# script_ref pin path mirrors the orchestrator refresh path.
+	wf_body = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert (
+		"integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+		in wf_body
+	), (
+		"review_autofix.yml does not stage the timeout-prelude template; "
+		"consumer-repo runs whose pinned script_ref includes the new "
+		"prelude file would still hit a missing-template ::warning:: at "
+		"runtime."
+	)
+
+
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# The resolver run: blocks were extracted into
 	# scripts/review_conflict_prepare.sh and

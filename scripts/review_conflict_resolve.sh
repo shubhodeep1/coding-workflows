@@ -683,7 +683,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # surfacing those numbers would mislead.
     case "${_retry_prompt_outcome}" in
       timeout-prelude)
-        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s) before producing any patch; rendered timeout-aware reflexion prompt (no validation data captured)."
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s) before completing; any partial edits were discarded by the working-tree restore and no soft-validation data was captured. Rendered timeout-aware reflexion prompt."
         ;;
       validation-prelude)
         if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
@@ -709,7 +709,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         # so operators reading the log do not assume a prelude was used.
         case "${_prev_attempt_failure_kind}" in
           timeout)
-            echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s); timeout-aware prelude template unavailable, retrying with original prompt verbatim."
+            echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s) before completing (any partial edits were discarded by the working-tree restore); timeout-aware prelude template unavailable, retrying with original prompt verbatim."
             ;;
           *)
             echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: prelude template unavailable, retrying with original prompt verbatim."

@@ -2,9 +2,10 @@
 
 Your previous attempt at resolving these merge conflicts was KILLED by
 the per-attempt timer ({{PER_ATTEMPT_TIMEOUT_SECS}} seconds) before it
-produced any apply_patch.  No validation data was captured — the
-working tree has been RESTORED to its post-`git merge` state and you
-are starting over from scratch.
+completed.  Any apply_patch calls you may have made before the timer
+fired were DISCARDED — the working tree has been restored to its
+post-`git merge` state, no soft-validation results were captured, and
+you are starting over from scratch on a clean base.
 
 This is the most important retry hint: BE DECISIVE.  The previous
 attempt spent its full budget investigating duplicate definitions,
