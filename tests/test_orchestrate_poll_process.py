@@ -335,6 +335,11 @@ _V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
 	re.MULTILINE,
 )
+# Mirror MAX_CHUNKS_PER_MANIFEST from scripts/orchestrate_state_v2.py so
+# the test parser rejects the same forged-large `total` values that
+# production rejects.  Drift here would create a test/prod parity gap
+# where oversized fixtures parse green in CI but never see production.
+_V2_MAX_CHUNKS_PER_MANIFEST = 1024
 _V2_CLOSER = "ORCHESTRATOR_STATE_V2 -->"
 
 
@@ -363,6 +368,8 @@ def _parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
 		return None
 	part, total, manifest = int(m.group(1)), int(m.group(2)), m.group(3)
 	if part < 1 or total < 1 or part > total:
+		return None
+	if total > _V2_MAX_CHUNKS_PER_MANIFEST:
 		return None
 	tail = body[m.end():]
 	if tail.startswith("\n"):
