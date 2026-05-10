@@ -338,9 +338,23 @@ _V2_OPENER_RE = re.compile(
 _V2_CLOSER = "ORCHESTRATOR_STATE_V2 -->"
 
 
+_V1_STATE_OPENER_RE = re.compile(r"^<!-- ORCHESTRATOR_STATE_V1$", re.MULTILINE)
+
+
 def _is_state_comment(body: str) -> bool:
-	"""True if the body carries a V1 single-comment state OR a V2 chunk."""
-	return "ORCHESTRATOR_STATE_V1" in body or "ORCHESTRATOR_STATE_V2" in body
+	"""True if the body carries a V1 single-comment state OR a V2 chunk.
+
+	Matches the framing markers anchored to start-of-line (V1: `<!-- ORCHESTRATOR_STATE_V1`,
+	V2: the V2 opener regex) instead of plain substring containment so a
+	tracking-comment fixture that merely mentions the marker text in prose
+	(e.g. an operator quoting the framing in a comment for context) is not
+	misclassified as a state comment and filtered out of `tracking_comments`.
+	"""
+	if _V1_STATE_OPENER_RE.search(body):
+		return True
+	if _V2_OPENER_RE.search(body):
+		return True
+	return False
 
 
 def _parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
