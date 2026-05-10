@@ -2090,7 +2090,7 @@ jobs:
 
           # 5a: Python unit tests
           echo "── Unit tests ──"
-          python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
 
           # 5b: CLI integration — validate a synthetic decomposition
           echo ""
@@ -2191,8 +2191,8 @@ jobs:
           # 5g: Judge integration-ref context regression guard
           echo ""
           echo "── Judge integration-ref context regression guard ──"
-          python3 tests/test_orchestrate_poll_process.py test_wave_judge_uses_integration_branch_context_when_available
-          python3 tests/test_orchestrate_poll_process.py test_wave_judge_uses_default_branch_context_without_integration_metadata
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_wave_judge_uses_integration_branch_context_when_available
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_wave_judge_uses_default_branch_context_without_integration_metadata
 
           echo ""
           echo "✓ All orchestrator script integration tests passed"
@@ -3201,12 +3201,12 @@ jobs:
       - name: Unit tests
         run: |
           set -euo pipefail
-          python3 tests/test_orchestrate_lib.py
-          python3 tests/test_orchestrate_poll_process.py
-          python3 tests/test_mark_stable_release_tag_refspec_contract.py
-          python3 tests/test_targeted_file_context.py
-          python3 tests/test_review_conflict_resolve_smoke_deterministic.py
-          python3 tests/test_review_conflict_resolve_retry_prelude_render.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
 
       - name: Prompt files integrity
         run: |
