@@ -45,7 +45,7 @@ rendered_file_has_unresolved_semble_prefetch()
 	# top-level unresolved-placeholder guard.
 	awk '
 		BEGIN { in_semble = 0 }
-		/^[[:space:]]*=== SEMBLE: .* ===[[:space:]]*$/ { in_semble = 1; next }
+		/^[[:space:]]*=== SEMBLE: [^=]* ===[[:space:]]*$/ { in_semble = 1; next }
 		/^[[:space:]]*=== END SEMBLE ===[[:space:]]*$/ { in_semble = 0; next }
 		!in_semble && /^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$/ { found = 1; exit }
 		END { exit(found ? 0 : 1) }
