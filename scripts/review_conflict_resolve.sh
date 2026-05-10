@@ -477,10 +477,40 @@ _build_retry_prompt() {
   if [ -n "${_outcome_notice}" ] && [ "${_outcome_notice:0:1}" != $'\n' ]; then
     _outcome_notice=$'\n'"${_outcome_notice}"
   fi
+  # On timeout/error the violations body in the prelude template
+  # ("Your previous attempt … produced output that failed post-resolve
+  # validation", "Fix the specific violations listed below", the marker
+  # / fingerprint sections) is misleading because soft validation
+  # never ran on that path. The notice already disclaims those phrases
+  # explicitly, but the body itself is still physically present in
+  # the rendered prompt and can anchor the model on the wrong frame.
+  # SUPPRESS_VIOLATIONS_BODY=1 tells the python renderer to strip the
+  # entire {{#IF_VIOLATIONS}}…{{/IF_VIOLATIONS}} region (including
+  # markers and trailing newlines), so the rendered prelude on
+  # timeout/error is just: header + outcome notice + ORIGINAL TASK
+  # marker. The ran/violations path keeps the body verbatim by
+  # stripping only the marker lines themselves. This also
+  # belt-and-suspenders the truncation-fail-open case at the
+  # retry-loop site: if `: > "${RESOLVER_*_VIOLATIONS_FILE}"` failed
+  # silently after a non-zero codex exit, the stale
+  # MARKER_VIOLATION_COUNT / MARKER_VIOLATION_FILES /
+  # FINGERPRINT_VIOLATION_COUNT / FINGERPRINT_VIOLATION_DETAILS
+  # values would otherwise leak into the next retry's prompt — but
+  # those substitutions happen INSIDE the stripped region on this
+  # path, so a truncation failure cannot poison the prelude.
+  local _suppress_violations_body=0
+  if [ "${_prev_outcome}" = "timeout" ] || [ "${_prev_outcome}" = "error" ]; then
+    _suppress_violations_body=1
+  fi
   # Render via python3 (same substitution pattern as
   # review_conflict_prepare.sh) so multi-line values with shell
-  # metacharacters do not need quoting gymnastics.
-  PRELUDE_TPL="${_prelude_tpl}" \
+  # metacharacters do not need quoting gymnastics.  Heredoc form
+  # (`python3 - <<'PY'`) is used instead of `python3 -c "…"` so the
+  # conditional-block strip + key substitution can use a real
+  # multi-line script rather than packing them into a one-liner with
+  # walrus + list-comprehension hacks.
+  SUPPRESS_VIOLATIONS_BODY="${_suppress_violations_body}" \
+    PRELUDE_TPL="${_prelude_tpl}" \
     ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
     PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
     MAX_ATTEMPTS="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
@@ -489,8 +519,43 @@ _build_retry_prompt() {
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
     PREVIOUS_OUTCOME_NOTICE="${_outcome_notice}" \
-    python3 -c "import os,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8').read(); keys=['PREVIOUS_ATTEMPT_NUMBER','MAX_ATTEMPTS','MARKER_VIOLATION_COUNT','MARKER_VIOLATION_FILES','FINGERPRINT_VIOLATION_COUNT','FINGERPRINT_VIOLATION_DETAILS','PREVIOUS_OUTCOME_NOTICE']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
-    > "${RESOLVER_RETRY_PROMPT_FILE}"
+    python3 - > "${RESOLVER_RETRY_PROMPT_FILE}" <<'PY'
+import os, re, sys
+
+tpl = open(os.environ['PRELUDE_TPL'], encoding='utf-8').read()
+
+# Conditional violations body: strip the entire IF_VIOLATIONS region on
+# timeout/error so the misleading "produced output that failed
+# post-resolve validation" + zero-violations boilerplate is not
+# rendered. On the ran/violations path keep the body verbatim by
+# removing only the marker lines themselves (with their trailing
+# newlines).
+if os.environ.get('SUPPRESS_VIOLATIONS_BODY') == '1':
+    tpl = re.sub(
+        r'\{\{#IF_VIOLATIONS\}\}\n.*?\{\{/IF_VIOLATIONS\}\}\n',
+        '',
+        tpl,
+        flags=re.DOTALL,
+    )
+else:
+    tpl = re.sub(r'\{\{#IF_VIOLATIONS\}\}\n', '', tpl)
+    tpl = re.sub(r'\{\{/IF_VIOLATIONS\}\}\n', '', tpl)
+
+keys = [
+    'PREVIOUS_ATTEMPT_NUMBER',
+    'MAX_ATTEMPTS',
+    'MARKER_VIOLATION_COUNT',
+    'MARKER_VIOLATION_FILES',
+    'FINGERPRINT_VIOLATION_COUNT',
+    'FINGERPRINT_VIOLATION_DETAILS',
+    'PREVIOUS_OUTCOME_NOTICE',
+]
+for k in keys:
+    tpl = tpl.replace('{{' + k + '}}', os.environ.get(k, ''))
+
+orig = open(os.environ['ORIGINAL_PROMPT_FILE'], encoding='utf-8', errors='replace').read()
+sys.stdout.write(tpl + orig)
+PY
 }
 
 # _scan_residual_markers: write the list of in-scope files that
@@ -612,17 +677,32 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       "${RESOLVER_FP_VIOLATIONS_FILE}" \
       "${_prev_attempt_outcome:-violations}"
     _effective_prompt_file="${RESOLVER_RETRY_PROMPT_FILE}"
-    if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
-      _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
-      _prev_marker_count="${_prev_marker_count:-0}"
-    else
+    # On timeout/error the violation files are supposed to be empty
+    # (the post-non-zero-exit truncation at the retry-loop site
+    # below ran), so the banner should always read "prev markers=0,
+    # prev fingerprint_violations=0".  Force those values regardless
+    # of file contents to belt-and-suspenders the case where that
+    # truncation failed silently — a `::warning::` is already
+    # emitted on truncation failure, but the banner consistency
+    # matters so workflow log readers don't see contradictory state
+    # ("prev markers=N" alongside the `*** TIMEOUT NOTICE ***`
+    # claim of "(none)").
+    if [ "${_prev_attempt_outcome:-}" = "timeout" ] || [ "${_prev_attempt_outcome:-}" = "error" ]; then
       _prev_marker_count=0
-    fi
-    if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
-      _prev_fp_violation_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" | tr -d '[:space:]')"
-      _prev_fp_violation_count="${_prev_fp_violation_count:-0}"
-    else
       _prev_fp_violation_count=0
+    else
+      if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
+        _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+        _prev_marker_count="${_prev_marker_count:-0}"
+      else
+        _prev_marker_count=0
+      fi
+      if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
+        _prev_fp_violation_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+        _prev_fp_violation_count="${_prev_fp_violation_count:-0}"
+      else
+        _prev_fp_violation_count=0
+      fi
     fi
     echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=${_prev_marker_count}, prev fingerprint_violations=${_prev_fp_violation_count})."
   else
