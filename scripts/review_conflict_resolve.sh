@@ -581,7 +581,17 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # commit / EXIT-trap dispatch within timeout-minutes: 60. Override via
   # CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS for per-PR tuning.
   : "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:=1080}"
-  if ! timeout --signal=TERM --kill-after=30s "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+  # Defensive: an empty / non-numeric / leading-'-' override would either
+  # be rejected by `timeout` outright or parsed as an option, burning the
+  # 3-attempt budget on env-config errors instead of real model work.
+  # Restrict to positive integer seconds (matches the README contract).
+  if ! [[ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 1080."
+    CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=1080
+  fi
+  # `--` terminates `timeout`'s option parsing so a leading '-' in DURATION
+  # cannot be mistaken for an option (defence-in-depth on top of the regex).
+  if ! timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
        codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}"; then
     rm -f "${tmp_output}"
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
