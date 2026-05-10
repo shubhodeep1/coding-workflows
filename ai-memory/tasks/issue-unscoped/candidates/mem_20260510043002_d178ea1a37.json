@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:29-325 | severity=critical | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: Mixed tab and space indentation in the test file can break import/execution.\n  WHY: Two reviewers reported it as a critical failure mode, while others said the file still parses and treated it as style-only; keep the highest severity because of the disagreement.\n- scripts/review_rb_judge.sh:305 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `$(cat \"${RB_JUDGE_SEMBLE_QUERY_FILE}\")` reads the query file without an explicit size cap.\n  WHY: The reviewer flagged possible ARG_MAX/memory issues; other reviewers treated it as a pre-existing or hardening concern.\n- scripts/review_rb_judge.sh:38 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The script does not define `REVIEW_RB_SEMBLE_QUERY_MAX_BYTES`.\n  WHY: The reviewer flagged the missing query bound as inconsistent with the orchestrate path; others treated it as a design/consistency issue.\n- scripts/review_rb_judge.sh:307-316 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The truncation failure path lacks logging, so resource errors can silently leave oversized prompts.\n  WHY: The reviewer flagged observability risk in the new truncation block even though the overwrite-risk fix itself was accepted.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:29-46, 132-134, 169-172, 243-325 | severity=critical | confidence=5\n  PROBLEM: The test file mixes tab and space indentation.\n  WHY: Python 3 raises an IndentationError when a module mixes tabs and spaces for indentation, preventing the module from being imported or executed.\n- scripts/review_rb_judge.sh:305 | confidence=4\n  PROBLEM: `$(cat \"${RB_JUDGE_SEMBLE_QUERY_FILE}\")` reads the entire query file without size limiting.\n  WHY: Unlike the orchestrate path, this could pass an excessively large query to Semble and risk shell command-line length limits or memory issues.\n- scripts/review_rb_judge.sh:38 | confidence=3\n  PROBLEM: The script defines `REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES` but lacks a corresponding `REVIEW_RB_SEMBLE_QUERY_MAX_BYTES`.\n  WHY: This makes bounded query reads inconsistent with the orchestrate path and harder to implement.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_rb_judge.sh:307-316 | confidence=3\n  PROBLEM: The truncation failure path lacks logging, so resource errors can silently leave oversized prompts.\n  WHY: Silent truncation failures can increase prompt size and cost without a diagnostic signal.\n- tests/test_judge_semble_prefetch_contract.py:29-46,133-135,162-165,169-185,243-256,260-273,277-280,284-300,304-319,323-325 | severity=critical | confidence=5\n  PROBLEM: Mixed tab and space indentation across functions can trigger a Python IndentationError on import/execution.\n  WHY: This was reported as an import-time failure risk for the contract test.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d037e7a9f1cdcff14577874db9e6e93b44c629e1d76d68b6d064d92e7f65e5ac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2398,
+    "run_id": "25619594486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25619594486",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510043002_d178ea1a37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2398,
+    "run_id": "25619594486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T04:30:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
