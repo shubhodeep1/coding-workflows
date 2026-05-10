@@ -3799,21 +3799,47 @@ jobs:
           # The same sanitisation pattern (%/\r escaping, whitespace
           # collapse) the "Detect merge conflicts" step uses for its
           # `git merge` stderr annotation applies here.
-          _resolver_check_err=""
-          if ! _resolver_check_err="$(bash -n "${RESOLVER_SCRIPT}" 2>&1 >/dev/null)"; then
-            _err_oneline="$(printf '%s' "${_resolver_check_err}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//; s/%/%25/g; s/\r/%0D/g')"
-            _err_oneline="${_err_oneline:-<no stderr captured>}"
-            if [ -f ".codex-workflow-src/scripts/review_conflict_resolve.sh" ] \
-               && bash -n ".codex-workflow-src/scripts/review_conflict_resolve.sh" 2>/dev/null; then
-              echo "::warning::${RESOLVER_SCRIPT} failed bash syntax check [bash -n: ${_err_oneline}] — likely unresolved conflict markers from the merge replay; falling back to .codex-workflow-src/scripts/review_conflict_resolve.sh (SCRIPT_REF=${SCRIPT_REF:-unknown})."
-              RESOLVER_SCRIPT=".codex-workflow-src/scripts/review_conflict_resolve.sh"
-            elif [ -f ".codex-workflow-src-main/scripts/review_conflict_resolve.sh" ] \
-                 && bash -n ".codex-workflow-src-main/scripts/review_conflict_resolve.sh" 2>/dev/null; then
-              echo "::warning::${RESOLVER_SCRIPT} failed bash syntax check [bash -n: ${_err_oneline}] and SCRIPT_REF copy is unavailable/unparseable; falling back to .codex-workflow-src-main/scripts/review_conflict_resolve.sh."
-              RESOLVER_SCRIPT=".codex-workflow-src-main/scripts/review_conflict_resolve.sh"
+          #
+          # Probe a candidate resolver path and echo one of:
+          #   ok | missing | parse_fail:<sanitized one-line stderr>
+          # The state string is embedded verbatim in the
+          # warning/error annotation below so the triple-failure path
+          # (in-tree corrupted AND both fallbacks unavailable or
+          # unparseable) reports each fallback's distinct state +
+          # captured stderr — addresses #2466 review feedback that
+          # the prior implementation suppressed fallback stderr and
+          # conflated missing-file with parse-failure under a single
+          # "unavailable/unparseable" label.
+          _probe_resolver() {
+            local path="$1" err
+            if [ ! -f "${path}" ]; then
+              printf '%s\n' "missing"
+              return
+            fi
+            if err="$(bash -n "${path}" 2>&1 >/dev/null)"; then
+              printf '%s\n' "ok"
             else
-              echo "::error::${RESOLVER_SCRIPT} failed bash syntax check [bash -n: ${_err_oneline}] and no clean fallback copy is available in .codex-workflow-src/ or .codex-workflow-src-main/."
-              exit 2
+              err="$(printf '%s' "${err}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//; s/%/%25/g; s/\r/%0D/g')"
+              printf 'parse_fail:%s\n' "${err:-<no stderr captured>}"
+            fi
+          }
+          _primary_state="$(_probe_resolver "${RESOLVER_SCRIPT}")"
+          if [ "${_primary_state}" != "ok" ]; then
+            _fb1=".codex-workflow-src/scripts/review_conflict_resolve.sh"
+            _fb2=".codex-workflow-src-main/scripts/review_conflict_resolve.sh"
+            _fb1_state="$(_probe_resolver "${_fb1}")"
+            if [ "${_fb1_state}" = "ok" ]; then
+              echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state} (likely unresolved conflict markers from the merge replay); falling back to ${_fb1} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
+              RESOLVER_SCRIPT="${_fb1}"
+            else
+              _fb2_state="$(_probe_resolver "${_fb2}")"
+              if [ "${_fb2_state}" = "ok" ]; then
+                echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; falling back to ${_fb2}."
+                RESOLVER_SCRIPT="${_fb2}"
+              else
+                echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; ${_fb2}=${_fb2_state}. No clean resolver entry-point available."
+                exit 2
+              fi
             fi
           fi
           bash "${RESOLVER_SCRIPT}"
