@@ -445,7 +445,14 @@ jobs:
           MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
           MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
           MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'xhigh' }}
+          # Default lowered from 'xhigh' to 'high' in lockstep with
+          # review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT (see the
+          # comment block there for the full rationale — runs 25627236793 /
+          # 25627316961 hit a hung-thinking failure mode at 'xhigh' that
+          # SIGTERMed Codex before it produced any apply_patch). Kept in
+          # sync so both consumers of vars.THINKING_LEVEL_CONFLICT_RESOLVER
+          # surface the same effective default when no repo override is set.
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
