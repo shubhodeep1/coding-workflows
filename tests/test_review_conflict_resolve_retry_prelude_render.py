@@ -2,14 +2,13 @@
 """Contract tests for outcome-aware retry-prelude rendering in
 scripts/review_conflict_resolve.sh::_build_retry_prompt.
 
-PR #2449 introduced the {{PREVIOUS_OUTCOME_NOTICE}} placeholder and
-the conditional {{#IF_VIOLATIONS}}…{{/IF_VIOLATIONS}} body
-suppression so the next-attempt reflexion prompt is accurate when
-the previous attempt was killed by `timeout` (exit 124 / 137) or
-exited non-zero before producing any patch (the violations body's
-"your previous attempt produced output that failed post-resolve
-validation" framing is misleading on those paths because soft
-validation never ran).
+The {{PREVIOUS_OUTCOME_NOTICE}} placeholder and the conditional
+{{#IF_VIOLATIONS}}…{{/IF_VIOLATIONS}} body suppression keep the
+next-attempt reflexion prompt accurate when the previous attempt
+was killed by `timeout` (exit 124 / 137) or exited non-zero before
+producing any patch (the violations body's "your previous attempt
+produced output that failed post-resolve validation" framing is
+misleading on those paths because soft validation never ran).
 
 These tests pin the rendering logic by extracting the python3
 heredoc body from the script and running it directly against
@@ -20,10 +19,14 @@ edit that:
   - re-adds the misleading "produced output that failed validation"
     framing to the timeout/error path
   - breaks the {{PREVIOUS_OUTCOME_NOTICE}} substitution
-would silently regress the model's retry context on the originating
-failure mode (runs 25627236793 / 25627316961 on
+would silently regress the model's retry context on the
+originating failure mode: runs 25627236793 / 25627316961 on
 shubhodeep1/tele-funtoken-msg-scoring's orchestrator/project-2840
-stack — the entire reason this PR exists).
+stack, where the resolver hung in extended reasoning at `xhigh`
+on a file with duplicate function bodies outside the conflict
+markers and got SIGTERMed on all three retry attempts with
+markers=0, fingerprint_violations=0 on every retry — the
+unambiguous signature of `timeout` firing pre-patch.
 """
 
 from __future__ import annotations

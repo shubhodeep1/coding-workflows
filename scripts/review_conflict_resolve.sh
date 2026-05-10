@@ -871,8 +871,9 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # SIGKILL) from codex-internal failures. The next retry's reflexion prompt
   # uses this distinction: on timeout the violation files are empty (soft
   # validation never ran), so the standard "fix the violations below" framing
-  # is misleading and we prepend an apply_patch-first hint. PR #2058 / runs
-  # 25627236793 + 25627316961 are the originating failure mode (xhigh +
+  # is misleading and we prepend an apply_patch-first hint. Runs
+  # 25627236793 + 25627316961 (on shubhodeep1/tele-funtoken-msg-scoring's
+  # orchestrator/project-2840 stack) are the originating failure mode (xhigh +
   # degenerate orchestrator-stack integration → 3× SIGTERM with markers=0
   # fingerprint_violations=0 on every retry).
   _codex_exit_code=0
