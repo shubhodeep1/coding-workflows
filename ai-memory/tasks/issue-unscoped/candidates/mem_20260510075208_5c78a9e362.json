@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:213-220 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The Unit tests step omits `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py`, so the manual stable-release workflow does not validate the Semble cost-audit parser.\n  WHY: Multiple reviewers confirmed the test was added to `ci.yml` and `test-and-mark-stable.yml` but not to `mark-stable.yml`, leaving the manual release gate with weaker coverage.\n- .github/workflows/ci.yml:169-175 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The Unit tests step runs multiple Python tests sequentially under `set -euo pipefail`, so a failure in `test_cost_audit_semble_metrics.py` aborts the rest of the step.\n  WHY: This can hide downstream test failures in the same CI step and reduce failure visibility during triage.\n- .github/workflows/test-and-mark-stable.yml:3205-3211 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The Unit tests step runs multiple Python tests sequentially under `set -euo pipefail`, so a failure in `test_cost_audit_semble_metrics.py` aborts the rest of the step.\n  WHY: This can hide correlated failures in the release-gate validation step and reduce failure visibility during triage.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/mark-stable.yml:213-220 (Unit tests step) | confidence=4\n  PROBLEM: The `mark-stable.yml` \"Unit tests\" step does not include `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py`, even though that test was added to `ci.yml` and `test-and-mark-stable.yml`.\n  WHY: The manual `Mark Stable Release` workflow_dispatch gate therefore validates fewer Semble contracts than CI and the automated release gate, so a parser regression could slip through manual stable tagging.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/mark-stable.yml:215-220 | confidence=4\n  PROBLEM: The manual `mark-stable.yml` release workflow runs `test_review_semble_contract.py` and `test_judge_semble_prefetch_contract.py` but does NOT include `test_cost_audit_semble_metrics.py`.\n  WHY: The manual \"Mark Stable Release\" workflow_dispatch gate will not validate the Semble cost-audit parser on manual release tagging, unlike the automated CI and test-and-mark-stable gates.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/mark-stable.yml:218-220 | confidence=5\n  PROBLEM: Missing `test_cost_audit_semble_metrics.py` test invocation in the Unit tests step.\n  WHY: The workflow includes `test_review_semble_contract.py` and `test_judge_semble_prefetch_contract.py` but omits the new Semble cost-audit parser test that was added to ci.yml and test-and-mark-stable.yml in the last run.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/mark-stable.yml:219-220 | confidence=4\n  PROBLEM: The manual release-gate workflow runs `test_review_semble_contract.py` and `test_judge_semble_prefetch_contract.py` but does not execute the newly-added `test_cost_audit_semble_metrics.py`.\n  WHY: A developer running the manual \"Mark Stable Release\" workflow_dispatch will not validate the Semble cost-audit parser during tag creation, creating a gap in release coverage.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/mark-stable.yml:Unit tests step (approx lines 212-220 based on context; grep for \"test_orchestrate_lib.py\") | confidence=5\n  PROBLEM: The manual release gate's Unit tests step invokes test_targeted_file_context.py, test_review_semble_contract.py, and test_judge_semble_prefetch_contract.py but omits the new tests/test_cost_audit_semble_metrics.py added by this PR.\n  WHY: Manual stable tagging via workflow_dispatch skips validation of Semble cost_audit.py parser changes, allowing a release without confirming the new telemetry aggregation works.\n- .github/workflows/ci.yml:169-175 (Unit tests step) | confidence=4\n  PROBLEM: Sequential python3 invocations under set -euo pipefail with no failure isolation; if test_cost_audit_semble_metrics.py fails, remaining Semble contract tests are skipped.\n  WHY: CI reports only the first test failure and aborts, masking downstream Semble contract violations in the same step and complicating triage for Semble rollout regressions.\n- .github/workflows/test-and-mark-stable.yml:3205-3211 (Unit tests step) | confidence=4\n  PROBLEM: Sequential python3 invocations under set -euo pipefail with no failure isolation; if test_cost_audit_semble_metrics.py fails, remaining Semble contract tests are skipped.\n  WHY: Release-gate automation reports incomplete failures during @stable candidate validation, so a parser bug blocks tagging while hiding correlated Semble contract test failures.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/mark-stable.yml:214-220 (Unit tests step) | confidence=4\n  PROBLEM: Missing `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py` test invocation\n  WHY: The last run added the Semble cost-audit parser test to CI (`ci.yml`) and the automated release gate (`test-and-mark-stable.yml`), but not to the manual stable release workflow, so a manual `mark-stable` release would not validate the parser.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f70250202e2fabdb88af82b48c61a7bb9a3102306913f934fb7503a65b1b3225",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2442,
+    "run_id": "25623082063",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25623082063",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510075208_5c78a9e362",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2442,
+    "run_id": "25623082063"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T07:52:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
