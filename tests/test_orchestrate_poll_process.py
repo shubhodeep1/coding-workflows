@@ -6211,6 +6211,123 @@ def test_capture_intent_fingerprints_preserves_net_duplicate_line_additions():
 	)
 
 
+def test_capture_intent_fingerprints_substring_dedups_extended_lines():
+	# Regression guard for tele-funtoken-msg-scoring PR #2852 (runs
+	# 25612161581 / 25614444875): a sub-issue extended an existing line
+	# by appending text — the unified diff has the SHORTER stripped line
+	# on the minus side and the LONGER stripped line (which textually
+	# contains the shorter) on the plus side, on the SAME file. Without
+	# the substring-overlap filter, both survive (`Counter`-based exact
+	# dedup only catches identical strings); the captured pair becomes a
+	# structurally unsatisfiable must_contain ⊃ must_not_contain
+	# constraint under re.search (the longer match guarantees the
+	# shorter substring matches), and the resolver burns its 3-attempt
+	# retry budget on a hunk it cannot make pass. The substring filter
+	# must drop the removed-line pattern from must_not_contain while
+	# preserving the added-line pattern in must_contain.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	short_line = "    description: critic-driven cohort-mix rollouts."
+	long_line = (
+		"    description: critic-driven cohort-mix rollouts. "
+		"When critic authority is enabled, accepted by orchestrator."
+	)
+	diff_text = (
+		"diff --git a/db/contracts/flash_offer_cohort_config.yml "
+		"b/db/contracts/flash_offer_cohort_config.yml\n"
+		"--- a/db/contracts/flash_offer_cohort_config.yml\n"
+		"+++ b/db/contracts/flash_offer_cohort_config.yml\n"
+		"@@ -1,3 +1,3 @@\n"
+		" prefix\n"
+		f"-{short_line}\n"
+		f"+{long_line}\n"
+		" suffix\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+
+	short_regex = re.escape(short_line.strip())
+	long_regex = re.escape(long_line.strip())
+	mc_regexes = [p.get("regex", "") for p in result.get("must_contain", [])]
+	mnc_regexes = [p.get("regex", "") for p in result.get("must_not_contain", [])]
+	assert short_regex not in mnc_regexes, (
+		"removed-line pattern that is a substring of an added-line pattern on the same file "
+		f"must be dropped from must_not_contain. Got mnc_regexes={mnc_regexes!r}"
+	)
+	assert long_regex in mc_regexes, (
+		"net-added longer line must still survive as must_contain so the stronger intent is "
+		f"enforced downstream. Got mc_regexes={mc_regexes!r}"
+	)
+
+
+def test_capture_intent_fingerprints_substring_dedup_preserves_unrelated_pairs():
+	# Negative control for the substring-overlap filter: when a removed
+	# line's stripped text is NOT a substring of any added line on the
+	# same file, both sides must survive — otherwise the filter would
+	# silently drop legitimate must_not_contain patterns and let real
+	# regressions through.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	removed_line = "    description: old standalone configuration directive"
+	added_line = "    description: entirely unrelated new configuration directive"
+	diff_text = (
+		"diff --git a/db/contracts/example.yml b/db/contracts/example.yml\n"
+		"--- a/db/contracts/example.yml\n"
+		"+++ b/db/contracts/example.yml\n"
+		"@@ -1,2 +1,2 @@\n"
+		f"-{removed_line}\n"
+		f"+{added_line}\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+
+	removed_regex = re.escape(removed_line.strip())
+	added_regex = re.escape(added_line.strip())
+	mc_regexes = [p.get("regex", "") for p in result.get("must_contain", [])]
+	mnc_regexes = [p.get("regex", "") for p in result.get("must_not_contain", [])]
+	assert added_regex in mc_regexes, (
+		"unrelated added line must survive as must_contain; "
+		f"mc_regexes={mc_regexes!r}"
+	)
+	assert removed_regex in mnc_regexes, (
+		"unrelated removed line must survive as must_not_contain; the substring filter "
+		f"must only drop pairs where one is a literal substring of the other. "
+		f"mnc_regexes={mnc_regexes!r}"
+	)
+
+
 def test_verify_integration_fingerprints_cross_dedups_self_contradictory_pairs():
 	# Defensive path in the verifier: if the orchestrator state file
 	# still holds legacy bad fingerprints (capture is idempotent per
@@ -6284,6 +6401,101 @@ def test_verify_integration_fingerprints_still_fails_on_real_violation_when_mixe
 				# Genuine must_not_contain — NOT in must_contain, so
 				# the dedup leaves it alone.
 				{"file": "scripts/foo.sh", "regex": r"gh\ api\ \-H"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_substring_dedups_self_contradictory_pairs(capsys):
+	# Companion path to test_verify_integration_fingerprints_cross_dedups_self_
+	# contradictory_pairs for state files captured before the capture-side
+	# substring filter landed (capture is idempotent per issue, so an
+	# already-stored bad entry survives the extractor fix). When the state
+	# file holds a must_not_contain regex whose source is a literal
+	# substring of a must_contain regex on the SAME file, the verifier
+	# must drop the must_not_contain side (any tree satisfying the longer
+	# must_contain trivially matches the shorter must_not_contain under
+	# re.search, making the pair structurally unsatisfiable) and emit a
+	# ::warning:: that names the dedup so the upstream cause stays visible.
+	mod = _verifier_module()
+	short_text = "critic-driven cohort-mix rollouts."
+	long_text = (
+		"critic-driven cohort-mix rollouts. "
+		"When critic authority is enabled, accepted by orchestrator."
+	)
+	files = {
+		"db/contracts/flash_offer_cohort_config.yml": (
+			f"  description: |\n    {long_text}\n"
+		),
+	}
+	fingerprints = {
+		"2849": {
+			"issue": 2849,
+			"pr": 2851,
+			"must_contain": [
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(long_text)},
+			],
+			"must_not_contain": [
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(short_text)},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 0
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+	captured = capsys.readouterr()
+	assert "::warning::Fingerprint substring-overlap dedup" in captured.out, (
+		"verifier must emit a ::warning:: naming the substring-overlap dedup so the "
+		f"capture-side cause stays visible in the run log; got stdout={captured.out!r}"
+	)
+
+
+def test_verify_integration_fingerprints_substring_dedup_still_fails_on_unrelated_must_not_contain():
+	# Belt-and-braces parallel to test_verify_integration_fingerprints_still_
+	# fails_on_real_violation_when_mixed_with_shared: the substring-overlap
+	# dedup must ONLY drop must_not_contain regexes that are literal
+	# substrings of a must_contain regex on the SAME file. Genuine
+	# must_not_contain entries (unrelated to any must_contain) must still
+	# trigger a violation when present in the post-resolve tree —
+	# otherwise the substring path would silently neuter the verifier
+	# whenever any pattern happened to overlap.
+	mod = _verifier_module()
+	short_text = "critic-driven cohort-mix rollouts."
+	long_text = (
+		"critic-driven cohort-mix rollouts. "
+		"When critic authority is enabled, accepted by orchestrator."
+	)
+	files = {
+		"db/contracts/flash_offer_cohort_config.yml": (
+			f"  description: |\n    {long_text}\n"
+			"    forbidden_marker_that_should_not_be_here\n"
+		),
+	}
+	fingerprints = {
+		"2849": {
+			"issue": 2849,
+			"pr": 2851,
+			"must_contain": [
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(long_text)},
+			],
+			"must_not_contain": [
+				# Will be dropped by the substring filter (substring of the must_contain regex above).
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(short_text)},
+				# Genuine forbidden pattern, NOT a substring of any must_contain — must still fire.
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": r"forbidden_marker_that_should_not_be_here"},
 			],
 		}
 	}
