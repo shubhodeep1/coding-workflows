@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:375 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: Semble query identifiers extracted only from last 120 lines of capture_file.\n  WHY: Early failure diagnostics (e.g. apply_patch rejection lines 1-100) omitted from query, yielding irrelevant Semble chunks despite full cat \"${CAPTURE_FILE}\" in prompt; diagnose model gets suboptimal repo context for root-cause fixes.\n- scripts/implement_diagnose_post_codex_failure.sh:382 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The diagnose context builder hard-caps failure capture at 120 lines, truncating earlier failure context.\n  WHY: For complex syntax errors or apply_patch failures with long stack traces, the first 120 lines (containing the actual error location and context) are discarded, leaving only the tail. The diagnose model receives incomplete evidence, reducing fix quality for multi-step failures.\n- tests/test_judge_semble_prefetch_contract.py:42-55 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The `extra_env` parameter type annotation changed from `dict[str, str]` to `dict[str, str | None]`, introducing a dual-purpose API where `None` means \"unset variable\".\n  WHY: Existing string-only callers continue to work, but the contract now requires callers to know that string values set variables while `None` unsets them, which creates a latent misuse path if callers expect `None` to be passed through as a literal value.\n- scripts/targeted_file_context.py:320-324 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: Hardcoded `SEMBLE_MAX_CHUNKS_CAP = 20` silently clamps Semble chunk counts above 20.\n  WHY: This silently clamps user-requested chunk counts above 20 without warning, so large repositories get only top-20 context and operators are not informed their request was overridden.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:375 | confidence=2\n  PROBLEM: The code explicitly takes only the last 120 lines.\n  WHY: Taking the last 120 lines is a reasonable heuristic for capturing the actionable error context while limiting prompt size. This is not clearly a bug but rather a trade-off decision.\n- scripts/targeted_file_context.py:320-324, 138 | confidence=3\n  PROBLEM: Hardcoded Semble chunk cap\n  WHY: This silently clamps chunk requests above 20. While this is a reasonable safety limit to prevent excessive context, users requesting 50 chunks would silently receive 20 without warning. This could be improved with a warning log when clamping occurs.\n- tests/test_judge_semble_prefetch_contract.py:42-55 | confidence=2\n  PROBLEM: extra_env type annotation change\n  WHY: The type changed from `dict[str, str] | None` to `dict[str, str | None] | None`, allowing `None` values to unset environment variables. Existing callers passing string values still work correctly. This is a latent API change but not causing current failures.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:382 | confidence=4\n  PROBLEM: The diagnose context builder hard-caps failure capture at 120 lines, truncating earlier failure context\n  WHY: For complex syntax errors or apply_patch failures with long stack traces, the first 120 lines (containing the actual error location and context) are discarded, leaving only the tail. The diagnose model receives incomplete evidence, reducing fix quality for multi-step failures.\n- scripts/targeted_file_context.py:82, 320-324 | confidence=3\n  PROBLEM: Hardcoded Semble chunk cap\n  WHY: This silently clamps user-requested chunk counts above 20 without warning. This could be improved with a warning log when clamping occurs.\n- tests/test_judge_semble_prefetch_contract.py:42-55 | confidence=2\n  PROBLEM: extra_env type annotation change\n  WHY: The type changed from `dict[str, str] | None` to `dict[str, str | None] | None`, allowing `None` values to unset environment variables. Existing callers passing string values still work correctly. This is a latent API change but not causing current failures.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/implement_diagnose_post_codex_failure.sh:375 | confidence=4\n  PROBLEM: Semble query identifiers extracted only from last 120 lines of capture_file.\n  WHY: Early failure diagnostics (e.g. apply_patch rejection lines 1-100) omitted from query, yielding irrelevant Semble chunks despite full cat \"${CAPTURE_FILE}\" in prompt; diagnose model gets suboptimal repo context for root-cause fixes.\n- tests/test_judge_semble_prefetch_contract.py:42-55 | confidence=3\n  PROBLEM: Internal helper contract widened from dict[str, str]|None to support None-unset, but existing callers pass str-only dicts and cannot express unsets without refactoring to None values.\n  WHY: Latent misuse if test caller intends unset but passes \"\" (sets empty str) instead; env var like ALLOW_WORKFLOW_EDITS= unexpectedly retained.\n- scripts/targeted_file_context.py:320-324 | confidence=3\n  PROBLEM: Hardcaps Semble --top-k at 20 chunks even when CLI/env requests higher for large repos.\n  WHY: Overflow files (e.g. 100kB+ utils.py) get top-20 only, missing deeper relevant sections; targeted context relevance drops without warning.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "274fadbb10e135a6d4eafd95488e510205ceea391aead2f05d58da8b19ae853f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2417,
+    "run_id": "25617747584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25617747584",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510025602_78bee2435d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2417,
+    "run_id": "25617747584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T02:56:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
