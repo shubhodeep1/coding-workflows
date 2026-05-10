@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:40-48 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The awk guard uses bare `exit` after setting `found=1`, relying on default awk exit semantics instead of an explicit status code.\n  WHY: Moonshot reported a portability/clarity concern; the other reviewers rejected it as correct awk behavior, so the finding is disputed.\n- scripts/render_prompt.sh:42-48 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The greedy `.*` in the Semble opener regex can accept malformed headers containing `===` and leave `in_semble` set.\n  WHY: Multiple reviewers reported the opener as too permissive and able to misclassify malformed Semble headers, though several noted the current call sites are controlled.\n- tests/test_judge_semble_prefetch_contract.py:133-159 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The exact multi-line string assertion is brittle to whitespace or newline changes in the renderer output.\n  WHY: Reviewers described this as a maintenance concern because the test locks down exact rendered bytes rather than a looser semantic property.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/render_prompt.sh:48 | severity=low | confidence=3\n  PROBLEM: The regex `/^[[:space:]]*=== SEMBLE: .* ===[[:space:]]*$/` uses greedy `.*`, which can match malformed SEMBLE headers containing `===`.\n  WHY: A header like `=== SEMBLE: foo===bar ===` would be accepted as a Semble block opener and could confuse placeholder scanning, though the current helper controls header labels.\n- tests/test_judge_semble_prefetch_contract.py:138-151 | confidence=2\n  PROBLEM: The test uses exact multi-line string equality, making it brittle to whitespace or newline handling changes.\n  WHY: It is a maintenance concern rather than a correctness bug, because formatting refactors in `render_prompt.sh` would force updates.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/render_prompt.sh:40-48 | confidence=3\n  PROBLEM: The awk guard uses bare `exit` after setting `found=1`, relying on default awk exit behavior instead of an explicit status.\n  WHY: This makes the function's intent less explicit and, in the reviewer's view, less portable, even though other reviewers said the awk semantics are correct.\n- scripts/render_prompt.sh:42-43 | confidence=4\n  PROBLEM: The greedy `.*` in `/^[[:space:]]*=== SEMBLE: .* ===[[:space:]]*$/` can accept a malformed header like `=== SEMBLE: foo===bar ===`.\n  WHY: A `===` substring in a title could misclassify a block boundary and suppress placeholder scanning, though the current header labels are controlled.\n- tests/test_judge_semble_prefetch_contract.py:133-159 | confidence=3\n  PROBLEM: The exact string assertion is brittle to whitespace or newline handling changes.\n  WHY: If `render_prompt.sh` changes its rendering details, the test would fail even if the semantics remain correct.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/render_prompt.sh:~42-43\n  PROBLEM: The greedy `.*` pattern can match malformed headers like `=== SEMBLE: foo===bar ===`.\n  WHY: A title containing `===` could misclassify block boundaries and leave placeholder scanning in the wrong state, although the current helper output is controlled.\n- tests/test_judge_semble_prefetch_contract.py:~133-159\n  PROBLEM: Exact string equality against rendered output is brittle to whitespace or newline handling changes.\n  WHY: The test is a contract check, but it will fail on formatting changes even when the functional behavior is still correct.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/render_prompt.sh:42-43 | confidence=4\n  PROBLEM: Greedy `.*` quantifier matches too much, falsely triggering `in_semble=1` on malformed SEMBLE headers where the title contains trailing ` ===`.\n  WHY: This can leave `in_semble` active without a matching END SEMBLE and skip placeholder scans in later content.\n- tests/test_judge_semble_prefetch_contract.py:133-159 | confidence=3\n  PROBLEM: Exact string comparison on rendered output is brittle to any future whitespace normalization or newline handling changes.\n  WHY: Test flakes on unrelated maintenance edits to `render_prompt.sh` trimming logic, blocking fixes and increasing churn.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a259e80af43b8758be9561ebc93b83f89183e0faf3e12d309deeb768e8ca2377",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2411,
+    "run_id": "25615305271",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25615305271",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510003718_f11389d9df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2411,
+    "run_id": "25615305271"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T00:37:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
