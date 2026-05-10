@@ -652,6 +652,18 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 1080."
     CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=1080
   fi
+  # Upper bound: with the 60-min step cap (review_autofix.yml:3711) and 3
+  # attempts the per-attempt budget cannot exceed (60min - cleanup buffer)
+  # / 3 ≈ 18 min without starving the retry loop.  Cap at 1800s (30 min)
+  # to leave at least 30 min for the second/third attempts plus the
+  # ~6-min EXIT-trap dispatch buffer.  An override of 3600 (1h) would
+  # otherwise let attempt 1 consume the whole step budget before any
+  # retries run, defeating the point of having a retry loop.
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS=1800
+  if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
+    echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would starve the retry loop under the 60-min step cap); clamping to ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
+    CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
+  fi
   # `--` terminates `timeout`'s option parsing so a leading '-' in DURATION
   # cannot be mistaken for an option (defence-in-depth on top of the regex).
   # Capture the exit code (instead of the bare `if !`) so we can distinguish
