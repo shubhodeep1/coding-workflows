@@ -533,8 +533,19 @@ _build_retry_prompt() {
   # would have already truncated the destination before python3
   # exited, so any post-abort tooling reading the destination
   # path would see a half-baked or empty prompt.
-  local _retry_tmp
-  _retry_tmp="$(mktemp)"
+  #
+  # The tempfile is allocated in the destination directory (not the
+  # default /tmp) so the subsequent `mv` is a same-filesystem rename
+  # rather than a copy+unlink. `mv` between filesystems falls back
+  # to copy+unlink, which is NOT atomic and can leave the
+  # destination partially overwritten if the copy is interrupted.
+  # RUNTIME_DIR is typically under /tmp on GitHub Actions runners,
+  # so this is usually a same-FS situation already, but pinning the
+  # tempfile to the destination dir makes the atomicity guarantee
+  # robust to operator overrides of RUNTIME_DIR.
+  local _retry_dst_dir _retry_tmp
+  _retry_dst_dir="$(dirname -- "${RESOLVER_RETRY_PROMPT_FILE}")"
+  _retry_tmp="$(mktemp -p "${_retry_dst_dir}" resolver_retry_prompt.XXXXXX)"
   SUPPRESS_VIOLATIONS_BODY="${_suppress_violations_body}" \
     PRELUDE_TPL="${_prelude_tpl}" \
     ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
@@ -613,7 +624,17 @@ else:
 # a filename in MARKER_VIOLATION_FILES that happens to include
 # `{{#IF_VIOLATIONS}}` text). Same fail-open philosophy as the
 # count check above — warn but proceed.
-if '{{#IF_VIOLATIONS}}' in tpl or '{{/IF_VIOLATIONS}}' in tpl:
+#
+# Use the same `_marker_open` / `_marker_close` regex patterns
+# (whitespace-tolerant) for detection rather than exact-string
+# substring checks, so a template variant like `{{ # IF_VIOLATIONS }}`
+# that the strip regex didn't catch is still detected here.
+# Without this, the guard's `'{{#IF_VIOLATIONS}}' in tpl` literal
+# check would miss any whitespace-bearing markers — and Copilot
+# noted on PR #2449 that this asymmetry could let interior-whitespace
+# variants leak silently.
+if (re.search(_marker_open, tpl, flags=re.MULTILINE) or
+    re.search(_marker_close, tpl, flags=re.MULTILINE)):
     sys.stderr.write(
         '::warning::Resolver retry prelude rendered with leftover '
         '{{#IF_VIOLATIONS}}/{{/IF_VIOLATIONS}} markers after the conditional '
