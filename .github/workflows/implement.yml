@@ -2861,6 +2861,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           # Atomically apply force-review + e2e-smoke-test labels at PR
           # creation time when this is a smoke-test run. Applying them
@@ -2893,7 +2895,10 @@ jobs:
             # above: `--search "issue:${N}"` is fuzzy free-text. Use the
             # issue timeline cross-reference query instead so a recovery
             # after a failed `gh pr create` returns a genuinely linked PR.
-            EXISTING_PR="$(gh api --paginate \
+            # `gh_retry` here so a transient API blip does not block the
+            # recovery — site 1 has the same lookup but cannot use
+            # `gh_retry` (gh_helpers.sh is staged later in the workflow).
+            EXISTING_PR="$(gh_retry gh api --paginate \
               "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
               --jq '
                 [.[]
