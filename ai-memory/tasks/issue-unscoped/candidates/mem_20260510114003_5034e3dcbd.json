@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:589-614 (comment block) | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The timeout-clamp comment block is internally inconsistent about the effective per-attempt budget.\n  WHY: One reviewer flagged the default-vs-clamp rationale mismatch on the same lines, and another flagged the same lines as saying 1800s while the comment text still references ~18 minutes.\n- scripts/orchestrate_poll_process.sh:1066-1076 (new helper check before python3 scripts/orchestrate_state_v2.py pack) | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new helper-existence check returns 1 when scripts/orchestrate_state_v2.py is missing from the staged scripts.\n  WHY: The reviewer says consumer repos can hit the V2 pack path without staging the helper, surfacing an error and leaving the poller to continue through the existing fail-open callers.\n- scripts/orchestrate_poll_process.sh:1076,1092,1102,1117 (representative; applies to all ~45 post_state_comment callers now changed to || true) | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: post_state_comment failures are now propagated as return 1, but the callers suppress them with || true.\n  WHY: The reviewer says persistent API or helper failures can silently prevent V2 persistence and leave the poller repeating stale V1 work.\n- scripts/orchestrate_poll_process.sh:1125-1157 (_post_state_comment_v2_chunk diag_file handling) | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The diag_file cleanup path is called out as potentially misleading during debugging.\n  WHY: The reviewer says the unconditional rm -f runs on both success and failure paths, so the concern is operator confusion rather than a runtime leak.\n- scripts/orchestrate_poll_process.sh:1202-1226 (V2 extract size guard) | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The V2 extract size guard can be bypassed when wc -c fails or returns non-numeric output, allowing payload validation to continue without the 8 MiB cap.\n  WHY: The reviewer says empty or malformed byte counts fall through the cap check and can admit oversized or malformed V2 payloads.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_conflict_resolve.sh:589-614 (comment block) | confidence=2\n  PROBLEM: The timeout-clamp comment block is internally inconsistent about the effective per-attempt budget.\n  WHY: The reviewer says the default 1080s rationale conflicts with the code's 1800s clamp, which can mislead operators.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:1066-1076 (new helper check before python3 scripts/orchestrate_state_v2.py pack) | confidence=5\n  PROBLEM: Hard error (::error:: + return 1) if the helper is missing from staged scripts/, but no workflow update stages it.\n  WHY: The reviewer says consumer repos can run V2 pack, hit a missing-file error, and then continue via the existing || true callers with stale or truncated V1 state.\n- scripts/orchestrate_poll_process.sh:1076,1092,1102,1117 (representative; applies to all ~45 post_state_comment callers now changed to || true) | confidence=5\n  PROBLEM: post_state_comment now returns 1 correctly on V2 pack/chunk/manifest/post failures, but all callers suppress it with || true.\n  WHY: The reviewer says persistent failures can silently drop V2 persistence and leave the poller repeating stale or partial V1 work.\n- scripts/orchestrate_poll_process.sh:1125-1157 (_post_state_comment_v2_chunk diag_file handling) | confidence=2\n  PROBLEM: diag_file rm -f \"${diag_file}\" executes unconditionally after the if block, including the success path.\n  WHY: The reviewer says this is not a leak because cleanup happens on both paths, but the lack of comment can mislead operators during debugging.\n- scripts/orchestrate_poll_process.sh:1202-1226 (V2 extract size guard) | confidence=4\n  PROBLEM: wc -c failure can leave _v2_payload_bytes empty or non-numeric and let the size check be skipped.\n  WHY: The reviewer says malformed byte counts can bypass the 8 MiB cap and admit oversized or malformed V2 payloads.\n- tests/test_orchestrate_poll_process.py:369-376 (_parse_v2_chunk total check) | confidence=1\n  PROBLEM: Mirrors prod MAX_CHUNKS_PER_MANIFEST=1024 correctly.\n  WHY: The reviewer says oversized fixtures are rejected the same way in tests and production, so there is no parity gap.\n- scripts/review_conflict_resolve.sh:589-614 (comment block) | confidence=3\n  PROBLEM: The inline timeout comments are inconsistent with the actual 1800s clamp.\n  WHY: The reviewer says the text mentions an ~18 min / 1080s rationale while the code clamps to 1800s, which could confuse operators tuning large conflicts.\n- scripts/verify_integration_fingerprints.py:116-193 (_looks_like_re_escape_output + _substring_overlap_drops) | confidence=1\n  PROBLEM: The heuristic correctly distinguishes re.escape output and avoids unsafe substring-overlap drops for real regex patterns.\n  WHY: The reviewer says the round-trip unescape/re-escape check works for literal-backslash cases and does not introduce unsafe drops.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7124ff7b19edff2dc25b944aae310cf48b8114c60d8cb24970cfac95b2abe91d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2439,
+    "run_id": "25626978122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25626978122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510114003_5034e3dcbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2439,
+    "run_id": "25626978122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T11:40:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
