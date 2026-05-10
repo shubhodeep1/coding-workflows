@@ -304,6 +304,7 @@ def test_review_rb_judge_wires_semble_prefetch() -> None:
 	text = _read(REVIEW_RB_JUDGE)
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"' in text
 	assert 'SEMBLE_HELPERS_AVAILABLE="true"' in text
+	assert 'REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="32768"' in text
 	assert 'RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"' in text
 	assert 'RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context.txt"' in text
 	assert 'append_semble_query_section' in text
@@ -311,7 +312,7 @@ def test_review_rb_judge_wires_semble_prefetch() -> None:
 	assert 'if [ "${SEMBLE_HELPERS_AVAILABLE}" = "true" ] \\' in text
 	assert '&& [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \\' in text
 	assert 'semble_query_block \\' in text
-	assert '"$(cat "${RB_JUDGE_SEMBLE_QUERY_FILE}")" \\' in text
+	assert 'head -c "${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}" "${RB_JUDGE_SEMBLE_QUERY_FILE}"' in text
 	assert '> "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" || true' in text
 	assert 'Review-Blocked Judge Context' in text
 	assert "    \"4\" \\" in text

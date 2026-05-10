@@ -35,6 +35,7 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 SEMBLE_HELPERS_AVAILABLE="false"
+REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="32768"
 REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES="12000"
 if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
   # shellcheck disable=SC1090
@@ -302,7 +303,7 @@ if [ "${SEMBLE_HELPERS_AVAILABLE}" = "true" ] \
    && [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
    && [ -s "${RB_JUDGE_SEMBLE_QUERY_FILE}" ]; then
   semble_query_block \
-    "$(cat "${RB_JUDGE_SEMBLE_QUERY_FILE}")" \
+    "$(head -c "${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}" "${RB_JUDGE_SEMBLE_QUERY_FILE}" 2>/dev/null || true)" \
     "4" \
     "Review-Blocked Judge Context" \
     > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" || true
