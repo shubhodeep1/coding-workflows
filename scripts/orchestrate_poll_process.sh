@@ -1013,6 +1013,12 @@ post_tracking_comment() {
   local comment_body="$1"
   local payload_file
   local payload_err_file
+  local body_bytes
+  body_bytes="$(printf '%s' "${comment_body}" | wc -c | tr -d '[:space:]')"
+  if [ "${body_bytes}" -gt 65536 ]; then
+    echo "::warning::Tracking comment body too large for issue #${TRACKING_NUM} (${body_bytes} bytes > 65536 GitHub limit); skipping post." >&2
+    return 0
+  fi
   payload_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload.XXXXXX")"
   payload_err_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload_err.XXXXXX")"
   # Pipe the body through jq's stdin (-Rs reads it as a single raw
@@ -1053,7 +1059,7 @@ post_state_comment() {
   # Reader (extract_latest_valid_orchestrator_state) tries V2 first and
   # falls back to V1 so existing tracking issues with V1 state comments
   # keep working until the next write supersedes them.
-  local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx
+  local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
   if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
       --state-file "${STATE_FILE}" \
@@ -1069,7 +1075,16 @@ post_state_comment() {
     rm -rf "${pack_dir}"
     return 0
   fi
-  chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || true)"
+  # Validate the manifest's files array before posting anything.  A
+  # mismatched count would otherwise emit a torn V2 chain and then fall
+  # back to stale state on the next poll.
+  chunk_count="$(printf '%s' "${manifest_json}" | jq -r '.files | if type == "array" then length else -1 end' 2>/dev/null || echo -1)"
+  if ! [[ "${chunk_count}" =~ ^-?[0-9]+$ ]] || [ "${chunk_count}" -ne "${total}" ]; then
+    echo "::error::orchestrate_state_v2 pack returned ${chunk_count} chunk file(s) but declared total=${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); skipping torn V2 state write." >&2
+    rm -rf "${pack_dir}"
+    return 0
+  fi
+  chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || echo "")"
   idx=0
   while IFS= read -r chunk_file; do
     [ -n "${chunk_file}" ] || continue
@@ -1080,6 +1095,11 @@ post_state_comment() {
       return 0
     fi
   done <<< "${chunk_files}"
+  if [ "${idx}" -ne "${total}" ]; then
+    echo "::error::Posted ${idx}/${total} V2 state chunks for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
+    rm -rf "${pack_dir}"
+    return 0
+  fi
   rm -rf "${pack_dir}"
 }
 
