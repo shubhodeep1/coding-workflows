@@ -233,6 +233,7 @@ def test_live_judge_templates_expose_semble_placeholder() -> None:
 	for prompt in (JUDGE_PROMPT, REVIEW_BLOCKED_PROMPT, STALL_PROMPT):
 		text = _read(prompt)
 		assert "{{SEMBLE_PREFETCH}}" in text, f"Missing Semble placeholder in {prompt}"
+		assert text.count("{{SEMBLE_PREFETCH}}") == 1, f"Expected exactly one Semble placeholder in {prompt}"
 
 
 def test_orchestrate_poll_process_wires_semble_for_all_judge_builders() -> None:

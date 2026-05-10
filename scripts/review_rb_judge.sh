@@ -286,6 +286,7 @@ RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
 RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"
 RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context.txt"
+trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE:-}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE:-}.tmp"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -306,8 +307,8 @@ if [ "${SEMBLE_HELPERS_AVAILABLE}" = "true" ] \
     "Review-Blocked Judge Context" \
     > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" || true
   if [ -s "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" ]; then
-    _rb_semble_context="$(cat "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true)"
-    printf '%s' "${_rb_semble_context:0:${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}}" > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}"
+    head -c "${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" 2>/dev/null || true
+    mv -f "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true
   fi
 fi
 
@@ -369,7 +370,7 @@ fi
     echo "approach is fundamentally wrong."
   fi
 } > "${RB_JUDGE_PROMPT}"
-rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp"
 
 # -----------------------------------------------------------
 # Temporarily set judge reasoning effort in codex config

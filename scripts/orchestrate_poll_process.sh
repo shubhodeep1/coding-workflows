@@ -211,7 +211,6 @@ build_judge_semble_prefetch()
   local header_label="$3"
   local max_chunks="${4:-4}"
   local query_text=""
-  local prefetch_text=""
 
   : > "${context_file}"
   if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
@@ -220,14 +219,14 @@ build_judge_semble_prefetch()
     return 0
   fi
 
-  query_text="$(cat "${query_file}" 2>/dev/null || true)"
-  query_text="${query_text:0:${JUDGE_SEMBLE_QUERY_MAX_BYTES}}"
+  query_text="$(head -c "${JUDGE_SEMBLE_QUERY_MAX_BYTES}" "${query_file}" 2>/dev/null || true)"
   [ -n "${query_text}" ] || return 0
 
-  prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
-  [ -n "${prefetch_text}" ] || return 0
-
-  printf '%s' "${prefetch_text:0:${JUDGE_SEMBLE_CONTEXT_MAX_BYTES}}" > "${context_file}"
+  if ! head -c "${JUDGE_SEMBLE_CONTEXT_MAX_BYTES}" \
+    < <(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true) \
+    > "${context_file}"; then
+    : > "${context_file}"
+  fi
 }
 
 render_prompt_with_semble_prefetch()
@@ -9418,6 +9417,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
       RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query_${rb_issue}.txt"
       RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context_${rb_issue}.txt"
+      trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE:-}"' EXIT
 
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
@@ -9489,6 +9489,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         fi
       } > "${RB_JUDGE_PROMPT_FILE}"
       rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}"
+      trap - EXIT
 
       # Run the judge
       RB_JUDGE_SUCCESS=false
