@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:171 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The thinking-levels intro duplicates the table details, creating redundant documentation that can drift from the canonical row.\n  WHY: It is documentation-only, but the summary text and table are meant to stay aligned and the reviewer flagged future drift risk.\n- scripts/review_conflict_resolve.sh:191-202 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Invalid CONFLICT_RESOLVER_REASONING_EFFORT values are accepted with a warning and coerced to `high` instead of being rejected.\n  WHY: A typo can silently run the resolver with higher-cost reasoning rather than surfacing a configuration error.\n- agents.md:63-69 | severity=medium | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The conflict-resolver levels table is inconsistent with the shell syntax used in the script and can mislead operators copying the value format.\n  WHY: The reviewer notes the docs use comma-separated values while the script uses shell-style separators, which can cause invalid configuration entries.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The contract test relies on exact source strings, so a harmless script refactor can fail the test without exercising the renderer.\n  WHY: That makes the CI contract brittle and able to miss regressions after quoting or default-value changes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- README.md:171 | severity=low | confidence=2\n  PROBLEM: The \"Thinking levels\" intro correctly notes \"**Conflict resolver exception:** `THINKING_LEVEL_CONFLICT_RESOLVER` defaults to `high`\", but the table row immediately below it (lines 168-174) fully documents the change with originating runs and valid levels, making the intro redundant prose.\n  WHY: No runtime impact (documentation only), but future edits risk drift between intro summary and table details.\n- scripts/review_conflict_resolve.sh:191-202 | severity=medium | confidence=3\n  PROBLEM: Invalid `CONFLICT_RESOLVER_REASONING_EFFORT` values (e.g. `low`) trigger fallback to `high` via `echo \"::warning::\" && _resolver_reasoning_effort=\"high\"`, silently elevating unknown inputs instead of rejecting them.\n  WHY: Operator typo in repo var (vars.THINKING_LEVEL_CONFLICT_RESOLVER=low) runs resolver at unexpectedly high reasoning (higher cost/tokens) without abort, but script comment (line 13) claims validation to {xhigh,high,medium,none}.\n- agents.md:63-69 | severity=low | confidence=2\n  PROBLEM: Valid levels rendered as `xhigh`, `high`, `medium`, `none` (commas) but script header (review_conflict_resolve.sh:13) and case (191) use shell | separator; table omits escaped-pipe rendering artifact but still inconsistent with code syntax.\n  WHY: No runtime impact (docs), but operators copying from table for shell env var may use comma-separated value that fails validation.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=low | confidence=3\n  PROBLEM: Heredoc extraction not present (source-level string search only), but tests pin exact strings like 'local _failure_kind=\"${4:-validation}\"' \u2014 script refactor (e.g. change quoting/default) breaks tests without exercising renderer.\n  WHY: CI passes stale contract tests post-refactor, missing dispatch/assignment regressions.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ec0ce655e1c5533992806e2df84aacebb8d5ea84a65d319c8a50dd48f1830940",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25640089048",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25640089048",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510214549_0318d43e6f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25640089048"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T21:45:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
