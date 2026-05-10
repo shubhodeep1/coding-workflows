@@ -38,7 +38,8 @@ def _render_prompt(
     prompt_text: str,
     semble_prefetch: str | None,
     *,
-    allow_workflow_edits: str = "false",
+    allow_workflow_edits: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
         tmpdir = Path(td)
@@ -46,8 +47,11 @@ def _render_prompt(
         prompt_file.write_text(prompt_text, encoding="utf-8")
 
         env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["ALLOW_WORKFLOW_EDITS"] = allow_workflow_edits
+        if allow_workflow_edits is not None:
+            env["ALLOW_WORKFLOW_EDITS"] = allow_workflow_edits
         if semble_prefetch is None:
             env.pop("SEMBLE_PREFETCH", None)
         else:
@@ -109,6 +113,33 @@ def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
 
     assert "{{SEMBLE_PREFETCH}}" not in rendered
     assert rendered == "Before\n\nAfter\n"
+
+
+def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> None:
+	rendered = _render_prompt(
+		"{{WORKFLOW_EDIT_RESTRICTION}}\n{{SEMBLE_PREFETCH}}\nFooter\n",
+		"=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+		extra_env={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+
+	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in rendered
+	assert "{{SEMBLE_PREFETCH}}" not in rendered
+	workflow_line, remainder = rendered.split("\n", 1)
+	assert workflow_line.startswith("- ")
+	assert ".github/workflows/" in workflow_line
+	assert remainder == (
+		"=== SEMBLE: Judge Context ===\n"
+		"chunk\n"
+		"=== END SEMBLE ===\n"
+		"Footer\n"
+	)
+
+
+def test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string() -> None:
+	rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", "")
+
+	assert "{{SEMBLE_PREFETCH}}" not in rendered
+	assert rendered == "Before\n\nAfter\n"
 
 
 def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
@@ -228,6 +259,8 @@ def main() -> int:
     test_render_prompt_replaces_semble_prefetch_and_existing_placeholder()
     test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
+    test_render_prompt_resolves_workflow_and_semble_placeholders_together()
+    test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()
     test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
     test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
     test_live_judge_templates_expose_semble_placeholder()
