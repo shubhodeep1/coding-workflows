@@ -3205,6 +3205,12 @@ jobs:
           python3 tests/test_orchestrate_poll_process.py
           python3 tests/test_mark_stable_release_tag_refspec_contract.py
           python3 tests/test_targeted_file_context.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
 
       - name: Prompt files integrity
         run: |

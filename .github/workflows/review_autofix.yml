@@ -151,6 +151,7 @@ env:
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
   CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
 
 jobs:
   gate:
@@ -922,6 +923,7 @@ jobs:
           # gated on the script's existence and falls open with a
           # warning when missing.
           OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
+          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh semble_helpers.sh"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -1158,13 +1160,72 @@ jobs:
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
             echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
+            echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
+            echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
+            echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"
             echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
             echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
             echo "COMMITTED_FILES_FILE=${RUNTIME_DIR}/committed_files.txt"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_BIN="
+            echo "SEMBLE_INDEX_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
             echo "HAS_PR_DIFF=false"
             echo "PR_DIFF_SOURCE=uninitialized"
             echo "PR_DIFF_ATTEMPTED_PATHS=gh_pr_diff:${RUNTIME_DIR}/pr_diff.patch"
           } >> "$GITHUB_ENV"
+
+      - name: Setup uv for Semble
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/install_semble.sh" ]; then
+            echo "::warning::install_semble.sh missing from support bootstrap at ${SUPPORT_SCRIPTS_DIR}/install_semble.sh; continuing without Semble."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # shellcheck source=/dev/null
+          source "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
+
+          SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"
+          if [ -n "${SEMBLE_BIN_PATH}" ]; then
+            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build semble index
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+
+          SEMBLE_BIN_PATH="${SEMBLE_BIN:-$(command -v semble 2>/dev/null || true)}"
+          if [ -z "${SEMBLE_BIN_PATH}" ]; then
+            echo "::warning::Semble binary unavailable after install step; skipping index build."
+            exit 0
+          fi
+
+          rm -rf "${SEMBLE_INDEX_PATH}"
+          mkdir -p "$(dirname "${SEMBLE_INDEX_PATH}")"
+          if "${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then
+            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "Built Semble index at ${SEMBLE_INDEX_PATH}"
+          else
+            echo "::warning::Semble index build failed; continuing without Semble-backed prompt context."
+            tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+          fi
 
       - name: Record review run start in memory (fail-open)
         env:
@@ -2585,6 +2646,8 @@ jobs:
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
           check_soft_file "${LAST_RUN_DIFF_FILE}"
           check_soft_file "${LAST_RUN_CHANGED_FILES_FILE}"
           check_soft_file "${LAST_RUN_DIFF_STAT_FILE}"

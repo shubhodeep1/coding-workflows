@@ -29,6 +29,7 @@ jobs:
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
+      SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
       # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
       # policy. The smoke override below intentionally drops reasoning to
@@ -214,7 +215,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh write_codex_config.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -294,6 +295,9 @@ jobs:
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
             echo "QUESTIONS_FILE=${RUNTIME_DIR}/questions.txt"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+            echo "SEMBLE_INDEX_AVAILABLE=false"
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
@@ -311,6 +315,7 @@ jobs:
           # issue. It is NOT set as an env var to avoid repeated logging of
           # potentially large content in every step's env dump. Read it from
           # ISSUE_META_FILE via jq when needed: jq -r '.body // ""' "${ISSUE_META_FILE}"
+          jq -r '.body // ""' "${ISSUE_META_FILE}" > "${RUNTIME_DIR}/issue_body.txt"
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
@@ -493,47 +498,6 @@ jobs:
             jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${ISSUE_CONTEXT_FILE}"
 
-      - name: Create Codex config
-        if: steps.clarify_route.outputs.skip_codex != 'true'
-        run: |
-          set -euo pipefail
-          # Centralised in scripts/write_codex_config.sh — see that
-          # script's header for the apply_patch / trust / elevation
-          # rationale.
-          bash scripts/write_codex_config.sh \
-            --model "${MODEL_EDITOR}" \
-            --reasoning "${MODEL_REASONING_EFFORT}"
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
-
-      - name: Pre-assemble static context (cacheable across runs)
-        if: steps.clarify_route.outputs.skip_codex != 'true'
-        run: |
-          set -euo pipefail
-          # See scripts/build_static_context.sh for trimming rationale and
-          # prompt-prefix caching motivation.
-          bash scripts/build_static_context.sh clarify ./pre_assembled_static.txt
-          STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
-          STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
-          echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
-
-      - name: Retrieve memory context
-        if: steps.clarify_route.outputs.skip_codex != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          source scripts/memory_helpers.sh 2>/dev/null || true
-          declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
-
-          jq -r '.body // ""' "${ISSUE_META_FILE}" > "${RUNTIME_DIR}/issue_body.txt"
-
-          memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
-            --role "clarify" \
-            --issue-number "${ISSUE_NUMBER}" \
-            --issue-title "${ISSUE_TITLE}" \
-            --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
-
       - name: Install Redis Python client
         if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
         continue-on-error: true
@@ -550,6 +514,7 @@ jobs:
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-
+
       - name: Semantic cache lookup
         id: semantic_cache_lookup
         if: always() && steps.clarify_route.outputs.skip_codex != 'true'
@@ -591,6 +556,81 @@ jobs:
               echo "::warning::Semantic cache lookup fail-open: $(jq -r '.error // "unknown_error"' "${LOOKUP_JSON}")"
             fi
           fi
+
+      - name: Setup uv
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "::warning::Semble binary not found on PATH after install; continuing without index."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          rm -rf "${SEMBLE_INDEX_PATH}"
+          if semble index . --out "${SEMBLE_INDEX_PATH}"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Semble index build failed; continuing without index."
+            rm -rf "${SEMBLE_INDEX_PATH}"
+          fi
+
+      - name: Create Codex config
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        run: |
+          set -euo pipefail
+          # Centralised in scripts/write_codex_config.sh — see that
+          # script's header for the apply_patch / trust / elevation
+          # rationale.
+          bash scripts/write_codex_config.sh \
+            --model "${MODEL_EDITOR}" \
+            --reasoning "${MODEL_REASONING_EFFORT}"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Pre-assemble static context (cacheable across runs)
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        run: |
+          set -euo pipefail
+          # See scripts/build_static_context.sh for trimming rationale and
+          # prompt-prefix caching motivation.
+          bash scripts/build_static_context.sh clarify ./pre_assembled_static.txt
+          STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
+          STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
+          echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
+
+      - name: Retrieve memory context
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
+
+          jq -r '.body // ""' "${ISSUE_META_FILE}" > "${RUNTIME_DIR}/issue_body.txt"
+
+          memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
+            --role "clarify" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-title "${ISSUE_TITLE}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
       - name: Set orchestrator /reclarify reasoning effort
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
