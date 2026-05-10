@@ -575,7 +575,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # neither failure mode and matches the codex CLI's default `[PROMPT]`
   # contract: "If not provided as an argument (or if `-` is used),
   # instructions are read from stdin".
-  if ! codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}"; then
+  # Per-attempt cap so a runaway first attempt can't burn the full 60-min
+  # step budget (review_autofix.yml:3711) before retries get a turn.
+  # 18 min x 3 attempts = 54 min, leaving ~6 min for soft validation /
+  # commit / EXIT-trap dispatch within timeout-minutes: 60. Override via
+  # CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS for per-PR tuning.
+  : "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:=1080}"
+  if ! timeout --signal=TERM --kill-after=30s "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+       codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}"; then
     rm -f "${tmp_output}"
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       echo "Conflict resolver failed after retries."
