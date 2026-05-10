@@ -188,6 +188,32 @@ def test_claimed_path_not_in_commit_still_reports_changes_lost(tmp_path: Path) -
 	)
 
 
+def test_reference_clause_path_not_treated_as_edit_target(tmp_path: Path) -> None:
+	"""bitsafe.io PR #135 / run 25628091558 reproducing case: the editor
+	bullet edits a single test file but its trailing "This matches `Y`"
+	clause references a sibling production file that was NOT edited.
+	Pre-fix, the path extractor pulled BOTH paths and the subset check
+	against COMMITTED_FILES_FILE failed because the referenced sibling
+	was correctly absent from the commit, producing a false-positive
+	EDITOR_CHANGES_LOST. The shim now strips reference clauses before
+	path extraction so only the actual edit target is checked."""
+	_init_clean_repo(tmp_path)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- apps/api/test/auth-service-verification.test.mjs\n",
+	)
+	result = _run_shim(
+		tmp_path,
+		FIXTURES / "narrative_reference_clause_status_edited.txt",
+		committed_files=committed,
+	)
+	assert result == "false", (
+		"Expected shim to strip the trailing 'This matches `Y`' reference "
+		f"clause and treat the bullet as a single-file edit; got {result!r}."
+	)
+
+
 def test_committed_files_file_unset_preserves_legacy_behaviour(tmp_path: Path) -> None:
 	"""When COMMITTED_FILES_FILE is unset the shim must behave exactly as
 	before — the new subset check is purely additive. narrative_real_edit

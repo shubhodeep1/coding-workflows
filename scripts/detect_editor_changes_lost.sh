@@ -62,7 +62,17 @@ changes_section="$(awk '
 
 narrative_claims=""
 if [ -n "${changes_section}" ]; then
-	narrative_claims="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|No modifications)' || true)"
+	# Strip trailing reference clauses ("This matches `Y`", "which
+	# mirrors `Y`", etc.) before downstream consumers — including the
+	# path extractor at L97-107 — read narrative_claims. Without this,
+	# a single-file edit bullet "Restored X in `a/b.test.mjs`. This
+	# matches `a/c.ts`." has BOTH paths extracted; the referenced sibling
+	# is correctly absent from COMMITTED_FILES_FILE, the subset check
+	# fails, and a healthy commit is misclassified as EDITOR_CHANGES_LOST.
+	# See bitsafe.io PR #135 / run 25628091558.
+	narrative_claims="$(printf '%s\n' "${changes_section}" \
+		| sed -E 's/\b(this|that|which|the (caller|reference)) (matches|mirrors|references|aligns with|maps to|tracks|points to|comes from)\b.*$//I' \
+		| grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|No modifications)' || true)"
 fi
 
 if [ -z "${porcelain}" ] && [ -z "${narrative_claims}" ]; then
