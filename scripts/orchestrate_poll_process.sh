@@ -1191,8 +1191,14 @@ extract_latest_valid_orchestrator_state() {
     # KiB; 8 MiB is two orders of magnitude above the worst real case
     # while still bounding the failure mode.
     local _v2_payload_bytes
-    _v2_payload_bytes="$(wc -c < "${_v2_payload_file}" | tr -d ' \n')"
-    if [ -n "${_v2_payload_bytes}" ] && [ "${_v2_payload_bytes}" -gt $((8 * 1024 * 1024)) ]; then
+    _v2_payload_bytes="$(wc -c < "${_v2_payload_file}" 2>/dev/null | tr -d ' \n' || echo "")"
+    # Fail closed: if wc -c fails or returns non-numeric output the size
+    # cap below cannot be evaluated, so reject the payload rather than
+    # bypassing the cap (a hostile/corrupted blob is the very thing we
+    # are trying to keep out of the poller's state).
+    if ! [[ "${_v2_payload_bytes}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::V2 state extract payload byte count unavailable (wc -c output: ${_v2_payload_bytes:-<empty>}); rejecting and falling back to V1 for issue #${TRACKING_NUM:-?}." >&2
+    elif [ "${_v2_payload_bytes}" -gt $((8 * 1024 * 1024)) ]; then
       echo "::warning::V2 state extract payload is ${_v2_payload_bytes} bytes (>8 MiB cap); rejecting and falling back to V1 for issue #${TRACKING_NUM:-?}." >&2
     else
       candidate_state="$(cat "${_v2_payload_file}")"
