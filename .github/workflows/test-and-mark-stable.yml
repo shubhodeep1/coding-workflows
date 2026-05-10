@@ -5046,6 +5046,7 @@ jobs:
           ALT_MODEL="${{ needs.e2e-alt-model-test.result }}"
           VALIDATE="${{ needs.validate.result }}"
           RELEASE="${{ needs.release.result }}"
+          SYNC_TO_MAIN="${{ needs.sync-to-main.result }}"
 
           # `LOG_ANALYSIS` is deliberately omitted from `all_supplemental_ok`
           # — its failure must NOT flip the overall message to "FAILED".
@@ -5056,6 +5057,14 @@ jobs:
               all_supplemental_ok=false
             fi
           done
+
+          # Unlike the post-hoc log-analysis audit, a failed sync-to-main
+          # dispatch means the release workflow itself did not complete.
+          if [ "$SYNC_TO_MAIN" = "success" ] || [ "$SYNC_TO_MAIN" = "skipped" ]; then
+            sync_to_main_ok=true
+          else
+            sync_to_main_ok=false
+          fi
 
           # Render an icon for log-analysis using the same scheme as the
           # FAILED branch loop below, so the SUCCEEDED line surfaces a
@@ -5068,13 +5077,13 @@ jobs:
           esac
 
           # Determine overall status
-          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ] && [ "$all_supplemental_ok" = "true" ]; then
+          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ] && [ "$sync_to_main_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
             MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
             MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ✓ log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             STATUS_LINE=""
-            for JOB_NAME in e2e-smoke-test validate-scripts workflow-log-analysis-test orphan-workflows-test orchestrate-decompose-test validate-standalone-test clarify-rejects-unsolvable-test e2e-alt-model-test validate release; do
+            for JOB_NAME in e2e-smoke-test validate-scripts workflow-log-analysis-test orphan-workflows-test orchestrate-decompose-test validate-standalone-test clarify-rejects-unsolvable-test e2e-alt-model-test validate release sync-to-main; do
               case "$JOB_NAME" in
                 e2e-smoke-test) RESULT="$E2E" ;;
                 validate-scripts) RESULT="$SCRIPTS" ;;
@@ -5086,6 +5095,7 @@ jobs:
                 e2e-alt-model-test) RESULT="$ALT_MODEL" ;;
                 validate) RESULT="$VALIDATE" ;;
                 release) RESULT="$RELEASE" ;;
+                sync-to-main) RESULT="$SYNC_TO_MAIN" ;;
               esac
               case "$RESULT" in
                 success) ICON="✓" ;;
