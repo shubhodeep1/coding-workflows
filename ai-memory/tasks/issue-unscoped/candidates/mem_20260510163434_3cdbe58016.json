@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:448-516 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The timeout/error notice string assembly relies on fragile adjacent-string concatenation and nested ANSI-C quoting.\n  WHY: A future maintenance edit that changes quoting or the interpolated budget text could break the generated notice sent to the model.\n- scripts/review_conflict_resolve.sh:469-475 | severity=low | confidence=1\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The timeout notice hardcodes originating run IDs inline instead of referencing them externally.\n  WHY: If the notice text is reused or the prior runs change, the embedded IDs become stale and the context is less reusable.\n- .github/workflows/orchestrate_poll.yml:445-458 | severity=low | confidence=1\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The workflow comment is abbreviated and omits the run/PR details present in the sibling workflow comment.\n  WHY: Operators lose some provenance context for why the default changed, even though the code path still works.\n- scripts/review_conflict_resolve.sh:522-534 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The suppression regex requires a trailing newline after `{{/IF_VIOLATIONS}}`.\n  WHY: If the template is edited so the closing marker no longer ends with `\\n`, the violations body will stop being suppressed on timeout/error paths.\n- .github/workflows/review_autofix.yml:3744 | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The YAML comment\u2019s separator style differs from the comma-separated presentation used in the docs.\n  WHY: The content is still correct, but the inconsistent formatting can confuse maintainers comparing the files.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_conflict_resolve.sh:522-534 | confidence=3\n  PROBLEM: The suppression regex requires a trailing newline after `{{/IF_VIOLATIONS}}`.\n  WHY: If a future template edit removes that newline, the block will not be suppressed; the fail-loud guard only warns after the mismatch.\n- .github/workflows/review_autofix.yml:3744\n  PROBLEM: The YAML comment says the valid levels are pipe-separated while the docs present them comma-separated.\n  WHY: It is cosmetic, but the inconsistent formatting can mislead maintainers comparing the workflow comment with the documentation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:448-516 | ISSUE_CONFIDENCE=2\n  PROBLEM: Shell string construction for the timeout/error notices is fragile because it depends on adjacent-string concatenation and nested ANSI-C quoting.\n  WHY: A future edit that changes the quoting or literal interpolation could break the generated notice text and degrade the retry prompt.\n- scripts/review_conflict_resolve.sh:469-475 | ISSUE_CONFIDENCE=1\n  PROBLEM: The timeout notice hardcodes originating run IDs inline.\n  WHY: Those IDs are only contextual references, so the prompt becomes stale if the same code is reused for a different incident.\n- .github/workflows/orchestrate_poll.yml:445-458 | ISSUE_CONFIDENCE=1\n  PROBLEM: The comment is abbreviated and omits the run/PR details present in the other workflow file.\n  WHY: The missing provenance makes the rationale less self-contained for operators reading only this file.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1bb405379ee95135966583b81a44bc0ce6f6e178e6134b398cb17a9ff6ffea26",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25633356207",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25633356207",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510163434_3cdbe58016",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25633356207"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T16:34:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
