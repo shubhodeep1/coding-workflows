@@ -3790,17 +3790,29 @@ jobs:
           # never overwritten, `bash -n` always passes, and this block
           # is a no-op.
           RESOLVER_SCRIPT="${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
-          if ! bash -n "${RESOLVER_SCRIPT}" 2>/dev/null; then
+          # Capture bash -n stderr (instead of redirecting to /dev/null)
+          # and surface a sanitized single-line copy in every fallback
+          # annotation so operators debugging a workflow run can tell
+          # an unresolved-merge-marker failure apart from a truncated
+          # file, a missing dependency reference, or any other
+          # parse-time issue without having to re-run the job locally.
+          # The same sanitisation pattern (%/\r escaping, whitespace
+          # collapse) the "Detect merge conflicts" step uses for its
+          # `git merge` stderr annotation applies here.
+          _resolver_check_err=""
+          if ! _resolver_check_err="$(bash -n "${RESOLVER_SCRIPT}" 2>&1 >/dev/null)"; then
+            _err_oneline="$(printf '%s' "${_resolver_check_err}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//; s/%/%25/g; s/\r/%0D/g')"
+            _err_oneline="${_err_oneline:-<no stderr captured>}"
             if [ -f ".codex-workflow-src/scripts/review_conflict_resolve.sh" ] \
                && bash -n ".codex-workflow-src/scripts/review_conflict_resolve.sh" 2>/dev/null; then
-              echo "::warning::${RESOLVER_SCRIPT} failed bash syntax check (likely unresolved conflict markers from the merge replay); falling back to .codex-workflow-src/scripts/review_conflict_resolve.sh (SCRIPT_REF=${SCRIPT_REF:-unknown})."
+              echo "::warning::${RESOLVER_SCRIPT} failed bash syntax check [bash -n: ${_err_oneline}] — likely unresolved conflict markers from the merge replay; falling back to .codex-workflow-src/scripts/review_conflict_resolve.sh (SCRIPT_REF=${SCRIPT_REF:-unknown})."
               RESOLVER_SCRIPT=".codex-workflow-src/scripts/review_conflict_resolve.sh"
             elif [ -f ".codex-workflow-src-main/scripts/review_conflict_resolve.sh" ] \
                  && bash -n ".codex-workflow-src-main/scripts/review_conflict_resolve.sh" 2>/dev/null; then
-              echo "::warning::${RESOLVER_SCRIPT} failed bash syntax check and SCRIPT_REF copy is unavailable/unparseable; falling back to .codex-workflow-src-main/scripts/review_conflict_resolve.sh."
+              echo "::warning::${RESOLVER_SCRIPT} failed bash syntax check [bash -n: ${_err_oneline}] and SCRIPT_REF copy is unavailable/unparseable; falling back to .codex-workflow-src-main/scripts/review_conflict_resolve.sh."
               RESOLVER_SCRIPT=".codex-workflow-src-main/scripts/review_conflict_resolve.sh"
             else
-              echo "::error::${RESOLVER_SCRIPT} contains unresolved conflict markers and no clean fallback copy is available in .codex-workflow-src/ or .codex-workflow-src-main/."
+              echo "::error::${RESOLVER_SCRIPT} failed bash syntax check [bash -n: ${_err_oneline}] and no clean fallback copy is available in .codex-workflow-src/ or .codex-workflow-src-main/."
               exit 2
             fi
           fi
