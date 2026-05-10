@@ -700,7 +700,20 @@ jobs:
     # break.
     name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Sized to accommodate the resolver step's 170-min cap plus the
+    # pre-resolver work (~24 min observed on run 25629086684: disk
+    # cleanup, checkout, codex install, runtime workspace setup,
+    # reviewer fan-out, editor, prompt prep) and post-resolver work
+    # (validation, push, comments, telegram, EXIT-trap dispatch).
+    # The previous 180-min cap left only ~10 min of job-level
+    # headroom over the new 170-min step cap, which a flagged
+    # review comment correctly identified as risk: a long resolver
+    # run could be killed by the job timer before the EXIT trap
+    # dispatches the orchestrator poll.  240 min gives ~46 min of
+    # cushion (24 pre + 170 step + 46 post = 240) so the EXIT trap
+    # is reachable even when every retry uses its full per-attempt
+    # budget.
+    timeout-minutes: 240
     concurrency:
       # Two cancellation regimes, keyed off needs.gate.outputs.claude_branch_review:
       #

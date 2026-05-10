@@ -744,35 +744,58 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # before the loop so this expansion is the same value used by
   # _build_retry_prompt and the retry-log line for every iteration.
   _codex_exit=0
+  _attempt_started_at=$(date +%s)
   timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
     codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
     || _codex_exit=$?
+  _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
   if [ "${_codex_exit}" -ne 0 ]; then
     rm -f "${tmp_output}"
-    # `timeout` documents two specific exit codes: 124 = the child
-    # was sent SIGTERM after DURATION expired; 137 = the child was
-    # SIGKILL'd after `--kill-after` expired (128 + 9).  Anything
-    # else came from codex itself — config / auth / model / network
-    # errors that have nothing to do with the per-attempt timer.
-    # Distinguishing the two matters because:
+    # `timeout` documents two specific exit codes:
+    #   - 124: the child was sent SIGTERM after DURATION expired.
+    #     Definitively a timer expiry.
+    #   - 137: the child received SIGKILL (128 + 9). `timeout
+    #     --kill-after=30s` produces this when the child ignored the
+    #     SIGTERM long enough for the kill-after backstop to fire,
+    #     BUT 137 is also produced by the OOM killer, by an external
+    #     `kill -9`, and by other SIGKILL sources that have nothing
+    #     to do with the per-attempt timer.  We disambiguate by
+    #     comparing the wall-clock elapsed time against the
+    #     configured duration: a `timeout`-driven SIGKILL fires at
+    #     duration + ~30s, so elapsed >= duration is a strong signal
+    #     of timer expiry; an OOM kill at minute 2 of a 50-min
+    #     budget produces elapsed << duration and gets routed to
+    #     exec_error (where the standard fail-open path retries
+    #     with the original prompt verbatim).
+    # Anything else came from codex itself — config / auth / model
+    # / network errors that have nothing to do with the per-attempt
+    # timer.  Distinguishing matters because the standard / timeout
+    # preludes would actively mislead the model on the wrong path:
     #   - On a real timeout, soft-validation never ran and the
     #     marker/fingerprint violation files are stale / empty;
     #     the timeout-aware prelude tells the model to be decisive
     #     and call apply_patch early on the next attempt.
     #   - On an exec error, the script has no reflexion data to
-    #     hand back; rendering either the standard ("output failed
-    #     validation") or timeout ("killed by per-attempt timer")
-    #     prelude would actively mislead the model.  Falling back
-    #     to the original prompt verbatim is the conservative
-    #     choice — same handling as a missing prelude template.
+    #     hand back; falling back to the original prompt verbatim
+    #     is the conservative choice — same handling as a missing
+    #     prelude template.
     case "${_codex_exit}" in
-      124|137)
+      124)
         _prev_attempt_failure_kind="timeout"
-        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit ${_codex_exit}; ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s budget)."
+        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 124 = SIGTERM after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; elapsed ${_attempt_elapsed}s)."
+        ;;
+      137)
+        if [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+          _prev_attempt_failure_kind="timeout"
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 137 = SIGKILL after kill-after backstop; elapsed ${_attempt_elapsed}s ≥ budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
+        else
+          _prev_attempt_failure_kind="exec_error"
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} crashed (SIGKILL exit 137 but elapsed ${_attempt_elapsed}s < budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely OOM kill or external SIGKILL, not the per-attempt timer)."
+        fi
         ;;
       *)
         _prev_attempt_failure_kind="exec_error"
-        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero)."
+        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
         ;;
     esac
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
