@@ -2652,6 +2652,39 @@ for path in set(per_file_added) | set(per_file_removed):
         if not per_file_removed[path]:
             del per_file_removed[path]
 
+# Substring-overlap filter: drop any removed-line whose stripped text is
+# a literal substring of any added-line stripped text on the same file.
+# Capture below wraps each kept line with re.escape(...), so substring
+# containment in the captured text is equivalent to substring
+# containment under re.search at verify time. When the added line
+# supersedes the removed line by extending it (e.g. a sub-issue
+# appended " When X is enabled, accepted ..." to "...cohort-mix
+# rollouts."), keeping the shorter removed text as a must_not_contain
+# produces a structurally unsatisfiable pair: any tree that satisfies
+# the longer must_contain also matches the shorter must_not_contain,
+# and the resolver burns its 3-attempt retry budget then times out at
+# the step wall-clock cap on a hunk it cannot make pass. Drop the
+# must_not_contain side; the must_contain side already enforces the
+# stronger intent. Companion verifier-side dedup at
+# scripts/verify_integration_fingerprints.py covers state files
+# captured before this filter landed.
+for path, added_lines in list(per_file_added.items()):
+    if path not in per_file_removed:
+        continue
+    added_stripped = {l.strip() for l in added_lines if l.strip()}
+    if not added_stripped:
+        continue
+    new_removed: list[str] = []
+    for raw in per_file_removed[path]:
+        stripped = raw.strip()
+        if stripped and any(stripped != a and stripped in a for a in added_stripped):
+            continue
+        new_removed.append(raw)
+    if new_removed:
+        per_file_removed[path] = new_removed
+    else:
+        del per_file_removed[path]
+
 result = {
     "must_contain": to_patterns(per_file_added),
     "must_not_contain": to_patterns(per_file_removed),
