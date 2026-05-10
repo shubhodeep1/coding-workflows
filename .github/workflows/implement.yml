@@ -14,7 +14,7 @@ name: AI Implement
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
-  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
   # prompt guide that step is research/synthesis, not coding. The implement

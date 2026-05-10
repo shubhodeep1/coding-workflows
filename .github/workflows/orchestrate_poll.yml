@@ -32,7 +32,7 @@ env:
   # policy. Override per-repo via vars.THINKING_LEVEL_JUDGE.
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
-  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver

@@ -31,7 +31,7 @@ env:
   # information-dense per the OpenAI prompt guide.
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_ORCHESTRATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
-  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
 
 jobs:
   orchestrate:
