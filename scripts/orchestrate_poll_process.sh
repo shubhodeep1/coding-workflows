@@ -1069,7 +1069,7 @@ post_state_comment() {
     echo "::error::scripts/orchestrate_state_v2.py is missing from the staged scripts tree; V2 state persistence cannot run for issue #${TRACKING_NUM}. Update the workflow's 'Stage workflow support files' loop to include this helper." >&2
     return 1
   fi
-  local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx
+  local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
   if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
       --state-file "${STATE_FILE}" \
@@ -1085,7 +1085,16 @@ post_state_comment() {
     rm -rf "${pack_dir}"
     return 1
   fi
-  chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || true)"
+  # Validate the manifest's files array before posting anything.  A
+  # mismatched count would otherwise emit a torn V2 chain and then fall
+  # back to stale state on the next poll.
+  chunk_count="$(printf '%s' "${manifest_json}" | jq -r '.files | if type == "array" then length else -1 end' 2>/dev/null || echo -1)"
+  if ! [[ "${chunk_count}" =~ ^-?[0-9]+$ ]] || [ "${chunk_count}" -ne "${total}" ]; then
+    echo "::error::orchestrate_state_v2 pack returned ${chunk_count} chunk file(s) but declared total=${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); skipping torn V2 state write." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
+  chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || echo "")"
   idx=0
   while IFS= read -r chunk_file; do
     [ -n "${chunk_file}" ] || continue
@@ -1096,6 +1105,11 @@ post_state_comment() {
       return 1
     fi
   done <<< "${chunk_files}"
+  if [ "${idx}" -ne "${total}" ]; then
+    echo "::error::Posted ${idx}/${total} V2 state chunks for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
   rm -rf "${pack_dir}"
   return 0
 }
