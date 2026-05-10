@@ -134,8 +134,8 @@ semble_query_block()
 		return 1
 	fi
 
-	tmp_stdout="$(mktemp 2>/dev/null || true)"
-	tmp_stderr="$(mktemp 2>/dev/null || true)"
+	tmp_stdout="$(mktemp "${TMPDIR:-/tmp}/semble.stdout.XXXXXX" 2>/dev/null || true)"
+	tmp_stderr="$(mktemp "${TMPDIR:-/tmp}/semble.stderr.XXXXXX" 2>/dev/null || true)"
 	if [ -z "${tmp_stdout}" ] || [ -z "${tmp_stderr}" ]; then
 		_semble_cleanup_tempfiles "${tmp_stdout}" "${tmp_stderr}"
 		_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=tempfile-unavailable"

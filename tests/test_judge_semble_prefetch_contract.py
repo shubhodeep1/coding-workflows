@@ -129,30 +129,30 @@ def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
 
 
 def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> None:
-	rendered = _render_prompt(
-		"{{WORKFLOW_EDIT_RESTRICTION}}\n{{SEMBLE_PREFETCH}}\nFooter\n",
-		"=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
-		extra_env={"ALLOW_WORKFLOW_EDITS": "true"},
-	)
+    rendered = _render_prompt(
+        "{{WORKFLOW_EDIT_RESTRICTION}}\n{{SEMBLE_PREFETCH}}\nFooter\n",
+        "=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+        extra_env={"ALLOW_WORKFLOW_EDITS": "true"},
+    )
 
-	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in rendered
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	workflow_line, remainder = rendered.split("\n", 1)
-	assert workflow_line.startswith("- ")
-	assert ".github/workflows/" in workflow_line
-	assert remainder == (
-		"=== SEMBLE: Judge Context ===\n"
-		"chunk\n"
-		"=== END SEMBLE ===\n"
-		"Footer\n"
-	)
+    assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in rendered
+    assert "{{SEMBLE_PREFETCH}}" not in rendered
+    workflow_line, remainder = rendered.split("\n", 1)
+    assert workflow_line.startswith("- ")
+    assert ".github/workflows/" in workflow_line
+    assert remainder == (
+        "=== SEMBLE: Judge Context ===\n"
+        "chunk\n"
+        "=== END SEMBLE ===\n"
+        "Footer\n"
+    )
 
 
 def test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string() -> None:
-	rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", "")
+    rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", "")
 
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	assert rendered == "Before\n\nAfter\n"
+    assert "{{SEMBLE_PREFETCH}}" not in rendered
+    assert rendered == "Before\n\nAfter\n"
 
 
 def test_render_prompt_extra_env_none_unsets_inherited_workflow_flag() -> None:

@@ -118,6 +118,7 @@ attempt_pip_install()
 	if "${SEMBLE_PYTHON_BIN}" -m pip install \
 		--disable-pip-version-check \
 		--quiet \
+		--upgrade \
 		--user \
 		"${SEMBLE_SPEC}" >"${pip_log}" 2>&1; then
 		rm -f "${pip_log}"
@@ -127,6 +128,7 @@ attempt_pip_install()
 	if "${SEMBLE_PYTHON_BIN}" -m pip install \
 		--disable-pip-version-check \
 		--quiet \
+		--upgrade \
 		--user \
 		--break-system-packages \
 		"${SEMBLE_SPEC}" >"${pip_log}" 2>&1; then

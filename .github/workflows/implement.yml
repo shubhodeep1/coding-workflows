@@ -573,8 +573,6 @@ jobs:
           if ! bash scripts/install_semble.sh; then
             echo "::warning::Semble install helper failed; leaving Semble disabled for this run."
             echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
-          else
-            echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"
           fi
 
       - name: Build semble index
