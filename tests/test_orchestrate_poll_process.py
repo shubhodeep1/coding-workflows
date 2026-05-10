@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -311,6 +314,11 @@ def _base_state(status: str = "in_progress") -> dict:
 
 
 def _state_comment(state: dict) -> str:
+	# V1 framing is intentionally retained for test SEED data.  The
+	# production reader handles the V2 → V1 fallback path, so seeding
+	# initial state as V1 still works after the V2 writer change.  The
+	# extractor helpers below transparently read either V1 or V2 so the
+	# rest of the test suite does not need to change.
 	return "<!-- ORCHESTRATOR_STATE_V1\n" + json.dumps(state) + "\nORCHESTRATOR_STATE_V1 -->"
 
 
@@ -319,28 +327,106 @@ def _write_exec(path: Path, body: str) -> None:
 	path.chmod(0o755)
 
 
-def _extract_latest_state(comments: list[dict]) -> dict:
-	for comment in reversed(comments):
-		body = comment.get("body", "")
-		if "ORCHESTRATOR_STATE_V1" not in body:
-			continue
-		match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
-		if not match:
-			continue
-		return json.loads(match.group(1))
-	raise AssertionError("No ORCHESTRATOR_STATE_V1 comment found")
+# V2 framing parsing — keep in sync with scripts/orchestrate_state_v2.py.
+# Tests cannot import the helper module directly because it lives outside
+# `tests/` and the test runner is invoked as a flat script; reimplementing
+# the parse loop inline avoids adding a sys.path hack.
+_V2_OPENER_RE = re.compile(
+	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
+	re.MULTILINE,
+)
+_V2_CLOSER = "ORCHESTRATOR_STATE_V2 -->"
+
+
+def _is_state_comment(body: str) -> bool:
+	"""True if the body carries a V1 single-comment state OR a V2 chunk."""
+	return "ORCHESTRATOR_STATE_V1" in body or "ORCHESTRATOR_STATE_V2" in body
+
+
+def _parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
+	m = _V2_OPENER_RE.search(body)
+	if m is None:
+		return None
+	part, total, manifest = int(m.group(1)), int(m.group(2)), m.group(3)
+	if part < 1 or total < 1 or part > total:
+		return None
+	tail = body[m.end():]
+	if tail.startswith("\n"):
+		tail = tail[1:]
+	closer_marker = "\n" + _V2_CLOSER
+	end = tail.rfind(closer_marker)
+	if end >= 0:
+		chunk = tail[:end]
+	elif tail.startswith(_V2_CLOSER):
+		chunk = ""
+	else:
+		return None
+	return part, total, manifest, chunk
 
 
 def _extract_state_payloads(comments: list[dict]) -> list[str]:
-	payloads: list[str] = []
-	for comment in comments:
-		body = comment.get("body", "")
-		if "ORCHESTRATOR_STATE_V1" not in body:
+	"""All orchestrator-state JSON payloads in chronological (oldest-first) order.
+
+	Walks comments forward.  Each V1 single-comment state contributes
+	one payload at its own index.  Each V2 chunk-chain contributes one
+	payload at the index of the comment where the chain completed
+	(the newest part of that chain).  Combined V2 + V1 listing keeps
+	the test contract that the latest state write is `payloads[-1]`.
+	"""
+	payloads: list[tuple[int, str]] = []
+	v2_parts: dict[str, dict[int, str]] = {}
+	v2_totals: dict[str, int] = {}
+	v2_complete: set[str] = set()
+	for idx, comment in enumerate(comments):
+		body = (comment or {}).get("body") or ""
+		if "ORCHESTRATOR_STATE_V2" in body:
+			parsed = _parse_v2_chunk(body)
+			if parsed is not None:
+				part, total, manifest, chunk = parsed
+				if manifest not in v2_complete:
+					slot = v2_parts.setdefault(manifest, {})
+					slot.setdefault(part, chunk)
+					prev_total = v2_totals.get(manifest)
+					mismatch = False
+					if prev_total is None:
+						v2_totals[manifest] = total
+					elif prev_total != total:
+						# Mismatched declared total — disqualify and skip.
+						v2_parts.pop(manifest, None)
+						mismatch = True
+					if not mismatch and len(slot) == total and all(p in slot for p in range(1, total + 1)):
+						stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
+						compact = re.sub(r"\s+", "", stitched_b64)
+						try:
+							decoded = base64.b64decode(compact, validate=True)
+						except (binascii.Error, ValueError):
+							v2_parts.pop(manifest, None)
+						else:
+							if hashlib.sha256(decoded).hexdigest() == manifest:
+								v2_complete.add(manifest)
+								payloads.append((idx, decoded.decode("utf-8")))
+							else:
+								v2_parts.pop(manifest, None)
+		if "ORCHESTRATOR_STATE_V1" in body:
+			match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
+			if match:
+				payloads.append((idx, match.group(1)))
+	return [payload for _, payload in payloads]
+
+
+def _extract_latest_state(comments: list[dict]) -> dict:
+	# Walk newest-first through the chronologically-ordered payload list
+	# returned by `_extract_state_payloads` and return the first one that
+	# parses as JSON.  Skipping malformed payloads matches the
+	# production reader's "newest VALID state wins" semantic — a
+	# truncated state-comment body should not crash callers when an
+	# older valid one is also present.
+	for raw in reversed(_extract_state_payloads(comments)):
+		try:
+			return json.loads(raw)
+		except json.JSONDecodeError:
 			continue
-		match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
-		if match:
-			payloads.append(match.group(1))
-	return payloads
+	raise AssertionError("No valid orchestrator state comment (V1 or V2) found")
 
 
 def _run_poller(
@@ -2393,7 +2479,7 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 		enable_validation="false",
 		max_validate_cycles="3",
 		tracking_comments=[
-			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 901},
@@ -2497,7 +2583,7 @@ def test_sync_conflict_dedupe_skips_identical_warnings():
 		enable_validation="false",
 		max_validate_cycles="3",
 		tracking_comments=[
-			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main"],
@@ -2531,7 +2617,7 @@ def test_sync_conflict_posts_again_when_conflict_set_changes():
 		enable_validation="false",
 		max_validate_cycles="3",
 		tracking_comments=[
-			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main"],
