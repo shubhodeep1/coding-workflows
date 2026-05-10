@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:~457-475 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The timeout/error notice still warns about prose and violation lists below even though `SUPPRESS_VIOLATIONS_BODY=1` removes that body.\n  WHY: The rendered prompt now goes straight from the notice to `=== ORIGINAL TASK ===`, so the notice text is slightly stale and can create avoidable confusion.\n- scripts/review_conflict_resolve.sh:498-512 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `re.sub` calls for `{{#IF_VIOLATIONS}}` and `{{/IF_VIOLATIONS}}` assume exact newline placement, so whitespace edits can leave marker text or the violations body in the rendered prompt.\n  WHY: Both regexes are coupled to the template\u2019s current formatting, and a marker-line whitespace change can make suppression fail open.\n- scripts/review_conflict_resolve.sh:518-523 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The suppression regex depends on exact `\\n` placement around the `{{#IF_VIOLATIONS}}...{{/IF_VIOLATIONS}}` block, so template whitespace changes can prevent the violations body from being stripped.\n  WHY: If the template marker lines gain trailing whitespace or extra blank lines, the renderer silently falls back to leaving the body in place.\n- scripts/review_conflict_resolve.sh:674-708\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The claim that `_prev_attempt_outcome` can be empty on the first retry is a false positive.\n  WHY: The variable is set after codex exits, and the retry-banner block only executes on later attempts.\n- scripts/review_conflict_resolve.sh:746-752 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The fail-open truncation path logs only a warning if the violations file cannot be truncated, so stale contents may persist into later retries.\n  WHY: On I/O failure the file contents are left unchanged, which can make the prompt signal inconsistent with the forced-zero banner counts.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:~457-470 (timeout notice body), ~472-475 (error notice body) | confidence=2\n  PROBLEM: The timeout/error notice text is partially stale after structural suppression was added.\n  WHY: The notice still talks about misleading prose and violation lists below, but `SUPPRESS_VIOLATIONS_BODY=1` removes that body from the rendered prompt.\n- scripts/review_conflict_resolve.sh:~518-523 | confidence=2\n  PROBLEM: The suppression regex has implicit coupling to template whitespace.\n  WHY: The pattern requires exact marker-line newlines, so a template edit with trailing whitespace or extra blank lines can stop the violations body from being stripped.\n- scripts/review_conflict_resolve.sh:674-708\n  PROBLEM: The `_prev_attempt_outcome` first-retry scoping concern is a false positive.\n  WHY: `_prev_attempt_outcome` is set before any retry banner runs, and the banner block is gated to later attempts.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:498-507 | confidence=4\n  PROBLEM: `re.sub(r'\\{\\{#IF_VIOLATIONS\\}\\}\\n.*?\\{\\{/IF_VIOLATIONS\\}\\}\\n', '', tpl, flags=re.DOTALL)` assumes exact template formatting with `\\n` immediately after the opening marker and before the closing marker.\n  WHY: A whitespace change in the template can leave the entire violations body unstripped on timeout/error paths.\n- scripts/review_conflict_resolve.sh:509-512 | confidence=4\n  PROBLEM: `re.sub(r'\\{\\{#IF_VIOLATIONS\\}\\}\\n', '')` and `re.sub(r'\\{\\{/IF_VIOLATIONS\\}\\}\\n', '')` assume exact `\\n` after each marker.\n  WHY: A template edit can leave the `{{#IF_VIOLATIONS}}` / `{{/IF_VIOLATIONS}}` markers in the rendered prompt.\n- scripts/review_conflict_resolve.sh:746-752 | confidence=3\n  PROBLEM: The fail-open truncation path logs a warning but leaves files unchanged on I/O error.\n  WHY: If truncation fails, stale marker contents can persist into later retries and make the prompt signals inconsistent.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "05ae24878ba23484716ca2c22a61da77306c0721659ad07ec7159103cd298fec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25632558778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25632558778",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510160035_cd44fc45d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25632558778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T16:00:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
