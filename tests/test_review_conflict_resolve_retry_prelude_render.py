@@ -47,7 +47,20 @@ def _extract_render_script() -> str:
 
 	Re-implementing the substitution logic in a copy would not
 	test the actual script — extracting the heredoc and running
-	it directly does.
+	it directly does. This is an intentional design coupling: the
+	test follows whatever shape the renderer takes today. If a
+	future script refactor moves the renderer out of an inline
+	heredoc (e.g. into a standalone `scripts/render_retry_prelude.py`
+	bootstrapped alongside `verify_integration_fingerprints.py`),
+	this extractor needs to follow — that is normal contract-test
+	maintenance, not a test fragility we can engineer away short of
+	having the script expose a stable on-disk renderer module that
+	the test imports directly. Multiple review rounds have re-flagged
+	this coupling; the trade-off has been to keep the extractor
+	regex broad (any heredoc form, any tag, any `python3` launcher
+	shape) so cosmetic refactors don't trip it, and to let
+	structural refactors fail the test loud with the assertion
+	messages below as a guide.
 
 	The extraction regex is intentionally loose so it survives
 	common launcher refactors:
