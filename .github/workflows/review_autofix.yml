@@ -700,7 +700,20 @@ jobs:
     # break.
     name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Sized to accommodate the resolver step's 170-min cap plus the
+    # pre-resolver work (~24 min observed on run 25629086684: disk
+    # cleanup, checkout, codex install, runtime workspace setup,
+    # reviewer fan-out, editor, prompt prep) and post-resolver work
+    # (validation, push, comments, telegram, EXIT-trap dispatch).
+    # The previous 180-min cap left only ~10 min of job-level
+    # headroom over the new 170-min step cap, which a flagged
+    # review comment correctly identified as risk: a long resolver
+    # run could be killed by the job timer before the EXIT trap
+    # dispatches the orchestrator poll.  240 min gives ~46 min of
+    # cushion (24 pre + 170 step + 46 post = 240) so the EXIT trap
+    # is reachable even when every retry uses its full per-attempt
+    # budget.
+    timeout-minutes: 240
     concurrency:
       # Two cancellation regimes, keyed off needs.gate.outputs.claude_branch_review:
       #
@@ -1074,6 +1087,18 @@ jobs:
             else
               echo "::warning::integration-sync-conflict-resolver-retry-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver retries on integration-sync runs will use the original prompt verbatim (no reflexion guidance)."
               rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver-retry-timeout-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver timeout-induced retries on integration-sync runs will fall back to the original prompt verbatim (no timeout-aware reflexion guidance)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             fi
           fi
 
@@ -3701,14 +3726,25 @@ jobs:
         # timeout-minutes is the safety net for a hung codex exec call.  The
         # script-internal retry loop does up to INTEGRATION_SYNC_RESOLVER_MAX_
         # ATTEMPTS=3 attempts, with the no-progress check biting after attempt
-        # 2 when fingerprint violations are stable; one observed worst-case
-        # attempt was ~58 min, so 60 min caps a single hung attempt without
-        # killing well-behaved 3-attempt runs.  On hit, the EXIT trap in
+        # 2 when fingerprint violations are stable.  Per-attempt cap is
+        # CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=3000 (50 min, raised from
+        # 18 min after run 25629086684 / PR #2865 on tele-funtoken-msg-scoring
+        # where every attempt hit the previous 18-min ceiling without ever
+        # producing apply_patch on a 7-file mixed-implementation merge).
+        # 3 × 50 min = 150 min fits inside the 170-min step cap with ~20 min
+        # for soft validation, commit, and the EXIT-trap dispatch.  The
+        # surrounding job's timeout-minutes (240 — see the `timeout-minutes:`
+        # setting on the codex-agent job earlier in this workflow) was sized
+        # to fit ~24 min of pre-resolver work (disk cleanup, checkout, codex
+        # install, runtime workspace, prompt prep, reviewers, editor) plus
+        # this 170-min step cap plus ~46 min of post-resolver work, so the
+        # EXIT trap is reachable even when every retry uses its full
+        # per-attempt budget.  On hit, the EXIT trap in
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
-        timeout-minutes: 60
+        timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override

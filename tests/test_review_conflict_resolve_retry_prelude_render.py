@@ -2,388 +2,263 @@
 """Contract tests for outcome-aware retry-prelude rendering in
 scripts/review_conflict_resolve.sh::_build_retry_prompt.
 
-The {{PREVIOUS_OUTCOME_NOTICE}} placeholder and the conditional
-{{#IF_VIOLATIONS}}…{{/IF_VIOLATIONS}} body suppression keep the
-next-attempt reflexion prompt accurate when the previous attempt
-was killed by `timeout` (exit 124 / 137) or exited non-zero before
-producing any patch (the violations body's "your previous attempt
-produced output that failed post-resolve validation" framing is
-misleading on those paths because soft validation never ran).
+The retry-prelude path keeps the next-attempt reflexion prompt
+accurate when the previous attempt was killed by `timeout` (exit
+124 / 137), exited non-zero for another reason, or completed but
+failed soft validation. Soft-validation never runs on the timeout
+or exec_error paths, so the standard "you produced violations
+last time, fix them" framing is misleading there.
 
-These tests pin the rendering logic by extracting the python3
-heredoc body from the script and running it directly against
-controlled prelude templates and env vars. Without them, a future
-edit that:
-  - drops the SUPPRESS_VIOLATIONS_BODY branch
-  - changes the marker-regex spelling
-  - re-adds the misleading "produced output that failed validation"
-    framing to the timeout/error path
-  - breaks the {{PREVIOUS_OUTCOME_NOTICE}} substitution
-would silently regress the model's retry context on the
-originating failure mode: runs 25627236793 / 25627316961 on
-shubhodeep1/tele-funtoken-msg-scoring's orchestrator/project-2840
-stack, where the resolver hung in extended reasoning at `xhigh`
-on a file with duplicate function bodies outside the conflict
-markers and got SIGTERMed on all three retry attempts with
-markers=0, fingerprint_violations=0 on every retry — the
-unambiguous signature of `timeout` firing pre-patch.
+`_build_retry_prompt` solves this by routing on a `_failure_kind`
+positional arg:
+
+  - `exec_error`  → copy the original prompt verbatim
+                    (`_retry_prompt_outcome="verbatim:exec_error"`)
+  - `timeout`     → render `integration-sync-conflict-resolver-
+                    retry-timeout-prelude.txt`
+                    (`_retry_prompt_outcome="timeout-prelude"`)
+  - `validation`  → render `integration-sync-conflict-resolver-
+                    retry-prelude.txt` (the original violations
+                    template) (`_retry_prompt_outcome="validation-
+                    prelude"`)
+  - missing template / non-integration-sync run → copy original
+                    prompt verbatim
+                    (`_retry_prompt_outcome="verbatim:fallback"`)
+
+Both prelude files are bootstrapped to consumer repos via the
+resolver-tooling refresh list in
+`scripts/orchestrate_poll_process.sh`. The retry-log dispatch
+reads `_retry_prompt_outcome` so the log honestly reflects which
+prelude (or verbatim fallback) was actually rendered.
+
+These tests pin the contract at the source level: they assert the
+files exist with the right placeholders, the dispatch branches
+exist in the script, and the `_retry_prompt_outcome` values are
+documented and used by the retry-log dispatch. A SOURCE-LEVEL
+contract is more robust to renderer refactors than extracting the
+inline python and re-running it; the existing
+`test_review_conflict_resolve_smoke_deterministic.py` follows the
+same pattern. Originating runs that motivated the timeout-aware
+path: 25627236793 / 25627316961 (PRs
+shubhodeep1/tele-funtoken-msg-scoring#2874 / #2867) on the
+orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 """
 
 from __future__ import annotations
 
-import os
-import re
-import subprocess
-import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESOLVE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
+PROMPTS_DIR = REPO_ROOT / "prompts"
+VALIDATION_PRELUDE = PROMPTS_DIR / "integration-sync-conflict-resolver-retry-prelude.txt"
+TIMEOUT_PRELUDE = PROMPTS_DIR / "integration-sync-conflict-resolver-retry-timeout-prelude.txt"
 
 
-def _extract_render_script() -> str:
-	"""Pull the python3 heredoc body out of `_build_retry_prompt`.
+def _resolve_script_text() -> str:
+	return RESOLVE_SCRIPT.read_text(encoding="utf-8")
 
-	Re-implementing the substitution logic in a copy would not
-	test the actual script — extracting the heredoc and running
-	it directly does. This is an intentional design coupling: the
-	test follows whatever shape the renderer takes today. If a
-	future script refactor moves the renderer out of an inline
-	heredoc (e.g. into a standalone `scripts/render_retry_prelude.py`
-	bootstrapped alongside `verify_integration_fingerprints.py`),
-	this extractor needs to follow — that is normal contract-test
-	maintenance, not a test fragility we can engineer away short of
-	having the script expose a stable on-disk renderer module that
-	the test imports directly. Multiple review rounds have re-flagged
-	this coupling; the trade-off has been to keep the extractor
-	regex broad (any heredoc form, any tag, any `python3` launcher
-	shape) so cosmetic refactors don't trip it, and to let
-	structural refactors fail the test loud with the assertion
-	messages below as a guide.
 
-	The extraction regex is intentionally loose so it survives
-	common launcher refactors:
-	  - any `python3` invocation form (`python3 -`, `python3 - >
-	    /path`, `python3 /dev/stdin`, …);
-	  - any heredoc operator form (`<<`, `<<-` with tab-stripping);
-	  - any quoting around the heredoc tag (`<<'PY'`, `<<"PY"`,
-	    or the unquoted `<<PY` form);
-	  - any tag name (`PY`, `PYEOF`, `RENDER`, …) as long as the
-	    body contains the `PREVIOUS_OUTCOME_NOTICE` substitution key.
-	Without the key check, a different python3 heredoc elsewhere in
-	the script could be picked up instead.
-	"""
-	src = RESOLVE_SCRIPT.read_text(encoding="utf-8")
-	# Heredoc launcher:
-	#   `python3` (word-bounded) + any non-newline tail
-	#   + `<<` with optional `-` (tab-strip form)
-	#   + optional ASCII whitespace
-	#   + optional `'` or `"` around the tag (captured then
-	#     back-referenced on the closing line)
-	#   + a tag of word characters
-	#   + matching closing quote (or nothing if the open quote was
-	#     also nothing)
-	#   + newline
-	#   + body (lazy, DOTALL)
-	#   + the captured tag on its own line, with optional leading
-	#     tabs (the `<<-` tab-strip form preserves spaces on the
-	#     terminator line in some shells, but bash strips leading
-	#     tabs only — accept either).
-	candidates = re.findall(
-		r"python3\b[^\n]*?<<-?\s*(?P<openq>['\"]?)(?P<tag>\w+)(?P=openq)\n"
-		r"(?P<body>.*?)\n[\t]*(?P=tag)\n",
-		src,
-		flags=re.DOTALL,
+def test_both_prelude_files_exist() -> None:
+	"""Both prelude templates must be checked in. They are referenced
+	by `_build_retry_prompt`'s `_prelude_basename` branching and
+	would render `verbatim:fallback` with a `::warning::` if
+	missing — fail-open is intentional but landing in upstream
+	without either file is a regression."""
+	assert VALIDATION_PRELUDE.is_file(), (
+		f"Validation-path prelude missing at {VALIDATION_PRELUDE}; "
+		"_build_retry_prompt's `_failure_kind=validation` branch "
+		"falls open to a verbatim retry with `::warning::` when "
+		"this file is absent."
 	)
-	if not candidates:
-		raise AssertionError(
-			"Could not locate any python3 heredoc in "
-			"scripts/review_conflict_resolve.sh — if the renderer "
-			"was rewritten without a heredoc-launched python3 "
-			"invocation, update this regex (or the test approach) "
-			"so it still exercises the substitution logic."
+	assert TIMEOUT_PRELUDE.is_file(), (
+		f"Timeout-path prelude missing at {TIMEOUT_PRELUDE}; "
+		"_build_retry_prompt's `_failure_kind=timeout` branch "
+		"falls open to a verbatim retry with `::warning::` when "
+		"this file is absent."
+	)
+
+
+def test_validation_prelude_carries_violations_framing() -> None:
+	"""The validation-path prelude must keep the "produced output
+	that failed post-resolve validation" framing + per-violation
+	markers / fingerprint sections — that wording is the
+	whole point of the prelude on that path, and the in-loop
+	soft-validation reads do populate the substitution values."""
+	body = VALIDATION_PRELUDE.read_text(encoding="utf-8")
+	assert "produced output" in body and "failed post-resolve validation" in body, (
+		"Validation prelude should describe the previous attempt's "
+		"output as having failed post-resolve validation; if this "
+		"framing was removed, the model gets no context for what "
+		"to fix on the retry."
+	)
+	assert "{{MARKER_VIOLATION_COUNT}}" in body
+	assert "{{MARKER_VIOLATION_FILES}}" in body
+	assert "{{FINGERPRINT_VIOLATION_COUNT}}" in body
+	assert "{{FINGERPRINT_VIOLATION_DETAILS}}" in body
+
+
+def test_timeout_prelude_carries_apply_patch_first_guidance() -> None:
+	"""The timeout-path prelude must (a) name the previous attempt
+	as KILLED by the per-attempt timer with the actual seconds
+	substituted, (b) tell the model to be DECISIVE rather than
+	re-investigate, and (c) NOT carry the misleading "produced
+	output that failed validation" framing (soft validation never
+	ran on this path). The `{{PER_ATTEMPT_TIMEOUT_SECS}}`
+	substitution is what makes the budget actionable in the
+	model's context."""
+	body = TIMEOUT_PRELUDE.read_text(encoding="utf-8")
+	assert "TIMED OUT" in body or "KILLED" in body, (
+		"Timeout prelude should explicitly say the previous "
+		"attempt was killed/timed out; without that framing the "
+		"model has no signal that the working tree is at the "
+		"post-`git merge` state, not its previous edits."
+	)
+	assert "{{PER_ATTEMPT_TIMEOUT_SECS}}" in body, (
+		"Timeout prelude should interpolate the actual per-attempt "
+		"budget so the model can pace itself — a hard-coded "
+		"budget would drift from CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS."
+	)
+	assert "apply_patch" in body, (
+		"Timeout prelude should explicitly mention apply_patch — "
+		"the originating failure mode was Codex consuming the "
+		"full budget investigating duplicates without ever "
+		"calling apply_patch."
+	)
+	# The misleading "produced output that failed post-resolve
+	# validation" framing belongs ONLY in the validation prelude.
+	# If it leaks into the timeout prelude, the model is told its
+	# previous (non-existent) output was rejected — exactly the
+	# bug this design was meant to fix.
+	assert "failed post-resolve validation" not in body, (
+		"Timeout prelude must NOT carry the validation-path's "
+		"'failed post-resolve validation' framing; soft validation "
+		"never ran on the timeout path so that wording is misleading."
+	)
+
+
+def test_build_retry_prompt_dispatches_on_failure_kind() -> None:
+	"""`_build_retry_prompt` must dispatch on its 4th positional
+	arg (`_failure_kind`) and select the right prelude basename
+	per failure mode. Without this dispatch, every retry would
+	render the validation prelude, re-introducing the misleading
+	"0 violations" framing on timeout-killed retries that
+	originally motivated the split (runs 25627236793 /
+	25627316961 / 25629086684)."""
+	src = _resolve_script_text()
+	assert "_build_retry_prompt()" in src
+	# The function takes _failure_kind as a positional default.
+	assert 'local _failure_kind="${4:-validation}"' in src, (
+		"_build_retry_prompt should default _failure_kind to "
+		"'validation' (the post-soft-validation retry path) and "
+		"accept 'timeout' / 'exec_error' overrides from the "
+		"retry loop. If this signature changed, update both the "
+		"caller at the loop top AND this test."
+	)
+	# Timeout branch must pick the timeout-prelude basename.
+	assert (
+		'_prelude_basename="integration-sync-conflict-resolver-retry-timeout-prelude.txt"'
+		in src
+	), (
+		"Timeout branch must select the timeout-specific prelude "
+		"basename so the rendered retry prompt carries the "
+		"apply_patch-first guidance."
+	)
+	# Validation (default) branch must pick the standard prelude.
+	assert (
+		'_prelude_basename="integration-sync-conflict-resolver-retry-prelude.txt"'
+		in src
+	), (
+		"Validation branch must select the standard prelude "
+		"basename so the violations-framing path is preserved."
+	)
+
+
+def test_build_retry_prompt_sets_retry_prompt_outcome() -> None:
+	"""`_retry_prompt_outcome` must be set on every code path
+	through `_build_retry_prompt` so the retry-log dispatch can
+	honestly describe which prelude (or verbatim fallback) was
+	actually rendered. Without this, the log claims a
+	timeout-aware reflexion was sent even when the function fell
+	back to a verbatim copy on a consumer-repo @stable pin that
+	predates the new template file."""
+	src = _resolve_script_text()
+	# Every documented outcome value must appear as a literal
+	# assignment in the function.
+	for outcome in (
+		'_retry_prompt_outcome="verbatim:exec_error"',
+		'_retry_prompt_outcome="verbatim:fallback"',
+		'_retry_prompt_outcome="timeout-prelude"',
+		'_retry_prompt_outcome="validation-prelude"',
+	):
+		assert outcome in src, (
+			f"_build_retry_prompt must set {outcome}; the "
+			"retry-log dispatch switch in the main loop reads "
+			"_retry_prompt_outcome to decide which message to "
+			"emit, so a missing assignment would silently log "
+			"the wrong path."
 		)
-	for _openq, _tag, body in candidates:
-		if "PREVIOUS_OUTCOME_NOTICE" in body:
-			return body
-	raise AssertionError(
-		"Found python3 heredoc(s) in scripts/review_conflict_resolve.sh "
-		"but none reference PREVIOUS_OUTCOME_NOTICE; the retry-prelude "
-		"renderer may have moved to a different launch site. Update "
-		"this extractor to follow it."
+
+
+def test_retry_loop_reads_retry_prompt_outcome_for_log_dispatch() -> None:
+	"""The retry loop's log dispatch must branch on
+	`_retry_prompt_outcome`, not on `_prev_attempt_failure_kind`
+	alone. The two can disagree (e.g. failure_kind=timeout but the
+	prelude file is missing on a consumer-repo pin, so the
+	function fell back to verbatim), and the log should reflect
+	the actual prompt fed to codex, not the intent."""
+	src = _resolve_script_text()
+	assert 'case "${_retry_prompt_outcome}" in' in src, (
+		"Retry-log dispatch should switch on _retry_prompt_outcome "
+		"so the log message honestly reflects which prelude (or "
+		"fallback) was rendered. Branching on _prev_attempt_failure_kind "
+		"alone causes the log to claim a timeout-aware reflexion "
+		"was sent on consumer-repo pins where the template was "
+		"missing and the function fell back to verbatim."
 	)
 
 
-# Canonical template shape, mirroring
-# prompts/integration-sync-conflict-resolver-retry-prelude.txt at
-# the time PR #2449 landed. Tests use a minimal in-memory copy so
-# they pin the renderer's contract independent of the on-disk
-# template's exact prose.
-_CANONICAL_TEMPLATE = (
-	"=== HEADER (attempt {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}) ==="
-	"{{PREVIOUS_OUTCOME_NOTICE}}\n"
-	"\n"
-	"{{#IF_VIOLATIONS}}\n"
-	"VIOLATIONS_BODY_LINE_1: this prose talks about post-resolve validation.\n"
-	"--- markers ({{MARKER_VIOLATION_COUNT}}) ---\n"
-	"{{MARKER_VIOLATION_FILES}}\n"
-	"--- fingerprints ({{FINGERPRINT_VIOLATION_COUNT}}) ---\n"
-	"{{FINGERPRINT_VIOLATION_DETAILS}}\n"
-	"VIOLATIONS_BODY_LINE_2: end of body.\n"
-	"{{/IF_VIOLATIONS}}\n"
-	"\n"
-	"=== ORIGINAL TASK ===\n"
-	"\n"
-)
-
-_ORIGINAL_TASK_PAYLOAD = "ORIGINAL TASK CONTENT FOR THE TEST\n"
-
-
-def _run_render(
-	*,
-	tpl_text: str,
-	suppress: bool,
-	outcome_notice: str = "",
-	marker_count: str = "0",
-	marker_files: str = "(none)",
-	fp_count: str = "0",
-	fp_details: str = "(none)",
-	prev_attempt: str = "1",
-	max_attempts: str = "3",
-) -> tuple[str, str, int]:
-	"""Run the extracted python3 renderer with the given inputs.
-
-	Returns (stdout, stderr, returncode).  The renderer reads its
-	template + original-task path from env vars, so we materialise
-	both into tempfiles inside a TemporaryDirectory.
-	"""
-	render_script = _extract_render_script()
-	with tempfile.TemporaryDirectory() as tmpdir:
-		tpl_path = Path(tmpdir) / "prelude.txt"
-		tpl_path.write_text(tpl_text, encoding="utf-8")
-		orig_path = Path(tmpdir) / "original_task.txt"
-		orig_path.write_text(_ORIGINAL_TASK_PAYLOAD, encoding="utf-8")
-
-		env = {
-			**os.environ,
-			"SUPPRESS_VIOLATIONS_BODY": "1" if suppress else "0",
-			"PRELUDE_TPL": str(tpl_path),
-			"ORIGINAL_PROMPT_FILE": str(orig_path),
-			"PREVIOUS_ATTEMPT_NUMBER": prev_attempt,
-			"MAX_ATTEMPTS": max_attempts,
-			"MARKER_VIOLATION_COUNT": marker_count,
-			"MARKER_VIOLATION_FILES": marker_files,
-			"FINGERPRINT_VIOLATION_COUNT": fp_count,
-			"FINGERPRINT_VIOLATION_DETAILS": fp_details,
-			"PREVIOUS_OUTCOME_NOTICE": outcome_notice,
-		}
-		proc = subprocess.run(
-			["python3", "-c", render_script],
-			env=env,
-			capture_output=True,
-			text=True,
-			check=False,
-		)
-	return proc.stdout, proc.stderr, proc.returncode
-
-
-def test_outcome_ran_keeps_violations_body() -> None:
-	"""On the post-validation retry path (`ran`/`violations`),
-	SUPPRESS_VIOLATIONS_BODY=0 must keep the violations body
-	intact and substitute MARKER_/FINGERPRINT_ counts + lists."""
-	stdout, stderr, rc = _run_render(
-		tpl_text=_CANONICAL_TEMPLATE,
-		suppress=False,
-		outcome_notice="",  # no notice on the ran/violations path
-		marker_count="2",
-		marker_files="          - foo.py\n          - bar.py",
-		fp_count="1",
-		fp_details="          - must_contain pattern missing from baz.py",
+def test_reasoning_default_lowered_to_high() -> None:
+	"""CONFLICT_RESOLVER_REASONING_EFFORT default must be `high`,
+	not `xhigh`. The lowering was the C half of the response to
+	the orchestrator-stack hung-thinking failure mode (runs
+	25627236793 / 25627316961). `xhigh` consumed the full
+	per-attempt budget enumerating duplicate helpers without
+	invoking apply_patch; `high` trades some depth for finishing
+	inside the budget."""
+	src = _resolve_script_text()
+	assert '_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-high}"' in src, (
+		"Script-side default for CONFLICT_RESOLVER_REASONING_EFFORT "
+		"should be `high` (lowered from `xhigh`). If a future "
+		"refactor reverts this, document the rationale and update "
+		"this test together — see the comment block on review_autofix.yml's "
+		"CONFLICT_RESOLVER_REASONING_EFFORT env var."
 	)
-	assert rc == 0, f"renderer returned non-zero: rc={rc}, stderr={stderr!r}"
-	assert "VIOLATIONS_BODY_LINE_1" in stdout
-	assert "VIOLATIONS_BODY_LINE_2" in stdout
-	assert "--- markers (2) ---" in stdout
-	assert "          - foo.py" in stdout
-	assert "          - bar.py" in stdout
-	assert "--- fingerprints (1) ---" in stdout
-	assert "must_contain pattern missing from baz.py" in stdout
-	# The {{#IF_VIOLATIONS}} / {{/IF_VIOLATIONS}} marker lines
-	# themselves must be stripped (they are template directives,
-	# not content).
-	assert "{{#IF_VIOLATIONS}}" not in stdout
-	assert "{{/IF_VIOLATIONS}}" not in stdout
-	# Original-task payload must be appended.
-	assert stdout.endswith(_ORIGINAL_TASK_PAYLOAD)
-	# No leftover-marker warnings on a well-formed template.
-	assert "::warning::" not in stderr
-
-
-def test_outcome_timeout_suppresses_violations_body() -> None:
-	"""On the timeout path, SUPPRESS_VIOLATIONS_BODY=1 must strip
-	the entire {{#IF_VIOLATIONS}}…{{/IF_VIOLATIONS}} region so the
-	misleading "produced output that failed post-resolve validation"
-	framing never reaches the model."""
-	notice = "\n*** TIMEOUT NOTICE ***\n[notice body]\n*** END TIMEOUT NOTICE ***"
-	stdout, stderr, rc = _run_render(
-		tpl_text=_CANONICAL_TEMPLATE,
-		suppress=True,
-		outcome_notice=notice,
-		# Stale violation values that would mislead if the body
-		# wasn't stripped — the suppression contract guarantees
-		# they never leak into the rendered prompt.
-		marker_count="99",
-		marker_files="          - STALE_FILE.py",
-		fp_count="42",
-		fp_details="          - stale fingerprint detail",
-	)
-	assert rc == 0, f"renderer returned non-zero: rc={rc}, stderr={stderr!r}"
-	assert "*** TIMEOUT NOTICE ***" in stdout
-	assert "*** END TIMEOUT NOTICE ***" in stdout
-	# Body must be gone — neither the prose nor the violation
-	# substitutions should appear.
-	assert "VIOLATIONS_BODY_LINE_1" not in stdout
-	assert "VIOLATIONS_BODY_LINE_2" not in stdout
-	assert "--- markers" not in stdout
-	assert "--- fingerprints" not in stdout
-	assert "STALE_FILE.py" not in stdout
-	assert "stale fingerprint detail" not in stdout
-	# Conditional markers themselves must be stripped.
-	assert "{{#IF_VIOLATIONS}}" not in stdout
-	assert "{{/IF_VIOLATIONS}}" not in stdout
-	# Original-task payload still appended.
-	assert stdout.endswith(_ORIGINAL_TASK_PAYLOAD)
-	assert "::warning::" not in stderr
-
-
-def test_outcome_error_suppresses_violations_body() -> None:
-	"""On the non-timeout-error path, SUPPRESS_VIOLATIONS_BODY=1
-	must strip the violations body the same way as the timeout
-	path; the only difference is the notice text."""
-	notice = (
-		"\n*** PREVIOUS ATTEMPT EXITED NON-ZERO ***\n"
-		"[notice body]\n*** END NOTICE ***"
-	)
-	stdout, stderr, rc = _run_render(
-		tpl_text=_CANONICAL_TEMPLATE,
-		suppress=True,
-		outcome_notice=notice,
-	)
-	assert rc == 0, f"renderer returned non-zero: rc={rc}, stderr={stderr!r}"
-	assert "*** PREVIOUS ATTEMPT EXITED NON-ZERO ***" in stdout
-	assert "VIOLATIONS_BODY_LINE_1" not in stdout
-	assert "VIOLATIONS_BODY_LINE_2" not in stdout
-	assert "{{#IF_VIOLATIONS}}" not in stdout
-	assert "{{/IF_VIOLATIONS}}" not in stdout
-	assert "::warning::" not in stderr
-
-
-def test_outcome_notice_placeholder_substitutes_at_header_position() -> None:
-	"""{{PREVIOUS_OUTCOME_NOTICE}} sits directly after the header
-	on the same line in the canonical template, so a non-empty
-	notice (which always starts with `\\n` per the
-	_build_retry_prompt invariant) lands cleanly on the line below
-	the header rather than gluing to the `===` text."""
-	notice = "\n*** A NOTICE ***\n[body]\n*** END ***"
-	stdout, _stderr, rc = _run_render(
-		tpl_text=_CANONICAL_TEMPLATE,
-		suppress=True,
-		outcome_notice=notice,
-		prev_attempt="2",
-		max_attempts="3",
-	)
-	assert rc == 0
-	# The header line ends, then the notice's leading `\n` puts
-	# the `*** A NOTICE ***` marker on its own line. Any glueing
-	# (`=== HEADER … === *** A NOTICE ***`) would mean the
-	# leading-newline invariant or the substitution broke.
-	assert "=== HEADER (attempt 2 of 3) ===\n*** A NOTICE ***" in stdout, (
-		"Expected the notice's first line on its own line directly "
-		"below the rendered header; got:\n" + stdout[:400]
-	)
-
-
-def test_marker_count_assertion_warns_on_malformed_template() -> None:
-	"""A template with more or fewer markers than the
-	canonical 1-open / 1-close pair must trigger the
-	pre-strip count assertion's `::warning::` so a malformed
-	template is diagnosable from the workflow log."""
-	# Two opens, one close — the non-greedy `.*?` strip would
-	# otherwise silently swallow the inner content without
-	# raising an alarm.
-	malformed = (
-		"=== H ==={{PREVIOUS_OUTCOME_NOTICE}}\n"
-		"\n"
-		"{{#IF_VIOLATIONS}}\n"
-		"first body\n"
-		"{{#IF_VIOLATIONS}}\n"
-		"second body\n"
-		"{{/IF_VIOLATIONS}}\n"
-		"\n"
-		"=== ORIGINAL TASK ===\n"
-		"\n"
-	)
-	_stdout, stderr, rc = _run_render(
-		tpl_text=malformed,
-		suppress=True,
-		outcome_notice="\n[notice]",
-	)
-	# Renderer is fail-open — non-zero exit would block the retry
-	# loop on a documentation bug, which is worse than a
-	# malformed prompt the operator can fix.
-	assert rc == 0
-	assert "::warning::" in stderr, (
-		"Expected the marker-count assertion to fire on a 2-open / "
-		"1-close template; got stderr=" + repr(stderr)
-	)
-	assert "open=2" in stderr or "opener(s)" in stderr
-
-
-def test_interior_whitespace_markers_are_stripped() -> None:
-	"""The marker regexes must tolerate whitespace inside the
-	`{{ … }}` braces (e.g. `{{ # IF_VIOLATIONS }}`) so a future
-	template edit with whitespace-bearing markers does not
-	silently fall open. Without this, the suppression would skip
-	and the timeout/error path would render the misleading body."""
-	whitespace_template = (
-		"=== H ==={{PREVIOUS_OUTCOME_NOTICE}}\n"
-		"\n"
-		"{{ # IF_VIOLATIONS }}\n"
-		"VIOLATIONS_BODY_LINE_1: must be stripped\n"
-		"{{ / IF_VIOLATIONS }}\n"
-		"\n"
-		"=== ORIGINAL TASK ===\n"
-		"\n"
-	)
-	stdout, stderr, rc = _run_render(
-		tpl_text=whitespace_template,
-		suppress=True,
-		outcome_notice="\n[notice]",
-	)
-	assert rc == 0, f"renderer returned non-zero: rc={rc}, stderr={stderr!r}"
-	assert "VIOLATIONS_BODY_LINE_1" not in stdout, (
-		"Body should be stripped on suppress=1 even with interior-"
-		"whitespace markers; got:\n" + stdout
-	)
-	# No leftover warnings — both the strip and the post-strip
-	# guard must accept the whitespace-bearing markers.
-	assert "::warning::" not in stderr, (
-		"Whitespace-tolerant markers should not trigger a leftover-"
-		"marker warning; got stderr=" + repr(stderr)
+	# The invalid-value fallback must also use the new default.
+	assert '_resolver_reasoning_effort="high"' in src and (
+		"falling back to high" in src
+	), (
+		"The invalid-value fallback warning + assignment should "
+		"reference `high`, not the old `xhigh`. Otherwise an "
+		"operator-supplied bogus value silently restores the "
+		"failure-mode default."
 	)
 
 
 def main() -> int:
-	test_outcome_ran_keeps_violations_body()
-	test_outcome_timeout_suppresses_violations_body()
-	test_outcome_error_suppresses_violations_body()
-	test_outcome_notice_placeholder_substitutes_at_header_position()
-	test_marker_count_assertion_warns_on_malformed_template()
-	test_interior_whitespace_markers_are_stripped()
+	test_both_prelude_files_exist()
+	test_validation_prelude_carries_violations_framing()
+	test_timeout_prelude_carries_apply_patch_first_guidance()
+	test_build_retry_prompt_dispatches_on_failure_kind()
+	test_build_retry_prompt_sets_retry_prompt_outcome()
+	test_retry_loop_reads_retry_prompt_outcome_for_log_dispatch()
+	test_reasoning_default_lowered_to_high()
 	print(
 		"OK: review_conflict_resolve outcome-aware retry-prelude "
-		"rendering contracts hold"
+		"contract holds (validation + timeout preludes, "
+		"_failure_kind dispatch, _retry_prompt_outcome wiring, "
+		"reasoning-default `high`)"
 	)
 	return 0
 
