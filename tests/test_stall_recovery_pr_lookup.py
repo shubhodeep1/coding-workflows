@@ -520,32 +520,48 @@ def _render_repository_expression(script: str, repository: str = "owner/repo") -
 
 
 _GH_STUB_TIMELINE = """#!/usr/bin/env python3
-# Minimal `gh` stub for `gh api ... timeline ... --jq <FILTER>` only.
-# Reads canned timeline JSON from MOCK_GH_TIMELINE_JSON, applies the
-# caller's --jq filter via the host `jq`, and writes to stdout.
+# `gh` stub for the Gap-3 safety-check tests AND the create-PR recovery
+# tests. Handles two subcommands:
+#   * `gh api ... --jq <FILTER>`  — reads canned timeline JSON from
+#     MOCK_GH_TIMELINE_JSON and applies <FILTER> via the host `jq`.
+#   * `gh pr create ...`           — exits with MOCK_GH_PR_CREATE_EXIT_CODE
+#     (default 1), optionally writing MOCK_GH_PR_CREATE_STDOUT / _STDERR.
+# Any other invocation is rejected loudly so tests catch unintended
+# `gh` calls instead of silently passing.
 import os, sys, subprocess
 args = sys.argv[1:]
-if not args or args[0] != "api":
-	sys.stderr.write(f"gh-stub: unsupported invocation: {args}\\n")
-	sys.exit(2)
-jq_filter = None
-for i, a in enumerate(args):
-	if a == "--jq" and i + 1 < len(args):
-		jq_filter = args[i + 1]
-		break
-canned = os.environ.get("MOCK_GH_TIMELINE_JSON", "[]")
-if jq_filter is None:
-	sys.stdout.write(canned)
-	sys.exit(0)
-proc = subprocess.run(
-	["jq", "-r", jq_filter],
-	input=canned,
-	capture_output=True,
-	text=True,
-)
-sys.stdout.write(proc.stdout)
-sys.stderr.write(proc.stderr)
-sys.exit(proc.returncode)
+
+if args and args[0] == "api":
+	jq_filter = None
+	for i, a in enumerate(args):
+		if a == "--jq" and i + 1 < len(args):
+			jq_filter = args[i + 1]
+			break
+	canned = os.environ.get("MOCK_GH_TIMELINE_JSON", "[]")
+	if jq_filter is None:
+		sys.stdout.write(canned)
+		sys.exit(0)
+	proc = subprocess.run(
+		["jq", "-r", jq_filter],
+		input=canned,
+		capture_output=True,
+		text=True,
+	)
+	sys.stdout.write(proc.stdout)
+	sys.stderr.write(proc.stderr)
+	sys.exit(proc.returncode)
+
+if len(args) >= 2 and args[0] == "pr" and args[1] == "create":
+	stdout_text = os.environ.get("MOCK_GH_PR_CREATE_STDOUT", "")
+	stderr_text = os.environ.get("MOCK_GH_PR_CREATE_STDERR", "")
+	if stdout_text:
+		sys.stdout.write(stdout_text)
+	if stderr_text:
+		sys.stderr.write(stderr_text)
+	sys.exit(int(os.environ.get("MOCK_GH_PR_CREATE_EXIT_CODE", "1")))
+
+sys.stderr.write(f"gh-stub: unsupported invocation: {args}\\n")
+sys.exit(2)
 """
 
 
@@ -743,6 +759,220 @@ def test_safety_check_ignores_cross_referenced_issues_not_prs():
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		assert pr_exists == "", f"issue cross-ref must not block; got: {pr_exists!r}"
 		assert "existing_pr=false" in gh_out, gh_out
+
+
+# ---------------------------------------------------------------------------
+# Site 2: "Create Pull Request" step's post-`gh pr create`-failure recovery
+#
+# When `gh pr create` fails — typically because a concurrent runner raced
+# and already created a PR on the same head branch — the recovery branch
+# queries the issue timeline for a cross-referenced OPEN PR and exits 0
+# with `pr_url=<URL>` if one is found. Otherwise it exits 1.
+#
+# This is the symmetric pair of Site 1's safety check, but with a
+# different output shape (bare URL written to GITHUB_OUTPUT, not the
+# `#N URL` line format) and a different control-flow context (nested
+# inside the `if ! gh pr create` failure branch). The tests below
+# exercise the full step under a stubbed `gh` that forces
+# `gh pr create` to fail and replays canned timeline JSON.
+# ---------------------------------------------------------------------------
+
+
+def _run_create_pr_recovery(
+	tmp: Path,
+	issue_number: str,
+	timeline: list[dict],
+	*,
+	gh_pr_create_stderr: str = "PR exists for head branch",
+) -> tuple[subprocess.CompletedProcess, str]:
+	"""Extract and execute the "Create Pull Request" step under a stubbed
+	`gh` that forces `gh pr create` to fail (to enter the recovery path)
+	and replays the supplied timeline for the recovery's `gh api` call.
+	Returns (proc, github_output_contents)."""
+	bin_dir = tmp / "bin"
+	_install_timeline_gh_stub(bin_dir)
+
+	# The step references `${{ github.repository }}` in two places
+	# (gh pr create --repo and the timeline URL). Render to a literal.
+	script = _render_repository_expression(
+		_extract_run_script(IMPLEMENT_WORKFLOW, "Create Pull Request")
+	)
+	script_path = tmp / "create_pr.sh"
+	script_path.write_text(script, encoding="utf-8")
+
+	runtime_dir = tmp / "runtime"
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+	github_output = tmp / "github_output"
+	github_output.write_text("", encoding="utf-8")
+
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+	env["ISSUE_NUMBER"] = issue_number
+	env["ISSUE_URL"] = f"https://github.com/owner/repo/issues/{issue_number}"
+	env["TARGET_BRANCH"] = f"ai/issue-{issue_number}"
+	env["PR_BASE_BRANCH"] = "main"
+	env["IS_SMOKE_TEST"] = "false"
+	env["RUNTIME_DIR"] = str(runtime_dir)
+	env["GITHUB_OUTPUT"] = str(github_output)
+	env["GH_TOKEN"] = "test-token"
+	env["MOCK_GH_TIMELINE_JSON"] = json.dumps(timeline)
+	env["MOCK_GH_PR_CREATE_EXIT_CODE"] = "1"
+	env["MOCK_GH_PR_CREATE_STDERR"] = gh_pr_create_stderr
+
+	proc = subprocess.run(
+		["bash", str(script_path)],
+		cwd=str(tmp),
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=30,
+	)
+	gh_out = github_output.read_text(encoding="utf-8")
+	return proc, gh_out
+
+
+def test_create_pr_recovery_finds_existing_linked_open_pr():
+	"""Recovery path's happy case: `gh pr create` raced and lost; the
+	timeline shows a cross-referenced OPEN PR; recovery must exit 0 and
+	write `pr_url=<URL>` to `$GITHUB_OUTPUT`."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 200,
+						"html_url": "https://github.com/owner/repo/pull/200",
+						"state": "open",
+						"pull_request": {"url": "https://api.github.com/.../pulls/200"},
+					}
+				},
+			},
+		]
+		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		assert proc.returncode == 0, (
+			f"recovery should succeed; stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=https://github.com/owner/repo/pull/200" in gh_out, gh_out
+
+
+def test_create_pr_recovery_exits_1_when_timeline_empty():
+	"""No linked PR on the timeline → recovery cannot find an existing PR,
+	must exit 1 (the workflow surfaces the failure rather than silently
+	advancing on stale state)."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, gh_out = _run_create_pr_recovery(tmp, "141", [])
+		assert proc.returncode == 1, (
+			f"recovery should exit 1 with empty timeline; rc={proc.returncode}\n"
+			f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=" not in gh_out, gh_out
+
+
+def test_create_pr_recovery_skips_text_only_mention():
+	"""The Site-1 false-positive case applies here too: a timeline whose
+	only events are `labeled` or cross-refs to other ISSUES (not PRs)
+	must not be treated as "linked PR exists". Recovery exits 1."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{"event": "labeled", "label": {"name": "ai:awaiting-approval"}},
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 999,
+						"html_url": "https://github.com/owner/repo/issues/999",
+						"state": "open",
+						"pull_request": None,
+					}
+				},
+			},
+		]
+		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		assert proc.returncode == 1, (
+			f"text-only mention must not satisfy recovery; rc={proc.returncode}\n"
+			f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=" not in gh_out, gh_out
+
+
+def test_create_pr_recovery_ignores_closed_pr():
+	"""A closed/merged cross-referenced PR must not satisfy recovery —
+	the goal is to find an OPEN PR to redirect to, not to point at a
+	merged historical artifact."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 199,
+						"html_url": "https://github.com/owner/repo/pull/199",
+						"state": "closed",
+						"pull_request": {"url": "x", "merged_at": "2026-01-01T00:00:00Z"},
+					}
+				},
+			},
+		]
+		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		assert proc.returncode == 1, (
+			f"closed PR must not satisfy recovery; rc={proc.returncode}\n"
+			f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=" not in gh_out, gh_out
+
+
+def test_create_pr_recovery_picks_first_open_pr_when_multiple_present():
+	"""When multiple OPEN PRs cross-reference the issue (rare but
+	possible — e.g. a stale human-authored PR alongside a fresh
+	orchestrator-created one, both still open), recovery must pin
+	deterministically to a single URL. The jq filter ends in
+	`.[0] // ""`, so the FIRST cross-reference event wins. This test
+	guards against a regression that would broaden the selection
+	(e.g. `.[] |` instead of `.[0] |`) and write multiple
+	`pr_url=<URL>` lines to $GITHUB_OUTPUT, which the GHA spec treats
+	as later-line-wins for the same output key — silently changing
+	which PR the caller redirects to."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 200,
+						"html_url": "https://github.com/owner/repo/pull/200",
+						"state": "open",
+						"pull_request": {"url": "https://api.github.com/.../pulls/200"},
+					}
+				},
+			},
+			{
+				"event": "cross-referenced",
+				"source": {
+					"issue": {
+						"number": 201,
+						"html_url": "https://github.com/owner/repo/pull/201",
+						"state": "open",
+						"pull_request": {"url": "https://api.github.com/.../pulls/201"},
+					}
+				},
+			},
+		]
+		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		assert proc.returncode == 0, (
+			f"recovery should succeed; stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=https://github.com/owner/repo/pull/200" in gh_out, gh_out
+		assert "pr_url=https://github.com/owner/repo/pull/201" not in gh_out, gh_out
+		# Exactly one pr_url line — broaden-selection regression guard.
+		pr_url_lines = [ln for ln in gh_out.splitlines() if ln.startswith("pr_url=")]
+		assert len(pr_url_lines) == 1, pr_url_lines
 
 
 def test_implement_workflow_does_not_use_buggy_search_form():
