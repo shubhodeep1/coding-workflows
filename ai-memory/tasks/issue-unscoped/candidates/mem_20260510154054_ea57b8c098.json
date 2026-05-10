@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- N/A (PR check-runs):N/A | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Lint check-run failed, but it provides no title, summary, or details to map the failure to a file or line.\n  WHY: The failure is reported, but the changed file is a plain text fixture and the review output gives no actionable location.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=[5]\n  PROBLEM: None.\n  WHY: The last autofix run correctly overwrote the file with exactly the three required lines, each terminated by a single newline, with no extra blank lines or content.\n- N/A (PR check-runs):N/A | confidence=[3]\n  PROBLEM: Lint check-run failed, but it provides no title, summary, or details to map the failure to a file or line.\n  WHY: The failure exists, but it cannot be tied to the changed text fixture or any specific code location.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e495c1c6792a88f629c9d7e754ad60f00792464448d54f86d08957f2ed23d1ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2460,
+    "run_id": "25632440903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25632440903",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510154054_ea57b8c098",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2460,
+    "run_id": "25632440903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T15:40:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
