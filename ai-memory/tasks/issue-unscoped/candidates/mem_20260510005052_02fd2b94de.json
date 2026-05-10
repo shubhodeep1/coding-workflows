@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:776-950 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: Several Semble query-builder helper functions in scripts/orchestrate_poll_process.sh are defined but never called by any live judge path.\n  WHY: All three reviewers identified the same dead-code block, with qwen covering the earlier helper section and moonshot/x-ai covering the later build_* helpers.\n- tests/test_judge_semble_prefetch_contract.py:178-232 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The Semble prefetch contract test no longer robustly verifies the live wiring because it mixes function-definition checks with live-path assertions and removes the positive guard for the scaffolding.\n  WHY: All three reviewers flagged the test as weakened or ambiguous; moonshot noted it only checks function existence, qwen called out the removed positive assertions, and x-ai said the contract is inconsistent.\n- tests/test_judge_semble_prefetch_contract.py:182 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The test asserts that 'append_judge_semble_query_text()' exists in scripts/orchestrate_poll_process.sh, but x-ai reports that no such function is defined there.\n  WHY: This is a standalone claim from x-ai at line 182 and was not merged with the other test-contract findings because it describes a different root cause.\n- scripts/orchestrate_poll_process.sh:149 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: render_judge_semble_prefetch_from_query_file is reported to pass the query file into semble_query_block without enforcing JUDGE_SEMBLE_QUERY_MAX_BYTES.\n  WHY: Only x-ai raised this line-149 concern; the other reviewers explicitly disputed it.\n- scripts/orchestrate_poll_process.sh:7-8 | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The shellcheck source directive points at scripts/semble_helpers.sh, but the conditional sourcing may leave ShellCheck coverage ambiguous.\n  WHY: Only qwen reported this as a potential static-analysis coverage issue.\n- scripts/orchestrate_poll_process.sh:795-829 | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: extract_diff_file_summary silently stops after 40 changed files without signaling truncation to callers.\n  WHY: Only qwen reported the silent 40-file cap and the lack of caller-side awareness.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:838-950 | confidence=5\n  PROBLEM: Five Semble query-builder helper functions are defined but never called by any live judge path.\n  WHY: The reviewer identified these as dead code in the script; the live wiring uses append_judge_semble_query_text() plus render_judge_semble_prefetch_from_query_file() instead.\n- tests/test_judge_semble_prefetch_contract.py:200 | confidence=3\n  PROBLEM: The assertion `assert 'append_judge_semble_query_text()' in text` checks only for the function definition string, so it does not verify that the helper is actually called in the live judge path.\n  WHY: The reviewer noted that the test passes while only confirming function existence, not live wiring.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:779-908 | confidence=5\n  PROBLEM: Seven Semble helper functions are defined but never called anywhere in the script.\n  WHY: The reviewer identified the helper block as dead code; the live Semble prefetch path uses append_judge_semble_query_text() plus render_judge_semble_prefetch_from_query_file() instead.\n- tests/test_judge_semble_prefetch_contract.py:178-192 | confidence=4\n  PROBLEM: Removing the positive assertions for build_semble_prefetch_block(), build_wave_judge_semble_query(), build_stall_judge_semble_query(), build_review_blocked_judge_semble_query(), and build_integration_conflict_judge_semble_query() removes the test guard for that scaffolding.\n  WHY: The reviewer said the current test no longer protects that block from accidental deletion, corruption, or relocation.\n- scripts/orchestrate_poll_process.sh:7-8 | confidence=3\n  PROBLEM: The shellcheck source directive points to scripts/semble_helpers.sh, but the actual sourcing is conditional and may leave ShellCheck coverage ambiguous.\n  WHY: The reviewer flagged this as a ShellCheck coverage issue rather than a runtime bug.\n- scripts/orchestrate_poll_process.sh:795-829 | confidence=3\n  PROBLEM: extract_diff_file_summary silently caps the changed-files summary at 40 files with no caller-side awareness.\n  WHY: The reviewer said large PRs can lose files from the summary without any signal that truncation occurred.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:182 | confidence=5\n  PROBLEM: The test asserts presence of `append_judge_semble_query_text()` in scripts/orchestrate_poll_process.sh, but x-ai reports that no such function exists or is defined in the file.\n  WHY: The reviewer said the test passes spuriously because it checks for a helper that is missing.\n- scripts/orchestrate_poll_process.sh:776-946 | confidence=5\n  PROBLEM: The script defines a large Semble query-builder helper block that is never called by any judge path.\n  WHY: The reviewer said the live paths use render_judge_semble_prefetch_from_query_file() and ignore this dead helper block entirely.\n- scripts/orchestrate_poll_process.sh:149 | confidence=4\n  PROBLEM: render_judge_semble_prefetch_from_query_file is reported to read the full query file without enforcing JUDGE_SEMBLE_QUERY_MAX_BYTES.\n  WHY: The reviewer said the size guard is missing before the file is passed to semble_query_block.\n- tests/test_judge_semble_prefetch_contract.py:178-232 | confidence=4\n  PROBLEM: The test mixes live wiring checks with legacy-pattern checks, creating an inconsistent contract that still passes despite dead helpers and a missing verifier.\n  WHY: The reviewer said the negative assertions and the phantom append_judge_semble_query_text() check do not correctly verify the live judge path.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d8ec30ae227cff047437e40055daccdad2d2ea7534d8a4417f9f1e79e0cbd853",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2400,
+    "run_id": "25615659974",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25615659974",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510005052_02fd2b94de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2400,
+    "run_id": "25615659974"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T00:50:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
