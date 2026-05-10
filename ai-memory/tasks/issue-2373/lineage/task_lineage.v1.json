@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-05-10T05:47:04Z",
+  "issue_number": 2373,
+  "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2373",
+  "lineage_id": "issue-2373",
+  "memory_record_ids": [],
+  "prs": [
+    {
+      "pr_number": 2429,
+      "state": "merged",
+      "url": "https://github.com/shubhodeep1/coding-workflows/pull/2429"
+    }
+  ],
+  "runs": [
+    {
+      "run_attempt": 1,
+      "run_id": "25621080866",
+      "status": "merged",
+      "timestamp": "2026-05-10T05:47:04Z",
+      "workflow": "Internal: Issue-PR Status Sync"
+    }
+  ],
+  "schema_version": "task_lineage.v1",
+  "state": "merged",
+  "updated_at": "2026-05-10T05:47:04Z"
+}
