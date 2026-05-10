@@ -16,7 +16,9 @@ before firing the warning.
 
 from __future__ import annotations
 
+import inspect
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -188,6 +190,32 @@ def test_claimed_path_not_in_commit_still_reports_changes_lost(tmp_path: Path) -
 	)
 
 
+def test_reference_clause_path_not_treated_as_edit_target(tmp_path: Path) -> None:
+	"""bitsafe.io PR #135 / run 25628091558 reproducing case: the editor
+	bullet edits a single test file but its trailing "This matches `Y`"
+	clause references a sibling production file that was NOT edited.
+	Pre-fix, the path extractor pulled BOTH paths and the subset check
+	against COMMITTED_FILES_FILE failed because the referenced sibling
+	was correctly absent from the commit, producing a false-positive
+	EDITOR_CHANGES_LOST. The shim now strips reference clauses before
+	path extraction so only the actual edit target is checked."""
+	_init_clean_repo(tmp_path)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- apps/api/test/auth-service-verification.test.mjs\n",
+	)
+	result = _run_shim(
+		tmp_path,
+		FIXTURES / "narrative_reference_clause_status_edited.txt",
+		committed_files=committed,
+	)
+	assert result == "false", (
+		"Expected shim to strip the trailing 'This matches `Y`' reference "
+		f"clause and treat the bullet as a single-file edit; got {result!r}."
+	)
+
+
 def test_committed_files_file_unset_preserves_legacy_behaviour(tmp_path: Path) -> None:
 	"""When COMMITTED_FILES_FILE is unset the shim must behave exactly as
 	before — the new subset check is purely additive. narrative_real_edit
@@ -242,15 +270,19 @@ def test_edit_claim_with_backticked_non_file_identifier_still_reports_changes_lo
 	as file paths. When the real file edit is present in the committed
 	set, the shim should still downgrade to `false`."""
 	_init_clean_repo(tmp_path)
-	fixture = tmp_path / "summary.txt"
-	fixture.write_text(
-		"""Changes made:
-- Modified `LEDGER_ONLY_COMMIT` handling in `scripts/detect_editor_changes_lost.sh`.
-
-Change status:
-- edited
-""",
-		encoding="utf-8",
+	# Write the summary OUTSIDE the worktree (mirroring the other tests via
+	# _write_external) so it does not show up in `git status --porcelain`
+	# inside the scratch repo; otherwise the shim's subset check at
+	# scripts/detect_editor_changes_lost.sh:81 (gated on a clean tree)
+	# never runs and the assertion below cannot be exercised.
+	fixture = _write_external(
+		tmp_path,
+		"summary.txt",
+		"Changes made:\n"
+		"- Modified `LEDGER_ONLY_COMMIT` handling in `scripts/detect_editor_changes_lost.sh`.\n"
+		"\n"
+		"Change status:\n"
+		"- edited\n",
 	)
 	committed = _write_external(
 		tmp_path,
@@ -297,3 +329,36 @@ def test_workflow_uses_defense_in_depth_shim() -> None:
 		"Expected review_autofix.yml to invoke the defense-in-depth shim"
 	)
 	assert "treating as false positive (no warning, auto-merge not blocked)" in wf
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	passed = 0
+	failed = 0
+
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			params = list(inspect.signature(func).parameters)
+			if not params:
+				func()
+			elif params == ["tmp_path"]:
+				with tempfile.TemporaryDirectory(prefix="detect-editor-changes-lost-") as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported test signature for {name}: {params}")
+			print(f"  PASS  {name}")
+			passed += 1
+		except AssertionError as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+		except Exception as e:
+			print(f"  ERROR {name}: {type(e).__name__}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
