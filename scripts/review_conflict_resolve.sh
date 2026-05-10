@@ -466,9 +466,9 @@ _build_retry_prompt() {
   local _outcome_notice=""
   if [ "${_prev_outcome}" = "timeout" ]; then
     local _budget="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-1080}"
-    _outcome_notice=$'\n*** TIMEOUT NOTICE — read this FIRST ***\n\nYour previous attempt was KILLED at the per-attempt time limit ('"${_budget}"$'s) before it produced any apply_patch tool call. Soft validation never ran, so the prose and violation lists below this notice are MISLEADING on this path:\n\n  - "Your previous attempt … produced output that failed post-resolve validation" — does NOT apply; your previous attempt produced no patch.\n  - The marker / fingerprint counts of 0 and "(none)" — not a sign of progress, only that there was nothing to validate.\n  - "Fix the specific violations listed below" / "the violations below are the EXACT checks" — refer to violations that do not exist on this path.\n\nThe working tree has been restored to the post-`git merge` state, identical to attempt 1. Read the === ORIGINAL TASK === section below this prelude and proceed from there.\n\nTo finish inside the next per-attempt budget:\n  1. Emit your first apply_patch tool call within the first 2–3 minutes.\n  2. Do NOT re-enumerate duplicate helpers across the file or trace every helper'"'"$'s call sites. If a file has duplicate function definitions outside the conflict markers (a known orchestrator-stack integration shape; originating runs 25627236793 / 25627316961), pick whichever side is consistent with the surrounding code in a single apply_patch hunk and move on.\n  3. Prose belongs AFTER the patches, not before.\n\n*** END TIMEOUT NOTICE ***'
+    _outcome_notice=$'\n*** TIMEOUT NOTICE — read this FIRST ***\n\nYour previous attempt was KILLED at the per-attempt time limit ('"${_budget}"$'s) before it produced any apply_patch tool call. Soft validation never ran on that attempt — this prelude therefore contains no violation lists for you to act on. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nTo finish inside the next per-attempt budget:\n  1. Emit your first apply_patch tool call within the first 2–3 minutes.\n  2. Do NOT re-enumerate duplicate helpers across the file or trace every helper'"'"$'s call sites. If a file has duplicate function definitions outside the conflict markers (a known orchestrator-stack integration shape; originating runs 25627236793 / 25627316961), pick whichever side is consistent with the surrounding code in a single apply_patch hunk and move on.\n  3. Prose belongs AFTER the patches, not before.\n\nRead the === ORIGINAL TASK === section below this prelude and proceed from there.\n\n*** END TIMEOUT NOTICE ***'
   elif [ "${_prev_outcome}" = "error" ]; then
-    _outcome_notice=$'\n*** PREVIOUS ATTEMPT EXITED NON-ZERO — read this FIRST ***\n\nYour previous attempt exited with a non-zero status (not a `timeout`-kill) before producing any apply_patch tool call. Soft validation never ran, so the prose and violation lists below this notice are MISLEADING on this path:\n\n  - "Your previous attempt … produced output that failed post-resolve validation" — does NOT apply; your previous attempt produced no patch.\n  - The marker / fingerprint counts of 0 and "(none)" — not a sign of progress, only that there was nothing to validate.\n  - "Fix the specific violations listed below" / "the violations below are the EXACT checks" — refer to violations that do not exist on this path.\n\nThe working tree has been restored to the post-`git merge` state, identical to attempt 1. Read the === ORIGINAL TASK === section below this prelude and proceed as if this were attempt 1.\n\nCommon causes for this exit shape are codex CLI panic, transient network/auth errors against the model provider, or rate-limit responses; if the same failure recurs the retry loop will exhaust naturally and the orchestrator integration judge will take over.\n\n*** END NOTICE ***'
+    _outcome_notice=$'\n*** PREVIOUS ATTEMPT EXITED NON-ZERO — read this FIRST ***\n\nYour previous attempt exited with a non-zero status (not a `timeout`-kill) before producing any apply_patch tool call. Soft validation never ran on that attempt — this prelude therefore contains no violation lists for you to act on. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nCommon causes for this exit shape are codex CLI panic, transient network/auth errors against the model provider, or rate-limit responses; if the same failure recurs the retry loop will exhaust naturally and the orchestrator integration judge will take over.\n\nRead the === ORIGINAL TASK === section below this prelude and proceed as if this were attempt 1.\n\n*** END NOTICE ***'
   fi
   # Defensive: if a future branch builds a notice without a leading
   # newline, prepend one so the `***` opener never glues to the
@@ -528,18 +528,28 @@ tpl = open(os.environ['PRELUDE_TPL'], encoding='utf-8').read()
 # timeout/error so the misleading "produced output that failed
 # post-resolve validation" + zero-violations boilerplate is not
 # rendered. On the ran/violations path keep the body verbatim by
-# removing only the marker lines themselves (with their trailing
-# newlines).
+# removing only the marker lines themselves.
+#
+# Whitespace tolerance: the markers are matched with `[ \t]*` around
+# them and `[ \t]*\n` after them so trailing whitespace or the
+# marker line being indented does not cause silent fall-open. The
+# fallback assertion at the end of this block emits a `::warning::`
+# if a marker leaks through to the rendered prompt anyway, so a
+# template edit that breaks both the regex and the fallback fails
+# loudly rather than silently rendering markers in the model's
+# context.
+_marker_open = r'^[ \t]*\{\{#IF_VIOLATIONS\}\}[ \t]*\n'
+_marker_close = r'^[ \t]*\{\{/IF_VIOLATIONS\}\}[ \t]*\n'
 if os.environ.get('SUPPRESS_VIOLATIONS_BODY') == '1':
     tpl = re.sub(
-        r'\{\{#IF_VIOLATIONS\}\}\n.*?\{\{/IF_VIOLATIONS\}\}\n',
+        _marker_open + r'.*?' + _marker_close,
         '',
         tpl,
-        flags=re.DOTALL,
+        flags=re.DOTALL | re.MULTILINE,
     )
 else:
-    tpl = re.sub(r'\{\{#IF_VIOLATIONS\}\}\n', '', tpl)
-    tpl = re.sub(r'\{\{/IF_VIOLATIONS\}\}\n', '', tpl)
+    tpl = re.sub(_marker_open, '', tpl, flags=re.MULTILINE)
+    tpl = re.sub(_marker_close, '', tpl, flags=re.MULTILINE)
 
 keys = [
     'PREVIOUS_ATTEMPT_NUMBER',
@@ -552,6 +562,23 @@ keys = [
 ]
 for k in keys:
     tpl = tpl.replace('{{' + k + '}}', os.environ.get(k, ''))
+
+# Fail-loud guard: any leftover IF_VIOLATIONS marker in the rendered
+# template means the regex above did not match the template's
+# current shape (e.g. someone edited the prelude and broke the
+# whitespace contract). Emit a `::warning::` to stderr so the
+# regression is visible in the workflow log; do not abort because
+# the worst case is that the model sees a stray '{{#IF_VIOLATIONS}}'
+# / '{{/IF_VIOLATIONS}}' line, which is cosmetic noise rather than
+# a correctness failure.
+if '{{#IF_VIOLATIONS}}' in tpl or '{{/IF_VIOLATIONS}}' in tpl:
+    sys.stderr.write(
+        '::warning::Resolver retry prelude rendered with leftover '
+        '{{#IF_VIOLATIONS}}/{{/IF_VIOLATIONS}} markers — the conditional-strip '
+        'regex did not match the template shape. The model will see the '
+        'literal markers in its prompt; fix the template or the regex in '
+        'scripts/review_conflict_resolve.sh::_build_retry_prompt.\n'
+    )
 
 orig = open(os.environ['ORIGINAL_PROMPT_FILE'], encoding='utf-8', errors='replace').read()
 sys.stdout.write(tpl + orig)
@@ -762,21 +789,30 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${_codex_exit_code}" -ne 0 ]; then
     rm -f "${tmp_output}"
     # Soft validation never ran on this attempt (codex exited non-zero
-    # before any apply_patch could land), so the violation files are
-    # stale from a prior successful exec — they would otherwise leak
-    # into the next retry's reflexion prompt and contradict the
-    # timeout/error notice's "0 / (none)" claim. Truncate to empty so
-    # the next iteration's _prev_marker_count / _prev_fp_violation_count
-    # reads correctly and the prelude's MARKER_VIOLATION_COUNT /
-    # FINGERPRINT_VIOLATION_COUNT substitutions are accurate. Fail-open
-    # but loud: a permissions/IO failure here is non-fatal (the worst
-    # case is the reflexion prompt carrying stale counts, which is what
-    # we had before this fix), but the failure must be visible in the
-    # log so the silent-leak case is diagnosable.
+    # before any apply_patch could land), so the violation files would
+    # otherwise carry stale data from a prior successful exec.
+    # Truncate to empty so the next iteration starts from a clean
+    # slate. Fail-open but loud: a permissions/IO failure here is
+    # non-fatal because two downstream defenses already mask any
+    # leak surface — (1) the next retry's reflexion-prompt body is
+    # structurally suppressed on timeout/error (SUPPRESS_VIOLATIONS_BODY
+    # in _build_retry_prompt strips the {{#IF_VIOLATIONS}}…
+    # {{/IF_VIOLATIONS}} region, so stale MARKER_VIOLATION_COUNT /
+    # FINGERPRINT_VIOLATION_COUNT substitutions happen inside the
+    # stripped region and never reach the model), (2) the retry-
+    # banner echo forces _prev_marker_count and
+    # _prev_fp_violation_count to 0 on timeout/error (so the
+    # workflow log reads "prev markers=0, prev fingerprint_violations=0"
+    # regardless of file contents). The next successful soft
+    # validation will overwrite the files unconditionally
+    # (`_scan_residual_markers` and `_verify_fingerprints_soft`
+    # both `: > "${FILE}"` before populating). The warning makes the
+    # silent-leak case diagnosable but the structural defenses are
+    # the primary contract.
     : > "${RESOLVER_MARKER_VIOLATIONS_FILE}" || \
-      echo "::warning::Failed to truncate ${RESOLVER_MARKER_VIOLATIONS_FILE} after non-zero codex exit (attempt ${attempt}); stale residual-marker counts may leak into the next retry's reflexion prompt and contradict the outcome notice's '(none)' claim."
+      echo "::warning::Failed to truncate ${RESOLVER_MARKER_VIOLATIONS_FILE} after non-zero codex exit (attempt ${attempt}); stale contents persist on disk but are masked by SUPPRESS_VIOLATIONS_BODY in the next retry's prelude and the forced-zero retry-banner counts. The next successful soft validation will overwrite this file."
     : > "${RESOLVER_FP_VIOLATIONS_FILE}" || \
-      echo "::warning::Failed to truncate ${RESOLVER_FP_VIOLATIONS_FILE} after non-zero codex exit (attempt ${attempt}); stale fingerprint-violation counts may leak into the next retry's reflexion prompt and contradict the outcome notice's '(none)' claim."
+      echo "::warning::Failed to truncate ${RESOLVER_FP_VIOLATIONS_FILE} after non-zero codex exit (attempt ${attempt}); stale contents persist on disk but are masked by SUPPRESS_VIOLATIONS_BODY in the next retry's prelude and the forced-zero retry-banner counts. The next successful soft validation will overwrite this file."
     if [ "${_codex_exit_code}" -eq 124 ] || [ "${_codex_exit_code}" -eq 137 ]; then
       _prev_attempt_outcome="timeout"
       echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by timeout (exit ${_codex_exit_code}) after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; next retry's reflexion prompt will hint apply_patch-first."
