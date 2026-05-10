@@ -249,6 +249,8 @@ build_judge_semble_prefetch()
   local context_file="$2"
   local header_label="$3"
   local max_chunks="${4:-4}"
+  local query_text=""
+  local prefetch_text=""
 
   : > "${context_file}"
   if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
@@ -257,11 +259,14 @@ build_judge_semble_prefetch()
     return 0
   fi
 
-  semble_query_block \
-    "$(cat "${query_file}")" \
-    "${max_chunks}" \
-    "${header_label}" \
-    > "${context_file}" || true
+  query_text="$(cat "${query_file}" 2>/dev/null || true)"
+  query_text="${query_text:0:${JUDGE_SEMBLE_QUERY_MAX_BYTES}}"
+  [ -n "${query_text}" ] || return 0
+
+  prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
+  [ -n "${prefetch_text}" ] || return 0
+
+  printf '%s' "${prefetch_text:0:${JUDGE_SEMBLE_CONTEXT_MAX_BYTES}}" > "${context_file}"
 }
 
 render_prompt_with_semble_prefetch()
@@ -9521,7 +9526,7 @@ ${FOLLOWUP_BLOCK_REASON}"
           echo "  any files. Emit the JSON with the chosen action and an empty fix_description."
         fi
       } > "${RB_JUDGE_PROMPT_FILE}"
-      rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+      rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}"
 
       # Run the judge
       RB_JUDGE_SUCCESS=false

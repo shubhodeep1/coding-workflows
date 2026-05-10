@@ -35,6 +35,7 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 SEMBLE_HELPERS_AVAILABLE="false"
+REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES="12000"
 if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null; then
   if declare -F semble_query_block >/dev/null 2>&1; then
     SEMBLE_HELPERS_AVAILABLE="true"
@@ -244,6 +245,13 @@ if [ "${PR_META_JSON}" = "{}" ]; then
   PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 fi
 
+REQUIREMENT_CONTEXT="${FIRST_ISSUE_BODY}"
+if [ -z "${REQUIREMENT_CONTEXT}" ]; then
+  REQUIREMENT_CONTEXT="$(printf 'Title: %s\nBody: %s' \
+    "$(jq -r '.title // ""' "${PR_META_FILE}" 2>/dev/null || echo "")" \
+    "$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")")"
+fi
+
 append_semble_query_section() {
   local label="$1"
   local text="${2:-}"
@@ -276,7 +284,7 @@ RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context.txt"
 
 {
   printf '%s\n' 'Review-blocked judge context.'
-  append_semble_query_section 'Original requirement:' "${FIRST_ISSUE_BODY}" 5000
+  append_semble_query_section 'Original requirement:' "${REQUIREMENT_CONTEXT}" 5000
   append_semble_query_json_section 'PR metadata:' "${PR_META_JSON}" '.' 3000
   append_semble_query_section 'PR diff excerpt:' "${PR_DIFF}" 6000
   append_semble_query_json_section 'PR issue comments:' "${PR_COMMENTS}" '.[0:12]' 4000
@@ -292,6 +300,10 @@ if [ "${SEMBLE_HELPERS_AVAILABLE}" = "true" ] \
     "4" \
     "Review-Blocked Judge Context" \
     > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" || true
+  if [ -s "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" ]; then
+    _rb_semble_context="$(cat "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true)"
+    printf '%s' "${_rb_semble_context:0:${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}}" > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}"
+  fi
 fi
 
 {
