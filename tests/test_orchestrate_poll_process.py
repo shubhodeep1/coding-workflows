@@ -6806,16 +6806,24 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 		)
 	# Defence-in-depth: the matching workflow-side bootstrap in
 	# review_autofix.yml must also stage the timeout-prelude file so the
-	# script_ref pin path mirrors the orchestrator refresh path.
+	# script_ref pin path mirrors the orchestrator refresh path.  Anchor
+	# the assertion on the actual `install -m 0644` staging line —
+	# matching the bare filename anywhere in the YAML would false-positive
+	# if the string remained only in an `echo "::warning::..."` line while
+	# the `install` line was removed or altered.  The signature
+	# `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/<file>` is the exact
+	# shape used by every prompt-staging block in this workflow.
 	wf_body = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
-	assert (
-		"integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-		in wf_body
-	), (
-		"review_autofix.yml does not stage the timeout-prelude template; "
-		"consumer-repo runs whose pinned script_ref includes the new "
-		"prelude file would still hit a missing-template ::warning:: at "
-		"runtime."
+	timeout_prelude_install_re = re.compile(
+		r"install -m 0644 [^\n]*\$\{SUPPORT_PROMPTS_DIR\}/integration-sync-conflict-resolver-retry-timeout-prelude\.txt",
+	)
+	assert timeout_prelude_install_re.search(wf_body) is not None, (
+		"review_autofix.yml does not stage the timeout-prelude template "
+		"via the expected `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/"
+		"integration-sync-conflict-resolver-retry-timeout-prelude.txt` "
+		"signature; consumer-repo runs whose pinned script_ref includes "
+		"the new prelude file would still hit a missing-template "
+		"::warning:: at runtime."
 	)
 
 
