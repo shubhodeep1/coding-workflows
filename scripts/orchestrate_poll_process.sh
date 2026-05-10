@@ -2995,6 +2995,7 @@ _refresh_integration_resolver_tooling() {
     "prompts/conflict-resolver.txt"
     "prompts/integration-sync-conflict-resolver.txt"
     "prompts/integration-sync-conflict-resolver-retry-prelude.txt"
+    "prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
   )
 
   local runtime_dir="${RUNTIME_DIR:-/tmp}"

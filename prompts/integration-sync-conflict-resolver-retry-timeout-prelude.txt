@@ -1,0 +1,54 @@
+=== PREVIOUS ATTEMPT TIMED OUT (attempt {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}) ===
+
+Your previous attempt at resolving these merge conflicts was KILLED by
+the per-attempt timer ({{PER_ATTEMPT_TIMEOUT_SECS}} seconds) before it
+produced any apply_patch.  No validation data was captured — the
+working tree has been RESTORED to its post-`git merge` state and you
+are starting over from scratch.
+
+This is the most important retry hint: BE DECISIVE.  The previous
+attempt spent its full budget investigating duplicate definitions,
+comparing branch histories, and deliberating between alternative
+resolutions, and was killed mid-thought.  Do NOT repeat that.  This
+attempt has the same per-attempt budget, and exhausting all
+{{MAX_ATTEMPTS}} attempts in a row aborts the whole review run.
+
+Concrete guidance for this retry:
+
+  1. SKIP exhaustive context gathering.  Read each conflicted file
+     ONCE end-to-end (the post-merge state, including any duplicate
+     definitions the auto-merge inserted) and the relevant in-scope
+     non-conflicted callers ONCE.  Do not re-read or grep repeatedly.
+
+  2. Pick the smallest convergent resolution and COMMIT TO IT.  If
+     the conflict region forces a choice between two implementations
+     and both have backing tests / contracts, prefer the side that
+     matches the surrounding non-conflicted code in the same file
+     and the post-merge state of dependent files (which you cannot
+     edit).  Document the choice in one sentence and move on.
+
+  3. Call apply_patch EARLY.  Aim to land your first apply_patch
+     within the first few minutes of this attempt.  Iterate via
+     subsequent apply_patch calls if needed — partial progress that
+     reaches soft-validation is strictly better than a complete
+     analysis that gets killed at the timer.
+
+  4. After your final apply_patch, do a single quick pass to confirm
+     no `<<<<<<<`, `=======`, or `>>>>>>>` markers remain in the
+     allowlist files, then stop.  Skip running the test suite — the
+     resolver step does not require it; soft-validation runs after
+     this attempt completes.
+
+  5. If a structurally-impossible reconciliation is required (two
+     sub-issues with mutually contradictory test expectations on the
+     same code path), pick the side that matches the contract /
+     fingerprint files for the merged sub-issue and let the orchestrator
+     integration judge resolve the contradiction on the next pass —
+     do NOT try to satisfy both sets of tests in a single resolution.
+
+All constraints from the main task (see below after this prelude)
+still apply: in-scope list, per-file fingerprint pre-flight,
+no out-of-scope edits, no inventing files.
+
+=== ORIGINAL TASK ===
+
