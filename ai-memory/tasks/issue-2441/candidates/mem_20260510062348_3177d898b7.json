@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2441,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2441\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2442\",\"pr_number\":2442,\"branch\":\"ai/issue-2441\",\"run_id\":\"25621389711\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25621389711\",\"changed_files\":[\"README.md\",\"agents.md\",\"docs/semble-integration-plan.md\",\"probably_unnecessary_but_read_if_stuck.md\",\"prompts/mode-workflow-analysis.txt\",\"scripts/cost_audit.py\",\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/render_prompt.sh\",\"scripts/targeted_file_context.py\",\"tests/test_cost_audit_semble_metrics.py\"]}",
+  "fingerprint": "fa57556cf567657384bf54622d91883baf9ab33f2617d4da0dde93da42cb3875",
+  "lineage": {
+    "issue_number": 2441,
+    "parent_ids": [],
+    "pr_number": 2442,
+    "run_id": "25621389711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25621389711",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2442"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260510062348_3177d898b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2441,
+    "level": "run",
+    "pr_number": 2442,
+    "run_id": "25621389711"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2441: https://github.com/shubhodeep1/coding-workflows/pull/2442",
+  "timestamps": {
+    "created_at": "2026-05-10T06:23:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
