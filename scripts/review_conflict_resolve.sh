@@ -390,20 +390,66 @@ _restore_attempt_base() {
 # strict improvement over today's one-shot behaviour because the
 # working tree is now reset between attempts.
 #
-# Fail-open: if the prelude template is missing (older script_ref
+# Three prelude variants are selected by ${_failure_kind}:
+#   - "validation" (default): the standard prelude listing the
+#     previous attempt's residual markers + fingerprint violations.
+#   - "timeout": a separate prelude (missing-template fail-open
+#     same as below) telling the model the previous attempt was
+#     killed by the per-attempt timer before completing — any
+#     partial apply_patch calls were discarded by the working-tree
+#     restore — and to be DECISIVE this time, picking the smallest
+#     convergent resolution and calling apply_patch early instead
+#     of deliberating.  Without this branch the retry log +
+#     reflexion text print "(prev markers=0, prev fingerprint_
+#     violations=0)" because soft-validation never ran on a
+#     timed-out attempt, falsely telling the model it succeeded.
+#   - "exec_error": codex itself exited non-zero (config / auth /
+#     model error — distinguished from "timeout" by the captured
+#     `timeout` exit code not being 124 or 137).  No reflexion
+#     data is available, so neither prelude's framing is honest;
+#     fall through to the same "retry with original prompt
+#     verbatim" path used when the prelude template is missing.
+#
+# Fail-open: if either prelude template is missing (older script_ref
 # on a consumer repo), retry with the original prompt verbatim
 # and emit a warning.  The soft retry itself is the core win; the
 # reflexion content is an optimisation on top of it.
+# _build_retry_prompt sets ${_retry_prompt_outcome} to one of:
+#   - "validation-prelude": the standard violations-listing prelude
+#     was rendered.
+#   - "timeout-prelude": the timeout-aware prelude was rendered.
+#   - "verbatim:exec_error": exec_error path; the original prompt was
+#     copied verbatim with no prelude.
+#   - "verbatim:fallback": prelude template missing or
+#     IS_INTEGRATION_SYNC=false; the original prompt was copied
+#     verbatim with no prelude.
+# The caller reads this to log what was actually rendered, rather
+# than inferring it from _prev_attempt_failure_kind alone (which
+# would lie when the prelude template is missing on a consumer-repo
+# script_ref pin).
+_retry_prompt_outcome=""
+
 _build_retry_prompt() {
   local _prev_attempt="$1"
   local _marker_file="$2"
   local _fp_file="$3"
-  local _prelude_tpl="${SUPPORT_PROMPTS_DIR:-prompts}/integration-sync-conflict-resolver-retry-prelude.txt"
+  local _failure_kind="${4:-validation}"
+  if [ "${_failure_kind}" = "exec_error" ]; then
+    cp -a "${CONFLICT_RESOLVER_PROMPT_FILE}" "${RESOLVER_RETRY_PROMPT_FILE}"
+    _retry_prompt_outcome="verbatim:exec_error"
+    return 0
+  fi
+  local _prelude_basename="integration-sync-conflict-resolver-retry-prelude.txt"
+  if [ "${_failure_kind}" = "timeout" ]; then
+    _prelude_basename="integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+  fi
+  local _prelude_tpl="${SUPPORT_PROMPTS_DIR:-prompts}/${_prelude_basename}"
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] || [ ! -f "${_prelude_tpl}" ]; then
     if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then
       echo "::warning::Resolver retry prelude template missing at ${_prelude_tpl}; retrying with original prompt verbatim (no reflexion)."
     fi
     cp -a "${CONFLICT_RESOLVER_PROMPT_FILE}" "${RESOLVER_RETRY_PROMPT_FILE}"
+    _retry_prompt_outcome="verbatim:fallback"
     return 0
   fi
   local _marker_count=0 _fp_count=0
@@ -418,7 +464,16 @@ _build_retry_prompt() {
   fi
   # Render via python3 (same substitution pattern as
   # review_conflict_prepare.sh) so multi-line values with shell
-  # metacharacters do not need quoting gymnastics.
+  # metacharacters do not need quoting gymnastics.  The set of
+  # `{{KEY}}` placeholders to substitute is auto-derived from the
+  # template body itself rather than maintained as a hardcoded list
+  # — that way a future template that adds a new placeholder
+  # (e.g. `{{INTEGRATION_BRANCH_NAME}}`) does not silently render
+  # the literal `{{...}}` text into the prelude on a stable
+  # script_ref pin.  Keys are matched against `[A-Z_][A-Z0-9_]*`
+  # (the convention used by every existing placeholder); any key
+  # whose corresponding env var is unset is replaced with the
+  # empty string, matching the existing hardcoded-list behaviour.
   PRELUDE_TPL="${_prelude_tpl}" \
     ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
     PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
@@ -427,8 +482,14 @@ _build_retry_prompt() {
     MARKER_VIOLATION_FILES="${_marker_list}" \
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
-    python3 -c "import os,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8').read(); keys=['PREVIOUS_ATTEMPT_NUMBER','MAX_ATTEMPTS','MARKER_VIOLATION_COUNT','MARKER_VIOLATION_FILES','FINGERPRINT_VIOLATION_COUNT','FINGERPRINT_VIOLATION_DETAILS']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+    PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
+    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); keys=sorted(set(re.findall(r'\{\{([A-Z_][A-Z0-9_]*)\}\}', tpl))); [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
+  if [ "${_failure_kind}" = "timeout" ]; then
+    _retry_prompt_outcome="timeout-prelude"
+  else
+    _retry_prompt_outcome="validation-prelude"
+  fi
 }
 
 # _scan_residual_markers: write the list of in-scope files that
@@ -537,31 +598,149 @@ if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
 fi
 
+# _prev_attempt_failure_kind tracks why the previous attempt left
+# the loop without breaking out via success.  Three values:
+#   - "validation": codex returned 0 but soft validation (residual
+#     markers / fingerprint verifier) rejected its output.  The
+#     marker/fingerprint violation files are populated and accurate,
+#     so the standard prelude lists them and the model can react.
+#   - "timeout": the `timeout` wrapper killed codex before it
+#     completed.  Detected via `timeout`'s exit codes:
+#       * 124 — unconditional timer expiry (SIGTERM after duration).
+#       * 137 — SIGKILL.  Disambiguated against OOM kill / external
+#         SIGKILL by elapsed wall-clock time: a `timeout`-driven
+#         SIGKILL fires at duration + ~30s (the `--kill-after=30s`
+#         backstop), so elapsed >= duration is treated as a real
+#         timeout.  Elapsed << duration on exit 137 routes to
+#         "exec_error" instead.  See the `case` block at the
+#         classification site.
+#     On a real timeout, soft validation never ran (any partial
+#     apply_patch calls were discarded by the per-attempt working-
+#     tree restore on the next iteration), so the violation files
+#     are stale / empty and the standard prelude would falsely
+#     report "0 markers, 0 fingerprint violations".  We render a
+#     timeout-aware prelude instead — see _build_retry_prompt.
+#   - "exec_error": codex itself exited non-zero (config / auth /
+#     model / network errors that are not the timer firing).  The
+#     script has no useful reflexion data; we retry with the
+#     original prompt verbatim rather than render either prelude
+#     with misleading wording.
+_prev_attempt_failure_kind=""
+
+# Per-attempt cap so a runaway first attempt can't burn the full
+# 170-min step budget (review_autofix.yml's resolver step cap)
+# before retries get a turn.  50 min × 3 attempts = 150 min,
+# leaving ~20 min for soft validation, commit, and the EXIT-trap
+# dispatch within the 170-min step cap.  Default raised from 18
+# min to 50 min after run 25629086684 (PR #2865 on
+# tele-funtoken-msg-scoring) where every one of the 3 attempts
+# hit the previous 18-min ceiling without ever producing
+# apply_patch on a 7-file mixed-implementation merge — symptom in
+# log: 3 × "Conflict resolver retry … (prev markers=0, prev
+# fingerprint_violations=0)" then "Conflict resolver failed after
+# retries."  Override via CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS
+# for per-PR tuning.
+#
+# Default + validation + clamp run ONCE here, before the retry
+# loop, so the value enforced by the `timeout` wrapper, the value
+# substituted into the retry-prompt template, and the value
+# printed in the retry log are guaranteed to agree.  Doing this
+# inside the loop body created a window (loop top, on retry
+# attempts) where _build_retry_prompt and the retry-log line
+# could see an unclamped override.
+: "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:=3000}"
+# Defensive: an empty / non-numeric / leading-'-' override would
+# either be rejected by `timeout` outright or parsed as an option,
+# burning the 3-attempt budget on env-config errors instead of
+# real model work.  Restrict to positive integer seconds (matches
+# the README contract).
+if ! [[ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 3000."
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=3000
+fi
+# Upper bound: the default of 3000s (50 min) is sized for 3
+# attempts × 50 min = 150 min inside the 170-min step cap
+# (review_autofix.yml's resolver step), leaving ~20 min for soft
+# validation, commit, and the EXIT-trap dispatch.  Operators can
+# raise the env var for a particular PR, but values above 3000s
+# start eating into that 20-min headroom and risk SIGKILL'ing
+# attempt 3 mid-flight on a hung run.  We clamp anything above
+# 3000s with a `::warning::` rather than rejecting it because a
+# legitimately-large per-attempt budget on a multi-file conflict
+# set is occasionally the right tuning — just not at unbounded
+# values.
+CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS=3000
+if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
+  echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would eat the soft-validation / commit / dispatch headroom under the 170-min step cap); clamping to ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
+fi
+
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # On retries: restore the working tree to its post-merge-replay
   # state (so retries don't compound the previous attempt's bad
   # edits) and build a reflexion prompt naming the previous
-  # attempt's violations.
+  # attempt's violations (or, on a timed-out previous attempt,
+  # the timeout-aware variant).
   if [ "${attempt}" -gt 1 ]; then
     _restore_attempt_base || echo "::warning::Resolver retry-base restore reported a non-fatal error; continuing."
     _build_retry_prompt "$((attempt - 1))" \
       "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
-      "${RESOLVER_FP_VIOLATIONS_FILE}"
+      "${RESOLVER_FP_VIOLATIONS_FILE}" \
+      "${_prev_attempt_failure_kind:-validation}"
     _effective_prompt_file="${RESOLVER_RETRY_PROMPT_FILE}"
-    if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
-      _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
-      _prev_marker_count="${_prev_marker_count:-0}"
-    else
-      _prev_marker_count=0
-    fi
-    if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
-      _prev_fp_violation_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" | tr -d '[:space:]')"
-      _prev_fp_violation_count="${_prev_fp_violation_count:-0}"
-    else
-      _prev_fp_violation_count=0
-    fi
-    echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=${_prev_marker_count}, prev fingerprint_violations=${_prev_fp_violation_count})."
+    # Log what was actually rendered, not what we hoped to render —
+    # _build_retry_prompt may have fallen back to the original prompt
+    # verbatim (template missing, IS_INTEGRATION_SYNC=false) even when
+    # _prev_attempt_failure_kind suggests a prelude would be ideal.
+    # Read marker / fingerprint counts only on the validation-prelude
+    # branch, since that is the only branch whose log message uses them
+    # and the only branch where they were freshly populated by the
+    # previous attempt's soft-validation.  On the timeout / exec_error
+    # paths the violation files are stale from earlier (or empty), so
+    # surfacing those numbers would mislead.
+    case "${_retry_prompt_outcome}" in
+      timeout-prelude)
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s) before completing; any partial edits were discarded by the working-tree restore and no soft-validation data was captured. Rendered timeout-aware reflexion prompt."
+        ;;
+      validation-prelude)
+        if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
+          _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+          _prev_marker_count="${_prev_marker_count:-0}"
+        else
+          _prev_marker_count=0
+        fi
+        if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
+          _prev_fp_violation_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+          _prev_fp_violation_count="${_prev_fp_violation_count:-0}"
+        else
+          _prev_fp_violation_count=0
+        fi
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=${_prev_marker_count}, prev fingerprint_violations=${_prev_fp_violation_count})."
+        ;;
+      verbatim:exec_error)
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt exited non-zero before validation could run; retrying with original prompt verbatim (no reflexion data to feed back)."
+        ;;
+      verbatim:fallback)
+        # Prelude template absent or non-integration-sync run: log the
+        # underlying failure context AND that we fell back to verbatim
+        # so operators reading the log do not assume a prelude was used.
+        case "${_prev_attempt_failure_kind}" in
+          timeout)
+            echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s) before completing (any partial edits were discarded by the working-tree restore); timeout-aware prelude template unavailable, retrying with original prompt verbatim."
+            ;;
+          *)
+            echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: prelude template unavailable, retrying with original prompt verbatim."
+            ;;
+        esac
+        ;;
+      *)
+        # Defensive: if a future failure_kind is added without
+        # extending the prelude builder, log the bare retry rather
+        # than printing a stale message.
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt retry prompt (prev failure_kind=${_prev_attempt_failure_kind:-unset})."
+        ;;
+    esac
   else
     _effective_prompt_file="${CONFLICT_RESOLVER_PROMPT_FILE}"
   fi
@@ -575,39 +754,107 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # neither failure mode and matches the codex CLI's default `[PROMPT]`
   # contract: "If not provided as an argument (or if `-` is used),
   # instructions are read from stdin".
-  # Per-attempt cap so a runaway first attempt can't burn the full 60-min
-  # step budget (review_autofix.yml:3711) before retries get a turn.
-  # 18 min x 3 attempts = 54 min, leaving ~6 min for soft validation /
-  # commit / EXIT-trap dispatch within timeout-minutes: 60. Override via
-  # CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS for per-PR tuning.
-  : "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:=1080}"
-  # Defensive: an empty / non-numeric / leading-'-' override would either
-  # be rejected by `timeout` outright or parsed as an option, burning the
-  # 3-attempt budget on env-config errors instead of real model work.
-  # Restrict to positive integer seconds (matches the README contract).
-  if ! [[ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 1080."
-    CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=1080
+  #
+  # `--` terminates `timeout`'s option parsing so a leading '-' in
+  # DURATION cannot be mistaken for an option (defence-in-depth on top
+  # of the regex check that runs before the loop).  Default + validation
+  # + clamp on CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS happens once
+  # before the loop so this expansion is the same value used by
+  # _build_retry_prompt and the retry-log line for every iteration.
+  _codex_exit=0
+  _attempt_started_at=$(date +%s)
+  timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+    codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+    || _codex_exit=$?
+  _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
+  # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
+  # a SIGTERM handler that completes cleanup and exits 0 within the
+  # 30s `--kill-after` window, `timeout` propagates the child's 0
+  # exit and `_codex_exit` stays 0 — the timeout-classification
+  # block below is skipped and execution falls through to soft
+  # validation.  This is intentional: the working tree is the source
+  # of truth for whether a useful resolution landed.  Three cases
+  # follow naturally from the existing soft-validation gates without
+  # special-casing the failure kind:
+  #   1. Tree clean (no residual markers, fingerprints satisfied) —
+  #      the attempt succeeded and we `break` out of the retry loop.
+  #      Treating this as a timeout would force a retry on a
+  #      legitimately-resolved conflict, which is a regression.
+  #   2. Tree dirty (markers or fingerprint violations) —
+  #      _prev_attempt_failure_kind="validation" fires (after the
+  #      ::warning::) and the standard prelude renders with the REAL
+  #      post-codex marker/fingerprint data captured by the soft
+  #      gates.  That is more actionable than the timeout prelude's
+  #      generic "be decisive, call apply_patch early" guidance,
+  #      because it names specific files / regexes the model needs
+  #      to fix on the next attempt.
+  #   3. Tree dirty AND no progress vs the previous attempt — the
+  #      no-progress detection promotes the attempt counter to MAX
+  #      and the run aborts with the orchestrator-poll dispatch,
+  #      same as a natural exhaustion.
+  # The diagnostic log is informational only — it surfaces the edge
+  # case for operators reading the log without changing the retry
+  # path.  Multi-reviewer feedback on PR #2453 flagged this case
+  # repeatedly; this comment block documents why no classification
+  # change is warranted.
+  if [ "${_codex_exit}" -eq 0 ] && [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+    echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex exited 0 with elapsed ${_attempt_elapsed}s ≥ per-attempt budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely a graceful SIGTERM-handler exit at the timer boundary; soft validation will inspect the post-codex working-tree state directly (no failure-kind change is needed — see comment block above)."
   fi
-  # Upper bound: with the 60-min step cap (review_autofix.yml:3711) and 3
-  # attempts the per-attempt budget cannot exceed (60min - cleanup buffer)
-  # / 3 ≈ 18 min without starving the retry loop.  Cap at 1800s (30 min)
-  # to leave at least 30 min for the second/third attempts plus the
-  # ~6-min EXIT-trap dispatch buffer.  An override of 3600 (1h) would
-  # otherwise let attempt 1 consume the whole step budget before any
-  # retries run, defeating the point of having a retry loop.
-  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS=1800
-  if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
-    echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would starve the retry loop under the 60-min step cap); clamping to ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
-    CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
-  fi
-  # `--` terminates `timeout`'s option parsing so a leading '-' in DURATION
-  # cannot be mistaken for an option (defence-in-depth on top of the regex).
-  if ! timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-       codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}"; then
+  if [ "${_codex_exit}" -ne 0 ]; then
     rm -f "${tmp_output}"
+    # `timeout` documents two specific exit codes:
+    #   - 124: the child was sent SIGTERM after DURATION expired.
+    #     Definitively a timer expiry.
+    #   - 137: the child received SIGKILL (128 + 9). `timeout
+    #     --kill-after=30s` produces this when the child ignored the
+    #     SIGTERM long enough for the kill-after backstop to fire,
+    #     BUT 137 is also produced by the OOM killer, by an external
+    #     `kill -9`, and by other SIGKILL sources that have nothing
+    #     to do with the per-attempt timer.  We disambiguate by
+    #     comparing the wall-clock elapsed time against the
+    #     configured duration: a `timeout`-driven SIGKILL fires at
+    #     duration + ~30s, so elapsed >= duration is a strong signal
+    #     of timer expiry; an OOM kill at minute 2 of a 50-min
+    #     budget produces elapsed << duration and gets routed to
+    #     exec_error (where the standard fail-open path retries
+    #     with the original prompt verbatim).
+    # Anything else came from codex itself — config / auth / model
+    # / network errors that have nothing to do with the per-attempt
+    # timer.  Distinguishing matters because the standard / timeout
+    # preludes would actively mislead the model on the wrong path:
+    #   - On a real timeout, soft-validation never ran and the
+    #     marker/fingerprint violation files are stale / empty;
+    #     the timeout-aware prelude tells the model to be decisive
+    #     and call apply_patch early on the next attempt.
+    #   - On an exec error, the script has no reflexion data to
+    #     hand back; falling back to the original prompt verbatim
+    #     is the conservative choice — same handling as a missing
+    #     prelude template.
+    case "${_codex_exit}" in
+      124)
+        _prev_attempt_failure_kind="timeout"
+        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 124 = SIGTERM after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; elapsed ${_attempt_elapsed}s)."
+        ;;
+      137)
+        if [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+          _prev_attempt_failure_kind="timeout"
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 137 = SIGKILL after kill-after backstop; elapsed ${_attempt_elapsed}s ≥ budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
+        else
+          _prev_attempt_failure_kind="exec_error"
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} crashed (SIGKILL exit 137 but elapsed ${_attempt_elapsed}s < budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely OOM kill or external SIGKILL, not the per-attempt timer)."
+        fi
+        ;;
+      *)
+        _prev_attempt_failure_kind="exec_error"
+        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
+        ;;
+    esac
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
-      echo "Conflict resolver failed after retries."
+      if [ "${_prev_attempt_failure_kind}" = "timeout" ]; then
+        echo "Conflict resolver failed after retries (final attempt killed by per-attempt timer)."
+      else
+        echo "Conflict resolver failed after retries (final attempt: codex non-zero exit ${_codex_exit})."
+      fi
       exit 1
     fi
     attempt=$((attempt + 1))
@@ -673,6 +920,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     break
   fi
 
+  # Codex returned 0 but the soft gates rejected its output —
+  # mark the failure kind so the next iteration's reflexion prompt
+  # uses the standard violations-listing prelude (the violation
+  # files are populated and accurate).
+  _prev_attempt_failure_kind="validation"
   echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed soft validation: residual_markers=${_marker_count} fingerprint_violations=${_fp_count}."
   if [ "${_marker_count}" -gt 0 ]; then
     echo "Files with residual Git conflict markers (first 10):"
