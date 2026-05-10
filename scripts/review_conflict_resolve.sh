@@ -767,6 +767,39 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
     || _codex_exit=$?
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
+  # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
+  # a SIGTERM handler that completes cleanup and exits 0 within the
+  # 30s `--kill-after` window, `timeout` propagates the child's 0
+  # exit and `_codex_exit` stays 0 — the timeout-classification
+  # block below is skipped and execution falls through to soft
+  # validation.  This is intentional: the working tree is the source
+  # of truth for whether a useful resolution landed.  Three cases
+  # follow naturally from the existing soft-validation gates without
+  # special-casing the failure kind:
+  #   1. Tree clean (no residual markers, fingerprints satisfied) —
+  #      the attempt succeeded and we `break` out of the retry loop.
+  #      Treating this as a timeout would force a retry on a
+  #      legitimately-resolved conflict, which is a regression.
+  #   2. Tree dirty (markers or fingerprint violations) —
+  #      _prev_attempt_failure_kind="validation" fires (after the
+  #      ::warning::) and the standard prelude renders with the REAL
+  #      post-codex marker/fingerprint data captured by the soft
+  #      gates.  That is more actionable than the timeout prelude's
+  #      generic "be decisive, call apply_patch early" guidance,
+  #      because it names specific files / regexes the model needs
+  #      to fix on the next attempt.
+  #   3. Tree dirty AND no progress vs the previous attempt — the
+  #      no-progress detection promotes the attempt counter to MAX
+  #      and the run aborts with the orchestrator-poll dispatch,
+  #      same as a natural exhaustion.
+  # The diagnostic log is informational only — it surfaces the edge
+  # case for operators reading the log without changing the retry
+  # path.  Multi-reviewer feedback on PR #2453 flagged this case
+  # repeatedly; this comment block documents why no classification
+  # change is warranted.
+  if [ "${_codex_exit}" -eq 0 ] && [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+    echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex exited 0 with elapsed ${_attempt_elapsed}s ≥ per-attempt budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely a graceful SIGTERM-handler exit at the timer boundary; soft validation will inspect the post-codex working-tree state directly (no failure-kind change is needed — see comment block above)."
+  fi
   if [ "${_codex_exit}" -ne 0 ]; then
     rm -f "${tmp_output}"
     # `timeout` documents two specific exit codes:
