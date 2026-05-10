@@ -269,8 +269,13 @@ render_prompt_with_semble_prefetch()
 {
   local prompt_file="$1"
   local prefetch_file="${2:-}"
+  local semble_prefetch=""
 
-  SEMBLE_PREFETCH="$(cat "${prefetch_file}" 2>/dev/null || true)" \
+  if [ -n "${prefetch_file}" ] && [ -f "${prefetch_file}" ]; then
+    semble_prefetch="$(cat "${prefetch_file}" 2>/dev/null || true)"
+  fi
+
+  SEMBLE_PREFETCH="${semble_prefetch}" \
     bash scripts/render_prompt.sh "${prompt_file}"
 }
 

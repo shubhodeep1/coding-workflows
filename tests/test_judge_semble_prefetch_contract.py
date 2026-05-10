@@ -122,10 +122,13 @@ def test_orchestrate_poll_workflow_bootstraps_semble_for_judges() -> None:
 
 def test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps() -> None:
 	workflow = _read(ORCHESTRATE_POLL_WORKFLOW)
+	install_block = _step_block(workflow, "Install semble")
 
 	assert "astral-sh/setup-uv@v3" in workflow
 	assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in workflow
 	assert 'scripts/install_semble.sh' in workflow
+	assert 'binary_matches_pin' in install_block
+	assert 'current_semble_version' in install_block
 	assert 'echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"' in workflow
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in workflow
 	assert (

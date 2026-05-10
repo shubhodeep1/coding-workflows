@@ -438,6 +438,16 @@ jobs:
             echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
+          if ! binary_matches_pin; then
+            SEMBLE_VERSION_TEXT="$(current_semble_version || true)"
+            if [ -n "${SEMBLE_VERSION_TEXT}" ]; then
+              echo "::warning::Semble install produced ${SEMBLE_VERSION_TEXT}; expected pinned version ${SEMBLE_VERSION}. Leaving Semble disabled for this poll run."
+            else
+              echo "::warning::Semble install did not yield pinned version ${SEMBLE_VERSION}; leaving Semble disabled for this poll run."
+            fi
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
           echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
           echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"
 
