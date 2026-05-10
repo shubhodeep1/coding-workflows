@@ -413,6 +413,21 @@ _restore_attempt_base() {
 # on a consumer repo), retry with the original prompt verbatim
 # and emit a warning.  The soft retry itself is the core win; the
 # reflexion content is an optimisation on top of it.
+# _build_retry_prompt sets ${_retry_prompt_outcome} to one of:
+#   - "validation-prelude": the standard violations-listing prelude
+#     was rendered.
+#   - "timeout-prelude": the timeout-aware prelude was rendered.
+#   - "verbatim:exec_error": exec_error path; the original prompt was
+#     copied verbatim with no prelude.
+#   - "verbatim:fallback": prelude template missing or
+#     IS_INTEGRATION_SYNC=false; the original prompt was copied
+#     verbatim with no prelude.
+# The caller reads this to log what was actually rendered, rather
+# than inferring it from _prev_attempt_failure_kind alone (which
+# would lie when the prelude template is missing on a consumer-repo
+# script_ref pin).
+_retry_prompt_outcome=""
+
 _build_retry_prompt() {
   local _prev_attempt="$1"
   local _marker_file="$2"
@@ -420,6 +435,7 @@ _build_retry_prompt() {
   local _failure_kind="${4:-validation}"
   if [ "${_failure_kind}" = "exec_error" ]; then
     cp -a "${CONFLICT_RESOLVER_PROMPT_FILE}" "${RESOLVER_RETRY_PROMPT_FILE}"
+    _retry_prompt_outcome="verbatim:exec_error"
     return 0
   fi
   local _prelude_basename="integration-sync-conflict-resolver-retry-prelude.txt"
@@ -432,6 +448,7 @@ _build_retry_prompt() {
       echo "::warning::Resolver retry prelude template missing at ${_prelude_tpl}; retrying with original prompt verbatim (no reflexion)."
     fi
     cp -a "${CONFLICT_RESOLVER_PROMPT_FILE}" "${RESOLVER_RETRY_PROMPT_FILE}"
+    _retry_prompt_outcome="verbatim:fallback"
     return 0
   fi
   local _marker_count=0 _fp_count=0
@@ -458,6 +475,11 @@ _build_retry_prompt() {
     PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
     python3 -c "import os,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); keys=['PREVIOUS_ATTEMPT_NUMBER','MAX_ATTEMPTS','MARKER_VIOLATION_COUNT','MARKER_VIOLATION_FILES','FINGERPRINT_VIOLATION_COUNT','FINGERPRINT_VIOLATION_DETAILS','PER_ATTEMPT_TIMEOUT_SECS']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
+  if [ "${_failure_kind}" = "timeout" ]; then
+    _retry_prompt_outcome="timeout-prelude"
+  else
+    _retry_prompt_outcome="validation-prelude"
+  fi
 }
 
 # _scan_residual_markers: write the list of in-scope files that
@@ -649,27 +671,56 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       "${RESOLVER_FP_VIOLATIONS_FILE}" \
       "${_prev_attempt_failure_kind:-validation}"
     _effective_prompt_file="${RESOLVER_RETRY_PROMPT_FILE}"
-    if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
-      _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
-      _prev_marker_count="${_prev_marker_count:-0}"
-    else
-      _prev_marker_count=0
-    fi
-    if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
-      _prev_fp_violation_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" | tr -d '[:space:]')"
-      _prev_fp_violation_count="${_prev_fp_violation_count:-0}"
-    else
-      _prev_fp_violation_count=0
-    fi
-    case "${_prev_attempt_failure_kind}" in
-      timeout)
-        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s) before producing any patch; rendering timeout-aware reflexion prompt (no validation data captured)."
+    # Log what was actually rendered, not what we hoped to render —
+    # _build_retry_prompt may have fallen back to the original prompt
+    # verbatim (template missing, IS_INTEGRATION_SYNC=false) even when
+    # _prev_attempt_failure_kind suggests a prelude would be ideal.
+    # Read marker / fingerprint counts only on the validation-prelude
+    # branch, since that is the only branch whose log message uses them
+    # and the only branch where they were freshly populated by the
+    # previous attempt's soft-validation.  On the timeout / exec_error
+    # paths the violation files are stale from earlier (or empty), so
+    # surfacing those numbers would mislead.
+    case "${_retry_prompt_outcome}" in
+      timeout-prelude)
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s) before producing any patch; rendered timeout-aware reflexion prompt (no validation data captured)."
         ;;
-      exec_error)
+      validation-prelude)
+        if [ -f "${RESOLVER_MARKER_VIOLATIONS_FILE}" ]; then
+          _prev_marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+          _prev_marker_count="${_prev_marker_count:-0}"
+        else
+          _prev_marker_count=0
+        fi
+        if [ -f "${RESOLVER_FP_VIOLATIONS_FILE}" ]; then
+          _prev_fp_violation_count="$(wc -l < "${RESOLVER_FP_VIOLATIONS_FILE}" | tr -d '[:space:]')"
+          _prev_fp_violation_count="${_prev_fp_violation_count:-0}"
+        else
+          _prev_fp_violation_count=0
+        fi
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=${_prev_marker_count}, prev fingerprint_violations=${_prev_fp_violation_count})."
+        ;;
+      verbatim:exec_error)
         echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt exited non-zero before validation could run; retrying with original prompt verbatim (no reflexion data to feed back)."
         ;;
+      verbatim:fallback)
+        # Prelude template absent or non-integration-sync run: log the
+        # underlying failure context AND that we fell back to verbatim
+        # so operators reading the log do not assume a prelude was used.
+        case "${_prev_attempt_failure_kind}" in
+          timeout)
+            echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt was killed by the per-attempt timer (${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s); timeout-aware prelude template unavailable, retrying with original prompt verbatim."
+            ;;
+          *)
+            echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: prelude template unavailable, retrying with original prompt verbatim."
+            ;;
+        esac
+        ;;
       *)
-        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt reflexion prompt (prev markers=${_prev_marker_count}, prev fingerprint_violations=${_prev_fp_violation_count})."
+        # Defensive: if a future failure_kind is added without
+        # extending the prelude builder, log the bare retry rather
+        # than printing a stale message.
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt retry prompt (prev failure_kind=${_prev_attempt_failure_kind:-unset})."
         ;;
     esac
   else
