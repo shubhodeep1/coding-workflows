@@ -311,7 +311,7 @@ if [ "${SEMBLE_HELPERS_AVAILABLE}" = "true" ] \
     if head -c "${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" > "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" 2>/dev/null; then
       mv -f "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true
     else
-      rm -f "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" 2>/dev/null || true
+      rm -f "${RB_JUDGE_SEMBLE_CONTEXT_FILE}.tmp" "${RB_JUDGE_SEMBLE_CONTEXT_FILE}" 2>/dev/null || true
     fi
   fi
 fi
