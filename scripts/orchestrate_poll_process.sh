@@ -1045,11 +1045,69 @@ post_tracking_comment() {
 }
 
 post_state_comment() {
-  local state_comment
-  state_comment="<!-- ORCHESTRATOR_STATE_V1
-$(cat "${STATE_FILE}")
-ORCHESTRATOR_STATE_V1 -->"
-  post_tracking_comment "${state_comment}"
+  # Persist orchestrator state as a V2 chunked-comment chain so a snapshot
+  # bigger than GitHub's 65,536-byte comment-body cap still lands.  The
+  # legacy V1 single-comment writer silently no-op'd when the body was too
+  # large (see post_tracking_comment's size guard), which left the
+  # persisted state pinned at an older snapshot and caused poll cycles to
+  # repeatedly redo wave-advance / deferred issue creation — observed as
+  # six duplicate issues for tracking #2373's `semble-judge-prefetch`.
+  #
+  # Reader (extract_latest_valid_orchestrator_state) tries V2 first and
+  # falls back to V1 so existing tracking issues with V1 state comments
+  # keep working until the next write supersedes them.
+  local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx
+  pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
+  if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
+      --state-file "${STATE_FILE}" \
+      --out-dir "${pack_dir}" 2>&1)"; then
+    echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}: ${manifest_json}" >&2
+    rm -rf "${pack_dir}"
+    return 0
+  fi
+  total="$(printf '%s' "${manifest_json}" | jq -r '.total // 0' 2>/dev/null || echo 0)"
+  raw_bytes="$(printf '%s' "${manifest_json}" | jq -r '.raw_bytes // 0' 2>/dev/null || echo 0)"
+  if ! [[ "${total}" =~ ^[0-9]+$ ]] || [ "${total}" -lt 1 ]; then
+    echo "::error::orchestrate_state_v2 pack returned no chunks for issue #${TRACKING_NUM}: ${manifest_json}" >&2
+    rm -rf "${pack_dir}"
+    return 0
+  fi
+  chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || true)"
+  idx=0
+  while IFS= read -r chunk_file; do
+    [ -n "${chunk_file}" ] || continue
+    idx=$((idx + 1))
+    if ! _post_state_comment_v2_chunk "${chunk_file}"; then
+      echo "::error::Failed to post V2 state chunk ${idx}/${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); chain incomplete, reader will fall back to last persisted state." >&2
+      rm -rf "${pack_dir}"
+      return 0
+    fi
+  done <<< "${chunk_files}"
+  rm -rf "${pack_dir}"
+}
+
+# Posts a single V2 state-chunk comment to the tracking issue.  Unlike
+# post_tracking_comment(), this returns non-zero on hard failure so the
+# caller can detect torn-write conditions instead of silently producing
+# a partial chain.  Each chunk is sized by orchestrate_state_v2.py to fit
+# under GitHub's 65,536-byte comment-body cap, so the post_tracking_comment
+# size guard does not apply here.
+_post_state_comment_v2_chunk() {
+  local chunk_file="$1"
+  local payload_file
+  payload_file="$(mktemp "${TMPDIR:-/tmp}/orchstate_v2_chunk_payload.XXXXXX")"
+  if ! jq -Rs '{body: .}' < "${chunk_file}" > "${payload_file}" 2>/dev/null; then
+    rm -f "${payload_file}"
+    return 1
+  fi
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    --method POST \
+    --input "${payload_file}" >/dev/null 2>&1; then
+    rm -f "${payload_file}"
+    return 1
+  fi
+  rm -f "${payload_file}"
+  return 0
 }
 
 extract_orchestrator_state_payload() {
@@ -1082,6 +1140,28 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
+
+  # Try the V2 chunked-chain reader first.  If a complete V2 chain is
+  # present (newest write wins), use it; otherwise fall through to the
+  # legacy V1 single-comment scan.  This keeps existing tracking issues
+  # whose state was last persisted as V1 readable until a V2 write
+  # supersedes them.  See scripts/orchestrate_state_v2.py for framing.
+  local _v2_comments_file _v2_payload_file _v2_rc
+  _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
+  _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
+  printf '%s' "${comments_json}" > "${_v2_comments_file}"
+  python3 scripts/orchestrate_state_v2.py extract \
+    --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
+  _v2_rc=$?
+  if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
+    candidate_state="$(cat "${_v2_payload_file}")"
+    if is_valid_orchestrator_state_json "${candidate_state}"; then
+      EXTRACTED_STATE_JSON="${candidate_state}"
+      rm -f "${_v2_comments_file}" "${_v2_payload_file}"
+      return 0
+    fi
+  fi
+  rm -f "${_v2_comments_file}" "${_v2_payload_file}"
 
   while IFS= read -r candidate; do
     [ -n "${candidate}" ] || continue
