@@ -46,6 +46,7 @@ orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -97,6 +98,93 @@ def test_validation_prelude_carries_violations_framing() -> None:
 	assert "{{MARKER_VIOLATION_FILES}}" in body
 	assert "{{FINGERPRINT_VIOLATION_COUNT}}" in body
 	assert "{{FINGERPRINT_VIOLATION_DETAILS}}" in body
+
+
+def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
+	"""The validation prelude must contain ONLY `{{KEY}}` placeholders
+	matching the renderer's auto-discovery regex (`[A-Z_][A-Z0-9_]*`).
+	Mustache-style conditional markers like `{{#IF_VIOLATIONS}}` and
+	`{{/IF_VIOLATIONS}}` — or any `{{...}}` containing characters
+	outside that uppercase identifier set — would survive the
+	renderer's substitution loop and leak into the rendered prompt
+	as literal text. An earlier iteration of this PR shipped a
+	template with `{{#IF_VIOLATIONS}}` / `{{/IF_VIOLATIONS}}`
+	wrappers; the upstream renderer was switched to a placeholder-
+	auto-discovery design that does not strip mustache conditionals,
+	so leaving those wrappers in the file would render the literal
+	marker text into the model's prompt. This regression was caught
+	by all six claude-branch reviewers at confidence 5; this test
+	pins the contract so the leak cannot be re-introduced.
+
+	`{{PREVIOUS_OUTCOME_NOTICE}}` was a placeholder used by the
+	PR's earlier single-template design but is never populated on
+	the upstream two-template design — leaving it would always
+	render as an empty string. Its absence is a stronger contract
+	than tolerating it as a no-op.
+	"""
+	body = VALIDATION_PRELUDE.read_text(encoding="utf-8")
+	# Conditional markers — must not appear under any spelling
+	# (with or without interior whitespace, with `#` or `/`).
+	conditional_marker_pattern = re.compile(
+		r"\{\{[ \t]*[#/][^}]*\}\}"
+	)
+	leaked = conditional_marker_pattern.findall(body)
+	assert not leaked, (
+		"Validation prelude contains mustache-style conditional "
+		"markers that the renderer does not strip: "
+		f"{leaked!r}. The renderer's placeholder regex is "
+		"`{{[A-Z_][A-Z0-9_]*}}` (auto-discovered from the "
+		"template body) and it will not match `{{#…}}` or "
+		"`{{/…}}` markers, so they survive verbatim into the "
+		"rendered retry prompt. Remove the markers from the "
+		"template (the violations body is unconditional on the "
+		"validation path)."
+	)
+	# Vestigial single-template-design placeholder.
+	assert "{{PREVIOUS_OUTCOME_NOTICE}}" not in body, (
+		"`{{PREVIOUS_OUTCOME_NOTICE}}` is a vestigial placeholder "
+		"from this PR's earlier single-template design; on the "
+		"upstream two-template design `_build_retry_prompt` never "
+		"sets PREVIOUS_OUTCOME_NOTICE, so the renderer substitutes "
+		"the empty string and the placeholder is dead template "
+		"baggage. Drop it from the validation prelude."
+	)
+	# Belt-and-suspenders: every remaining `{{...}}` token must
+	# match the renderer's auto-discovery regex so future template
+	# edits can't introduce a different unrendered token shape.
+	all_tokens = re.findall(r"\{\{([^}]*)\}\}", body)
+	bad = [t for t in all_tokens if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", t)]
+	assert not bad, (
+		"Validation prelude contains `{{…}}` tokens that the "
+		"renderer's auto-discovery regex `[A-Z_][A-Z0-9_]*` does "
+		f"not match: {bad!r}. These tokens will survive verbatim "
+		"into the rendered prompt. Either rename them to match "
+		"the regex (uppercase identifiers) or remove them."
+	)
+
+
+def test_timeout_prelude_has_no_leaked_unprocessed_markers() -> None:
+	"""Same contract as the validation prelude: the timeout prelude
+	must contain ONLY `{{KEY}}` placeholders matching the
+	renderer's auto-discovery regex, with no mustache conditionals
+	or other unrendered token shapes. Pinning this contract on
+	both prelude files prevents the same regression from sneaking
+	in via either path."""
+	body = TIMEOUT_PRELUDE.read_text(encoding="utf-8")
+	conditional_marker_pattern = re.compile(
+		r"\{\{[ \t]*[#/][^}]*\}\}"
+	)
+	leaked = conditional_marker_pattern.findall(body)
+	assert not leaked, (
+		"Timeout prelude contains mustache-style conditional "
+		f"markers the renderer does not strip: {leaked!r}."
+	)
+	all_tokens = re.findall(r"\{\{([^}]*)\}\}", body)
+	bad = [t for t in all_tokens if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", t)]
+	assert not bad, (
+		"Timeout prelude contains `{{…}}` tokens outside the "
+		f"renderer's auto-discovery regex: {bad!r}."
+	)
 
 
 def test_timeout_prelude_carries_apply_patch_first_guidance() -> None:
@@ -249,6 +337,8 @@ def test_reasoning_default_lowered_to_high() -> None:
 def main() -> int:
 	test_both_prelude_files_exist()
 	test_validation_prelude_carries_violations_framing()
+	test_validation_prelude_has_no_leaked_unprocessed_markers()
+	test_timeout_prelude_has_no_leaked_unprocessed_markers()
 	test_timeout_prelude_carries_apply_patch_first_guidance()
 	test_build_retry_prompt_dispatches_on_failure_kind()
 	test_build_retry_prompt_sets_retry_prompt_outcome()

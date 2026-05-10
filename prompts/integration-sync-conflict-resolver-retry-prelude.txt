@@ -1,6 +1,5 @@
-=== PREVIOUS ATTEMPT VIOLATIONS (attempt {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}) ==={{PREVIOUS_OUTCOME_NOTICE}}
+=== PREVIOUS ATTEMPT VIOLATIONS (attempt {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}) ===
 
-{{#IF_VIOLATIONS}}
 Your previous attempt at resolving these merge conflicts produced output
 that failed post-resolve validation.  The working tree has been
 RESTORED to its post-`git merge` state — you are starting over from
@@ -49,7 +48,6 @@ so every `must_contain` pattern matches somewhere in the file and no
 pre-flight loop in the main prompt still applies — do it for every
 file touched by your resolution, not just the ones listed above, so
 you do not trade one regression for another.
-{{/IF_VIOLATIONS}}
 
 === ORIGINAL TASK ===
 
