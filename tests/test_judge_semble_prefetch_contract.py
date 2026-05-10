@@ -94,15 +94,15 @@ def test_render_prompt_preserves_multiline_semble_prefetch_verbatim() -> None:
 
 
 def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
-	rendered = _render_prompt(
-		"Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
-		"=== SEMBLE: Judge Context ===\nchunk",
-	)
+    rendered = _render_prompt(
+        "Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
+        "=== SEMBLE: Judge Context ===\nchunk",
+    )
 
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	assert "=== SEMBLE: Judge Context ===" in rendered
-	assert "chunk" in rendered
-	assert rendered.endswith("Footer\n")
+    assert "{{SEMBLE_PREFETCH}}" not in rendered
+    assert "=== SEMBLE: Judge Context ===" in rendered
+    assert "chunk" in rendered
+    assert rendered.endswith("Footer\n")
 
 
 def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
