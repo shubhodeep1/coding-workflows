@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -311,6 +314,11 @@ def _base_state(status: str = "in_progress") -> dict:
 
 
 def _state_comment(state: dict) -> str:
+	# V1 framing is intentionally retained for test SEED data.  The
+	# production reader handles the V2 → V1 fallback path, so seeding
+	# initial state as V1 still works after the V2 writer change.  The
+	# extractor helpers below transparently read either V1 or V2 so the
+	# rest of the test suite does not need to change.
 	return "<!-- ORCHESTRATOR_STATE_V1\n" + json.dumps(state) + "\nORCHESTRATOR_STATE_V1 -->"
 
 
@@ -319,28 +327,106 @@ def _write_exec(path: Path, body: str) -> None:
 	path.chmod(0o755)
 
 
-def _extract_latest_state(comments: list[dict]) -> dict:
-	for comment in reversed(comments):
-		body = comment.get("body", "")
-		if "ORCHESTRATOR_STATE_V1" not in body:
-			continue
-		match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
-		if not match:
-			continue
-		return json.loads(match.group(1))
-	raise AssertionError("No ORCHESTRATOR_STATE_V1 comment found")
+# V2 framing parsing — keep in sync with scripts/orchestrate_state_v2.py.
+# Tests cannot import the helper module directly because it lives outside
+# `tests/` and the test runner is invoked as a flat script; reimplementing
+# the parse loop inline avoids adding a sys.path hack.
+_V2_OPENER_RE = re.compile(
+	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
+	re.MULTILINE,
+)
+_V2_CLOSER = "ORCHESTRATOR_STATE_V2 -->"
+
+
+def _is_state_comment(body: str) -> bool:
+	"""True if the body carries a V1 single-comment state OR a V2 chunk."""
+	return "ORCHESTRATOR_STATE_V1" in body or "ORCHESTRATOR_STATE_V2" in body
+
+
+def _parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
+	m = _V2_OPENER_RE.search(body)
+	if m is None:
+		return None
+	part, total, manifest = int(m.group(1)), int(m.group(2)), m.group(3)
+	if part < 1 or total < 1 or part > total:
+		return None
+	tail = body[m.end():]
+	if tail.startswith("\n"):
+		tail = tail[1:]
+	closer_marker = "\n" + _V2_CLOSER
+	end = tail.rfind(closer_marker)
+	if end >= 0:
+		chunk = tail[:end]
+	elif tail.startswith(_V2_CLOSER):
+		chunk = ""
+	else:
+		return None
+	return part, total, manifest, chunk
 
 
 def _extract_state_payloads(comments: list[dict]) -> list[str]:
-	payloads: list[str] = []
-	for comment in comments:
-		body = comment.get("body", "")
-		if "ORCHESTRATOR_STATE_V1" not in body:
+	"""All orchestrator-state JSON payloads in chronological (oldest-first) order.
+
+	Walks comments forward.  Each V1 single-comment state contributes
+	one payload at its own index.  Each V2 chunk-chain contributes one
+	payload at the index of the comment where the chain completed
+	(the newest part of that chain).  Combined V2 + V1 listing keeps
+	the test contract that the latest state write is `payloads[-1]`.
+	"""
+	payloads: list[tuple[int, str]] = []
+	v2_parts: dict[str, dict[int, str]] = {}
+	v2_totals: dict[str, int] = {}
+	v2_complete: set[str] = set()
+	for idx, comment in enumerate(comments):
+		body = (comment or {}).get("body") or ""
+		if "ORCHESTRATOR_STATE_V2" in body:
+			parsed = _parse_v2_chunk(body)
+			if parsed is not None:
+				part, total, manifest, chunk = parsed
+				if manifest not in v2_complete:
+					slot = v2_parts.setdefault(manifest, {})
+					slot.setdefault(part, chunk)
+					prev_total = v2_totals.get(manifest)
+					mismatch = False
+					if prev_total is None:
+						v2_totals[manifest] = total
+					elif prev_total != total:
+						# Mismatched declared total — disqualify and skip.
+						v2_parts.pop(manifest, None)
+						mismatch = True
+					if not mismatch and len(slot) == total and all(p in slot for p in range(1, total + 1)):
+						stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
+						compact = re.sub(r"\s+", "", stitched_b64)
+						try:
+							decoded = base64.b64decode(compact, validate=True)
+						except (binascii.Error, ValueError):
+							v2_parts.pop(manifest, None)
+						else:
+							if hashlib.sha256(decoded).hexdigest() == manifest:
+								v2_complete.add(manifest)
+								payloads.append((idx, decoded.decode("utf-8")))
+							else:
+								v2_parts.pop(manifest, None)
+		if "ORCHESTRATOR_STATE_V1" in body:
+			match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
+			if match:
+				payloads.append((idx, match.group(1)))
+	return [payload for _, payload in payloads]
+
+
+def _extract_latest_state(comments: list[dict]) -> dict:
+	# Walk newest-first through the chronologically-ordered payload list
+	# returned by `_extract_state_payloads` and return the first one that
+	# parses as JSON.  Skipping malformed payloads matches the
+	# production reader's "newest VALID state wins" semantic — a
+	# truncated state-comment body should not crash callers when an
+	# older valid one is also present.
+	for raw in reversed(_extract_state_payloads(comments)):
+		try:
+			return json.loads(raw)
+		except json.JSONDecodeError:
 			continue
-		match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
-		if match:
-			payloads.append(match.group(1))
-	return payloads
+	raise AssertionError("No valid orchestrator state comment (V1 or V2) found")
 
 
 def _run_poller(
@@ -2393,7 +2479,7 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 		enable_validation="false",
 		max_validate_cycles="3",
 		tracking_comments=[
-			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 901},
@@ -2497,7 +2583,7 @@ def test_sync_conflict_dedupe_skips_identical_warnings():
 		enable_validation="false",
 		max_validate_cycles="3",
 		tracking_comments=[
-			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main"],
@@ -2531,7 +2617,7 @@ def test_sync_conflict_posts_again_when_conflict_set_changes():
 		enable_validation="false",
 		max_validate_cycles="3",
 		tracking_comments=[
-			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main"],
@@ -6211,6 +6297,123 @@ def test_capture_intent_fingerprints_preserves_net_duplicate_line_additions():
 	)
 
 
+def test_capture_intent_fingerprints_substring_dedups_extended_lines():
+	# Regression guard for tele-funtoken-msg-scoring PR #2852 (runs
+	# 25612161581 / 25614444875): a sub-issue extended an existing line
+	# by appending text — the unified diff has the SHORTER stripped line
+	# on the minus side and the LONGER stripped line (which textually
+	# contains the shorter) on the plus side, on the SAME file. Without
+	# the substring-overlap filter, both survive (`Counter`-based exact
+	# dedup only catches identical strings); the captured pair becomes a
+	# structurally unsatisfiable must_contain ⊃ must_not_contain
+	# constraint under re.search (the longer match guarantees the
+	# shorter substring matches), and the resolver burns its 3-attempt
+	# retry budget on a hunk it cannot make pass. The substring filter
+	# must drop the removed-line pattern from must_not_contain while
+	# preserving the added-line pattern in must_contain.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	short_line = "    description: critic-driven cohort-mix rollouts."
+	long_line = (
+		"    description: critic-driven cohort-mix rollouts. "
+		"When critic authority is enabled, accepted by orchestrator."
+	)
+	diff_text = (
+		"diff --git a/db/contracts/flash_offer_cohort_config.yml "
+		"b/db/contracts/flash_offer_cohort_config.yml\n"
+		"--- a/db/contracts/flash_offer_cohort_config.yml\n"
+		"+++ b/db/contracts/flash_offer_cohort_config.yml\n"
+		"@@ -1,3 +1,3 @@\n"
+		" prefix\n"
+		f"-{short_line}\n"
+		f"+{long_line}\n"
+		" suffix\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+
+	short_regex = re.escape(short_line.strip())
+	long_regex = re.escape(long_line.strip())
+	mc_regexes = [p.get("regex", "") for p in result.get("must_contain", [])]
+	mnc_regexes = [p.get("regex", "") for p in result.get("must_not_contain", [])]
+	assert short_regex not in mnc_regexes, (
+		"removed-line pattern that is a substring of an added-line pattern on the same file "
+		f"must be dropped from must_not_contain. Got mnc_regexes={mnc_regexes!r}"
+	)
+	assert long_regex in mc_regexes, (
+		"net-added longer line must still survive as must_contain so the stronger intent is "
+		f"enforced downstream. Got mc_regexes={mc_regexes!r}"
+	)
+
+
+def test_capture_intent_fingerprints_substring_dedup_preserves_unrelated_pairs():
+	# Negative control for the substring-overlap filter: when a removed
+	# line's stripped text is NOT a substring of any added line on the
+	# same file, both sides must survive — otherwise the filter would
+	# silently drop legitimate must_not_contain patterns and let real
+	# regressions through.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	removed_line = "    description: old standalone configuration directive"
+	added_line = "    description: entirely unrelated new configuration directive"
+	diff_text = (
+		"diff --git a/db/contracts/example.yml b/db/contracts/example.yml\n"
+		"--- a/db/contracts/example.yml\n"
+		"+++ b/db/contracts/example.yml\n"
+		"@@ -1,2 +1,2 @@\n"
+		f"-{removed_line}\n"
+		f"+{added_line}\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+
+	removed_regex = re.escape(removed_line.strip())
+	added_regex = re.escape(added_line.strip())
+	mc_regexes = [p.get("regex", "") for p in result.get("must_contain", [])]
+	mnc_regexes = [p.get("regex", "") for p in result.get("must_not_contain", [])]
+	assert added_regex in mc_regexes, (
+		"unrelated added line must survive as must_contain; "
+		f"mc_regexes={mc_regexes!r}"
+	)
+	assert removed_regex in mnc_regexes, (
+		"unrelated removed line must survive as must_not_contain; the substring filter "
+		f"must only drop pairs where one is a literal substring of the other. "
+		f"mnc_regexes={mnc_regexes!r}"
+	)
+
+
 def test_verify_integration_fingerprints_cross_dedups_self_contradictory_pairs():
 	# Defensive path in the verifier: if the orchestrator state file
 	# still holds legacy bad fingerprints (capture is idempotent per
@@ -6284,6 +6487,106 @@ def test_verify_integration_fingerprints_still_fails_on_real_violation_when_mixe
 				# Genuine must_not_contain — NOT in must_contain, so
 				# the dedup leaves it alone.
 				{"file": "scripts/foo.sh", "regex": r"gh\ api\ \-H"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_substring_dedups_self_contradictory_pairs():
+	# Companion path to test_verify_integration_fingerprints_cross_dedups_self_
+	# contradictory_pairs for state files captured before the capture-side
+	# substring filter landed (capture is idempotent per issue, so an
+	# already-stored bad entry survives the extractor fix). When the state
+	# file holds a must_not_contain regex whose source is a literal
+	# substring of a must_contain regex on the SAME file, the verifier
+	# must drop the must_not_contain side (any tree satisfying the longer
+	# must_contain trivially matches the shorter must_not_contain under
+	# re.search, making the pair structurally unsatisfiable) and emit a
+	# ::warning:: that names the dedup so the upstream cause stays visible.
+	import contextlib
+	import io
+	mod = _verifier_module()
+	short_text = "critic-driven cohort-mix rollouts."
+	long_text = (
+		"critic-driven cohort-mix rollouts. "
+		"When critic authority is enabled, accepted by orchestrator."
+	)
+	files = {
+		"db/contracts/flash_offer_cohort_config.yml": (
+			f"  description: |\n    {long_text}\n"
+		),
+	}
+	fingerprints = {
+		"2849": {
+			"issue": 2849,
+			"pr": 2851,
+			"must_contain": [
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(long_text)},
+			],
+			"must_not_contain": [
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(short_text)},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	stdout_buf = io.StringIO()
+	try:
+		os.chdir(sandbox)
+		with contextlib.redirect_stdout(stdout_buf):
+			rc = mod.main([str(fp)])
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+	assert rc == 0, f"verify must PASS after substring dedup; got rc={rc}"
+	captured = stdout_buf.getvalue()
+	assert "::warning::Fingerprint substring-overlap dedup" in captured, (
+		"verifier must emit a ::warning:: naming the substring-overlap dedup so the "
+		f"capture-side cause stays visible in the run log; got stdout={captured!r}"
+	)
+
+
+def test_verify_integration_fingerprints_substring_dedup_still_fails_on_unrelated_must_not_contain():
+	# Belt-and-braces parallel to test_verify_integration_fingerprints_still_
+	# fails_on_real_violation_when_mixed_with_shared: the substring-overlap
+	# dedup must ONLY drop must_not_contain regexes that are literal
+	# substrings of a must_contain regex on the SAME file. Genuine
+	# must_not_contain entries (unrelated to any must_contain) must still
+	# trigger a violation when present in the post-resolve tree —
+	# otherwise the substring path would silently neuter the verifier
+	# whenever any pattern happened to overlap.
+	mod = _verifier_module()
+	short_text = "critic-driven cohort-mix rollouts."
+	long_text = (
+		"critic-driven cohort-mix rollouts. "
+		"When critic authority is enabled, accepted by orchestrator."
+	)
+	files = {
+		"db/contracts/flash_offer_cohort_config.yml": (
+			f"  description: |\n    {long_text}\n"
+			"    forbidden_marker_that_should_not_be_here\n"
+		),
+	}
+	fingerprints = {
+		"2849": {
+			"issue": 2849,
+			"pr": 2851,
+			"must_contain": [
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(long_text)},
+			],
+			"must_not_contain": [
+				# Will be dropped by the substring filter (substring of the must_contain regex above).
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": re.escape(short_text)},
+				# Genuine forbidden pattern, NOT a substring of any must_contain — must still fire.
+				{"file": "db/contracts/flash_offer_cohort_config.yml", "regex": r"forbidden_marker_that_should_not_be_here"},
 			],
 		}
 	}
