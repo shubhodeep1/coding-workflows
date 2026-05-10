@@ -480,6 +480,15 @@ _build_retry_prompt() {
     # template controlled by this function; the only %s slot is
     # bound to ${_budget}, so this is the documented printf -v
     # idiom rather than a user-input format-string smell.
+    #
+    # MAINTAINER WARNING: any future edit to ${_timeout_template}
+    # that introduces a literal `%` character MUST escape it as
+    # `%%` (printf format syntax) — otherwise printf will treat
+    # the literal as a conversion specifier and consume the next
+    # `${_budget}` arg in unexpected ways or insert garbage into
+    # the rendered notice. If you need to interpolate additional
+    # values, add another `%s` slot AND another positional arg to
+    # the printf call so the slot/arg counts stay balanced.
     printf -v _outcome_notice "${_timeout_template}" "${_budget}"
   elif [ "${_prev_outcome}" = "error" ]; then
     _outcome_notice=$'\n*** PREVIOUS ATTEMPT EXITED NON-ZERO — read this FIRST ***\n\nYour previous attempt exited with a non-zero status (not a `timeout`-kill) before producing any apply_patch tool call. Soft validation never ran on that attempt — this prelude therefore contains no violation lists for you to act on. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nCommon causes for this exit shape are codex CLI panic, transient network/auth errors against the model provider, or rate-limit responses; if the same failure recurs the retry loop will exhaust naturally and the orchestrator integration judge will take over.\n\nRead the === ORIGINAL TASK === section below this prelude and proceed as if this were attempt 1.\n\n*** END NOTICE ***'
@@ -567,13 +576,17 @@ tpl = open(os.environ['PRELUDE_TPL'], encoding='utf-8').read()
 # rendered. On the ran/violations path keep the body verbatim by
 # removing only the marker lines themselves.
 #
-# Whitespace tolerance: the markers are matched with `[ \t]*` around
-# the entire marker AND inside it (between `{{`, `#`/`/`,
+# Whitespace tolerance: the markers are matched with `[^\S\n\r]*`
+# around the entire marker AND inside it (between `{{`, `#`/`/`,
 # `IF_VIOLATIONS`, and `}}`), and the trailing newline is optional
 # (`\n?`) so the closing marker on the last line of a template
-# without a final newline still suppresses cleanly. Indented
-# markers, trailing tabs / spaces, and editor-injected interior
-# whitespace (e.g. `{{# IF_VIOLATIONS }}`) are all tolerated.
+# without a final newline still suppresses cleanly. `[^\S\n\r]` is
+# "any whitespace except `\n`/`\r`" — broader than the prior
+# `[ \t]*`, covering form-feed (`\f`), vertical tab (`\v`), and
+# Unicode horizontal-whitespace classes (NBSP `U+00A0`, en-quad,
+# em-space, …) so an editor-introduced non-ASCII space cannot
+# silently break suppression. Newlines are excluded so the regex
+# stays line-anchored under `re.MULTILINE`.
 #
 # The fallback assertion before substitution counts the marker
 # pairs and emits a `::warning::` if anything other than 1+1 is
@@ -581,8 +594,8 @@ tpl = open(os.environ['PRELUDE_TPL'], encoding='utf-8').read()
 # additional markers or strip one), so a malformed template that
 # would otherwise produce a partial-strip via the non-greedy
 # `.*?` match fails loudly.
-_marker_open = r'^[ \t]*\{\{[ \t]*#[ \t]*IF_VIOLATIONS[ \t]*\}\}[ \t]*\n?'
-_marker_close = r'^[ \t]*\{\{[ \t]*/[ \t]*IF_VIOLATIONS[ \t]*\}\}[ \t]*\n?'
+_marker_open = r'^[^\S\n\r]*\{\{[^\S\n\r]*#[^\S\n\r]*IF_VIOLATIONS[^\S\n\r]*\}\}[^\S\n\r]*\n?'
+_marker_close = r'^[^\S\n\r]*\{\{[^\S\n\r]*/[^\S\n\r]*IF_VIOLATIONS[^\S\n\r]*\}\}[^\S\n\r]*\n?'
 
 # Pre-substitution sanity check: the template should contain
 # exactly one open marker and one close marker. Anything else

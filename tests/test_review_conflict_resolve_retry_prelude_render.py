@@ -44,22 +44,42 @@ def _extract_render_script() -> str:
 
 	Re-implementing the substitution logic in a copy would not
 	test the actual script — extracting the heredoc and running
-	it directly does.  The heredoc bounds are
-	`python3 - > "${_retry_tmp}" <<'PY'` … `^PY$`.
+	it directly does.
+
+	The extraction regex is intentionally loose so it survives
+	common launcher refactors (different heredoc tag, the
+	tempfile redirect target moving or being replaced with a
+	pipe, the `python3 -` form changing to `python3 /dev/stdin`,
+	etc.). It looks for any `python3 …` invocation followed by a
+	`<<'TAG'` heredoc whose terminator is the captured TAG on its
+	own line. The body must contain the
+	`PREVIOUS_OUTCOME_NOTICE` substitution key — without that, the
+	extracted block is not the renderer we want, and re-extraction
+	via a different anchor is the right next step.
 	"""
 	src = RESOLVE_SCRIPT.read_text(encoding="utf-8")
-	match = re.search(
-		r"python3 - > \"\$\{_retry_tmp\}\" <<'PY'\n(.*?)\nPY\n",
+	candidates = re.findall(
+		r"python3\b[^\n]*<<'(?P<tag>\w+)'\n(?P<body>.*?)\n(?P=tag)\n",
 		src,
 		flags=re.DOTALL,
 	)
-	if not match:
+	if not candidates:
 		raise AssertionError(
-			"Could not locate the python3 heredoc in "
-			"_build_retry_prompt; if the heredoc-launch syntax "
-			"changed, update this regex."
+			"Could not locate any python3 heredoc in "
+			"scripts/review_conflict_resolve.sh — if the renderer "
+			"was rewritten without a heredoc-launched python3 "
+			"invocation, update this regex (or the test approach) "
+			"so it still exercises the substitution logic."
 		)
-	return match.group(1)
+	for _tag, body in candidates:
+		if "PREVIOUS_OUTCOME_NOTICE" in body:
+			return body
+	raise AssertionError(
+		"Found python3 heredoc(s) in scripts/review_conflict_resolve.sh "
+		"but none reference PREVIOUS_OUTCOME_NOTICE; the retry-prelude "
+		"renderer may have moved to a different launch site. Update "
+		"this extractor to follow it."
+	)
 
 
 # Canonical template shape, mirroring
