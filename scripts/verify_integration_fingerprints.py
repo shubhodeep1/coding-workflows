@@ -116,6 +116,27 @@ def _fp_key(fp: Any) -> tuple[str, str] | None:
 	return (path, regex_src)
 
 
+def _looks_like_re_escape_output(pattern: str) -> bool:
+	"""Heuristic: does ``pattern`` look like the output of :func:`re.escape`?
+
+	The drop semantics in :func:`_substring_overlap_drops` only hold when
+	both patterns are literal-string matches (i.e. re.escape outputs from
+	captured diff lines), because under that invariant substring
+	containment in the regex source is equivalent to substring containment
+	in the matched text.  If a pattern is a real regex (e.g. with
+	unescaped metachars, character classes, alternation), the drop is
+	unsafe — a forbidden pattern could legitimately differ in matching
+	semantics from a longer ``must_contain`` regex.  Round-trip ``pattern``
+	through ``re.escape`` of its un-escaped form: only return True when
+	the round-trip is a fixed point, i.e. the pattern contains no
+	unescaped regex metachars beyond what ``re.escape`` itself produces.
+	"""
+	if not isinstance(pattern, str):
+		return False
+	unescaped = re.sub(r"\\(.)", r"\1", pattern)
+	return re.escape(unescaped) == pattern
+
+
 def _substring_overlap_drops(
 	mc_with_keys: list[tuple[Any, tuple[str, str] | None]],
 	mnc_with_keys: list[tuple[Any, tuple[str, str] | None]],
@@ -140,11 +161,24 @@ def _substring_overlap_drops(
 	# filter at write time so freshly captured state files no longer
 	# admit the bad pair; this verifier-side check covers state files
 	# written before the capture-side fix landed.
+	#
+	# Provenance guard: only fire when BOTH patterns look like re.escape
+	# outputs (no real regex metachars).  If either pattern carries real
+	# regex syntax (alternation, character classes, anchors, …), the
+	# drop is unsafe — substring containment in the regex source no
+	# longer implies substring containment in the matched text, so a
+	# legitimate forbidden pattern could be silently removed and let a
+	# regression slip through.  Captures from the orchestrator pipeline
+	# always use re.escape, so this guard is a no-op for the intended
+	# use case while protecting against hand-edited / future fingerprint
+	# entries that contain raw regex.
 	drops: set[tuple[str, str]] = set()
 	for _, mc_key in mc_with_keys:
 		if mc_key is None:
 			continue
 		mc_path, mc_regex = mc_key
+		if not _looks_like_re_escape_output(mc_regex):
+			continue
 		for _, mnc_key in mnc_with_keys:
 			if mnc_key is None:
 				continue
@@ -153,6 +187,7 @@ def _substring_overlap_drops(
 				mnc_path == mc_path
 				and mnc_regex != mc_regex
 				and mnc_regex in mc_regex
+				and _looks_like_re_escape_output(mnc_regex)
 			):
 				drops.add(mnc_key)
 	return drops
