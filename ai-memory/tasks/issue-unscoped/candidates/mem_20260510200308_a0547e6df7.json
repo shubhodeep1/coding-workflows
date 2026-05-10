@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:880 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS is mutable instead of readonly.\n  WHY: Reviewers disagreed about whether this is a bug, but the highest stated concern was a low-severity hardening gap because the constant is assigned once and used immediately.\n- scripts/review_conflict_resolve.sh:574 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: dirname is called on RESOLVER_RETRY_PROMPT_FILE without a guard.\n  WHY: Reviewers disagreed about whether this is actionable, but the highest stated concern was a theoretical hardening gap because the path is derived from required RUNTIME_DIR and is non-empty in normal runs.\n- scripts/review_conflict_resolve.sh:469-492 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: _template_format_check is assigned and unset without local declaration in _build_retry_prompt.\n  WHY: The reviewer said this can leak shell state across retry-loop iterations.\n- .github/workflows/mark-stable.yml:216-223 | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The added resolver tests are wired into the Unit tests step without the PYTHONDONTWRITEBYTECODE=1 prefix.\n  WHY: The reviewer said this can let Python emit __pycache__ artifacts in the repo root and violate repository hygiene.\n- .github/workflows/test-and-mark-stable.yml:3205-3212 | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The added resolver tests are wired into the Unit tests step without the PYTHONDONTWRITEBYTECODE=1 prefix.\n  WHY: The reviewer said this can let Python emit __pycache__ artifacts in the repo root and violate repository hygiene.\n- scripts/review_conflict_resolve.sh:884-903 | severity=low | confidence=[2]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: rm -f is run before the truncation step even when tmp_output may not have been created.\n  WHY: The reviewer described this as an unnecessary cleanup step with inconsistent fail-loud handling.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-84 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The heredoc extractor regex assumes the launcher stays single-line and tightly structured.\n  WHY: The reviewer said a future launcher shape change could make the test extract the wrong body or fail to validate the renderer.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:880\n  PROBLEM: CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS at line 880 is not marked readonly.\n  WHY: The variable is assigned once and consumed immediately, so the reviewer treated this as a style/hardening concern rather than a runtime bug.\n- scripts/review_conflict_resolve.sh:574\n  PROBLEM: _retry_dst_dir derives its directory from dirname -- \"${RESOLVER_RETRY_PROMPT_FILE}\".\n  WHY: The reviewer argued this is not a real issue because RESOLVER_RETRY_PROMPT_FILE comes from required RUNTIME_DIR, so the path is non-empty in normal runs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_conflict_resolve.sh:880 | severity=low | confidence=2\n  PROBLEM: The variable CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS is set once as a constant but is not declared readonly.\n  WHY: The reviewer said this is a minor style preference rather than a functional bug because the variable is assigned once and used consistently.\n- scripts/review_conflict_resolve.sh:574 | confidence=1\n  PROBLEM: dirname -- \"${RESOLVER_RETRY_PROMPT_FILE}\" could return an empty or unusable directory if the path were unset.\n  WHY: The reviewer said this is only theoretical because RESOLVER_RETRY_PROMPT_FILE is built from required RUNTIME_DIR and there is no realistic path where it fails.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:469-492 | confidence=4\n  PROBLEM: _template_format_check is assigned and unset without a local declaration in _build_retry_prompt.\n  WHY: The reviewer said variable leakage into the global scope could corrupt state across retry loop iterations.\n- .github/workflows/mark-stable.yml:216-223 | confidence=4\n  PROBLEM: The added resolver tests are wired into the Unit tests step without PYTHONDONTWRITEBYTECODE=1.\n  WHY: The reviewer said Python may write __pycache__ to the repo root, violating repository hygiene.\n- .github/workflows/test-and-mark-stable.yml:3205-3212 | confidence=4\n  PROBLEM: The added resolver tests are wired into the Unit tests step without PYTHONDONTWRITEBYTECODE=1.\n  WHY: The reviewer said Python may write __pycache__ to the repo root, violating repository hygiene.\n- scripts/review_conflict_resolve.sh:884-903 | confidence=2\n  PROBLEM: rm -f runs unconditionally before the truncation step even when tmp_output may not have been created.\n  WHY: The reviewer said this is harmless in the common case but inconsistent with the later fail-loud truncation path.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-84 | confidence=3\n  PROBLEM: The regex extractor assumes the heredoc tag follows a tightly structured single-line launcher.\n  WHY: The reviewer said future launcher shape changes could make the test extract the wrong body or fail to validate the renderer.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_conflict_resolve.sh:880 | severity=low | confidence=2\n  PROBLEM: CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS is a mutable global rather than a readonly constant.\n  WHY: The reviewer said this is a low-severity hardening gap because the value is used immediately and no reassignment exists in current code.\n- scripts/review_conflict_resolve.sh:574 | confidence=1\n  PROBLEM: dirname could return \".\" if RESOLVER_RETRY_PROMPT_FILE is unexpectedly empty.\n  WHY: The reviewer said this is only a theoretical concern because RUNTIME_DIR is always provided by the workflow.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "807a03e614e9b49080d7929058e64cdf3beda64a11c76049ec25dd0882a51e17",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25637876757",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25637876757",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510200308_a0547e6df7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25637876757"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T20:03:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
