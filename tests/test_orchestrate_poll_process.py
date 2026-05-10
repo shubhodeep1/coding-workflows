@@ -6765,22 +6765,43 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 	# the new timeout prelude needed an explicit pin against future
 	# refactors silently dropping it.
 	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
-	# Locate the refresh_files array and ensure both prelude paths
-	# appear inside it (raw substring match is sufficient — there is
-	# only one `refresh_files=(` declaration in the file).
-	assert "refresh_files=(" in poller_body, (
-		"refresh_files=( ... ) array missing from "
+	# Narrow the assertion to the substring between `refresh_files=(`
+	# and its matching closing `)` so the test actually enforces array
+	# membership — not "path appears anywhere in the file" (which would
+	# false-positive if a future refactor moved the path to a comment
+	# or echo while dropping it from the allowlist).  There is only one
+	# `refresh_files=(` declaration in the file, so a simple
+	# split-from-the-marker / slice-to-next-`)` works without a full
+	# bash parser.
+	open_marker = "refresh_files=("
+	open_idx = poller_body.find(open_marker)
+	assert open_idx != -1, (
+		f"{open_marker} ... ) array missing from "
 		"scripts/orchestrate_poll_process.sh; the resolver-tooling "
 		"refresh path has been removed or renamed."
 	)
+	# Closing `)` of the array is the first `)` that appears on its
+	# own line (possibly indented).  This matches the existing array
+	# style and avoids matching `)` characters that occur inside
+	# comments or quoted paths within the array body.
+	close_re = re.compile(r"^\s*\)\s*$", re.MULTILINE)
+	close_match = close_re.search(poller_body, pos=open_idx + len(open_marker))
+	assert close_match is not None, (
+		f"could not find closing `)` for the {open_marker} array in "
+		"scripts/orchestrate_poll_process.sh; the array literal is "
+		"either malformed or its closing brace style changed."
+	)
+	array_body = poller_body[open_idx + len(open_marker): close_match.start()]
 	for tpl in (
 		"prompts/integration-sync-conflict-resolver-retry-prelude.txt",
 		"prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt",
 	):
-		assert tpl in poller_body, (
-			f"{tpl} missing from refresh_files allowlist in "
-			"scripts/orchestrate_poll_process.sh; consumer repos pinning "
-			"@stable would not pick up this prelude after a release, "
+		assert tpl in array_body, (
+			f"{tpl} missing from the refresh_files=( ... ) allowlist "
+			"body in scripts/orchestrate_poll_process.sh (not just "
+			"absent from the file as a whole — the path must be a "
+			"member of the array). Consumer repos pinning @stable "
+			"would not pick up this prelude after a release, "
 			"silently disabling the corresponding retry-reflexion path."
 		)
 	# Defence-in-depth: the matching workflow-side bootstrap in
