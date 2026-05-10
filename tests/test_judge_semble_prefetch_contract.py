@@ -127,6 +127,13 @@ def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> N
 	)
 
 
+def test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string() -> None:
+	rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", "")
+
+	assert "{{SEMBLE_PREFETCH}}" not in rendered
+	assert rendered == "Before\n\nAfter\n"
+
+
 def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
     rendered = _render_prompt(
         "Before {{SEMBLE_PREFETCH}} After\n",
@@ -226,6 +233,7 @@ def main() -> int:
     test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
     test_render_prompt_resolves_workflow_and_semble_placeholders_together()
+    test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()
     test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
     test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
     test_live_judge_templates_declare_semble_prefetch_placeholder()
