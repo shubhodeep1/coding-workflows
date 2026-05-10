@@ -50,19 +50,36 @@ def _extract_render_script() -> str:
 	it directly does.
 
 	The extraction regex is intentionally loose so it survives
-	common launcher refactors (different heredoc tag, the
-	tempfile redirect target moving or being replaced with a
-	pipe, the `python3 -` form changing to `python3 /dev/stdin`,
-	etc.). It looks for any `python3 …` invocation followed by a
-	`<<'TAG'` heredoc whose terminator is the captured TAG on its
-	own line. The body must contain the
-	`PREVIOUS_OUTCOME_NOTICE` substitution key — without that, the
-	extracted block is not the renderer we want, and re-extraction
-	via a different anchor is the right next step.
+	common launcher refactors:
+	  - any `python3` invocation form (`python3 -`, `python3 - >
+	    /path`, `python3 /dev/stdin`, …);
+	  - any heredoc operator form (`<<`, `<<-` with tab-stripping);
+	  - any quoting around the heredoc tag (`<<'PY'`, `<<"PY"`,
+	    or the unquoted `<<PY` form);
+	  - any tag name (`PY`, `PYEOF`, `RENDER`, …) as long as the
+	    body contains the `PREVIOUS_OUTCOME_NOTICE` substitution key.
+	Without the key check, a different python3 heredoc elsewhere in
+	the script could be picked up instead.
 	"""
 	src = RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	# Heredoc launcher:
+	#   `python3` (word-bounded) + any non-newline tail
+	#   + `<<` with optional `-` (tab-strip form)
+	#   + optional ASCII whitespace
+	#   + optional `'` or `"` around the tag (captured then
+	#     back-referenced on the closing line)
+	#   + a tag of word characters
+	#   + matching closing quote (or nothing if the open quote was
+	#     also nothing)
+	#   + newline
+	#   + body (lazy, DOTALL)
+	#   + the captured tag on its own line, with optional leading
+	#     tabs (the `<<-` tab-strip form preserves spaces on the
+	#     terminator line in some shells, but bash strips leading
+	#     tabs only — accept either).
 	candidates = re.findall(
-		r"python3\b[^\n]*<<'(?P<tag>\w+)'\n(?P<body>.*?)\n(?P=tag)\n",
+		r"python3\b[^\n]*?<<-?\s*(?P<openq>['\"]?)(?P<tag>\w+)(?P=openq)\n"
+		r"(?P<body>.*?)\n[\t]*(?P=tag)\n",
 		src,
 		flags=re.DOTALL,
 	)
@@ -74,7 +91,7 @@ def _extract_render_script() -> str:
 			"invocation, update this regex (or the test approach) "
 			"so it still exercises the substitution logic."
 		)
-	for _tag, body in candidates:
+	for _openq, _tag, body in candidates:
 		if "PREVIOUS_OUTCOME_NOTICE" in body:
 			return body
 	raise AssertionError(
