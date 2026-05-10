@@ -395,13 +395,14 @@ _restore_attempt_base() {
 #     previous attempt's residual markers + fingerprint violations.
 #   - "timeout": a separate prelude (missing-template fail-open
 #     same as below) telling the model the previous attempt was
-#     killed by the per-attempt timer before any patch landed,
-#     and to be DECISIVE this time — pick the smallest convergent
-#     resolution and call apply_patch early instead of deliberating.
-#     Without this branch the retry log + reflexion text print
-#     "(prev markers=0, prev fingerprint_violations=0)" because
-#     soft-validation never ran on a timed-out attempt, falsely
-#     telling the model it succeeded.
+#     killed by the per-attempt timer before completing — any
+#     partial apply_patch calls were discarded by the working-tree
+#     restore — and to be DECISIVE this time, picking the smallest
+#     convergent resolution and calling apply_patch early instead
+#     of deliberating.  Without this branch the retry log +
+#     reflexion text print "(prev markers=0, prev fingerprint_
+#     violations=0)" because soft-validation never ran on a
+#     timed-out attempt, falsely telling the model it succeeded.
 #   - "exec_error": codex itself exited non-zero (config / auth /
 #     model error — distinguished from "timeout" by the captured
 #     `timeout` exit code not being 124 or 137).  No reflexion
@@ -463,7 +464,16 @@ _build_retry_prompt() {
   fi
   # Render via python3 (same substitution pattern as
   # review_conflict_prepare.sh) so multi-line values with shell
-  # metacharacters do not need quoting gymnastics.
+  # metacharacters do not need quoting gymnastics.  The set of
+  # `{{KEY}}` placeholders to substitute is auto-derived from the
+  # template body itself rather than maintained as a hardcoded list
+  # — that way a future template that adds a new placeholder
+  # (e.g. `{{INTEGRATION_BRANCH_NAME}}`) does not silently render
+  # the literal `{{...}}` text into the prelude on a stable
+  # script_ref pin.  Keys are matched against `[A-Z_][A-Z0-9_]*`
+  # (the convention used by every existing placeholder); any key
+  # whose corresponding env var is unset is replaced with the
+  # empty string, matching the existing hardcoded-list behaviour.
   PRELUDE_TPL="${_prelude_tpl}" \
     ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
     PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
@@ -473,7 +483,7 @@ _build_retry_prompt() {
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
     PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
-    python3 -c "import os,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); keys=['PREVIOUS_ATTEMPT_NUMBER','MAX_ATTEMPTS','MARKER_VIOLATION_COUNT','MARKER_VIOLATION_FILES','FINGERPRINT_VIOLATION_COUNT','FINGERPRINT_VIOLATION_DETAILS','PER_ATTEMPT_TIMEOUT_SECS']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); keys=sorted(set(re.findall(r'\{\{([A-Z_][A-Z0-9_]*)\}\}', tpl))); [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
   if [ "${_failure_kind}" = "timeout" ]; then
     _retry_prompt_outcome="timeout-prelude"
@@ -595,12 +605,20 @@ fi
 #     marker/fingerprint violation files are populated and accurate,
 #     so the standard prelude lists them and the model can react.
 #   - "timeout": the `timeout` wrapper killed codex before it
-#     produced a final patch.  Detected via `timeout`'s exit codes
-#     124 (SIGTERM after the per-attempt timer fired) and 137
-#     (SIGKILL after the `--kill-after=30s` backstop).  Soft
-#     validation never ran, so the violation files are stale /
-#     empty and the standard prelude would falsely report "0
-#     markers, 0 fingerprint violations".  We render a
+#     completed.  Detected via `timeout`'s exit codes:
+#       * 124 — unconditional timer expiry (SIGTERM after duration).
+#       * 137 — SIGKILL.  Disambiguated against OOM kill / external
+#         SIGKILL by elapsed wall-clock time: a `timeout`-driven
+#         SIGKILL fires at duration + ~30s (the `--kill-after=30s`
+#         backstop), so elapsed >= duration is treated as a real
+#         timeout.  Elapsed << duration on exit 137 routes to
+#         "exec_error" instead.  See the `case` block at the
+#         classification site.
+#     On a real timeout, soft validation never ran (any partial
+#     apply_patch calls were discarded by the per-attempt working-
+#     tree restore on the next iteration), so the violation files
+#     are stale / empty and the standard prelude would falsely
+#     report "0 markers, 0 fingerprint violations".  We render a
 #     timeout-aware prelude instead — see _build_retry_prompt.
 #   - "exec_error": codex itself exited non-zero (config / auth /
 #     model / network errors that are not the timer firing).  The

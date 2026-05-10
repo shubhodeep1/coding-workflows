@@ -3733,8 +3733,9 @@ jobs:
         # producing apply_patch on a 7-file mixed-implementation merge).
         # 3 × 50 min = 150 min fits inside the 170-min step cap with ~20 min
         # for soft validation, commit, and the EXIT-trap dispatch.  The
-        # job-level timeout-minutes (240 — see line 716 above) was sized to
-        # fit ~24 min of pre-resolver work (disk cleanup, checkout, codex
+        # surrounding job's timeout-minutes (240 — see the `timeout-minutes:`
+        # setting on the codex-agent job earlier in this workflow) was sized
+        # to fit ~24 min of pre-resolver work (disk cleanup, checkout, codex
         # install, runtime workspace, prompt prep, reviewers, editor) plus
         # this 170-min step cap plus ~46 min of post-resolver work, so the
         # EXIT trap is reachable even when every retry uses its full
