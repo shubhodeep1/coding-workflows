@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:388-430 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The test helper leaves a stale V2 total in `v2_totals` after a manifest total mismatch instead of permanently disqualifying the manifest like production does.\n  WHY: Production sets `totals_by_manifest[manifest] = -1` on mismatch, while the test only pops `v2_parts`, creating a test/prod parity gap that can accept scenarios production rejects.\n- scripts/verify_integration_fingerprints.py:119-137 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: `_looks_like_re_escape_output` returns `True` for the empty-string pattern, so an empty fingerprint would be treated as a valid escaped-regex output.\n  WHY: `re.escape(\"\") == \"\"`, and the round-trip check does not exclude that fixed point; reviewers noted upstream filtering makes this low-impact.\n- scripts/verify_integration_fingerprints.py:134-137 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_looks_like_re_escape_output` fails to round-trip legitimate `re.escape` output containing newline or carriage-return characters.\n  WHY: The `r\"\\\\(.)\"` unescape pattern does not match backslash-newline or backslash-carriage-return sequences, so the function returns `False` for those escaped literals.\n- scripts/detect_editor_changes_lost.sh:70-87 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The greedy reference-clause stripping can remove trailing edit claims from unusual multi-edit bullets.\n  WHY: The sed replacement consumes text after the reference clause, so a bullet that mentions another edit after the clause can be collapsed into a false `EDITOR_CHANGES_LOST`.\n- scripts/orchestrate_state_v2.py:240-250 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `cmd_extract()` only disqualifies a manifest after popping it, leaving a window where interleaved chunks could observe inconsistent totals handling.\n  WHY: The production code sets `totals[manifest] = -1` only after the pop path, which the reviewer described as a rare race on concurrent posts.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/verify_integration_fingerprints.py:134-137 | confidence=1\n  PROBLEM: `_looks_like_re_escape_output` fails to round-trip legitimate `re.escape` output containing newline or carriage-return characters.\n  WHY: The `r\"\\\\(.)\"` unescape pattern does not match backslash-newline or backslash-carriage-return sequences, so the function returns `False` for those escaped literals.\n- tests/test_orchestrate_poll_process.py:408-413 | confidence=2\n  PROBLEM: The test reimplementation does not permanently disqualify a manifest after a V2 total mismatch.\n  WHY: Production sets `totals_by_manifest[manifest] = -1` on mismatch, but the test only pops `v2_parts[manifest]`, leaving a stale total behind.\n- scripts/verify_integration_fingerprints.py:134-137 | confidence=1\n  PROBLEM: `_looks_like_re_escape_output` returns `True` for the empty-string pattern.\n  WHY: `re.escape(\"\")` is `\"\"`, so the fixed-point check accepts an empty regex source as escaped output.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_process.py:~418-422 | confidence=3\n  PROBLEM: `_extract_state_payloads` in the test has a parity gap in V2 manifest mismatch handling.\n  WHY: Production permanently disqualifies the manifest by setting `totals_by_manifest[manifest] = -1`, but the test only pops `v2_parts[manifest]` and leaves the stale total in `v2_totals`.\n- scripts/verify_integration_fingerprints.py:119-136 | confidence=2\n  PROBLEM: `_looks_like_re_escape_output` returns `True` for an empty string pattern.\n  WHY: `re.escape(\"\")` returns `\"\"`, making the empty string a fixed point of the round-trip check.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:410-417 | confidence=3\n  PROBLEM: The test helper `_extract_state_payloads` does not permanently disqualify a manifest when a total mismatch is detected, unlike production code.\n  WHY: Production sets `totals_by_manifest[manifest] = -1` on mismatch, but the test only pops `v2_parts[manifest]`, leaving `v2_totals[manifest]` stale.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_process.py:~388-430 | confidence=4\n  PROBLEM: The test's V2 manifest mismatch handling leaves `v2_totals[manifest]` stale after popping `v2_parts[manifest]`.\n  WHY: Production permanently disqualifies the manifest with `totals_by_manifest[manifest] = -1`, so the test exercises different behavior and creates a parity gap.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_orchestrate_poll_process.py:~380-430 | confidence=4\n  PROBLEM: On manifest total mismatch, the test pops `v2_parts` but retains the first chunk's total in `v2_totals`.\n  WHY: Production sets `totals[manifest] = -1` to permanently disqualify the manifest, so the test can accept mismatched V2 chains differently from the poller.\n- scripts/detect_editor_changes_lost.sh:70-80 | confidence=3\n  PROBLEM: The greedy `.*)$` stripping can remove trailing edit claims from unusual multi-edit bullets.\n  WHY: The sed replacement strips everything after the reference clause, which can collapse a valid later edit claim into a false `EDITOR_CHANGES_LOST`.\n- scripts/orchestrate_state_v2.py:~240-250 | confidence=2\n  PROBLEM: `cmd_extract()` only disqualifies a manifest after popping it, leaving a window where interleaved chunks could observe inconsistent totals handling.\n  WHY: The reviewer described the production code as setting `totals[manifest] = -1` only after the pop path, creating a rare race on concurrent posts.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_orchestrate_poll_process.py:418-421 | confidence=4\n  PROBLEM: The test's V2 chunk parsing reimplementation has different manifest disqualification behavior than production.\n  WHY: Production sets `totals_by_manifest[manifest] = -1` on total mismatch, but the test only pops `v2_parts[manifest]`, leaving a stale total in `v2_totals`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "40bb5f789dc14a1705905bdf9d1da65660a00ca1614090931dca2c630aee2414",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2464,
+    "run_id": "25634376141",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25634376141",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510174148_751fbf27f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2464,
+    "run_id": "25634376141"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T17:41:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
