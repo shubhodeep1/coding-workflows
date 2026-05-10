@@ -88,16 +88,27 @@ def test_render_prompt_replaces_semble_prefetch_and_guards_placeholder() -> None
     assert "Unresolved SEMBLE_PREFETCH placeholder" in render_text
 
 
-def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
-	rendered = _render_prompt(
-		"Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
-		"=== SEMBLE: Judge Context ===\nchunk",
-	)
+def test_render_prompt_preserves_multiline_semble_prefetch_verbatim() -> None:
+    rendered = _render_prompt(
+        "Before\n{{SEMBLE_PREFETCH}}\nAfter\n",
+        "=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===",
+    )
 
-	assert "{{SEMBLE_PREFETCH}}" not in rendered
-	assert "=== SEMBLE: Judge Context ===" in rendered
-	assert "chunk" in rendered
-	assert rendered.endswith("Footer\n")
+    assert rendered == (
+        "Before\n=== SEMBLE: Judge Context ===\nchunk 1\n\nchunk 2\n=== END SEMBLE ===\nAfter\n"
+    )
+
+
+def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> None:
+    rendered = _render_prompt(
+        "Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
+        "=== SEMBLE: Judge Context ===\nchunk",
+    )
+
+    assert "{{SEMBLE_PREFETCH}}" not in rendered
+    assert "=== SEMBLE: Judge Context ===" in rendered
+    assert "chunk" in rendered
+    assert rendered.endswith("Footer\n")
 
 
 def test_render_prompt_drops_semble_prefetch_placeholder_when_empty() -> None:
@@ -230,6 +241,7 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 
 def main() -> int:
     test_render_prompt_replaces_semble_prefetch_and_guards_placeholder()
+    test_render_prompt_preserves_multiline_semble_prefetch_verbatim()
     test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
     test_render_prompt_resolves_workflow_and_semble_placeholders_together()

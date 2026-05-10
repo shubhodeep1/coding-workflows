@@ -404,6 +404,15 @@ stop_words = {
     "validation",
     "with",
 }
+file_like_exts = {
+    ".c", ".cc", ".cfg", ".conf", ".contract", ".cpp", ".cs", ".css", ".csv", ".go", ".h",
+    ".hpp", ".html", ".java", ".js", ".json", ".jsx", ".kt", ".md", ".py",
+    ".rb", ".rs", ".sh", ".sol", ".sql", ".svelte", ".toml", ".ts", ".tsx", ".txt",
+    ".vue", ".xml", ".yaml", ".yml",
+}
+# Keep this source-oriented so dotted log artifacts such as error.message and
+# runtime byproducts such as foo.pyc / uv.lock do not crowd out likely code
+# files in the bounded Semble diagnose query.
 
 
 def add_identifier(value: str) -> None:
@@ -417,15 +426,18 @@ def add_identifier(value: str) -> None:
 add_identifier(failed_step_name)
 
 for match in re.findall(r"(?:[A-Za-z0-9_.-]+/)*([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)", tail_text):
+    if len(identifiers) >= 40:
+        break
+    if os.path.splitext(match)[1].lower() not in file_like_exts:
+        continue
     add_identifier(match)
-    add_identifier(os.path.basename(match))
 
 for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", tail_text):
+    if len(identifiers) >= 40:
+        break
     if match.lower() in stop_words:
         continue
     add_identifier(match)
-    if len(identifiers) >= 40:
-        break
 
 parts: list[str] = ["Implement post-failure diagnosis"]
 if failed_step_name:
