@@ -31,7 +31,6 @@ if [ -f "scripts/memory_helpers.sh" ]; then
 fi
 # shellcheck source=scripts/semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
-JUDGE_SEMBLE_MAX_CHUNKS="4"
 JUDGE_SEMBLE_QUERY_MAX_BYTES="12000"
 JUDGE_SEMBLE_CONTEXT_MAX_BYTES="12000"
 if [ -f "scripts/semble_helpers.sh" ]; then
@@ -122,45 +121,6 @@ tg_notify_issue() {
 if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
-
-append_judge_semble_query_text() {
-  local label="$1"
-  local text="${2:-}"
-  local max_bytes="${3:-2048}"
-  local truncated_text=""
-
-  [ -n "${text}" ] || return 0
-
-  truncated_text="${text:0:${max_bytes}}"
-
-  printf '%s\n' "${label}"
-  printf '%s' "${truncated_text}"
-  printf '\n'
-}
-
-render_judge_semble_prefetch_from_query_file() {
-  local query_file="$1"
-  local header_label="${2:-Judge Context}"
-  local max_chunks="${3:-${JUDGE_SEMBLE_MAX_CHUNKS}}"
-  local query_text=""
-  local prefetch_text=""
-
-  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
-    || [ ! -s "${query_file}" ]; then
-    return 0
-  fi
-
-  query_text="$(cat "${query_file}" 2>/dev/null || true)"
-  query_text="${query_text:0:${JUDGE_SEMBLE_QUERY_MAX_BYTES}}"
-  [ -n "${query_text}" ] || return 0
-
-  prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
-  [ -n "${prefetch_text}" ] || return 0
-
-  printf '%s\n' "${prefetch_text:0:${JUDGE_SEMBLE_CONTEXT_MAX_BYTES}}"
-}
 
 is_truthy() {
   local value
@@ -5745,6 +5705,7 @@ invoke_stall_judge() {
   local static_file="${RUNTIME_DIR}/judge_static.txt"
   local stall_semble_query_file="${RUNTIME_DIR}/stall_judge_semble_query_${issue_num}.txt"
   local stall_semble_context_file="${RUNTIME_DIR}/stall_judge_semble_context_${issue_num}.txt"
+  trap 'rm -f "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${stall_semble_query_file}" "${stall_semble_context_file}"' RETURN
 
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
@@ -10928,7 +10889,7 @@ ${PR_DIFF}
     echo "IMPORTANT: If current wave < total waves, the project is NOT complete."
     echo "Return in_progress to advance to the next wave."
   } > "${JUDGE_PROMPT_FILE}"
-  rm -f "${JUDGE_SEMBLE_QUERY_FILE}"
+  rm -f "${JUDGE_SEMBLE_QUERY_FILE}" "${JUDGE_SEMBLE_CONTEXT_FILE}"
 
   # Run judge via Codex
   JUDGE_SUCCESS=false
