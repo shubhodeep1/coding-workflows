@@ -56,15 +56,70 @@ def _step_block(text: str, step_name: str) -> str:
     return text[start:next_step]
 
 
+def _render_prompt(
+    prompt_text: str,
+    semble_prefetch: str | None,
+    extra_env: dict[str, str] | None = None,
+) -> str:
+    with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
+        tmpdir = Path(td)
+        prompt_file = tmpdir / "prompt.txt"
+        prompt_file.write_text(prompt_text, encoding="utf-8")
+
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if semble_prefetch is None:
+            env.pop("SEMBLE_PREFETCH", None)
+        else:
+            env["SEMBLE_PREFETCH"] = semble_prefetch
+
+        proc = subprocess.run(
+            ["bash", str(RENDER_PROMPT), str(prompt_file)],
+            cwd=str(REPO_ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        assert proc.returncode == 0, (
+            f"render_prompt.sh failed with {proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\n\n"
+            f"stderr:\n{proc.stderr}"
+        )
+        return proc.stdout
+
+
 def test_render_prompt_replaces_multiline_semble_prefetch() -> None:
-	result = _run_render(
-		"Role: judge\n{{SEMBLE_PREFETCH}}\nTask body\n",
-		semble_prefetch="=== SEMBLE: Judge Context ===\nchunk 1\nchunk 2\n=== END SEMBLE ===",
-	)
-	assert result.returncode == 0, result.stderr
-	assert result.stderr == ""
-	assert "{{SEMBLE_PREFETCH}}" not in result.stdout
-	assert "=== SEMBLE: Judge Context ===\nchunk 1\nchunk 2\n=== END SEMBLE ===\n" in result.stdout
+    result = _run_render(
+        "Role: judge\n{{SEMBLE_PREFETCH}}\nTask body\n",
+        semble_prefetch="=== SEMBLE: Judge Context ===\nchunk 1\nchunk 2\n=== END SEMBLE ===",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert "{{SEMBLE_PREFETCH}}" not in result.stdout
+    assert "=== SEMBLE: Judge Context ===\nchunk 1\nchunk 2\n=== END SEMBLE ===\n" in result.stdout
+
+
+def test_render_prompt_replaces_semble_prefetch_and_guards_placeholder() -> None:
+    rendered = _render_prompt(
+        "Header\n{{SEMBLE_PREFETCH}}\nFooter\n",
+        "=== SEMBLE: Judge Context ===\nchunk one\n=== END SEMBLE ===\n",
+    )
+
+    assert rendered == (
+        "Header\n"
+        "=== SEMBLE: Judge Context ===\n"
+        "chunk one\n"
+        "=== END SEMBLE ===\n"
+        "Footer\n"
+    )
+
+    render_text = _read(RENDER_PROMPT)
+    assert '"{{SEMBLE_PREFETCH}}")' in render_text
+    assert "Unresolved SEMBLE_PREFETCH placeholder" in render_text
 
 
 def test_render_prompt_rejects_unresolved_semble_placeholder() -> None:
@@ -91,6 +146,33 @@ def test_render_prompt_allows_empty_semble_prefetch() -> None:
 	assert result.returncode == 0, result.stderr
 	assert result.stderr == ""
 	assert result.stdout == "Role: judge\n\nTask body\n"
+
+
+def test_render_prompt_resolves_workflow_and_semble_placeholders_together() -> None:
+	rendered = _render_prompt(
+		"{{WORKFLOW_EDIT_RESTRICTION}}\n{{SEMBLE_PREFETCH}}\nFooter\n",
+		"=== SEMBLE: Judge Context ===\nchunk\n=== END SEMBLE ===",
+		extra_env={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+
+	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in rendered
+	assert "{{SEMBLE_PREFETCH}}" not in rendered
+	workflow_line, remainder = rendered.split("\n", 1)
+	assert workflow_line.startswith("- ")
+	assert ".github/workflows/" in workflow_line
+	assert remainder == (
+		"=== SEMBLE: Judge Context ===\n"
+		"chunk\n"
+		"=== END SEMBLE ===\n"
+		"Footer\n"
+	)
+
+
+def test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string() -> None:
+	rendered = _render_prompt("Before\n{{SEMBLE_PREFETCH}}\nAfter\n", "")
+
+	assert "{{SEMBLE_PREFETCH}}" not in rendered
+	assert rendered == "Before\n\nAfter\n"
 
 
 def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
@@ -189,19 +271,22 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 
 
 def main() -> int:
-	test_render_prompt_replaces_multiline_semble_prefetch()
-	test_render_prompt_rejects_unresolved_semble_placeholder()
-	test_render_prompt_replaces_semble_prefetch_with_surrounding_whitespace()
-	test_render_prompt_allows_empty_semble_prefetch()
-	test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
-	test_orchestrate_poll_workflow_bootstraps_semble_for_judges()
-	test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
-	test_live_judge_templates_expose_semble_placeholder()
-	test_orchestrate_poll_process_wires_semble_for_all_judge_builders()
-	test_review_rb_judge_wires_semble_prefetch()
-	test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed()
-	print("OK: judge Semble prefetch contract assertions hold")
-	return 0
+    test_render_prompt_replaces_semble_prefetch_and_guards_placeholder()
+    test_render_prompt_replaces_multiline_semble_prefetch()
+    test_render_prompt_rejects_unresolved_semble_placeholder()
+    test_render_prompt_replaces_semble_prefetch_with_surrounding_whitespace()
+    test_render_prompt_allows_empty_semble_prefetch()
+    test_render_prompt_resolves_workflow_and_semble_placeholders_together()
+    test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()
+    test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
+    test_orchestrate_poll_workflow_bootstraps_semble_for_judges()
+    test_orchestrate_poll_workflow_adds_gated_setup_install_and_index_steps()
+    test_live_judge_templates_expose_semble_placeholder()
+    test_orchestrate_poll_process_wires_semble_for_all_judge_builders()
+    test_review_rb_judge_wires_semble_prefetch()
+    test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed()
+    print("OK: judge Semble prefetch contract assertions hold")
+    return 0
 
 
 if __name__ == "__main__":
