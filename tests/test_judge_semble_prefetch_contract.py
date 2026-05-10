@@ -155,6 +155,24 @@ def test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string() -> 
 	assert rendered == "Before\n\nAfter\n"
 
 
+def test_render_prompt_extra_env_none_unsets_inherited_workflow_flag() -> None:
+    previous = os.environ.get("ALLOW_WORKFLOW_EDITS")
+    os.environ["ALLOW_WORKFLOW_EDITS"] = "true"
+    try:
+        rendered = _render_prompt(
+            "{{WORKFLOW_EDIT_RESTRICTION}}\n",
+            "",
+            extra_env={"ALLOW_WORKFLOW_EDITS": None},
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("ALLOW_WORKFLOW_EDITS", None)
+        else:
+            os.environ["ALLOW_WORKFLOW_EDITS"] = previous
+
+    assert rendered == "- Do not change CI workflows.\n"
+
+
 def test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged() -> None:
     rendered = _render_prompt(
         "Before {{SEMBLE_PREFETCH}} After\n",
@@ -294,6 +312,7 @@ def main() -> int:
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
     test_render_prompt_resolves_workflow_and_semble_placeholders_together()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()
+    test_render_prompt_extra_env_none_unsets_inherited_workflow_flag()
     test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
     test_render_prompt_preserves_workflow_edit_restriction_contract()
     test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
