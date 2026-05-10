@@ -29,18 +29,23 @@ else
 	WORKFLOW_EDIT_RESTRICTION_LINE="- Do not change CI workflows."
 fi
 
+# {{SEMBLE_PREFETCH}} resolves from the optional ${SEMBLE_PREFETCH}
+# environment variable. Prompt consumers set it per render invocation so the
+# bounded Semble block stays in the dynamic prompt section and does not leak
+# across different prompt builds in the same shell process.
 SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
 
 line=""
 while IFS= read -r line || [ -n "${line}" ]; do
 	trimmed_line="${line#"${line%%[![:space:]]*}"}"
+	trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
 	case "${trimmed_line}" in
 		"{{WORKFLOW_EDIT_RESTRICTION}}")
 			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 			;;
 		"{{SEMBLE_PREFETCH}}")
 			if [ -n "${SEMBLE_PREFETCH_BLOCK}" ]; then
-				printf '%s\n' "${SEMBLE_PREFETCH_BLOCK}"
+				printf '%s\n' "${SEMBLE_PREFETCH_BLOCK%$'\n'}"
 			fi
 			;;
 		*)
@@ -54,7 +59,8 @@ if grep -Fq '{{WORKFLOW_EDIT_RESTRICTION}}' "${RENDERED_FILE}"; then
 	exit 1
 fi
 
-if grep -Fq '{{SEMBLE_PREFETCH}}' "${RENDERED_FILE}"; then
+if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}" \
+	|| { [ -z "${SEMBLE_PREFETCH_BLOCK}" ] && grep -Fq '{{SEMBLE_PREFETCH}}' "${RENDERED_FILE}"; }; then
 	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi

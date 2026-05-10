@@ -18,6 +18,14 @@ rm -f /tmp/_rb_judge_syntax_err
 
 set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
+if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
+  if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
+    SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
+  else
+    SUPPORT_ROOT_DIR="${SUPPORT_SCRIPTS_DIR}"
+  fi
+fi
+SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
@@ -57,6 +65,7 @@ build_review_blocked_semble_prefetch() {
 
   : > "${context_file}"
   if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
     || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
     || [ ! -s "${query_file}" ]; then
     return 0
@@ -282,7 +291,15 @@ RB_JUDGE_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/rb_judge_semble_context.txt"
 {
   printf '%s\n' 'Review-blocked judge PR remediation context.'
   printf '%s\n' "Issue ${FIRST_ISSUE:+#${FIRST_ISSUE}} PR #${PR_NUMBER} retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}."
-  append_semble_query_text_section 'Original requirement:' "${FIRST_ISSUE_BODY}" 4000
+  if [ -n "${FIRST_ISSUE_BODY}" ]; then
+    append_semble_query_text_section 'Original requirement:' "${FIRST_ISSUE_BODY}" 4000
+  else
+    append_semble_query_text_section \
+      'PR title/body:' \
+      "Title: $(jq -r '.title // ""' "${PR_META_FILE}")
+Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")" \
+      4000
+  fi
   append_semble_query_text_section 'PR metadata:' "${PR_META_JSON}" 2000
   append_semble_query_text_section 'PR diff:' "${PR_DIFF}" 6000
   append_semble_query_text_section 'PR comments:' "${PR_COMMENTS}" 3500
@@ -348,6 +365,7 @@ build_review_blocked_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "${RB_JUDGE
     echo "approach is fundamentally wrong."
   fi
 } > "${RB_JUDGE_PROMPT}"
+rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
 # -----------------------------------------------------------
 # Temporarily set judge reasoning effort in codex config
