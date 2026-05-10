@@ -35,6 +35,23 @@ fi
 # across different prompt builds in the same shell process.
 SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
 
+rendered_file_has_unresolved_semble_prefetch()
+{
+	local rendered_file="${1:?rendered_file required}"
+
+	# Semble query helpers wrap retrieved context in explicit delimiters.
+	# Ignore standalone placeholder lines inside those blocks so indexed
+	# prompt templates can be surfaced verbatim without tripping the
+	# top-level unresolved-placeholder guard.
+	awk '
+		BEGIN { in_semble = 0 }
+		/^[[:space:]]*=== SEMBLE: .* ===[[:space:]]*$/ { in_semble = 1; next }
+		/^[[:space:]]*=== END SEMBLE ===[[:space:]]*$/ { in_semble = 0; next }
+		!in_semble && /^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$/ { found = 1; exit }
+		END { exit(found ? 0 : 1) }
+	' "${rendered_file}"
+}
+
 line=""
 while IFS= read -r line || [ -n "${line}" ]; do
 	trimmed_line="${line#"${line%%[![:space:]]*}"}"
@@ -57,7 +74,7 @@ if grep -qE '^[[:space:]]*\{\{WORKFLOW_EDIT_RESTRICTION\}\}[[:space:]]*$' "${REN
 	exit 1
 fi
 
-if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+if rendered_file_has_unresolved_semble_prefetch "${RENDERED_FILE}"; then
 	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi

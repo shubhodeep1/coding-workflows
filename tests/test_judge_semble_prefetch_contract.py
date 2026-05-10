@@ -133,6 +133,27 @@ def test_render_prompt_rejects_unresolved_semble_prefetch_placeholder_output() -
     assert "Unresolved SEMBLE_PREFETCH placeholder" in proc.stderr
 
 
+def test_render_prompt_allows_placeholder_text_inside_semble_prefetch_block() -> None:
+    rendered = _render_prompt(
+        "Role: judge\n{{SEMBLE_PREFETCH}}\nFooter\n",
+        (
+            "=== SEMBLE: Judge Context ===\n"
+            "Indexed prompt excerpt:\n"
+            "{{SEMBLE_PREFETCH}}\n"
+            "=== END SEMBLE ===\n"
+        ),
+    )
+
+    assert rendered == (
+        "Role: judge\n"
+        "=== SEMBLE: Judge Context ===\n"
+        "Indexed prompt excerpt:\n"
+        "{{SEMBLE_PREFETCH}}\n"
+        "=== END SEMBLE ===\n"
+        "Footer\n"
+    )
+
+
 def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges() -> None:
     workflow = _read(ORCHESTRATE_POLL_WF)
     workspace_block = _step_block(workflow, "Create runtime workspace")
@@ -224,6 +245,7 @@ def main() -> int:
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
     test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
     test_render_prompt_rejects_unresolved_semble_prefetch_placeholder_output()
+    test_render_prompt_allows_placeholder_text_inside_semble_prefetch_block()
     test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
     test_live_judge_templates_declare_semble_prefetch_placeholder()
     test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only()
