@@ -30,15 +30,27 @@ Framing
 Each chunk is posted as a single GitHub comment whose body looks like:
 
     <!-- ORCHESTRATOR_STATE_V2 part=1/3 manifest=<64 hex chars> -->
-    <chunk bytes — a contiguous slice of the raw state JSON>
+    <chunk bytes — a slice of base64(full state JSON)>
     ORCHESTRATOR_STATE_V2 -->
 
+The full state JSON is base64-encoded BEFORE chunking, then sliced at
+arbitrary byte offsets.  base64 keeps every chunk in a 7-bit ASCII
+alphabet (A-Z, a-z, 0-9, +, /, =) so:
+  - splitting at any byte offset is safe — base64 has no multi-byte
+    characters, so a UTF-8 split bug is impossible (the underlying JSON
+    may legitimately contain non-ASCII text in user-authored fields like
+    issue titles or project_body_snapshot, which in raw bytes would be
+    at risk of being split mid-codepoint by a naive offset slicer);
+  - the V2 closer marker `\nORCHESTRATOR_STATE_V2 -->` cannot appear
+    inside a chunk because spaces and `-->` are outside the base64
+    alphabet, so the rfind reader cannot be confused by a chunk that
+    happens to embed the marker.
+
 The opener line is anchored to start-of-line for unambiguous extraction.
-The closer is `ORCHESTRATOR_STATE_V2 -->` on its own line; the rfind for
-`\nORCHESTRATOR_STATE_V2 -->` cleanly handles slices that themselves end
-with a newline byte.  The manifest is sha256(full state bytes) — every
-chunk in a single write carries the same manifest, so torn writes are
-trivially detected (incomplete chain or hash mismatch -> chain skipped).
+The closer is `ORCHESTRATOR_STATE_V2 -->` on its own line.  The manifest
+is sha256(full state bytes BEFORE base64) — every chunk in a single
+write carries the same manifest, so torn writes are trivially detected
+(incomplete chain or hash mismatch -> chain skipped).
 
 Backward compatibility
 ----------------------
@@ -51,6 +63,8 @@ single-chunk payloads to keep the write path uniform.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -94,6 +108,15 @@ def cmd_pack(args: argparse.Namespace) -> int:
 		print("state file is empty", file=sys.stderr)
 		return 2
 	manifest = hashlib.sha256(state_bytes).hexdigest()
+	# Base64-encode BEFORE chunking.  This is essential for correctness:
+	# the state JSON includes user-authored text (issue titles, bodies,
+	# project_body_snapshot) which routinely contains non-ASCII UTF-8
+	# (em-dashes, smart quotes, emoji).  A naive byte-offset slice can
+	# split a multi-byte UTF-8 sequence, producing invalid UTF-8 in the
+	# posted comment body — jq -Rs / GitHub will then either reject or
+	# normalise the bytes, breaking the sha256 manifest check on extract.
+	# base64 is single-byte ASCII so any byte boundary is a safe cut.
+	encoded = base64.b64encode(state_bytes)
 	chunk_size = args.chunk_size
 	if chunk_size <= 0 or chunk_size > GITHUB_COMMENT_BODY_CAP:
 		print(
@@ -101,12 +124,12 @@ def cmd_pack(args: argparse.Namespace) -> int:
 			file=sys.stderr,
 		)
 		return 2
-	total = max(1, (len(state_bytes) + chunk_size - 1) // chunk_size)
+	total = max(1, (len(encoded) + chunk_size - 1) // chunk_size)
 	out_dir = Path(args.out_dir)
 	out_dir.mkdir(parents=True, exist_ok=True)
 	files: list[str] = []
 	for i in range(1, total + 1):
-		slice_bytes = state_bytes[(i - 1) * chunk_size : i * chunk_size]
+		slice_bytes = encoded[(i - 1) * chunk_size : i * chunk_size]
 		framed = _frame(i, total, manifest, slice_bytes)
 		if len(framed) > GITHUB_COMMENT_BODY_CAP:
 			# Should never happen with DEFAULT_CHUNK_SIZE, but guard just
@@ -126,6 +149,7 @@ def cmd_pack(args: argparse.Namespace) -> int:
 		"total": total,
 		"files": files,
 		"raw_bytes": len(state_bytes),
+		"encoded_bytes": len(encoded),
 		"chunk_size": chunk_size,
 	}))
 	return 0
@@ -209,10 +233,26 @@ def cmd_extract(args: argparse.Namespace) -> int:
 			continue
 		# Check completeness: every part 1..N present?
 		if len(slot) == total and all(p in slot for p in range(1, total + 1)):
-			stitched = "".join(slot[p] for p in range(1, total + 1))
-			digest = hashlib.sha256(stitched.encode("utf-8")).hexdigest()
+			stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
+			# Strip any whitespace the comment renderer / round-trip
+			# might have introduced; standard base64 has no whitespace.
+			compact_b64 = re.sub(r"\s+", "", stitched_b64)
+			try:
+				decoded = base64.b64decode(compact_b64, validate=True)
+			except (binascii.Error, ValueError):
+				# Corrupted or non-base64 payload.  Drop this manifest
+				# and keep walking older comments for an earlier
+				# intact chain.
+				parts_by_manifest.pop(manifest, None)
+				totals_by_manifest[manifest] = -1
+				continue
+			digest = hashlib.sha256(decoded).hexdigest()
 			if digest == manifest:
-				sys.stdout.write(stitched)
+				# Write raw bytes through the buffer so non-UTF-8
+				# state bytes round-trip unchanged.  In practice the
+				# orchestrator state is JSON (UTF-8) but we never
+				# assume that.
+				sys.stdout.buffer.write(decoded)
 				return 0
 			# Hash mismatch — corrupted or truncated chunk(s).  Drop
 			# this manifest and keep walking older comments for an
