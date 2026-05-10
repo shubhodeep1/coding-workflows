@@ -40,8 +40,8 @@ REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="12000"
 REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES="12000"
 if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then
   # shellcheck disable=SC1090
-  if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"; then
-    if type semble_query_block >/dev/null 2>&1; then
+  if source "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null; then
+    if declare -F semble_query_block >/dev/null 2>&1; then
       REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="true"
     else
       echo "::warning::${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh did not provide semble_query_block; continuing without Semble review-blocked judge context." >&2
@@ -71,6 +71,7 @@ render_review_rb_semble_prefetch() {
   local prefetch_text=""
 
   if [ "${REVIEW_RB_SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
     || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
     || [ ! -s "${query_file}" ]; then
     return 0

@@ -305,7 +305,7 @@ jobs:
               src=".codex-workflow-src-main/scripts/${f}"
             fi
             if [ ! -f "${src}" ]; then
-              echo "::notice::Optional Semble support script ${f} is unavailable on ${SCRIPT_REF}; legacy path remains active."
+              echo "::warning::Optional Semble support script ${f} is unavailable on ${SCRIPT_REF} in the checked-out support sources; legacy path remains active."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -399,9 +399,10 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+
           if [ ! -f scripts/install_semble.sh ]; then
-            echo "::warning::Optional Semble installer is unavailable on ${SCRIPT_REF}; leaving Semble disabled for this poll run."
-            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "::warning::Optional Semble installer is unavailable on ${SCRIPT_REF} (scripts/install_semble.sh missing from staged workflow support files); leaving Semble disabled for this poll run."
             exit 0
           fi
 
@@ -442,7 +443,7 @@ jobs:
             echo "SEMBLE_BIN=${semble_bin}" >> "$GITHUB_ENV"
             echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
           else
-            echo "::warning::Semble index build failed; continuing without Semble-backed judge context."
+            echo "::warning::Semble index build failed; continuing without Semble-backed prompt context."
             tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
             rm -rf "${semble_index_path}"
           fi

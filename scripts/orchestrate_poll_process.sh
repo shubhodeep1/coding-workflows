@@ -29,7 +29,7 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
-# shellcheck source=semble_helpers.sh
+# shellcheck source=scripts/semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
 JUDGE_SEMBLE_MAX_CHUNKS="4"
 JUDGE_SEMBLE_QUERY_MAX_BYTES="12000"
@@ -146,6 +146,7 @@ render_judge_semble_prefetch_from_query_file() {
   local prefetch_text=""
 
   if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
     || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
     || [ ! -s "${query_file}" ]; then
     return 0

@@ -37,6 +37,8 @@ def _step_block(text: str, step_name: str) -> str:
 def _render_prompt(
     prompt_text: str,
     semble_prefetch: str | None,
+    *,
+    allow_workflow_edits: str | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
@@ -48,6 +50,8 @@ def _render_prompt(
         if extra_env:
             env.update(extra_env)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if allow_workflow_edits is not None:
+            env["ALLOW_WORKFLOW_EDITS"] = allow_workflow_edits
         if semble_prefetch is None:
             env.pop("SEMBLE_PREFETCH", None)
         else:
@@ -69,10 +73,17 @@ def _render_prompt(
         return proc.stdout
 
 
-def test_render_prompt_replaces_semble_prefetch_and_guards_placeholder() -> None:
+def test_render_prompt_replaces_semble_prefetch_and_existing_placeholder() -> None:
+    render_prompt = _read(RENDER_PROMPT)
+    assert '"{{WORKFLOW_EDIT_RESTRICTION}}")' in render_prompt
+    assert '"{{SEMBLE_PREFETCH}}")' in render_prompt
+    assert "Unresolved WORKFLOW_EDIT_RESTRICTION placeholder" in render_prompt
+    assert "Unresolved SEMBLE_PREFETCH placeholder" in render_prompt
+
     rendered = _render_prompt(
-        "Header\n{{SEMBLE_PREFETCH}}\nFooter\n",
+        "Header\n{{SEMBLE_PREFETCH}}\n{{WORKFLOW_EDIT_RESTRICTION}}\nFooter\n",
         "=== SEMBLE: Judge Context ===\nchunk one\n=== END SEMBLE ===\n",
+        allow_workflow_edits="true",
     )
 
     assert rendered == (
@@ -80,12 +91,9 @@ def test_render_prompt_replaces_semble_prefetch_and_guards_placeholder() -> None
         "=== SEMBLE: Judge Context ===\n"
         "chunk one\n"
         "=== END SEMBLE ===\n"
+        "- CI workflow edits under .github/workflows/ are permitted when required by the approved plan; keep changes inside the plan's stated file scope.\n"
         "Footer\n"
     )
-
-    render_text = _read(RENDER_PROMPT)
-    assert '"{{SEMBLE_PREFETCH}}")' in render_text
-    assert "Unresolved SEMBLE_PREFETCH placeholder" in render_text
 
 
 def test_render_prompt_preserves_multiline_semble_prefetch_verbatim() -> None:
@@ -104,7 +112,6 @@ def test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace() -> 
         "Role: judge\n  {{SEMBLE_PREFETCH}}   \nFooter\n",
         "=== SEMBLE: Judge Context ===\nchunk",
     )
-
     assert "{{SEMBLE_PREFETCH}}" not in rendered
     assert "=== SEMBLE: Judge Context ===" in rendered
     assert "chunk" in rendered
@@ -169,17 +176,21 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workspace_block
 
     assert "for f in install_semble.sh semble_helpers.sh; do" in stage_block
+    assert '_fetched_scripts+=("${f}")' in stage_block
     assert "Optional Semble support script ${f} is unavailable" in stage_block
     assert "legacy path remains active" in stage_block
 
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in setup_block
     assert "uses: astral-sh/setup-uv@v3" in setup_block
+
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in install_block
-    assert 'if [ ! -f scripts/install_semble.sh ]; then' in install_block
-    assert 'if ! bash scripts/install_semble.sh; then' in install_block
     assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block
+    assert 'if [ ! -f scripts/install_semble.sh ]; then' in install_block
+    assert 'scripts/install_semble.sh missing from staged workflow support files' in install_block
+    assert 'if ! bash scripts/install_semble.sh; then' in install_block
     assert 'SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"' in install_block
     assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
+
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in index_block
     assert 'semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"' in index_block
     assert 'echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"' in index_block
@@ -193,27 +204,39 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert workflow.find("- name: Build semble index") < workflow.find("- name: Process each tracking issue")
 
 
-def test_live_judge_templates_declare_semble_prefetch_placeholder() -> None:
+def test_live_judge_templates_expose_semble_placeholder() -> None:
     for path in [MODE_JUDGE, MODE_JUDGE_REVIEW_BLOCKED, MODE_JUDGE_STALL_RECOVERY]:
-        assert "{{SEMBLE_PREFETCH}}" in _read(path), f"missing Semble placeholder in {path.name}"
+        text = _read(path)
+        assert "{{SEMBLE_PREFETCH}}" in text, f"missing Semble placeholder in {path.name}"
+        assert text.count("{{SEMBLE_PREFETCH}}") == 1, f"expected one Semble placeholder in {path.name}"
 
 
-def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only() -> None:
+def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges() -> None:
     text = _read(ORCHESTRATE_POLL_PROCESS)
 
     assert 'if [ -f "scripts/semble_helpers.sh" ]; then' in text
     assert 'SEMBLE_HELPERS_AVAILABLE="false"' in text
+    assert 'JUDGE_SEMBLE_MAX_CHUNKS="4"' in text
+    assert 'append_judge_semble_query_text()' in text
     assert 'render_judge_semble_prefetch_from_query_file()' in text
     assert '_append_judge_semble_query_section()' not in text
     assert '_build_judge_semble_prefetch()' not in text
+    assert 'judge_semble_prefetch="$(_build_judge_semble_prefetch' not in text
+    assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch' not in text
+    assert 'JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch' not in text
+    assert 'judge_semble_prefetch="$(build_semble_prefetch_block' not in text
+    assert 'stall_judge_semble_prefetch="$(build_semble_prefetch_block' not in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block' not in text
+    assert 'JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block' not in text
+    assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"' in text
+    assert 'stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context")"' in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
+    assert 'JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context")"' in text
+    assert "printf '%s\\n' \"${judge_semble_prefetch}\"" in text
     assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in text
     assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in text
     assert 'SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt' in text
-    assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"' in text
-    assert "printf '%s\\n' \"${judge_semble_prefetch}\"" in text
-    assert 'integration_judge_semble_prefetch="$(_build_judge_semble_prefetch' not in text
-    assert 'stall_judge_semble_prefetch="$(_build_judge_semble_prefetch "${stall_judge_semble_query}"' not in text
-    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(_build_judge_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY}"' not in text
     assert 'bash scripts/render_prompt.sh prompts/mode-orchestrate-poll-judge.txt' not in text
 
 
@@ -225,9 +248,12 @@ def test_review_rb_judge_sources_semble_helpers_and_passes_prefetch_to_renderer(
     assert 'SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"' in text
     assert 'if [ -f "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh" ]; then' in text
     assert 'REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"' in text
+    assert 'append_review_rb_semble_query_section()' in text
+    assert 'render_review_rb_semble_prefetch()' in text
+    assert 'build_review_blocked_semble_query()' not in text
+    assert 'build_review_blocked_semble_prefetch()' not in text
     assert 'append_judge_semble_query_section()' not in text
     assert 'build_judge_semble_prefetch()' not in text
-    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(build_judge_semble_prefetch' not in text
     assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
     assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"' in text
 
@@ -240,7 +266,7 @@ def test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed() -> None:
 
 
 def main() -> int:
-    test_render_prompt_replaces_semble_prefetch_and_guards_placeholder()
+    test_render_prompt_replaces_semble_prefetch_and_existing_placeholder()
     test_render_prompt_preserves_multiline_semble_prefetch_verbatim()
     test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
@@ -248,8 +274,8 @@ def main() -> int:
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()
     test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
     test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
-    test_live_judge_templates_declare_semble_prefetch_placeholder()
-    test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges_only()
+    test_live_judge_templates_expose_semble_placeholder()
+    test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges()
     test_review_rb_judge_sources_semble_helpers_and_passes_prefetch_to_renderer()
     test_unwired_orchestrate_poll_judge_prompt_remains_unconsumed()
     print("OK: judge Semble prefetch contract assertions hold")
