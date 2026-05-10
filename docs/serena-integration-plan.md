@@ -479,16 +479,18 @@ rollout PR so future readers see the decision was deliberate.
 |  3. Cheap gates run first (label gate, no-linked-issue exit,   |
 |     comment-only check). Workflow may short-circuit here       |
 |     paying NO Serena cost.                                     |
-|  4. setup_serena.sh (NEW):                                     |
+|  4. write_codex_config.sh runs as today (atomically rewrites   |
+|     ~/.codex/config.toml from a fresh template — see §4.4).    |
+|  5. setup_serena.sh (NEW), runs AFTER write_codex_config.sh    |
+|     so the [mcp_servers.serena] block survives the atomic      |
+|     rewrite (the writer's emit path is intentionally           |
+|     untouched; the Serena block is appended on top):           |
 |       - Install Serena via uv (pinned version)                 |
 |       - Write .serena/project.yml                              |
 |       - Probe MCP handshake (15s timeout)                      |
-|       - On probe success → write [mcp_servers.serena] block    |
-|         into ~/.codex/config.toml (post write_codex_config.sh) |
+|       - On probe success → append [mcp_servers.serena] block   |
+|         into ~/.codex/config.toml                              |
 |       - On probe failure → SERENA_AVAILABLE=false, no block    |
-|  5. write_codex_config.sh runs as today; the Serena block is   |
-|     appended *after* its output (not edited into its emit      |
-|     path, so the central writer's tests stay green).           |
 |  6. build_static_context.sh <phase> <static.txt>               |
 |  7. render_prompt.sh fills {{SERENA_TOOL_HINTS}} based on      |
 |     SERENA_AVAILABLE.                                          |
@@ -662,8 +664,13 @@ For each in-scope workflow, the `setup_serena.sh` step is placed
 The gate-to-setup ordering is enforced by step order in the workflow
 YAML. A workflow-log-analysis assertion (added in Phase 1, Phase 5
 verification) flags any run where `setup_serena.sh` ran but the job
-exited within 30s without a `codex exec` step — that pattern is the
-fingerprint of a gate ordering regression.
+exited within 90s without a `codex exec` step — that pattern is the
+fingerprint of a gate ordering regression. The 90s floor is generous
+on purpose: `setup_serena.sh` itself runs `uv` install plus a 15s MCP
+handshake probe, which on a slow runner can legitimately consume
+30–60s before any `codex exec` would have started, so a tighter
+threshold (e.g. 30s) would produce false positives. Tune downward
+only if Phase 5 telemetry shows the lower bound has slack.
 
 ### 4.7 Sandbox / cleanup compatibility
 
@@ -999,7 +1006,7 @@ next time `setup_serena.sh` runs.
 | LSP server crashes mid-edit | low | medium | Serena's MCP layer surfaces the crash to codex as a tool-error response; the model falls back to `read`/`grep` for the rest of the loop. Stats collection captures crash count per phase via a new `SERENA_FALLBACK reason=lsp-crash` line. |
 | `.serena/` cache files leak into a Codex-produced diff and trip Guard 0 / Guard 1 | medium | medium | Phase 1 baseline-snapshot filter excludes `.serena/`; same pattern as `.codex-workflow-src*`. Regression test in `tests/test_implement_baseline_filter.py` (added in Phase 1). |
 | Reviewer pass accidentally inherits Serena (carve-out regression) | low | medium | The strip-mcp invariant in `review_run_reviewers.sh:193-200` handles this transparently. `tests/test_review_reviewer_strip_mcp.py` (added in Phase 3) asserts the carve-out continues to fire after the Serena block is added. |
-| Lazy bootstrap regression — Serena setup runs on a short-circuit path | medium | low | Workflow-log-analysis assertion (Phase 1) flags any `setup_serena.sh` run on a job that exited within 30s without `codex exec`. Surfaces as a `WORKFLOW_AUDIT` line in the periodic audit. |
+| Lazy bootstrap regression — Serena setup runs on a short-circuit path | medium | low | Workflow-log-analysis assertion (Phase 1) flags any `setup_serena.sh` run on a job that exited within 90s without `codex exec` (threshold rationale in §4.6 — the floor is set above the 30–60s `uv` install + 15s probe budget to avoid false positives on slow runners). Surfaces as a `WORKFLOW_AUDIT` line in the periodic audit. |
 | Stats lost to cancel/cleanup (the gap from `analysis/workflow-optimization-2026-05-02-3.md`) | medium | low | End-of-job stats step uses `if: always()` and runs *before* the `.serena/` cleanup step. Regression test in `tests/test_review_stats_preservation.py`. |
 | Static-prefix cache inadvertently breaks | very low | high | Phase 1 explicitly tests that `build_static_context.sh` output is byte-identical pre/post merge. CI assertion added. |
 | `apply_patch_tool_type` regression reopened | very low | high | This plan does not touch the editor config beyond appending an MCP block. `tests/test_write_codex_config.py` continues to enforce the `apply_patch_tool_type` setting (the MCP append happens *after* the writer, not inside it; the writer's TOML output is unchanged). |
@@ -1090,10 +1097,33 @@ Extend `scripts/cost_audit.py` with new buckets:
 - `serena_targets[target]` — target-scoped breakdown (call count /
   byte count / fallback count).
 - Estimated token-savings comparison: `editor_input_tokens_actual`
-  vs `editor_input_tokens_legacy_estimate` (the latter computed by
-  multiplying Serena query count by an empirical "tokens per
-  read+grep loop iteration" constant calibrated against pre-Serena
-  baselines).
+  vs `editor_input_tokens_legacy_estimate`. The legacy estimate is
+  computed *dynamically per call* — not via a fixed per-iteration
+  constant — because Serena tool responses (symbol bodies) vary by
+  one to two orders of magnitude across calls (a 10-line helper vs.
+  a 600-line class), and a single Serena call sometimes replaces
+  several legacy `read`/`grep` iterations and sometimes none.
+  Formula:
+
+      legacy_estimate = Σ_calls max(serena_response_bytes,
+                                    avg_legacy_slice_bytes)
+                        × tokens_per_byte
+
+  where `avg_legacy_slice_bytes` is calibrated from pre-Serena
+  baseline runs as the median bytes-per-`read` (codex's `read` tool
+  defaults to ~250 lines per call; the empirical median in the
+  pre-Serena baseline window is the right calibration target). The
+  `max(...)` floor handles the small-symbol case (a 30-byte
+  `find_symbol` response that would have cost a full file read in
+  the legacy path). For calls where the model would have issued
+  multiple legacy iterations (e.g. `find_referencing_symbols`
+  returning N caller sites that each would have been a separate
+  `read`), the multiplier defaults to 1 but is configurable per
+  Serena tool (`grep`-equivalent tools get a higher multiplier).
+  Configuration lives alongside the Serena tool list in
+  `scripts/cost_audit.py` so future Serena tool additions get an
+  explicit calibration entry rather than silently inheriting a
+  fixed constant.
 
 The periodic workflow-log-analysis (`prompts/mode-workflow-
 analysis.txt`) flags any workflow whose `serena_fallbacks /
@@ -1175,14 +1205,41 @@ preconditions for starting:
   to teach the model)? Default to names-only (the schemas are
   authoritative); revisit after Phase 2 if the model under-uses
   Serena.
-- **Q9.3**: `setup_serena.sh` writes the `[mcp_servers.serena]`
-  block by appending to `~/.codex/config.toml`. If a future MCP
-  server (Context7, Git) writes its block via a different append
-  path, do we need a coordinator to avoid TOML duplication? Not
-  today (the `[Unreleased]` CHANGELOG block describes the same
-  append pattern for Context7 and Git, presumably in the same
-  `setup_serena.sh`). If Context7 / Git move out of that script,
-  factor out the append helper.
+- **Q9.3**: Script naming and multi-MCP-server scope.
+  - **Q9.3a — should the script be named `setup_serena.sh` or
+    `setup_mcp.sh`?** Considered both. The plan describes the script
+    as the future home for Context7 / Git MCP wiring too (the
+    `[Unreleased]` CHANGELOG block documents the same append +
+    handshake-probe pattern for those servers and explicitly names
+    `setup_serena.sh` as the host). Two options:
+    - Keep `setup_serena.sh` (current plan): matches the existing
+      `[Unreleased]` CHANGELOG convention and the
+      `probe_mcp_handshake` helper already lives inside it. The
+      "serena" name is slightly misleading once Context7 / Git land
+      but reads as "the Serena-led MCP setup script", which is
+      accurate.
+    - Rename to `setup_mcp.sh`: more general; signals that the
+      script is the canonical MCP-bootstrap entry point. Cost: a
+      breaking rename per `CLAUDE.md` §6 (the CHANGELOG entry, any
+      docs referencing it, future grep history). Consumer repos do
+      not call this script directly (it runs from inside the
+      reusable workflow), so the breakage is contained.
+    - **Default: keep `setup_serena.sh`** to avoid the §6 rename
+      cost. Revisit if a fourth MCP server lands and the
+      single-server name becomes actively confusing. If the rename
+      ever happens, do it as an alongside-old shim: add
+      `scripts/setup_mcp.sh` that delegates to the existing script,
+      then migrate callers, then remove the old name (per §6's
+      alongside-old discipline).
+  - **Q9.3b — TOML append coordination**. `setup_serena.sh` appends
+    its `[mcp_servers.serena]` block. If Context7 / Git land later
+    via separate scripts, do we need a coordinator to avoid TOML
+    duplication / re-append on retry? Not today (the `[Unreleased]`
+    CHANGELOG block describes the same append pattern for all three
+    servers via the one script). If they move out, factor out a
+    shared `append_mcp_block` helper that idempotently re-appends
+    (i.e. detects an existing `[mcp_servers.<name>]` table and
+    replaces it in place rather than adding a duplicate header).
 - **Q9.4**: For the validate phase: do `discover` and `diagnose`
   benefit enough from Serena to justify the per-pass tool registration?
   Default to "yes — register, let the model decide whether to call".
