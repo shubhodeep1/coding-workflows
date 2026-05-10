@@ -523,6 +523,18 @@ _build_retry_prompt() {
   # conditional-block strip + key substitution can use a real
   # multi-line script rather than packing them into a one-liner with
   # walrus + list-comprehension hacks.
+  #
+  # Atomic write: render to a tempfile first, then `mv` into place.
+  # `set -euo pipefail` is in effect, so a non-zero `python3` exit
+  # (parse error, IO error, exception in the substitution loop)
+  # aborts the script and the destination file is left untouched —
+  # the orphan tempfile is non-fatal because RUNTIME_DIR is per-run
+  # ephemeral.  Without the tempfile pattern the `>` redirection
+  # would have already truncated the destination before python3
+  # exited, so any post-abort tooling reading the destination
+  # path would see a half-baked or empty prompt.
+  local _retry_tmp
+  _retry_tmp="$(mktemp)"
   SUPPRESS_VIOLATIONS_BODY="${_suppress_violations_body}" \
     PRELUDE_TPL="${_prelude_tpl}" \
     ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
@@ -533,7 +545,7 @@ _build_retry_prompt() {
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
     PREVIOUS_OUTCOME_NOTICE="${_outcome_notice}" \
-    python3 - > "${RESOLVER_RETRY_PROMPT_FILE}" <<'PY'
+    python3 - > "${_retry_tmp}" <<'PY'
 import os, re, sys
 
 tpl = open(os.environ['PRELUDE_TPL'], encoding='utf-8').read()
@@ -545,16 +557,43 @@ tpl = open(os.environ['PRELUDE_TPL'], encoding='utf-8').read()
 # removing only the marker lines themselves.
 #
 # Whitespace tolerance: the markers are matched with `[ \t]*` around
-# them, and the trailing newline is optional (`\n?`) so the closing
-# marker on the last line of a template without a final newline
-# still suppresses cleanly. Indented markers and trailing tabs /
-# spaces are also tolerated. The fallback assertion at the end of
-# this block emits a `::warning::` if a marker leaks through to the
-# rendered prompt anyway, so a template edit that breaks both the
-# regex and the fallback fails loudly rather than silently rendering
-# markers in the model's context.
-_marker_open = r'^[ \t]*\{\{#IF_VIOLATIONS\}\}[ \t]*\n?'
-_marker_close = r'^[ \t]*\{\{/IF_VIOLATIONS\}\}[ \t]*\n?'
+# the entire marker AND inside it (between `{{`, `#`/`/`,
+# `IF_VIOLATIONS`, and `}}`), and the trailing newline is optional
+# (`\n?`) so the closing marker on the last line of a template
+# without a final newline still suppresses cleanly. Indented
+# markers, trailing tabs / spaces, and editor-injected interior
+# whitespace (e.g. `{{# IF_VIOLATIONS }}`) are all tolerated.
+#
+# The fallback assertion before substitution counts the marker
+# pairs and emits a `::warning::` if anything other than 1+1 is
+# present (catches template edits that accidentally introduce
+# additional markers or strip one), so a malformed template that
+# would otherwise produce a partial-strip via the non-greedy
+# `.*?` match fails loudly.
+_marker_open = r'^[ \t]*\{\{[ \t]*#[ \t]*IF_VIOLATIONS[ \t]*\}\}[ \t]*\n?'
+_marker_close = r'^[ \t]*\{\{[ \t]*/[ \t]*IF_VIOLATIONS[ \t]*\}\}[ \t]*\n?'
+
+# Pre-substitution sanity check: the template should contain
+# exactly one open marker and one close marker. Anything else
+# means a template edit slipped past review (or the regex
+# definitions above drifted from the template shape) and the
+# downstream strip will produce a malformed prompt.  Fail loud
+# but do not abort — emit a `::warning::` to stderr so the
+# regression is diagnosable, and proceed with whatever the
+# regex can match.  Same fail-open philosophy as the existing
+# missing-template-file branch.
+_open_count = len(re.findall(_marker_open, tpl, flags=re.MULTILINE))
+_close_count = len(re.findall(_marker_close, tpl, flags=re.MULTILINE))
+if _open_count != 1 or _close_count != 1:
+    sys.stderr.write(
+        '::warning::Resolver retry prelude template has %d {{#IF_VIOLATIONS}} '
+        'opener(s) and %d {{/IF_VIOLATIONS}} closer(s); expected exactly 1 of '
+        'each. The conditional-strip regex may produce a partial or empty '
+        'suppression. Fix the template or the regex in '
+        'scripts/review_conflict_resolve.sh::_build_retry_prompt.\n'
+        % (_open_count, _close_count)
+    )
+
 if os.environ.get('SUPPRESS_VIOLATIONS_BODY') == '1':
     tpl = re.sub(
         _marker_open + r'.*?' + _marker_close,
@@ -565,6 +604,23 @@ if os.environ.get('SUPPRESS_VIOLATIONS_BODY') == '1':
 else:
     tpl = re.sub(_marker_open, '', tpl, flags=re.MULTILINE)
     tpl = re.sub(_marker_close, '', tpl, flags=re.MULTILINE)
+
+# Fail-loud guard: any leftover IF_VIOLATIONS marker in the
+# stripped template (BEFORE key substitution) means the regex
+# did not match the template's current shape. Checking before
+# substitution avoids false-positives from substitution payload
+# values that legitimately contain marker-like substrings (e.g.
+# a filename in MARKER_VIOLATION_FILES that happens to include
+# `{{#IF_VIOLATIONS}}` text). Same fail-open philosophy as the
+# count check above — warn but proceed.
+if '{{#IF_VIOLATIONS}}' in tpl or '{{/IF_VIOLATIONS}}' in tpl:
+    sys.stderr.write(
+        '::warning::Resolver retry prelude rendered with leftover '
+        '{{#IF_VIOLATIONS}}/{{/IF_VIOLATIONS}} markers after the conditional '
+        'strip — the regex did not match the template shape. The model will '
+        'see the literal markers in its prompt; fix the template or the regex '
+        'in scripts/review_conflict_resolve.sh::_build_retry_prompt.\n'
+    )
 
 keys = [
     'PREVIOUS_ATTEMPT_NUMBER',
@@ -578,26 +634,14 @@ keys = [
 for k in keys:
     tpl = tpl.replace('{{' + k + '}}', os.environ.get(k, ''))
 
-# Fail-loud guard: any leftover IF_VIOLATIONS marker in the rendered
-# template means the regex above did not match the template's
-# current shape (e.g. someone edited the prelude and broke the
-# whitespace contract). Emit a `::warning::` to stderr so the
-# regression is visible in the workflow log; do not abort because
-# the worst case is that the model sees a stray '{{#IF_VIOLATIONS}}'
-# / '{{/IF_VIOLATIONS}}' line, which is cosmetic noise rather than
-# a correctness failure.
-if '{{#IF_VIOLATIONS}}' in tpl or '{{/IF_VIOLATIONS}}' in tpl:
-    sys.stderr.write(
-        '::warning::Resolver retry prelude rendered with leftover '
-        '{{#IF_VIOLATIONS}}/{{/IF_VIOLATIONS}} markers — the conditional-strip '
-        'regex did not match the template shape. The model will see the '
-        'literal markers in its prompt; fix the template or the regex in '
-        'scripts/review_conflict_resolve.sh::_build_retry_prompt.\n'
-    )
-
 orig = open(os.environ['ORIGINAL_PROMPT_FILE'], encoding='utf-8', errors='replace').read()
 sys.stdout.write(tpl + orig)
 PY
+  # Atomic install of the rendered prompt.  Reaching this line
+  # means python3 exited 0 (set -e would have aborted otherwise),
+  # so the tempfile is fully-written and a single mv replaces
+  # the destination atomically.
+  mv "${_retry_tmp}" "${RESOLVER_RETRY_PROMPT_FILE}"
 }
 
 # _scan_residual_markers: write the list of in-scope files that
