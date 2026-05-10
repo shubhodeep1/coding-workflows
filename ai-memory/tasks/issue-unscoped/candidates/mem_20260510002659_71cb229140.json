@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:97-113, 205-212 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The new empty-string Semble prefetch test duplicates the existing None-based test and exercises the same render_prompt.sh behavior.\n  WHY: `${SEMBLE_PREFETCH:-}` treats unset and empty identically, so this adds no new coverage; reviewers agreed it is harmless but redundant.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `add_identifier(os.path.basename(match))` can emit repeated basenames when different paths share the same filename.\n  WHY: the `seen` set only deduplicates exact strings, so distinct full paths can still contribute the same basename and bloat the Semble query; one reviewer disputed this as harmless/redundant.\n- scripts/targeted_file_context.py:141-148 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_log_semble_event` can emit unquoted `key=0` / `key=` values because it only quotes when whitespace is present.\n  WHY: one reviewer flagged empty-string and zero-value handling as ambiguous in logs, while others said empty strings are already quoted and current callers pass non-empty values.\n- scripts/implement_diagnose_post_codex_failure.sh:483-484 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The diagnose path hardcodes `6` for the Semble max_chunks argument.\n  WHY: the value is not tied to the shared chunk cap, so it could drift if the global limit changes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_judge_semble_prefetch_contract.py:104-108 vs. 97-101 | confidence=3\n  PROBLEM: The new test passes SEMBLE_PREFETCH=\"\" while the existing test uses None.\n  WHY: `render_prompt.sh` treats unset and empty the same way, so the two tests exercise the same code path and rendered output.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=1\n  PROBLEM: Claimed that os.path.basename(match) could produce duplicates not caught by the seen set.\n  WHY: re.findall returns only the captured basename strings and add_identifier() already deduplicates exact values, so the extra os.path.basename call is redundant but harmless.\n- scripts/targeted_file_context.py:141-148 | confidence=1\n  PROBLEM: Claimed that str(value) producing \"\" would not trigger the whitespace fallback, causing key= without quoting.\n  WHY: not rendered is true for empty strings, so repr(\"\") is emitted as key=''; current call sites don't produce an empty-string value.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:~419-421 | confidence=3\n  PROBLEM: The code collects identifiers from file paths using two regex passes, which can leave duplicate basenames in the query.\n  WHY: `seen` only prevents exact duplicates, so the same basename can be added again when it comes from a different full path.\n- scripts/targeted_file_context.py:141-148 | confidence=1\n  PROBLEM: Empty value logging was flagged as a potential issue.\n  WHY: this appears already handled because `if not rendered` catches empty strings and quotes them, so the finding is not a runtime bug.\n- tests/test_judge_semble_prefetch_contract.py:104-109, 205-209 | confidence=3\n  PROBLEM: The new `test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()` is redundant with `test_render_prompt_drops_semble_prefetch_placeholder_when_empty()`.\n  WHY: both verify that falsy SEMBLE_PREFETCH values render identically, so the added test does not expand coverage.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/targeted_file_context.py:141-148 | confidence=2\n  PROBLEM: The logging function doesn't handle empty strings and numeric zero values correctly.\n  WHY: values like `\"\"` and `0` can be emitted without explicit quoting, which may make log parsing ambiguous.\n- tests/test_judge_semble_prefetch_contract.py:104-109, 206-212 | confidence=3\n  PROBLEM: This test duplicates coverage of `test_render_prompt_drops_semble_prefetch_placeholder_when_empty()`.\n  WHY: `render_prompt.sh` treats `None` and `\"\"` the same way, so the added test is redundant and adds maintenance cost without value.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=3\n  PROBLEM: Duplicate basenames can appear in the Semble query identifiers.\n  WHY: different full paths with the same filename can both contribute the same basename, which wastes tokens in the query text.\n- scripts/implement_diagnose_post_codex_failure.sh:483-484 | confidence=2\n  PROBLEM: The `semble_query_block` call uses `6` as a hardcoded max_chunks value.\n  WHY: the diagnose phase can drift from the global chunk cap if that value changes, causing inconsistent context sizes.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:104-113, 206-212 | confidence=4\n  PROBLEM: New test duplicates coverage of `test_render_prompt_drops_semble_prefetch_placeholder_when_empty()`.\n  WHY: both verify the same `{{SEMBLE_PREFETCH}}` drop behavior for falsy inputs, and `render_prompt.sh` treats `None` and `\"\"` identically.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=4\n  PROBLEM: `seen=set()` dedups exact strings, but `basename(\"path1/foo.py\")` and `basename(\"path2/foo.py\")` can both add `foo.py` to `identifiers`.\n  WHY: `\"\\n\".join(identifiers[:40])` can then emit repeated basenames in `DIAGNOSE_SEMBLE_QUERY_FILE`, making the query noisier.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "431deef547af75d194509e08bae6e7397224595d194e0b48803e2e59890aff47",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2419,
+    "run_id": "25615188778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25615188778",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510002659_71cb229140",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2419,
+    "run_id": "25615188778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T00:26:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
