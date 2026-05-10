@@ -2,7 +2,7 @@
 """cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
 
 Pulls the last N runs per workflow via `gh`, fetches each run's log, and
-aggregates token usage per workflow. Two patterns are recognised:
+aggregates token usage per workflow. Three patterns are recognised:
 
   1. Codex CLI ("tokens used\\n<N>") — emitted by clarify, plan, implement,
      validate, orchestrate*, orchestrate_clarify_respond.
@@ -10,6 +10,9 @@ aggregates token usage per workflow. Two patterns are recognised:
      completion_tokens=N total_tokens=N cache_creation_input_tokens=N
      cache_read_input_tokens=N") — emitted by review_autofix via
      scripts/review_run_reviewers.sh.
+  3. Semble telemetry (`SEMBLE_QUERY ... bytes=N` and
+     `SEMBLE_FALLBACK ...`) — emitted by Semble-backed prompt-context
+     helpers.
 
 Output: stdout markdown table + per-run JSON file.
 
@@ -68,6 +71,14 @@ OPENROUTER_RE = re.compile(
     r"cache_read_input_tokens=(?P<cr>" + _NUM + r")"
 )
 
+SEMBLE_QUERY_RE = re.compile(r"(?:^|\s)SEMBLE_QUERY(?:\s|$)")
+SEMBLE_FALLBACK_RE = re.compile(r"(?:^|\s)SEMBLE_FALLBACK(?:\s|$)")
+
+
+def _extract_log_field(line: str, field: str) -> Optional[str]:
+    m = re.search(rf"(?:^|\s){re.escape(field)}=([^\s]+)", line)
+    return m.group(1) if m else None
+
 
 def gh(args: List[str]) -> Optional[str]:
     """Run gh and return stdout, or None on failure (stderr to our stderr)."""
@@ -116,6 +127,10 @@ def parse_log(log: str) -> dict:
         "or_cache_read_tokens": 0,
         "or_calls": 0,
         "or_phases": defaultdict(lambda: defaultdict(int)),
+        "semble_query_calls": 0,
+        "semble_query_bytes": 0,
+        "semble_fallbacks": 0,
+        "semble_targets": defaultdict(lambda: defaultdict(int)),
     }
 
     for m in CODEX_TOKENS_RE.finditer(log):
@@ -149,7 +164,21 @@ def parse_log(log: str) -> dict:
         out["or_phases"][phase]["total_tokens"] += tt
         out["or_phases"][phase]["calls"] += 1
 
+    for line in log.splitlines():
+        if SEMBLE_QUERY_RE.search(line):
+            target = _extract_log_field(line, "target") or "unknown"
+            logged_bytes = _to_int(_extract_log_field(line, "bytes") or "0")
+            out["semble_query_calls"] += 1
+            out["semble_query_bytes"] += logged_bytes
+            out["semble_targets"][target]["query_calls"] += 1
+            out["semble_targets"][target]["bytes"] += logged_bytes
+        elif SEMBLE_FALLBACK_RE.search(line):
+            target = _extract_log_field(line, "target") or "unknown"
+            out["semble_fallbacks"] += 1
+            out["semble_targets"][target]["fallbacks"] += 1
+
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
+    out["semble_targets"] = {p: dict(v) for p, v in out["semble_targets"].items()}
     return out
 
 
@@ -191,6 +220,10 @@ def main() -> int:
             "or_cache_read_tokens": 0,
             "or_calls": 0,
             "or_phases": defaultdict(lambda: defaultdict(int)),
+            "semble_query_calls": 0,
+            "semble_query_bytes": 0,
+            "semble_fallbacks": 0,
+            "semble_targets": defaultdict(lambda: defaultdict(int)),
         }
 
         for i, r in enumerate(runs, 1):
@@ -205,16 +238,25 @@ def main() -> int:
                 sys.stderr.write("skip (log unavailable)\n")
                 continue
             parsed = parse_log(log)
-            if parsed["codex_tokens_used"] or parsed["or_calls"]:
+            if (
+                parsed["codex_tokens_used"]
+                or parsed["or_calls"]
+                or parsed["semble_query_calls"]
+                or parsed["semble_fallbacks"]
+            ):
                 agg["runs_with_data"] += 1
             for k in ("codex_tokens_used", "codex_calls", "or_prompt_tokens",
                       "or_completion_tokens", "or_total_tokens",
                       "or_cache_write_tokens", "or_cache_read_tokens",
-                      "or_calls"):
+                      "or_calls", "semble_query_calls",
+                      "semble_query_bytes", "semble_fallbacks"):
                 agg[k] += parsed[k]
             for phase, vals in parsed["or_phases"].items():
                 for k, v in vals.items():
                     agg["or_phases"][phase][k] += v
+            for target, vals in parsed["semble_targets"].items():
+                for k, v in vals.items():
+                    agg["semble_targets"][target][k] += v
             per_run.append({
                 "workflow": wf,
                 "run_id": rid,
@@ -225,15 +267,20 @@ def main() -> int:
                     "codex_tokens_used", "codex_calls", "or_prompt_tokens",
                     "or_completion_tokens", "or_total_tokens",
                     "or_cache_write_tokens", "or_cache_read_tokens", "or_calls",
+                    "semble_query_calls", "semble_query_bytes", "semble_fallbacks",
                 )},
+                "semble_targets": parsed["semble_targets"],
             })
             sys.stderr.write(
                 f"codex={fmt(parsed['codex_tokens_used'])} "
                 f"or_total={fmt(parsed['or_total_tokens'])} "
-                f"or_calls={parsed['or_calls']}\n"
+                f"or_calls={parsed['or_calls']} "
+                f"semble_bytes={fmt(parsed['semble_query_bytes'])} "
+                f"semble_fallbacks={fmt(parsed['semble_fallbacks'])}\n"
             )
 
         agg["or_phases"] = {p: dict(v) for p, v in agg["or_phases"].items()}
+        agg["semble_targets"] = {p: dict(v) for p, v in agg["semble_targets"].items()}
         per_wf[wf] = agg
 
     # Markdown summary on stdout
@@ -270,6 +317,47 @@ def main() -> int:
                       f"{fmt(v.get('prompt_tokens', 0))} | "
                       f"{fmt(v.get('completion_tokens', 0))} | "
                       f"{fmt(v.get('total_tokens', 0))} |")
+            print()
+
+    semble_workflows = [
+        wf for wf, a in per_wf.items()
+        if a["semble_query_calls"] or a["semble_fallbacks"]
+    ]
+    if semble_workflows:
+        print("\n## Semble telemetry breakdown\n")
+        print("| Workflow | query_calls | logged_bytes | fallbacks |")
+        print("|---|---:|---:|---:|")
+        for wf in semble_workflows:
+            a = per_wf[wf]
+            print(
+                f"| {wf} | {fmt(a['semble_query_calls'])} | "
+                f"{fmt(a['semble_query_bytes'])} | {fmt(a['semble_fallbacks'])} |"
+            )
+
+        print()
+        for wf in semble_workflows:
+            targets = per_wf[wf]["semble_targets"]
+            if not targets:
+                continue
+            print(f"### {wf}\n")
+            print("| target | query_calls | logged_bytes | fallbacks |")
+            print("|---|---:|---:|---:|")
+            ordered_targets = sorted(
+                targets,
+                key=lambda t: (
+                    -targets[t].get("bytes", 0),
+                    -targets[t].get("query_calls", 0),
+                    -targets[t].get("fallbacks", 0),
+                    t,
+                ),
+            )
+            for target in ordered_targets:
+                vals = targets[target]
+                print(
+                    f"| {target} | {fmt(vals.get('query_calls', 0))} | "
+                    f"{fmt(vals.get('bytes', 0))} | "
+                    f"{fmt(vals.get('fallbacks', 0))} |"
+                )
             print()
 
     payload = {

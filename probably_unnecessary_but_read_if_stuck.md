@@ -18,6 +18,7 @@
 - §18 Orchestrator Integration-Sync Auto-Heal Hardening
 - §19 Workflow Checkout Integration-Ref Contract
 - §20 Autofix Retrigger Dedup (with subsections 20.1–20.10)
+- §21 Semble rollout and observability
 
 **From `README.md`:**
 - Workflow Log Analysis And Improvement
@@ -683,4 +684,20 @@ The analyzer is now a context-prep stage only — it loads the collector report,
 - Model resolution for the Codex passes only: the workflow defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.4` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL`.
 - `main` prints the analysis-context path on stdout and exits non-zero on input/write errors only.
 
+## 21. Semble rollout and observability
 
+- `SEMBLE_ENABLED` defaults to `false`. That default is intentional: Semble-backed context retrieval is opt-in per caller repo until operators are ready to soak it.
+- The install/index path lives in the reusable workflows under `.github/workflows/`, not in `workflow-templates/*.yml`. Consumer templates stay thin `uses:` wrappers pinned to `@stable`; a job that uses a reusable workflow cannot also define its own `steps:` block for local install/index setup.
+- Merging Semble changes on this repo's `main` branch updates the source-of-truth reusable workflows for this repo's own internal wrappers, but consumer repos do not receive those changes until a separate operational step cuts a new `@stable` tag. That tag cut and the downstream repository-dispatch fanout are operational rollout steps, not part of a docs/observability-only issue.
+- Expected success telemetry in job logs:
+  - `SEMBLE_QUERY target=<slug> chunks=<n> bytes=<m> ms=<t>` — Semble returned prompt context; `bytes` is the producer-reported size of the rendered Semble block, not a normalized end-to-end prompt-byte metric.
+  - `SEMBLE_FALLBACK target=<slug> ... reason=<...>` — fail-open fallback activated because Semble was unavailable, empty, timed out, or returned an error.
+- Interpretation guidance:
+  - Rare `SEMBLE_FALLBACK` lines are healthy fail-open behavior and should not block the pipeline.
+  - Repeated fallbacks for the same workflow/target over a rolling window usually mean the rollout is misconfigured (for example installer drift, missing index setup, or a query path that is systematically failing) rather than a one-off transient.
+  - `scripts/cost_audit.py` now aggregates Semble telemetry by workflow and `target=` because current emitters do not expose a universal `phase=` field. Prefer workflow+target trend checks over phase-name assumptions when triaging.
+- Operational checklist when Semble looks unhealthy:
+  1. Confirm the caller repo intentionally set `SEMBLE_ENABLED=true`.
+  2. Check the reusable-workflow run log for `Install semble` / `Build semble index` step outcomes.
+  3. Inspect whether fallbacks cluster on one `target=` value (for example `overflow`, `reviewer-context`, or `judge`) before broadening the investigation.
+  4. If consumer repos need the fix, remember that updating this repo alone is insufficient — the separate `@stable` promotion must happen after validation.

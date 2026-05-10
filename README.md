@@ -920,6 +920,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `ENABLE_LABEL_REPAIR_SWEEP` | `true` | Contract-defined gate for poller label-repair sweep. Current branch status: reserved (not consumed yet); `reconcile_managed_issue_labels` runs every poll cycle for current-wave managed issues. |
 | `LABEL_REPAIR_DRY_RUN` | `false` | Contract-defined dry-run mode for label repair. Current branch status: reserved (not consumed yet); label diffs are applied live when detected. |
 | `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` | `50` | Contract-defined cap for per-cycle label-repair mutations. Current branch status: reserved (not consumed yet); effective scope is the current-wave issue set. |
+| `SEMBLE_ENABLED` | `false` | Opt-in gate for Semble-backed context retrieval. Reusable workflows read this repo variable from the caller repo; the Semble install/index steps live in `.github/workflows/*.yml`, not in `workflow-templates/*.yml` wrapper copies. |
 
 ## Semantic Cache (Clarification Only)
 
@@ -1593,6 +1594,8 @@ coding-workflows/
   rather than `@stable`.
 
 Consumer repos pin to `@stable` for automatic updates or exact tags for reproducibility. This repo's own `internal-*.yml` wrappers pin `@main`.
+
+> **Semble rollout note.** `workflow-templates/*.yml` remain thin caller wrappers. The opt-in `SEMBLE_ENABLED` gate plus the Semble install/index steps live in the reusable workflows under `.github/workflows/`. Consumer repos pick up those reusable-workflow changes only after a new `@stable` tag is cut; merging changes on `main` here does not update already-installed consumer wrappers by itself.
 
 ## Contributing
 
