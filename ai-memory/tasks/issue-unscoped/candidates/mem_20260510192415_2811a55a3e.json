@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:400-428 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `_extract_state_payloads()` clears `v2_parts[manifest]` on a manifest-total mismatch but leaves `v2_totals[manifest]` stale, so later retries for the same manifest keep hitting the mismatch path.\n  WHY: Production `cmd_extract` resets the manifest to `-1` on mismatch, so the test helper diverges from production semantics and can suppress valid retry chains.\n- tests/test_orchestrate_poll_process.py:N/A | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The claimed regression test for the stale-`v2_totals` fix is not present in the tree.\n  WHY: The reviewer noted the editor summary promised `test_extract_state_payloads_resets_v2_total_after_mismatch_for_later_retry`, but grep found no such test and the fix was not persisted.\n- scripts/orchestrate_poll_process.sh:1198-1208 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: If `wc -c` fails or returns a non-numeric byte count, the V2 size guard can still fall through to payload processing instead of rejecting the payload.\n  WHY: That bypass defeats the intended fail-closed 8 MiB cap and would let corrupted or oversized V2 payloads through.\n- scripts/verify_integration_fingerprints.py:N/A | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `_looks_like_re_escape_output()` heuristic misclassifies literal strings containing backslashes as non-literal `re.escape()` output.\n  WHY: The unescape/re-escape round-trip changes backslash-containing literals, so substring-overlap dedup can be disabled for those diffs.\n- .github/workflows/test-and-mark-stable.yml:5063-5068 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `LOG_ANALYSIS` renders `cancelled`, `neutral`, and `timed_out` as `\u2717`.\n  WHY: Those states fall through to the wildcard arm, producing a misleading failed icon even though the job is display-only and does not gate release.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py:410-418 | confidence=4\n  PROBLEM: After a V2 manifest-total mismatch, `_extract_state_payloads()` pops `v2_parts[manifest]` but does not reset `v2_totals[manifest]`, so the stale total keeps future retries in the mismatch path.\n  WHY: Production sets `totals_by_manifest[manifest] = -1` on mismatch, so the test helper diverges from production semantics.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_process.py:413-421 | confidence=5\n  PROBLEM: `_extract_state_payloads()` leaves `v2_totals[manifest]` stale after a manifest-total mismatch, so later chunks for the same manifest are still compared against the old total.\n  WHY: A later valid retry chain for the same manifest will be incorrectly rejected because the helper never resets the mismatched total.\n- scripts/orchestrate_poll_process.sh:1198-1208 | confidence=4\n  PROBLEM: The V2 extract size guard can be bypassed when `wc -c` fails, because the code still proceeds instead of explicitly rejecting the payload.\n  WHY: A corrupted or malicious payload that triggers `wc -c` failure can bypass the intended 8 MiB protection.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:410-416 | confidence=4\n  PROBLEM: The test helper leaves `v2_totals[manifest]` stale after a manifest-total mismatch.\n  WHY: A later retry chunk for the same manifest with a different total will keep re-triggering the mismatch path instead of being treated as fresh.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_process.py:400-428 | confidence=4\n  PROBLEM: When a manifest-total mismatch is detected, `_extract_state_payloads()` removes `v2_parts[manifest]` but leaves `v2_totals[manifest]` unchanged.\n  WHY: A later legitimate retry write for the same manifest will compare against the stale total and stay trapped in the mismatch path.\n- tests/test_orchestrate_poll_process.py:N/A | confidence=5\n  PROBLEM: The editor summary claimed a regression test for the stale-total fix, but that test is not in the current HEAD.\n  WHY: `test_extract_state_payloads_resets_v2_total_after_mismatch_for_later_retry()` does not exist, so the stale-state bug has no regression coverage.\n- .github/workflows/test-and-mark-stable.yml:5063-5068 | confidence=4\n  PROBLEM: `LOG_ANALYSIS` renders non-success states like `cancelled`, `neutral`, and `timed_out` as `\u2717`.\n  WHY: Those states fall through to the wildcard arm, which is misleading even though the icon is display-only and does not gate release.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/verify_integration_fingerprints.py:N/A | confidence=4\n  PROBLEM: The unescape heuristic misclassifies literal backslashes in diff lines as non-literal output.\n  WHY: `re.escape('\\\\')` round-trips differently through the `re.sub(r\"\\\\(.)\", r\"\\1\", pattern)` check, so backslash-containing literals are treated as regex-ish.\n- tests/test_orchestrate_poll_process.py:~380-420 | confidence=4\n  PROBLEM: On manifest-total mismatch, `v2_parts.pop(manifest)` happens but `v2_totals[manifest]` is not reset, so later chunks for that manifest keep comparing against the stale total.\n  WHY: This makes the test helper skip valid V2 payloads after a prior mismatch and diverge from the production reader.\n- scripts/orchestrate_poll_process.sh:~1170-1200 | confidence=4\n  PROBLEM: If `wc -c` fails or returns a non-numeric size, the V2 payload size cap is not enforced before processing continues.\n  WHY: A malformed payload can bypass the intended 8 MiB guard and proceed into the poller.\n- .github/workflows/test-and-mark-stable.yml:~4794-5034 | confidence=3\n  PROBLEM: The notify job shows the `LOG_ANALYSIS` result with a failed icon for non-success states like `cancelled`, `neutral`, and `timed_out`.\n  WHY: The display is misleading for operators even though the job is non-blocking.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_orchestrate_poll_process.py:410-417 | confidence=4\n  PROBLEM: The test helper does not permanently disqualify manifests after a total mismatch, because it leaves `v2_totals[manifest]` stale.\n  WHY: A later valid retry chain for the same manifest would be incorrectly rejected by the helper, creating a test/production parity gap.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2916c460268b670fb8172757172d966e36e902c78747711713c25f8cc83f58d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2464,
+    "run_id": "25636499205",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25636499205",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510192415_2811a55a3e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2464,
+    "run_id": "25636499205"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T19:24:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
