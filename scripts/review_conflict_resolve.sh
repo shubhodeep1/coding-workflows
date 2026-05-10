@@ -13,9 +13,14 @@
 #   CONFLICT_RESOLVER_SUMMARY_FILE  Path resolver summary is written to.
 #   CONFLICT_RESOLVER_REASONING_EFFORT  Reasoning level applied to ~/.codex/config.toml
 #                                   before the retry loop. One of xhigh|high|medium|none;
-#                                   defaults to medium. Decoupled from EDITOR_REASONING_EFFORT
-#                                   so the smoke-test override (which sets editor reasoning
-#                                   to "none") doesn't starve the resolver.
+#                                   defaults to high (lowered from xhigh after runs
+#                                   25627236793 / 25627316961 hit `timeout`-killed retries
+#                                   on degenerate orchestrator-stack integrations — see the
+#                                   comment block on review_autofix.yml's
+#                                   CONFLICT_RESOLVER_REASONING_EFFORT env var). Decoupled
+#                                   from EDITOR_REASONING_EFFORT so the smoke-test override
+#                                   (which sets editor reasoning to "none") doesn't starve
+#                                   the resolver.
 #   MODEL_EDITOR                    Codex model id used for resolution.
 #   IS_WORKFLOW_SOURCE_REPO         "true" on the coding-workflows repo itself.
 #   SUPPORT_SCRIPTS_DIR             Path to check_resolver_diff.sh / verify_integration_fingerprints.py.
@@ -180,15 +185,19 @@ RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
 # that value; for smoke PRs that's fine since "low" doesn't trip the
 # empty-stdout failure mode. The pin here exists so that future changes
 # to the smoke override level don't accidentally starve the resolver:
-# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "xhigh"
+# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "high"
 # repo-wide) overrides config.toml unconditionally before the resolver
 # runs. PR #2058 / run 25300219172 originally hit this with override=none.
+# Default was lowered from "xhigh" to "high" after runs 25627236793 and
+# 25627316961 hit a hung-thinking failure mode at "xhigh" — see the
+# comment block on review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT
+# env var for the full rationale.
 #
 # Override config.toml here using CONFLICT_RESOLVER_REASONING_EFFORT
-# (set by the workflow step's env, defaults to "xhigh"). Also ensure
+# (set by the workflow step's env, defaults to "high"). Also ensure
 # model_reasoning_summary = "auto" is present — same diagnostic +
 # anti-empty-stdout rationale as the editor step.
-_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}"
+_resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-high}"
 # Validate against known reasoning levels before interpolating into sed —
 # CONFLICT_RESOLVER_REASONING_EFFORT comes from a repo var
 # (vars.THINKING_LEVEL_CONFLICT_RESOLVER) so an unexpected value would
@@ -198,8 +207,8 @@ _resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}"
 case "${_resolver_reasoning_effort}" in
   xhigh|high|medium|none) ;;
   *)
-    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to xhigh."
-    _resolver_reasoning_effort="xhigh"
+    echo "::warning::Invalid CONFLICT_RESOLVER_REASONING_EFFORT='${_resolver_reasoning_effort}'; falling back to high."
+    _resolver_reasoning_effort="high"
     ;;
 esac
 _codex_config="${HOME}/.codex/config.toml"
