@@ -811,7 +811,12 @@ _cleanup_prompt_budget
 editor_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
-  bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
+  # The editor heredoc itself uses no `{{SEMBLE_PREFETCH}}`, but
+  # targeted_file_context.py can inline judge-prompt templates verbatim
+  # into the editor prompt body. Set SEMBLE_PREFETCH="" so any inlined
+  # placeholder lines are treated as resolved by render_prompt versions
+  # that support the placeholder, instead of tripping a strict guard.
+  SEMBLE_PREFETCH="" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
 ) > "${editor_prompt_rendered}"
 mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 

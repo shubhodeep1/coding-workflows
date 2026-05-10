@@ -116,6 +116,48 @@ def _fp_key(fp: Any) -> tuple[str, str] | None:
 	return (path, regex_src)
 
 
+def _substring_overlap_drops(
+	mc_with_keys: list[tuple[Any, tuple[str, str] | None]],
+	mnc_with_keys: list[tuple[Any, tuple[str, str] | None]],
+) -> set[tuple[str, str]]:
+	# Capture-side artefact: when a sub-issue extended an existing line
+	# by appending text (e.g. removed `foo bar.` and added
+	# `foo bar. When baz, accepted ...`), capture wraps both via
+	# re.escape() and stores the shorter regex under must_not_contain
+	# and the longer one under must_contain on the same file.  Under
+	# re.search (used by both verify modes here), any post-resolve tree
+	# that satisfies the longer must_contain trivially matches the
+	# shorter must_not_contain too, so the constraint pair is
+	# structurally unsatisfiable — the resolver burns its 3-attempt
+	# retry budget and times out at the step wall-clock cap on a hunk
+	# it cannot make pass.  Drop the must_not_contain side; the
+	# must_contain side already enforces the stronger intent (the
+	# longer added line being present).  Both regexes here come from
+	# re.escape on diff lines, so substring containment in the regex
+	# source is equivalent to substring containment in the literal
+	# matched text.  The capture half (orchestrate_poll_process.sh
+	# capture_intent_fingerprints_for_merged_subissue) applies the same
+	# filter at write time so freshly captured state files no longer
+	# admit the bad pair; this verifier-side check covers state files
+	# written before the capture-side fix landed.
+	drops: set[tuple[str, str]] = set()
+	for _, mc_key in mc_with_keys:
+		if mc_key is None:
+			continue
+		mc_path, mc_regex = mc_key
+		for _, mnc_key in mnc_with_keys:
+			if mnc_key is None:
+				continue
+			mnc_path, mnc_regex = mnc_key
+			if (
+				mnc_path == mc_path
+				and mnc_regex != mc_regex
+				and mnc_regex in mc_regex
+			):
+				drops.add(mnc_key)
+	return drops
+
+
 def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 	"""Return a sorted, de-duplicated list of file paths that currently
 	fail at least one fingerprint check against the cwd tree.
@@ -135,15 +177,23 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 		must_not_contain = entry.get("must_not_contain", []) or []
 
 		# Cross-dedup: skip (file, regex) pairs recorded in both lists
-		# for this issue (historic capture false positives).
+		# for this issue (historic capture false positives) and pairs
+		# where the must_not_contain regex is a literal substring of a
+		# must_contain regex on the same file (see
+		# :func:`_substring_overlap_drops`).  Stay silent in
+		# list-violated-files mode: the stdout contract is "file paths
+		# ONLY" and the verify path already emits the operator-visible
+		# warnings.
 		mc_with_keys = [(fp, _fp_key(fp)) for fp in must_contain]
 		mnc_with_keys = [(fp, _fp_key(fp)) for fp in must_not_contain]
 		mc_keys = {k for _, k in mc_with_keys if k is not None}
 		mnc_keys = {k for _, k in mnc_with_keys if k is not None}
 		shared_keys = mc_keys & mnc_keys
-		if shared_keys:
-			must_contain = [fp for fp, key in mc_with_keys if key not in shared_keys]
-			must_not_contain = [fp for fp, key in mnc_with_keys if key not in shared_keys]
+		substring_drops = _substring_overlap_drops(mc_with_keys, mnc_with_keys)
+		drops = shared_keys | substring_drops
+		if drops:
+			must_contain = [fp for fp, key in mc_with_keys if key not in drops]
+			must_not_contain = [fp for fp, key in mnc_with_keys if key not in drops]
 
 		for fp in must_contain:
 			if not isinstance(fp, dict):
@@ -217,6 +267,7 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 		mc_keys = {k for _, k in mc_with_keys if k is not None}
 		mnc_keys = {k for _, k in mnc_with_keys if k is not None}
 		shared_keys = mc_keys & mnc_keys
+		substring_drops = _substring_overlap_drops(mc_with_keys, mnc_with_keys)
 		if shared_keys:
 			print(
 				f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
@@ -224,8 +275,18 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 				f"must_contain and must_not_contain (capture-side refactor false positive).",
 				flush=True,
 			)
-			must_contain = [fp for fp, key in mc_with_keys if key not in shared_keys]
-			must_not_contain = [fp for fp, key in mnc_with_keys if key not in shared_keys]
+		if substring_drops:
+			print(
+				f"::warning::Fingerprint substring-overlap dedup for issue #{issue_num} (PR #{pr_num}): "
+				f"skipping {len(substring_drops)} must_not_contain pattern(s) whose regex is a literal "
+				f"substring of a must_contain regex on the same file (capture-side: deleted line subsumed "
+				f"by added line under re.search; the longer must_contain already enforces the stronger intent).",
+				flush=True,
+			)
+		drops = shared_keys | substring_drops
+		if drops:
+			must_contain = [fp for fp, key in mc_with_keys if key not in drops]
+			must_not_contain = [fp for fp, key in mnc_with_keys if key not in drops]
 
 		for fp in must_contain:
 			if not isinstance(fp, dict):
