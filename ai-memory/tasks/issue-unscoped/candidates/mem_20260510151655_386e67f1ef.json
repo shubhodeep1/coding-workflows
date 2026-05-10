@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The lint check-run failed even though the only changed file is a plain `.txt` fixture that the lint workflow does not inspect.\n  WHY: The workflow covers YAML, Python, shell, Ruff, and JSON paths, so the failure appears pre-existing or transient rather than caused by this PR.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The Copilot inline review claim that there is a \"4th empty line\" is incorrect.\n  WHY: Byte- and line-level checks confirm the file contains exactly the required three newline-terminated lines and no extra blank line.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The lint check-run failed even though the only changed file is a plain `.txt` fixture that the lint workflow does not inspect.\n  WHY: The workflow covers YAML, Python, shell, Ruff, and JSON paths, so the failure appears pre-existing or transient rather than caused by this PR.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The Copilot inline review claim that there is a \"4th empty line\" is incorrect.\n  WHY: The file ends immediately after `updated-by: ai-pipeline\\n` with no extra blank line.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The lint check-run failed even though the only changed file is a plain `.txt` fixture that the lint workflow does not inspect.\n  WHY: The lint job runs on YAML, action/workflow, shell, Python, and JSON-related paths, not `.txt` files.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The Copilot review comment claiming a \"4th empty line at the end\" is wrong.\n  WHY: `cat -A` / `od -c` confirm exactly three newline-terminated lines and no trailing blank line.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The lint check-run failed even though the only changed file is a plain `.txt` fixture that the lint workflow does not inspect.\n  WHY: The lint job covers YAML, Python, shell, Ruff, and JSON paths, so the failure is unrelated to this PR diff.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The claim that there is a \"4th empty line at the end\" is incorrect.\n  WHY: `cat -A`, `wc -l`, and byte inspection confirm exactly three newline-terminated lines and no extra blank line.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The lint check-run failed even though the only changed file is a plain `.txt` fixture that the lint workflow does not inspect.\n  WHY: GitHub branch protection blocks auto-merge on a failing required check, and the lint workflow does not cover this file type.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The Copilot inline review claim that there is a \"4th empty line\" is incorrect.\n  WHY: Byte-level inspection confirms exactly three newline-terminated lines matching the spec template.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The lint check-run failed on the PR head SHA even though the only changed file is a plain `.txt` fixture that the lint workflow does not inspect.\n  WHY: The lint workflow targets YAML/Python/shell/Ruff/JSON paths, so this failure is unrelated to the diff.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The Copilot inline review claims there is a \"4th empty line\" requiring removal.\n  WHY: `cat -n` / `cat -A` / `wc` / hexdump show exactly three newline-terminated lines and no extra blank line.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The lint check-run failed even though the only changed file is a plain `.txt` fixture that the lint workflow does not inspect.\n  WHY: The lint job checks YAML, Python, shell, Ruff, and JSON paths, so the failure is unrelated to this PR's change.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The Copilot inline review claim that there is a \"4th empty line\" is incorrect.\n  WHY: Byte-level inspection confirms exactly three newline-terminated lines and no trailing blank line.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "00a2f4c027ab5533ffd01f25fdd40f528a42fdf1393b6454aca4d80982d3ea9e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2461,
+    "run_id": "25631855037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25631855037",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510151655_386e67f1ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2461,
+    "run_id": "25631855037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T15:16:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
