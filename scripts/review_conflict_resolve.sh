@@ -415,8 +415,14 @@ _build_retry_prompt() {
   #                 so the next attempt does not waste budget on the
   #                 same hung-thinking loop.
   #   error       - codex exited non-zero for another reason (network,
-  #                 auth, panic). Not yet observed enough to warrant
-  #                 a tailored hint; the standard reflexion is used.
+  #                 auth, panic, rate-limit). Violation files are also
+  #                 empty (soft validation never ran), so we prepend a
+  #                 shorter "previous attempt exited non-zero" notice
+  #                 telling the model to proceed as if attempt 1 — the
+  #                 typical causes are not addressable by prompt
+  #                 engineering, but we still do not want the standard
+  #                 prelude's "produced output that failed validation"
+  #                 framing to mislead the next attempt.
   #   ran         - codex exited 0 (with or without stdout); soft
   #                 validation produced violation files. Standard
   #                 reflexion lists those for the model to address.
@@ -449,12 +455,27 @@ _build_retry_prompt() {
   # (which says "your previous attempt produced output that failed
   # post-resolve validation") is misleading on both these paths
   # because soft validation never ran — the notice supersedes it.
+  #
+  # Invariant: the placeholder {{PREVIOUS_OUTCOME_NOTICE}} is
+  # substituted directly after the `=== PREVIOUS ATTEMPT VIOLATIONS …
+  # ===` header in the template (no intervening newline), so a
+  # non-empty notice MUST start with `\n` or its first `***` line will
+  # glue to the header.  Each branch below sets a value that begins
+  # with `\n`; the post-branch normalisation belt-and-suspenders the
+  # invariant for any future notice that forgets the leading newline.
   local _outcome_notice=""
   if [ "${_prev_outcome}" = "timeout" ]; then
     local _budget="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-1080}"
     _outcome_notice=$'\n*** TIMEOUT NOTICE — read this FIRST ***\n\nYour previous attempt was KILLED at the per-attempt time limit ('"${_budget}"$'s) before it produced any apply_patch tool call. Soft validation never ran on that attempt, so the violation lists below report 0 and "(none)" — that is NOT a sign of progress, only that the previous attempt emitted no edits to validate. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nTo finish inside the next per-attempt budget:\n  1. Emit your first apply_patch tool call within the first 2–3 minutes.\n  2. Do NOT re-enumerate duplicate helpers across the file or trace every helper'"'"$'s call sites. If a file has duplicate function definitions outside the conflict markers (a known orchestrator-stack integration shape; originating runs 25627236793 / 25627316961), pick whichever side is consistent with the surrounding code in a single apply_patch hunk and move on.\n  3. Prose belongs AFTER the patches, not before.\n\n*** END TIMEOUT NOTICE ***'
   elif [ "${_prev_outcome}" = "error" ]; then
     _outcome_notice=$'\n*** PREVIOUS ATTEMPT EXITED NON-ZERO — read this FIRST ***\n\nYour previous attempt exited with a non-zero status (not a `timeout`-kill) before producing any apply_patch tool call. Soft validation never ran on that attempt, so the violation lists below report 0 and "(none)" — that is NOT a sign of progress, only that the previous attempt emitted no edits to validate. The working tree has been restored to the post-`git merge` state, identical to attempt 1.\n\nCommon causes for this exit shape are codex CLI panic, transient network/auth errors against the model provider, or rate-limit responses. Proceed with the original task as if this were attempt 1; if the same failure recurs, the retry loop will exhaust naturally and the orchestrator integration judge will take over.\n\n*** END NOTICE ***'
+  fi
+  # Defensive: if a future branch builds a notice without a leading
+  # newline, prepend one so the `***` opener never glues to the
+  # `=== PREVIOUS ATTEMPT VIOLATIONS … ===` header line in the
+  # rendered prompt.  Empty notice case is unaffected.
+  if [ -n "${_outcome_notice}" ] && [ "${_outcome_notice:0:1}" != $'\n' ]; then
+    _outcome_notice=$'\n'"${_outcome_notice}"
   fi
   # Render via python3 (same substitution pattern as
   # review_conflict_prepare.sh) so multi-line values with shell
@@ -655,12 +676,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # timeout/error notice's "0 / (none)" claim. Truncate to empty so
     # the next iteration's _prev_marker_count / _prev_fp_violation_count
     # reads correctly and the prelude's MARKER_VIOLATION_COUNT /
-    # FINGERPRINT_VIOLATION_COUNT substitutions are accurate. Fail-open:
-    # a permissions/IO failure here is non-fatal — the worst case is
-    # the reflexion prompt carrying stale counts, which is what we had
-    # before this fix, so degrade gracefully.
-    : > "${RESOLVER_MARKER_VIOLATIONS_FILE}" 2>/dev/null || true
-    : > "${RESOLVER_FP_VIOLATIONS_FILE}" 2>/dev/null || true
+    # FINGERPRINT_VIOLATION_COUNT substitutions are accurate. Fail-open
+    # but loud: a permissions/IO failure here is non-fatal (the worst
+    # case is the reflexion prompt carrying stale counts, which is what
+    # we had before this fix), but the failure must be visible in the
+    # log so the silent-leak case is diagnosable.
+    : > "${RESOLVER_MARKER_VIOLATIONS_FILE}" || \
+      echo "::warning::Failed to truncate ${RESOLVER_MARKER_VIOLATIONS_FILE} after non-zero codex exit (attempt ${attempt}); stale residual-marker counts may leak into the next retry's reflexion prompt and contradict the outcome notice's '(none)' claim."
+    : > "${RESOLVER_FP_VIOLATIONS_FILE}" || \
+      echo "::warning::Failed to truncate ${RESOLVER_FP_VIOLATIONS_FILE} after non-zero codex exit (attempt ${attempt}); stale fingerprint-violation counts may leak into the next retry's reflexion prompt and contradict the outcome notice's '(none)' claim."
     if [ "${_codex_exit_code}" -eq 124 ] || [ "${_codex_exit_code}" -eq 137 ]; then
       _prev_attempt_outcome="timeout"
       echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by timeout (exit ${_codex_exit_code}) after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; next retry's reflexion prompt will hint apply_patch-first."
