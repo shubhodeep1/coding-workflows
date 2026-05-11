@@ -1695,13 +1695,31 @@ def detect_stalls(
 		# from the default 5-attempt cap (e.g. ai:done with
 		# MAX_STALL_RECOVERIES_DONE=99) would still be hard-closed here at 5,
 		# bypassing the override.
+		#
+		# Phase-attempt cap routing (Codex P2, PR #2522, line 1705): when
+		# the phase oscillates (e.g. ai:review-blocked → ai:done →
+		# ai:review-blocked), update_issue_timestamps resets
+		# stall_recovery_count but phase_attempts_count keeps climbing.
+		# That makes it possible for phase_attempts to cap BEFORE
+		# recovery_count ever reaches stall_judge_trigger_count, so the
+		# old `elif phase_attempts_count >= effective_max: action = "skip"`
+		# would silently force a destructive skip without ever invoking
+		# the judge.  Route the phase-attempt-cap path through
+		# RUN_STALL_JUDGE_ACTION whenever the judge is enabled — the
+		# judge gets one chance to override (close_and_reissue, escalate,
+		# or unlock more attempts) before the ladder forces skip.  When
+		# the judge is disabled, fall back to the original behaviour
+		# (silent skip).
 		effective_max = _phase_specific_max_recoveries(
 			phase, max_recoveries, max_recoveries_by_phase
 		)
 		if recovery_count >= effective_max:
 			action = "skip"
 		elif phase_attempts_count >= effective_max:
-			action = "skip"
+			if enable_stall_judge and stall_judge_trigger_count >= 1:
+				action = RUN_STALL_JUDGE_ACTION
+			else:
+				action = "skip"
 		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
 			action = RUN_STALL_JUDGE_ACTION
 		else:

@@ -6009,16 +6009,21 @@ invoke_stall_judge() {
   # each chunk is the same noise and additionally churns the cache key
   # on every poll cycle because its manifest hash changes as timestamps
   # and counters advance — defeating MAX_JUDGE_REPLAY for orchestrator-
-  # managed stalls per Codex P2, PR #2522, line 6147).  Then cap each
-  # remaining body at 2000 characters. Without these caps, 8 state
-  # snapshots produce ~260KB of argv which trips Linux MAX_ARG_STRLEN
-  # (128KB per argv entry) when passed to the final diagnostics jq via
-  # `--argjson recent_comments`, causing execve to return E2BIG and the
-  # diagnostics blob to come out empty.
+  # managed stalls per Codex P2, PR #2522, line 6147) AND the
+  # standalone-state snapshot the standalone recovery loop writes via
+  # write_standalone_state_json — same noise/churn pattern as the
+  # orchestrator state, just on a per-issue tracking comment rather than
+  # the project tracking issue (Codex P2, PR #2522, line 6221 #1).  Then
+  # cap each remaining body at 2000 characters. Without these caps, 8
+  # state snapshots produce ~260KB of argv which trips Linux
+  # MAX_ARG_STRLEN (128KB per argv entry) when passed to the final
+  # diagnostics jq via `--argjson recent_comments`, causing execve to
+  # return E2BIG and the diagnostics blob to come out empty.
   recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '
     [.[]
       | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
       | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V2")) | not)
+      | select(((.body // "") | startswith("<!-- AI_STANDALONE_STALL_STATE_V1")) | not)
       | {
           author: (.user.login // ""),
           created_at: (.created_at // ""),
@@ -6185,6 +6190,23 @@ invoke_stall_judge() {
   # comments, PR state / mergeability, head_ref / base_ref, recent
   # workflow outcomes beyond the latest conclusion, prior_recovery_actions
   # — automatically invalidates the cached decision.
+  #
+  # Standalone-stall caveat (Codex P2, PR #2522, line 6411):
+  # invoke_stall_judge is also reachable from run_standalone_stall_recovery
+  # for issues outside a tracking-project run.  Those callsites have no
+  # STATE_FILE (the orchestrator's wave state) and the per-issue
+  # standalone state schema (AI_STANDALONE_STALL_STATE_V1) does not
+  # currently hold the judge decision cache, so MAX_JUDGE_REPLAY is
+  # silently a no-op on the standalone path: every cycle that reaches
+  # `run_stall_judge` burns a fresh LLM call.  The cache below is
+  # therefore gated on STATE_FILE existence, and we surface a single
+  # warning per invocation so operators understand the gap until the
+  # standalone state schema is extended to carry judge_decision_cache.
+  if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
+    if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then
+      echo "::warning::Stall judge for issue #${issue_num} runs without STATE_FILE (standalone path); MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation. Every identical stall will burn a fresh LLM call until the standalone state schema carries judge_decision_cache." >&2
+    fi
+  fi
   if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
     # Normalize the cache-key view of diagnostics before hashing so
     # MAX_JUDGE_REPLAY can actually fire on repeated identical stalls.
@@ -6214,10 +6236,25 @@ invoke_stall_judge() {
     # Fail-open: if jq fails, fall back to hashing the unfiltered
     # blob (today's behaviour, no regression).
     local _cache_diagnostics
+    # The judge-heading filter must NOT eat a human-authored comment
+    # whose body happens to start with the copied bot heading.  Require
+    # BOTH the heading prefix AND a bot author (login ends in "[bot]")
+    # so only the orchestrator's own narration is stripped — the
+    # author field is captured on every recent_tracking_comments entry
+    # via the diagnostics-build site at line ~6017+ (Codex P2,
+    # PR #2522, line 6221 #4).  Human comments that quote the heading
+    # still flow into the hash so fresh human guidance invalidates the
+    # cache.
     _cache_diagnostics="$(printf '%s' "${diagnostics}" | jq -c '
       .recent_tracking_comments = (
         (.recent_tracking_comments // [])
-        | map(select((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #") | not))
+        | map(select(
+            (
+              ((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #"))
+              and ((.author // "") | endswith("[bot]"))
+            )
+            | not
+          ))
       )
       | del(.stall_minutes)
       | del(.recovery_count)

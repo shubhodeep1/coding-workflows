@@ -252,6 +252,32 @@ def test_judge_cache_force_escalate_marker_stops_when_diagnostics_change(tmp_pat
 	assert out["cache_force_escalate"] == "false", out
 
 
+def test_standalone_judge_path_warns_when_state_file_missing():
+	"""When invoke_stall_judge runs on the standalone path (no
+	STATE_FILE, empty local_id), the judge cache is silently a no-op
+	because the standalone state schema does not (yet) carry
+	judge_decision_cache.  Surface a single ::warning:: so operators
+	understand MAX_JUDGE_REPLAY is not enforcing a replay cap on
+	this invocation (Codex P2, PR #2522 line 6411)."""
+	body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# The warning marker must be present.  Pin both the diagnostic
+	# substring and the standalone-path guard so future refactors
+	# that drop one or the other are caught.
+	assert "MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation" in body, (
+		"standalone-path STATE_FILE-absent warning is missing"
+	)
+	# The guard must check both STATE_FILE absent AND empty local_id
+	# (managed runs without STATE_FILE are a misconfiguration that
+	# warrants its own surface, but the new warning should not
+	# trigger there).
+	assert (
+		'if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then\n'
+		'    if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then'
+	) in body, (
+		"standalone-path warning guard must check STATE_FILE absence AND empty local_id"
+	)
+
+
 def test_judge_cache_stores_effective_action_not_raw_judge_action(tmp_path):
 	"""When the judge returns an unrecognized action, the cache must
 	store the effective (post-normalize) action, not the raw invalid
@@ -329,7 +355,10 @@ def test_heal_integration_conflict_rc2_does_not_refresh_dispatch_ts(tmp_path):
 PRODUCTION_CACHE_KEY_FILTER = (
 	'.recent_tracking_comments = '
 	'((.recent_tracking_comments // []) '
-	'| map(select((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #") | not))) '
+	'| map(select('
+	'(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #")) '
+	'and ((.author // "") | endswith("[bot]"))) '
+	'| not))) '
 	'| del(.stall_minutes) '
 	'| del(.recovery_count) '
 	'| .prior_recovery_actions = '
@@ -959,10 +988,11 @@ def test_managed_override_counter_skipped_on_no_op_dispatch(tmp_path):
 # would otherwise leak into the diagnostics blob and the cache hash.
 # ---------------------------------------------------------------------------
 
-def test_recent_comments_filter_strips_state_v1_and_v2(tmp_path):
-	"""Build a synthetic comments_json with a mix of V1, V2, and
-	human/orchestrator narration; apply the production filter and
-	confirm only the non-state comments survive."""
+def test_recent_comments_filter_strips_state_v1_v2_and_standalone(tmp_path):
+	"""Build a synthetic comments_json with a mix of V1, V2,
+	standalone-state, and human/orchestrator narration; apply the
+	production filter and confirm only the non-state comments
+	survive (Codex P2, PR #2522 lines 6147 + 6221 #1)."""
 	comments = [
 		{"id": 1, "user": {"login": "alice"}, "created_at": "2026-01-01T00:00:00Z",
 		 "body": "human guidance: please retry"},
@@ -974,6 +1004,12 @@ def test_recent_comments_filter_strips_state_v1_and_v2(tmp_path):
 		 "body": "<!-- ORCHESTRATOR_STATE_V2 part=2/2 manifest=" + ("a" * 64) + " -->\nchunk body 2\n<!-- /ORCHESTRATOR_STATE_V2 -->"},
 		{"id": 5, "user": {"login": "bob"}, "created_at": "2026-01-01T04:00:00Z",
 		 "body": "another human comment"},
+		# Standalone state snapshot — produced by write_standalone_state_json
+		# on every poll cycle.  Codex P2 line 6221 #1: this must be
+		# filtered too or the judge cache key churns every cycle on a
+		# stalled standalone issue.
+		{"id": 6, "user": {"login": "github-actions[bot]"}, "created_at": "2026-01-01T05:00:00Z",
+		 "body": "<!-- AI_STANDALONE_STALL_STATE_V1\n{\"stall_recovery_count\":2,\"updated_ts\":1700000000}\nAI_STANDALONE_STALL_STATE_V1 -->"},
 	]
 	(tmp_path / "comments.json").write_text(json.dumps(comments))
 
@@ -984,6 +1020,7 @@ def test_recent_comments_filter_strips_state_v1_and_v2(tmp_path):
 			[.[]
 				| select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
 				| select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V2")) | not)
+				| select(((.body // "") | startswith("<!-- AI_STANDALONE_STALL_STATE_V1")) | not)
 				| {
 						author: (.user.login // ""),
 						created_at: (.created_at // ""),
@@ -998,9 +1035,10 @@ def test_recent_comments_filter_strips_state_v1_and_v2(tmp_path):
 	# Only the 2 human-narration comments should survive.
 	authors = [c["author"] for c in out]
 	bodies = [c["body"] for c in out]
-	assert authors == ["alice", "bob"], f"V1/V2 not filtered: {out}"
+	assert authors == ["alice", "bob"], f"state snapshots not filtered: {out}"
 	assert not any("ORCHESTRATOR_STATE_V1" in b for b in bodies), out
 	assert not any("ORCHESTRATOR_STATE_V2" in b for b in bodies), out
+	assert not any("AI_STANDALONE_STALL_STATE_V1" in b for b in bodies), out
 
 
 # ---------------------------------------------------------------------------
@@ -1290,53 +1328,67 @@ def test_judge_cache_key_stable_across_self_judge_narration(tmp_path):
 
 
 def test_judge_cache_filter_preserves_human_comments_referencing_judge_heading(tmp_path):
-	"""The cache-key filter must NOT drop a HUMAN reply that mentions
-	"Stall Judge — Issue #N" in the body (e.g. quoting the bot's
-	heading while giving guidance).  The original filter used
-	`contains(...)`, which over-matched; the tightened filter uses
-	`startswith("## 🧑‍⚖️ Stall Judge — Issue #")` so only the bot's
-	exact heading is stripped (Codex P2, PR #2522 line 6200)."""
+	"""The cache-key filter must drop ONLY the bot's own judge
+	tracking comments — neither human comments that mention
+	"Stall Judge — Issue #N" inline, nor human comments that copy
+	the heading verbatim, may be removed from the hash view (Codex
+	P2, PR #2522 line 6200, and the line-6221 #4 follow-up requiring
+	a bot-author check)."""
 	base = _diag_base()
-	# t1: only a human reference, no bot heading.
+	JUDGE_BODY = "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n**Decision:** retrigger"
+	# t1: only an inline human reference, no bot heading.
 	diag_human_ref = {**base, "recent_tracking_comments": [
 		{"author": "alice", "body": "Regarding Stall Judge — Issue #2870, please choose close_and_reissue.", "created_at": "2026-01-01T00:00:00Z"},
 	]}
-	# t2: SAME human reference but a different judge heading present.
+	# t2: inline human reference PLUS the bot's actual heading.
 	diag_human_ref_with_judge = {**base, "recent_tracking_comments": [
 		{"author": "alice", "body": "Regarding Stall Judge — Issue #2870, please choose close_and_reissue.", "created_at": "2026-01-01T00:00:00Z"},
-		{"author": "github-actions[bot]",
-		 "body": "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n**Decision:** retrigger",
-		 "created_at": "2026-01-01T01:00:00Z"},
+		{"author": "github-actions[bot]", "body": JUDGE_BODY, "created_at": "2026-01-01T01:00:00Z"},
 	]}
-	# t3: only the bot heading (human reference absent).
+	# t3: only the bot's heading (human reference absent).
 	diag_only_judge = {**base, "recent_tracking_comments": [
-		{"author": "github-actions[bot]",
-		 "body": "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n**Decision:** retrigger",
-		 "created_at": "2026-01-01T01:00:00Z"},
+		{"author": "github-actions[bot]", "body": JUDGE_BODY, "created_at": "2026-01-01T01:00:00Z"},
 	]}
 	# t4: no comments at all.
 	diag_no_comments = {**base, "recent_tracking_comments": []}
+	# t5: a HUMAN whose comment STARTS with the exact bot heading.
+	# Under the old startswith-only filter this would have been
+	# stripped (and the hash would equal t3's filtered shape) — the
+	# new author-aware filter keeps it.
+	diag_human_starts_with_heading = {**base, "recent_tracking_comments": [
+		{"author": "bob",
+		 "body": JUDGE_BODY + "\n\nBob: please go with close_and_reissue.",
+		 "created_at": "2026-01-01T01:00:00Z"},
+	]}
+
 	keys = _hash_variants(tmp_path, {
 		"human_ref": diag_human_ref,
 		"human_ref_with_judge": diag_human_ref_with_judge,
 		"only_judge": diag_only_judge,
 		"no_comments": diag_no_comments,
+		"human_starts_with_heading": diag_human_starts_with_heading,
 	})
-	# A human reference to the judge heading is NOT filtered, so
-	# human_ref and no_comments have DIFFERENT keys (the human
-	# comment IS in the hash).
+	# An inline human reference is NOT filtered: changes the hash.
 	assert keys["human_ref"] != keys["no_comments"], (
-		f"human reference must remain in the hash (was over-filtered): {keys}"
+		f"inline human reference must remain in the hash: {keys}"
 	)
-	# Adding the bot's own judge heading on top of the human reference
-	# must NOT change the key (only the heading is filtered).
+	# Adding the bot heading on top must NOT change the hash.
 	assert keys["human_ref"] == keys["human_ref_with_judge"], (
-		f"bot heading filtering must leave the human reference alone: {keys}"
+		f"bot heading filter must leave the human reference alone: {keys}"
 	)
-	# The bot-only variant equals no_comments (heading filtered out,
-	# nothing else remains).
+	# Bot-only variant filters down to empty == no_comments.
 	assert keys["only_judge"] == keys["no_comments"], (
 		f"bot heading + no other comments must filter down to empty: {keys}"
+	)
+	# Human whose body STARTS with the bot heading must NOT be
+	# filtered (author check protects it).
+	assert keys["human_starts_with_heading"] != keys["no_comments"], (
+		f"human starting with the bot heading must remain in the hash "
+		f"(author check failed): {keys}"
+	)
+	assert keys["human_starts_with_heading"] != keys["only_judge"], (
+		f"human-with-heading and bot-only must NOT hash the same "
+		f"(author check failed to distinguish): {keys}"
 	)
 
 
@@ -1536,10 +1588,19 @@ def test_production_script_contains_expected_fix_markers():
 	assert 'startswith("<!-- ORCHESTRATOR_STATE_V2")) | not' in body, (
 		"recent_comments filter must strip ORCHESTRATOR_STATE_V2 chunks"
 	)
-	# Codex P2 6200: cache-key filter uses startswith (not contains) for the bot heading.
-	assert 'startswith("## 🧑‍⚖️ Stall Judge — Issue #") | not' in body, (
-		"cache-key filter must use startswith for the bot judge heading "
-		"(avoid over-matching human references)"
+	# Codex P2 6200: cache-key filter uses startswith for the bot
+	# heading AND requires a bot author.  Don't over-match human
+	# comments that quote the heading.
+	assert 'startswith("## 🧑‍⚖️ Stall Judge — Issue #"))' in body, (
+		"cache-key filter must use startswith for the bot judge heading"
+	)
+	assert '((.author // "") | endswith("[bot]"))' in body, (
+		"cache-key filter must also require a bot author so human references "
+		"to the judge heading are not removed from the hash view"
+	)
+	# Codex P2 6221 #1: standalone state marker filtered from recent_comments.
+	assert 'startswith("<!-- AI_STANDALONE_STALL_STATE_V1")) | not' in body, (
+		"recent_comments filter must strip AI_STANDALONE_STALL_STATE_V1 snapshots"
 	)
 	# Codex P2 3352: conflict-probe fetch uses explicit refspecs.
 	assert "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" in body, (
