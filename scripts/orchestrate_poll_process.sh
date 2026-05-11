@@ -3417,8 +3417,8 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       local _ihb_conflict_files
       if _ihb_conflict_files="$(_list_integration_conflict_files "${integration_branch}" "${default_branch}" 2>/dev/null)"; then
         local _ihb_conflict_count
-        _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l)"
-        if [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
+        _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+        if [[ "${_ihb_conflict_count}" =~ ^[0-9]+$ ]] && [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
           local _ihb_hot_files
           _ihb_hot_files="$(jq -r '.hot_files[]? // empty' .github/ai/hot_files.json 2>/dev/null || echo "")"
           if [ -n "${_ihb_hot_files}" ]; then
