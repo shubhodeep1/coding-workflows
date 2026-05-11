@@ -293,6 +293,32 @@ def test_standalone_judge_path_warns_when_local_id_empty():
 	)
 
 
+def test_max_recoveries_done_canonicalisation_is_top_level_safe(tmp_path):
+	"""The canonical-int normalization for MAX_STALL_RECOVERIES_DONE
+	lives in the top-level poller body (outside any function), so it
+	must NOT use the `local` keyword.  `bash -n` does not catch
+	`local` at top level — it's a runtime error — so this test
+	executes the exact block in isolation under `set -euo pipefail`
+	to fail fast on regression.  Caught a real lint break on the
+	first push of this fix where `local _msd_canonical` was left at
+	top level (Copilot review, PR #2522 line 11254 follow-up).
+	"""
+	script = textwrap.dedent("""
+		set -euo pipefail
+		export MAX_STALL_RECOVERIES_DONE=99
+		_stall_check_args=()
+		# Reproduce the production canonicalisation block verbatim.
+		_msd_canonical=$(( 10#${MAX_STALL_RECOVERIES_DONE} ))
+		_stall_check_args+=(--max-recoveries-by-phase-json "$(jq -cn --argjson n "${_msd_canonical}" '{"ai:done": $n}')")
+		printf '%s\\n' "${_stall_check_args[@]}"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"top-level block must run without `local` errors: {r.stderr}"
+	assert "local: can only be used in a function" not in r.stderr, r.stderr
+	assert "--max-recoveries-by-phase-json" in r.stdout, r.stdout
+	assert '{"ai:done":99}' in r.stdout, r.stdout
+
+
 def test_max_recoveries_done_json_is_canonical_under_leading_zero(tmp_path):
 	"""When MAX_STALL_RECOVERIES_DONE is a non-canonical decimal like
 	`09` (which the `^[0-9]+$` regex validator at line ~882 permits),

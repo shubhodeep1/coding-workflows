@@ -11369,7 +11369,8 @@ fi
     # interpretation, stripping leading zeros without invoking an
     # external process.  Then build the JSON via `jq --argjson` so
     # the result is guaranteed-valid JSON.
-    local _msd_canonical
+    # No `local` here — this block lives in the top-level poller body
+    # (outside any function), where `local` is a syntax error.
     _msd_canonical=$(( 10#${MAX_STALL_RECOVERIES_DONE} ))
     _stall_check_args+=(--max-recoveries-by-phase-json "$(jq -cn --argjson n "${_msd_canonical}" '{"ai:done": $n}')")
 
