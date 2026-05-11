@@ -55,6 +55,7 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
 
 jobs:
   validate:
@@ -150,6 +151,21 @@ jobs:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+
+      - name: Initialize Serena runtime state
+        run: |
+          set -euo pipefail
+
+          serena_project_preexisted="false"
+          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
+            serena_project_preexisted="true"
+          fi
+
+          {
+            echo "SERENA_AVAILABLE=false"
+            echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"
+            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
+          } >> "$GITHUB_ENV"
 
       - name: Log checkout ref
         run: |
@@ -473,6 +489,41 @@ jobs:
             chmod +x "scripts/self_heal_validation.sh"
             _fetched_scripts+=(self_heal_validation.sh)
           fi
+
+          # Serena bootstrap helpers (optional; validation falls back if
+          # absent on the selected script_ref to preserve compatibility
+          # with older stable tags during rollout).
+          for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
+            if [ ! -f "scripts/${f}" ]; then
+              if copy_from_ref_or_local "scripts/${f}" "scripts/${f}.tmp" "false" "true"; then
+                mv "scripts/${f}.tmp" "scripts/${f}"
+                chmod +x "scripts/${f}"
+                _fetched_scripts+=("${f}")
+              else
+                rm -f "scripts/${f}.tmp"
+                echo "Optional Serena support asset scripts/${f} not on ${script_ref} yet; validation will continue without that helper."
+              fi
+            else
+              chmod +x "scripts/${f}"
+              _fetched_scripts+=("${f}")
+            fi
+          done
+
+          mkdir -p scripts/templates
+          if [ "${is_self_repo}" != "true" ] && git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2" >/dev/null 2>&1; then
+            echo "::notice::Consumer repo already tracks scripts/templates/serena_project.yml.j2; preserving caller-owned Serena template."
+          elif [ ! -f "scripts/templates/serena_project.yml.j2" ]; then
+            if copy_from_ref_or_local "scripts/templates/serena_project.yml.j2" "scripts/templates/serena_project.yml.j2.tmp" "false" "true"; then
+              mv "scripts/templates/serena_project.yml.j2.tmp" "scripts/templates/serena_project.yml.j2"
+              _fetched_scripts+=(templates/serena_project.yml.j2)
+            else
+              rm -f "scripts/templates/serena_project.yml.j2.tmp"
+              echo "Optional Serena template scripts/templates/serena_project.yml.j2 not on ${script_ref} yet; validation will continue without Serena project templating."
+            fi
+          else
+            _fetched_scripts+=(templates/serena_project.yml.j2)
+          fi
+
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -573,19 +624,33 @@ jobs:
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           VALIDATION_USE_SEMBLE: ${{ vars.VALIDATION_USE_SEMBLE || 'true' }}
+          SERENA_ENABLED: ${{ env.SERENA_ENABLED }}
         run: |
           set -euo pipefail
 
           enabled="false"
+          serena_enabled="false"
+          bootstrap_enabled="false"
           case "$(printf '%s' "${VALIDATION_USE_SEMBLE}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on)
               enabled="true"
               ;;
           esac
+          case "$(printf '%s' "${SERENA_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              serena_enabled="true"
+              ;;
+          esac
+
+          if [ "${enabled}" = "true" ] || [ "${serena_enabled}" = "true" ]; then
+            bootstrap_enabled="true"
+          fi
 
           index_path="${RUNTIME_DIR}/.semble-index"
           {
             echo "enabled=${enabled}"
+            echo "serena_enabled=${serena_enabled}"
+            echo "bootstrap_enabled=${bootstrap_enabled}"
             echo "index_path=${index_path}"
           } >> "$GITHUB_OUTPUT"
 
@@ -600,16 +665,30 @@ jobs:
           fi
 
       - name: setup-uv
-        if: steps.semble_gate.outputs.enabled == 'true'
+        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: steps.semble_gate.outputs.enabled == 'true'
+        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'
         env:
           PYTHONDONTWRITEBYTECODE: '1'
+          VALIDATION_USE_SEMBLE: ${{ vars.VALIDATION_USE_SEMBLE || 'true' }}
         run: |
           set -euo pipefail
+
+          semble_enabled="false"
+          case "$(printf '%s' "${VALIDATION_USE_SEMBLE}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              semble_enabled="true"
+              ;;
+          esac
+
+          if [ "${semble_enabled}" != "true" ]; then
+            echo "::notice::VALIDATION_USE_SEMBLE is not true; skipping Semble install."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
 
           if [ ! -f "scripts/install_semble.sh" ]; then
             echo "::notice::scripts/install_semble.sh is unavailable; validation will continue without Semble."
@@ -863,6 +942,35 @@ jobs:
             echo "status_file=${STATUS_FILE_PATH}"
             echo "metadata_file=${METADATA_FILE_PATH}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Emit Serena stats
+        if: always()
+        continue-on-error: true
+        env:
+          RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/serena_stats_emit.py ]; then
+            echo "::notice::serena_stats_emit.py is unavailable; skipping Serena stats emission."
+            exit 0
+          fi
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
+            echo "::notice::RUNTIME_DIR is unavailable; skipping Serena stats emission."
+            exit 0
+          fi
+
+          serena_stat_args=(--target validate)
+          while IFS= read -r -d '' log_path; do
+            serena_stat_args+=(--log "${log_path}")
+          done < <(find "${RUNTIME_DIR}" -maxdepth 1 -type f \( -name 'validate_discover.log' -o -name 'validate_diagnose.log' -o -name 'validate_self_heal.log' \) -print0 2>/dev/null)
+
+          if [ "${#serena_stat_args[@]}" -le 2 ]; then
+            echo "::notice::No Serena log files were found for this validate run."
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
 
       - name: Record validation candidate
         if: always()

@@ -211,6 +211,18 @@ append_self_heal_semble_context()
 	fi
 }
 
+build_self_heal_serena_tool_hints()
+{
+	if [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
+		return 0
+	fi
+
+	printf '%s\n' \
+		'Serena hints:' \
+		'- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads while tracing which validation prompt instruction likely caused the failure.' \
+		'- Use Serena for evidence and focused navigation only; keep any proposed patch additive, prompt-only, and limited to the four allow-listed validation prompts.'
+}
+
 # Ensure the patches ledger exists.
 : > "${SELF_HEAL_LOG_FILE}"
 if [ ! -f "${SELF_HEAL_PATCHES_FILE}" ]; then
@@ -221,12 +233,13 @@ fi
 # Compose the self-heal prompt
 # ---------------------------------------------------------------
 self_heal_semble_query="$(build_self_heal_semble_query || true)"
+self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 {
 	_cat_if_exists "STATIC CONTEXT" "${STATIC_CONTEXT_FILE:-}"
 	echo
 	echo "=== SELF-HEAL TASK ==="
 	echo
-	bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
+	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
 	echo
 	echo "=== SELF-HEAL ATTEMPT ==="
 	echo "attempt_number: $((SELF_HEAL_ATTEMPT + 1))"

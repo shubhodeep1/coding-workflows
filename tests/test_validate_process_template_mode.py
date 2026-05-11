@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,6 +27,20 @@ def _self_heal_script_text() -> str:
 
 def _self_heal_prompt_text() -> str:
 	return SELF_HEAL_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _git(cmd: list[str], *, cwd: Path) -> None:
+	subprocess.run(cmd, cwd=str(cwd), check=True, capture_output=True, text=True)
+
+
+def _bootstrap_git_repo(repo_dir: Path) -> None:
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	_git(["git", "init"], cwd=repo_dir)
+	_git(["git", "config", "user.name", "tests"], cwd=repo_dir)
+	_git(["git", "config", "user.email", "tests@example.com"], cwd=repo_dir)
+	(repo_dir / "README.md").write_text("test\n", encoding="utf-8")
+	_git(["git", "add", "README.md"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "init"], cwd=repo_dir)
 
 
 def test_template_mode_selection_contract_present() -> None:
@@ -229,12 +245,88 @@ def test_render_recovery_lint_gate_contract_present() -> None:
 	assert 'Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}.' in text
 
 
+def test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree() -> None:
+	text = _validate_process_text()
+	filter_helper = "filter_runtime_status_noise()\n{" + text.split("filter_runtime_status_noise()\n{", 1)[1].split("\n\nbuild_validate_serena_tool_hints()", 1)[0]
+
+	with tempfile.TemporaryDirectory(prefix="validate-serena-runtime-") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+
+		def _write_serena_tree(project_body: str) -> str:
+			project_path = repo_dir / ".serena" / "project.yml"
+			cache_path = repo_dir / ".serena" / "cache" / "state.json"
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			project_path.write_text(project_body, encoding="utf-8")
+			cache_path.write_text('{"runtime": true}\n', encoding="utf-8")
+			return hashlib.sha256(project_path.read_bytes()).hexdigest()
+
+		def _run_inline_bash(script: str, *, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+			env = os.environ.copy()
+			env.update(extra_env)
+			return subprocess.run(
+				["bash", "-s"],
+				cwd=str(repo_dir),
+				env=env,
+				input=script,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+
+		filter_script = "set -euo pipefail\n" + filter_helper + "\ngit status --porcelain -uall | filter_runtime_status_noise\n"
+
+		bootstrap_hash = _write_serena_tree("project_name: bootstrap\n")
+		filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert filter_result.returncode == 0, filter_result.stderr
+		assert ".serena/" not in filter_result.stdout, (
+			"Unchanged bootstrap-owned .serena state should be filtered out of validate path-constraint bookkeeping"
+		)
+
+		(repo_dir / ".serena" / "project.yml").write_text("project_name: mutated\n", encoding="utf-8")
+		mutated_filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert mutated_filter_result.returncode == 0, mutated_filter_result.stderr
+		assert ".serena/project.yml" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the validate filter from hiding .serena/project.yml"
+		)
+		assert ".serena/cache/state.json" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the validate filter from hiding sibling .serena runtime files"
+		)
+
+		shutil.rmtree(repo_dir / ".serena")
+		bootstrap_hash = _write_serena_tree("project_name: preexisting\n")
+		preexisting_filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "true",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert preexisting_filter_result.returncode == 0, preexisting_filter_result.stderr
+		assert ".serena/project.yml" in preexisting_filter_result.stdout, (
+			"Repo-owned Serena state must stay visible to validate bookkeeping even when its content matches the bootstrap hash"
+		)
+
+
 def main() -> int:
 	test_template_mode_selection_contract_present()
 	test_render_recovery_contract_and_prompt_only_self_heal_scope()
 	test_template_mode_missing_manifest_returns_harness_error()
 	test_template_mode_harness_contract_accepts_missing_validate_env()
 	test_render_recovery_lint_gate_contract_present()
+	test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree()
 	return 0
 
 

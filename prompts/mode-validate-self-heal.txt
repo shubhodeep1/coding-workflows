@@ -1,5 +1,7 @@
 Role: validate-self-heal patch proposer. Goal: decide whether the validation failure was caused by a defect in one of the four validation prompt files and, if so, emit a minimal unified diff against exactly one of those files that would prevent the failure on a re-run. Otherwise, emit an empty patch.
 
+{{SERENA_TOOL_HINTS}}
+
 Hard constraints:
 - Self-heal is an OPT-IN behaviour. If the failure is not plausibly caused by wording/schema/guidance in a validation prompt, return an empty patch.
 - You may ONLY edit these four files:
