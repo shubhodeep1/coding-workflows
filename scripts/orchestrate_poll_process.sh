@@ -3324,7 +3324,20 @@ _list_integration_conflict_files() {
 
   local ib_ref="refs/remotes/origin/${integration_branch}"
   local db_ref="refs/remotes/origin/${default_branch}"
-  git fetch --no-tags --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null || true
+  # Use --filter=blob:none so the per-tick conflict probe fetches only the
+  # commits + trees needed by `git merge-tree --name-only --no-messages`,
+  # not the blob contents (which the probe never reads).  We deliberately
+  # do NOT use --depth=1: `git merge-tree --write-tree` needs the merge-
+  # base, and a shallow fetch can strand the lookup so the probe falls back
+  # to a tree-vs-tree diff and over-reports conflicts — defeating the
+  # ≤3-conflicts hot-file short-circuit in heal_integration_branch_conflict
+  # below.  Fail-open: if the partial-clone option is unsupported by the
+  # remote (very rare on GitHub), the `|| true` swallows the error and the
+  # subsequent rev-parse checks return 1, matching the existing
+  # missing-refs fail-open contract.
+  git fetch --no-tags --filter=blob:none --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null \
+    || git fetch --no-tags --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null \
+    || true
   git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
   git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
 
