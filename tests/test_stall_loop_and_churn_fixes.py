@@ -252,29 +252,44 @@ def test_judge_cache_force_escalate_marker_stops_when_diagnostics_change(tmp_pat
 	assert out["cache_force_escalate"] == "false", out
 
 
-def test_standalone_judge_path_warns_when_state_file_missing():
-	"""When invoke_stall_judge runs on the standalone path (no
-	STATE_FILE, empty local_id), the judge cache is silently a no-op
-	because the standalone state schema does not (yet) carry
+def test_standalone_judge_path_warns_when_local_id_empty():
+	"""When invoke_stall_judge runs on the standalone path (empty
+	local_id), the judge cache is silently a no-op because the
+	standalone state schema does not (yet) carry
 	judge_decision_cache.  Surface a single ::warning:: so operators
 	understand MAX_JUDGE_REPLAY is not enforcing a replay cap on
-	this invocation (Codex P2, PR #2522 line 6411)."""
+	this invocation (Codex P2, PR #2522 lines 6411 + 6210).
+
+	The earlier guard keyed on STATE_FILE existence, but STATE_FILE
+	is a global runtime variable populated inside the tracking-issue
+	loop — when the standalone loop runs afterward in the same
+	poller invocation, a non-empty STATE_FILE here may point at an
+	unrelated last-processed tracking issue.  Gate on local_id
+	emptiness instead."""
 	body = POLLER_SCRIPT.read_text(encoding="utf-8")
-	# The warning marker must be present.  Pin both the diagnostic
-	# substring and the standalone-path guard so future refactors
-	# that drop one or the other are caught.
+	# The warning marker must be present.
 	assert "MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation" in body, (
-		"standalone-path STATE_FILE-absent warning is missing"
+		"standalone-path warning is missing"
 	)
-	# The guard must check both STATE_FILE absent AND empty local_id
-	# (managed runs without STATE_FILE are a misconfiguration that
-	# warrants its own surface, but the new warning should not
-	# trigger there).
+	# The cache eligibility gate must require local_id (managed) +
+	# STATE_FILE existence — STATE_FILE alone is not safe.
+	assert "_judge_cache_eligible" in body, (
+		"cache eligibility helper must exist"
+	)
 	assert (
-		'if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then\n'
-		'    if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then'
+		'if [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \\\n'
+		'     && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then\n'
+		'    _judge_cache_eligible="true"'
 	) in body, (
-		"standalone-path warning guard must check STATE_FILE absence AND empty local_id"
+		"cache eligibility must require BOTH non-empty local_id AND STATE_FILE"
+	)
+	# The standalone warning must trigger on empty local_id (no longer
+	# gated on STATE_FILE absence).
+	assert (
+		'if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then\n'
+		'    echo "::warning::Stall judge for issue #${issue_num} runs without a managed local_id'
+	) in body, (
+		"standalone-path warning must trigger on empty local_id, not STATE_FILE absence"
 	)
 
 
@@ -369,6 +384,54 @@ def test_normalize_stall_recovery_action_threads_phase_attempts_count(tmp_path):
 	assert "FALLBACK_BUG" not in out["without_threading"], out
 
 
+def test_judge_cache_suppresses_resolve_merge_conflict_without_target_metadata(tmp_path):
+	"""When effective_action is resolve_merge_conflict but the linked
+	PR metadata (STALL_JUDGE_TARGET_PR + STALL_JUDGE_HEAD_REF) is
+	missing, the action is not executable and the downstream branch
+	falls back to retrigger_pipeline.  Caching the unexecutable
+	resolve_merge_conflict would replay the same dead-end decision
+	on every identical stall, so the cache write must be suppressed
+	when the linked-PR metadata is missing (Codex P2, PR #2522
+	line 6448)."""
+	script = textwrap.dedent("""
+		set -uo pipefail
+		# Reproduce the production gate verbatim.
+		should_cache() {
+			local effective_action="$1"
+			local target_pr="$2"
+			local head_ref="$3"
+			local _judge_should_cache="true"
+			if [ "$effective_action" = "resolve_merge_conflict" ]; then
+				if ! [[ "${target_pr:-}" =~ ^[0-9]+$ ]] || [ -z "${head_ref:-}" ]; then
+					_judge_should_cache="false"
+				fi
+			fi
+			echo "$_judge_should_cache"
+		}
+		echo "with_metadata=$(should_cache resolve_merge_conflict 1234 feat-branch)"
+		echo "missing_pr=$(should_cache resolve_merge_conflict '' feat-branch)"
+		echo "missing_ref=$(should_cache resolve_merge_conflict 1234 '')"
+		echo "missing_both=$(should_cache resolve_merge_conflict '' '')"
+		echo "non_numeric_pr=$(should_cache resolve_merge_conflict 'abc' feat-branch)"
+		# Other actions are always cacheable regardless of metadata.
+		echo "retrigger_no_meta=$(should_cache retrigger_pipeline '' '')"
+		echo "escalate_no_meta=$(should_cache escalate_human '' '')"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# resolve_merge_conflict with full metadata → cache it.
+	assert out["with_metadata"] == "true", out
+	# resolve_merge_conflict missing target_pr / head_ref / both / bad target_pr → suppress cache.
+	assert out["missing_pr"] == "false", out
+	assert out["missing_ref"] == "false", out
+	assert out["missing_both"] == "false", out
+	assert out["non_numeric_pr"] == "false", out
+	# Other actions: no metadata gate.
+	assert out["retrigger_no_meta"] == "true", out
+	assert out["escalate_no_meta"] == "true", out
+
+
 def test_judge_cache_stores_effective_action_not_raw_judge_action(tmp_path):
 	"""When the judge returns an unrecognized action, the cache must
 	store the effective (post-normalize) action, not the raw invalid
@@ -447,8 +510,10 @@ PRODUCTION_CACHE_KEY_FILTER = (
 	'.recent_tracking_comments = '
 	'((.recent_tracking_comments // []) '
 	'| map(select('
-	'(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #")) '
-	'and ((.author // "") | endswith("[bot]"))) '
+	'(((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")) '
+	'or (((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #")) '
+	'and ((.body // "") | contains("**Decision (judge):**")) '
+	'and ((.body // "") | contains("**Decision (effective):**")))) '
 	'| not))) '
 	'| del(.stall_minutes) '
 	'| del(.recovery_count) '
@@ -1369,7 +1434,13 @@ def test_judge_cache_key_stable_across_self_judge_narration(tmp_path):
 		{"author": "alice", "body": "human guidance comment", "created_at": "2026-01-01T00:00:00Z"},
 		{
 			"author": "github-actions[bot]",
-			"body": "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n**Decision (judge):** retrigger_review\n**Justification:** stale check, retry",
+			"body": (
+				"## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n"
+				"**Decision (judge):** retrigger_review\n"
+				"**Decision (effective):** retrigger_review\n"
+				"**Justification:** stale check, retry\n\n"
+				"<!-- ORCHESTRATOR_STALL_JUDGE -->"
+			),
 			"created_at": "2026-01-01T01:00:00Z",
 		},
 	]
@@ -1379,7 +1450,13 @@ def test_judge_cache_key_stable_across_self_judge_narration(tmp_path):
 		{"author": "alice", "body": "human guidance comment", "created_at": "2026-01-01T00:00:00Z"},
 		{
 			"author": "github-actions[bot]",
-			"body": "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 4\n\n**Decision (judge):** retrigger_review\n**Justification:** stale check, retry",
+			"body": (
+				"## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 4\n\n"
+				"**Decision (judge):** retrigger_review\n"
+				"**Decision (effective):** retrigger_review\n"
+				"**Justification:** stale check, retry\n\n"
+				"<!-- ORCHESTRATOR_STALL_JUDGE -->"
+			),
 			"created_at": "2026-01-01T02:00:00Z",
 		},
 	]
@@ -1420,36 +1497,60 @@ def test_judge_cache_key_stable_across_self_judge_narration(tmp_path):
 
 def test_judge_cache_filter_preserves_human_comments_referencing_judge_heading(tmp_path):
 	"""The cache-key filter must drop ONLY the bot's own judge
-	tracking comments — neither human comments that mention
-	"Stall Judge — Issue #N" inline, nor human comments that copy
-	the heading verbatim, may be removed from the hash view (Codex
-	P2, PR #2522 line 6200, and the line-6221 #4 follow-up requiring
-	a bot-author check)."""
+	tracking comments — i.e., comments that match the full bot body
+	shape (heading + both Decision lines, OR the hidden
+	ORCHESTRATOR_STALL_JUDGE marker).  Human comments that quote the
+	heading inline, or that start with a heading-like phrase but
+	lack the Decision lines, must remain in the hash (Codex P2,
+	PR #2522 lines 6200 + 6221 #4 + 6255).
+
+	The author-suffix check (`endswith("[bot]")`) was dropped because
+	deployments using a PAT author the bot's comments as the PAT
+	user, not `*[bot]`, which silently broke filtering — replaced
+	with body-shape matching."""
 	base = _diag_base()
-	JUDGE_BODY = "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n**Decision:** retrigger"
-	# t1: only an inline human reference, no bot heading.
+	# Production judge body has the heading + both Decision lines
+	# + the hidden ORCHESTRATOR_STALL_JUDGE HTML-comment marker.
+	JUDGE_BODY = (
+		"## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n"
+		"**Decision (judge):** retrigger\n"
+		"**Decision (effective):** retrigger\n"
+		"**Justification:** test\n\n"
+		"<!-- ORCHESTRATOR_STALL_JUDGE -->"
+	)
+	# t1: inline human reference, no bot heading at start.
 	diag_human_ref = {**base, "recent_tracking_comments": [
 		{"author": "alice", "body": "Regarding Stall Judge — Issue #2870, please choose close_and_reissue.", "created_at": "2026-01-01T00:00:00Z"},
 	]}
-	# t2: inline human reference PLUS the bot's actual heading.
+	# t2: inline human reference PLUS the bot's actual judge body
+	# (carrying the marker).
 	diag_human_ref_with_judge = {**base, "recent_tracking_comments": [
 		{"author": "alice", "body": "Regarding Stall Judge — Issue #2870, please choose close_and_reissue.", "created_at": "2026-01-01T00:00:00Z"},
 		{"author": "github-actions[bot]", "body": JUDGE_BODY, "created_at": "2026-01-01T01:00:00Z"},
 	]}
-	# t3: only the bot's heading (human reference absent).
+	# t3: only the bot's body (human reference absent).
 	diag_only_judge = {**base, "recent_tracking_comments": [
 		{"author": "github-actions[bot]", "body": JUDGE_BODY, "created_at": "2026-01-01T01:00:00Z"},
 	]}
-	# t4: no comments at all.
+	# t4: no comments.
 	diag_no_comments = {**base, "recent_tracking_comments": []}
-	# t5: a HUMAN whose comment STARTS with the exact bot heading.
-	# Under the old startswith-only filter this would have been
-	# stripped (and the hash would equal t3's filtered shape) — the
-	# new author-aware filter keeps it.
-	diag_human_starts_with_heading = {**base, "recent_tracking_comments": [
+	# t5: a human whose body STARTS with the bot heading verbatim
+	# but lacks the Decision lines and the hidden marker (e.g.
+	# someone tried to draft a judge-style reply by hand).  Must
+	# stay in the hash because the body-shape filter requires
+	# heading + BOTH Decision lines + marker — heading alone is not
+	# enough.
+	diag_human_heading_only = {**base, "recent_tracking_comments": [
 		{"author": "bob",
-		 "body": JUDGE_BODY + "\n\nBob: please go with close_and_reissue.",
+		 "body": "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 99\n\nbob: please pick close_and_reissue.",
 		 "created_at": "2026-01-01T01:00:00Z"},
+	]}
+	# t6: a deployment where the bot is authenticated as a PAT user
+	# (the comment is NOT authored by `*[bot]`).  The new body-shape
+	# filter MUST still strip it; the earlier author-suffix filter
+	# would have left it in.
+	diag_pat_authored_judge = {**base, "recent_tracking_comments": [
+		{"author": "automation-pat-user", "body": JUDGE_BODY, "created_at": "2026-01-01T01:00:00Z"},
 	]}
 
 	keys = _hash_variants(tmp_path, {
@@ -1457,29 +1558,33 @@ def test_judge_cache_filter_preserves_human_comments_referencing_judge_heading(t
 		"human_ref_with_judge": diag_human_ref_with_judge,
 		"only_judge": diag_only_judge,
 		"no_comments": diag_no_comments,
-		"human_starts_with_heading": diag_human_starts_with_heading,
+		"human_heading_only": diag_human_heading_only,
+		"pat_authored_judge": diag_pat_authored_judge,
 	})
-	# An inline human reference is NOT filtered: changes the hash.
+	# An inline human reference is NOT filtered (changes hash vs no_comments).
 	assert keys["human_ref"] != keys["no_comments"], (
 		f"inline human reference must remain in the hash: {keys}"
 	)
-	# Adding the bot heading on top must NOT change the hash.
+	# Adding the bot judge body on top of the human reference must
+	# NOT change the hash (bot body filtered).
 	assert keys["human_ref"] == keys["human_ref_with_judge"], (
-		f"bot heading filter must leave the human reference alone: {keys}"
+		f"bot judge body must be stripped, leaving the human reference: {keys}"
 	)
 	# Bot-only variant filters down to empty == no_comments.
 	assert keys["only_judge"] == keys["no_comments"], (
-		f"bot heading + no other comments must filter down to empty: {keys}"
+		f"bot body + no other comments must filter down to empty: {keys}"
 	)
-	# Human whose body STARTS with the bot heading must NOT be
-	# filtered (author check protects it).
-	assert keys["human_starts_with_heading"] != keys["no_comments"], (
-		f"human starting with the bot heading must remain in the hash "
-		f"(author check failed): {keys}"
+	# Human with heading-only (no Decision lines, no marker) must
+	# stay in the hash — heading alone is not enough to filter.
+	assert keys["human_heading_only"] != keys["no_comments"], (
+		f"human-heading-only must remain in the hash (no Decision lines, "
+		f"no marker → must not match the bot-body filter): {keys}"
 	)
-	assert keys["human_starts_with_heading"] != keys["only_judge"], (
-		f"human-with-heading and bot-only must NOT hash the same "
-		f"(author check failed to distinguish): {keys}"
+	# PAT-authored bot body MUST be filtered (the whole point of the
+	# Codex P2 6255 fix — author-suffix check was unreliable).
+	assert keys["pat_authored_judge"] == keys["no_comments"], (
+		f"PAT-authored bot body must be filtered like a bot comment "
+		f"(body-shape match, not author-suffix): {keys}"
 	)
 
 
@@ -1679,23 +1784,40 @@ def test_production_script_contains_expected_fix_markers():
 	assert 'startswith("<!-- ORCHESTRATOR_STATE_V2")) | not' in body, (
 		"recent_comments filter must strip ORCHESTRATOR_STATE_V2 chunks"
 	)
-	# Codex P2 6200: cache-key filter uses startswith for the bot
-	# heading AND requires a bot author.  Don't over-match human
-	# comments that quote the heading.
-	assert 'startswith("## 🧑‍⚖️ Stall Judge — Issue #"))' in body, (
-		"cache-key filter must use startswith for the bot judge heading"
+	# Codex P2 6200 + 6255: cache-key filter uses body-shape match
+	# (hidden ORCHESTRATOR_STALL_JUDGE marker OR full heading +
+	# Decision lines), NOT author-suffix, so deployments where gh
+	# authenticates as a PAT user still correctly strip the bot's
+	# own narration.
+	assert "<!-- ORCHESTRATOR_STALL_JUDGE -->" in body, (
+		"bot judge tracking comment must include the hidden ORCHESTRATOR_STALL_JUDGE marker"
 	)
-	assert '((.author // "") | endswith("[bot]"))' in body, (
-		"cache-key filter must also require a bot author so human references "
-		"to the judge heading are not removed from the hash view"
+	assert 'contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")' in body, (
+		"cache-key filter must match the hidden ORCHESTRATOR_STALL_JUDGE marker"
+	)
+	assert 'contains("**Decision (judge):**")' in body, (
+		"cache-key filter must also match the legacy heading+Decision shape"
 	)
 	# Codex P2 6221 #1: standalone state marker filtered from recent_comments.
 	assert 'startswith("<!-- AI_STANDALONE_STALL_STATE_V1")) | not' in body, (
 		"recent_comments filter must strip AI_STANDALONE_STALL_STATE_V1 snapshots"
 	)
-	# Codex P2 3352: conflict-probe fetch uses explicit refspecs.
-	assert "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" in body, (
-		"conflict probe must use explicit refspecs so remote-tracking refs update"
+	# Codex P2 3352 + 3363: conflict-probe fetch uses explicit
+	# refspecs WITH the `+` force-prefix so rewritten branches still
+	# update remote-tracking refs (otherwise stale refs pass
+	# rev-parse and the merge-tree probe judges the wrong tip).
+	assert "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" in body, (
+		"conflict probe must use forced refspecs (+refs/heads/...) so rewritten branches refresh"
+	)
+	# Codex P2 6448: don't cache resolve_merge_conflict without
+	# target_pr / head_ref — the action is not executable and the
+	# bad decision would replay on every future identical stall.
+	assert "Suppressing cache write of resolve_merge_conflict" in body, (
+		"cache write must suppress resolve_merge_conflict without target_pr/head_ref"
+	)
+	# Codex P2 1720: judge-failure fallback honors phase-attempt cap.
+	assert "the judge-failure fallback will be forced to skip so a transient judge crash cannot bypass the phase-lifetime cap" in body, (
+		"judge-failure fallback must downgrade to skip when phase_attempts is exhausted"
 	)
 	# Codex P2 6279: synthetic forced escalations stamp force_escalate=true in cache.
 	assert '"force_escalate": true' in body, (

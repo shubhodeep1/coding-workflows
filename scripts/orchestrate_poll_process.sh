@@ -3360,20 +3360,23 @@ _list_integration_conflict_files() {
   # to a tree-vs-tree diff and over-reports conflicts — defeating the
   # ≤3-conflicts hot-file short-circuit in heal_integration_branch_conflict
   # below.
-  # Use explicit refspecs `refs/heads/<b>:refs/remotes/origin/<b>` rather
-  # than bare branch names: `git fetch origin <b1> <b2>` without
+  # Use explicit refspecs `+refs/heads/<b>:refs/remotes/origin/<b>`
+  # rather than bare branch names: `git fetch origin <b1> <b2>` without
   # refspecs only updates FETCH_HEAD and may leave
   # refs/remotes/origin/<b> missing or stale in single-branch /
   # shallow clones (the orchestrator's CI checkout context), so the
   # subsequent rev-parse checks would fail-open and the hot-file
   # short-circuit could never fire even on a live conflict (Codex P2,
-  # PR #2522, line 3352).
-  # Fail-open: if the partial-clone option is unsupported by the
-  # remote (very rare on GitHub), the `|| true` swallows the error and
-  # the subsequent rev-parse checks return 1, matching the existing
-  # missing-refs fail-open contract.
-  local _ib_refspec="refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}"
-  local _db_refspec="refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
+  # PR #2522, line 3352).  The leading `+` is the
+  # `+`/`--force` flag: this script force-updates bot branches with
+  # `--force-with-lease` in the premerge/rebase paths, so the
+  # remote-tracking ref can be ahead of a rewritten branch tip.
+  # Without `+`, a non-fast-forward update is silently refused, the
+  # fetch failure is swallowed by `|| true`, and rev-parse passes
+  # against a stale tip — making the new merge-tree probe judge the
+  # wrong branch tip (Codex P2, PR #2522, line 3363).
+  local _ib_refspec="+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}"
+  local _db_refspec="+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
   git fetch --no-tags --filter=blob:none --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null \
     || git fetch --no-tags --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null \
     || true
@@ -6023,6 +6026,35 @@ invoke_stall_judge() {
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
 
+  # Look up the phase-lifetime counter for this issue (managed runs
+  # only; standalone state does not carry phase_attempts).  This is
+  # used twice below: by the judge-failure / parse-error fallback
+  # branches (so a flaky judge cannot bypass an exhausted phase cap
+  # — Codex P2, PR #2522, line 1720) and by the
+  # normalize_stall_recovery_action call after a successful judge
+  # response (Copilot review, line 1527).  When phase_attempts is
+  # already at the cap, downgrade the failure-path fallback to
+  # "skip" so a transient judge crash cannot run another non-
+  # terminal recovery the cap was specifically supposed to prevent.
+  local _judge_phase_attempts_count=0
+  local _judge_phase_effective_max="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+  if [ "${phase}" = "ai:done" ] \
+     && [[ "${MAX_STALL_RECOVERIES_DONE}" =~ ^[0-9]+$ ]] \
+     && [ "${MAX_STALL_RECOVERIES_DONE}" -ge 1 ]; then
+    _judge_phase_effective_max="${MAX_STALL_RECOVERIES_DONE}"
+  fi
+  if [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
+     && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_phase_attempts_count="$(jq -r --arg lid "${local_id}" --argjson wi "${WAVE_IDX:-0}" --arg p "${phase}" \
+      '((.waves[$wi].issues[] | select(.id == $lid)) // {}) | (.phase_attempts[$p] // 0)' \
+      "${STATE_FILE}" 2>/dev/null || echo "0")"
+    [[ "${_judge_phase_attempts_count}" =~ ^[0-9]+$ ]] || _judge_phase_attempts_count=0
+  fi
+  if [ "${_judge_phase_attempts_count}" -ge "${_judge_phase_effective_max}" ]; then
+    echo "  [stall-judge] phase_attempts_count=${_judge_phase_attempts_count} >= effective_max=${_judge_phase_effective_max} for phase ${phase}; the judge-failure fallback will be forced to skip so a transient judge crash cannot bypass the phase-lifetime cap."
+    fallback_action="skip"
+  fi
+
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
     comments_issue_num="${TRACKING_NUM}"
@@ -6220,23 +6252,31 @@ invoke_stall_judge() {
   # workflow outcomes beyond the latest conclusion, prior_recovery_actions
   # — automatically invalidates the cached decision.
   #
-  # Standalone-stall caveat (Codex P2, PR #2522, line 6411):
-  # invoke_stall_judge is also reachable from run_standalone_stall_recovery
-  # for issues outside a tracking-project run.  Those callsites have no
-  # STATE_FILE (the orchestrator's wave state) and the per-issue
+  # Standalone-stall caveat (Codex P2, PR #2522, lines 6411 + 6210):
+  # invoke_stall_judge is also reachable from
+  # run_standalone_stall_recovery for issues outside a tracking-project
+  # run.  Those callsites have an empty local_id, and the per-issue
   # standalone state schema (AI_STANDALONE_STALL_STATE_V1) does not
-  # currently hold the judge decision cache, so MAX_JUDGE_REPLAY is
-  # silently a no-op on the standalone path: every cycle that reaches
-  # `run_stall_judge` burns a fresh LLM call.  The cache below is
-  # therefore gated on STATE_FILE existence, and we surface a single
-  # warning per invocation so operators understand the gap until the
-  # standalone state schema is extended to carry judge_decision_cache.
-  if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
-    if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then
-      echo "::warning::Stall judge for issue #${issue_num} runs without STATE_FILE (standalone path); MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation. Every identical stall will burn a fresh LLM call until the standalone state schema carries judge_decision_cache." >&2
-    fi
+  # currently hold the judge decision cache.  STATE_FILE on its own
+  # is NOT a safe gate: it is a global runtime variable populated
+  # inside the tracking-issue loop, and run_standalone_stall_recovery
+  # runs afterward in the same poller invocation, so a non-empty
+  # STATE_FILE here may point at an unrelated last-processed tracking
+  # issue rather than the current standalone issue's state — writing
+  # the cache there would persist nothing useful and could pollute
+  # another project's state on the next read.  Gate the cache on a
+  # managed `local_id` and surface a single warning per standalone
+  # invocation so operators understand MAX_JUDGE_REPLAY is not
+  # enforced there.
+  local _judge_cache_eligible="false"
+  if [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
+     && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_cache_eligible="true"
   fi
-  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+  if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then
+    echo "::warning::Stall judge for issue #${issue_num} runs without a managed local_id (standalone path); MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation. Every identical stall will burn a fresh LLM call until the standalone state schema carries judge_decision_cache." >&2
+  fi
+  if [ "${_judge_cache_eligible}" = "true" ]; then
     # Normalize the cache-key view of diagnostics before hashing so
     # MAX_JUDGE_REPLAY can actually fire on repeated identical stalls.
     # Three classes of churn used to leak the cache key:
@@ -6266,21 +6306,28 @@ invoke_stall_judge() {
     # blob (today's behaviour, no regression).
     local _cache_diagnostics
     # The judge-heading filter must NOT eat a human-authored comment
-    # whose body happens to start with the copied bot heading.  Require
-    # BOTH the heading prefix AND a bot author (login ends in "[bot]")
-    # so only the orchestrator's own narration is stripped — the
-    # author field is captured on every recent_tracking_comments entry
-    # via the diagnostics-build site at line ~6017+ (Codex P2,
-    # PR #2522, line 6221 #4).  Human comments that quote the heading
-    # still flow into the hash so fresh human guidance invalidates the
-    # cache.
+    # whose body happens to start with the copied bot heading.  The
+    # earlier `endswith("[bot]")` author check broke in deployments
+    # where the gh CLI is authenticated as a PAT user (Codex P2,
+    # PR #2522, line 6255).  Switch to body-shape matching using the
+    # hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` HTML-comment marker
+    # that the bot stamps on every judge tracking comment it posts
+    # (line ~6510 above) — humans cannot accidentally include this
+    # exact byte sequence in a reply.  The OR fallback (heading +
+    # both Decision lines) matches legacy judge comments written
+    # before the marker was added; both conditions are body-shape
+    # checks that survive any author-attribution drift.
     _cache_diagnostics="$(printf '%s' "${diagnostics}" | jq -c '
       .recent_tracking_comments = (
         (.recent_tracking_comments // [])
         | map(select(
             (
-              ((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #"))
-              and ((.author // "") | endswith("[bot]"))
+              ((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->"))
+              or (
+                ((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #"))
+                and ((.body // "") | contains("**Decision (judge):**"))
+                and ((.body // "") | contains("**Decision (effective):**"))
+              )
             )
             | not
           ))
@@ -6378,7 +6425,7 @@ invoke_stall_judge() {
     # PR #2522, line 6279).  Best-effort: a jq failure is silently
     # swallowed, matching the existing replay / write callsites
     # below.
-    if [ -n "${_judge_cache_key}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    if [ -n "${_judge_cache_key}" ] && [ "${_judge_cache_eligible:-false}" = "true" ]; then
       jq --arg k "${_judge_cache_key}" \
         '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": "escalate_human", "replay_count": 0, "force_escalate": true})' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
@@ -6429,22 +6476,11 @@ invoke_stall_judge() {
   local judge_justification
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
-  # Look up phase_attempts_count for the current issue so the
-  # normalize fallback below (when judge_action is malformed or
-  # empty) respects the same phase-lifetime cap that detect_stalls
-  # uses.  Only meaningful for the managed path (local_id set +
-  # STATE_FILE present); standalone state does not carry
-  # phase_attempts, so 0 is the only sane default there (Copilot
-  # review, PR #2522, line 1527).
-  local _judge_phase_attempts_count=0
-  if [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
-     && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
-    _judge_phase_attempts_count="$(jq -r --arg lid "${local_id}" --argjson wi "${WAVE_IDX:-0}" --arg p "${phase}" \
-      '((.waves[$wi].issues[] | select(.id == $lid)) // {}) | (.phase_attempts[$p] // 0)' \
-      "${STATE_FILE}" 2>/dev/null || echo "0")"
-    [[ "${_judge_phase_attempts_count}" =~ ^[0-9]+$ ]] || _judge_phase_attempts_count=0
-  fi
-
+  # _judge_phase_attempts_count was looked up earlier (alongside
+  # fallback_action) so the judge-failure fallback branches above
+  # could downgrade to "skip" on phase-attempt exhaustion.  Reuse
+  # the same value here for the normalize call (Copilot review,
+  # PR #2522, line 1527) — no second jq read needed.
   local effective_action
   if [ "${_judge_force_escalate:-false}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
     # Bypass normalize_stall_recovery_action for the synthetic
@@ -6487,12 +6523,38 @@ invoke_stall_judge() {
   # cache write when effective_action ended up empty (defensive
   # belt-and-braces, though normalize never returns empty in
   # practice).
-  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${effective_action}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+  #
+  # Additionally, skip caching `resolve_merge_conflict` when the
+  # judge did not also produce the linked-PR metadata
+  # (STALL_JUDGE_TARGET_PR + STALL_JUDGE_HEAD_REF) that
+  # execute_stall_recovery_action needs to actually dispatch the
+  # resolver: without those, the action is not executable, the
+  # downstream branch falls back to retrigger_pipeline anyway, and
+  # caching the unexecutable action would replay the same dead-end
+  # decision on every future identical stall until MAX_JUDGE_REPLAY
+  # escalates a human based on one malformed judge response (Codex
+  # P2, PR #2522, line 6448).
+  local _judge_should_cache="true"
+  if [ "${effective_action}" = "resolve_merge_conflict" ]; then
+    if ! [[ "${STALL_JUDGE_TARGET_PR:-}" =~ ^[0-9]+$ ]] || [ -z "${STALL_JUDGE_HEAD_REF:-}" ]; then
+      echo "  [stall-judge] Suppressing cache write of resolve_merge_conflict for issue #${issue_num}: linked-PR metadata missing (target_pr=${STALL_JUDGE_TARGET_PR:-empty}, head_ref=${STALL_JUDGE_HEAD_REF:-empty}). Action is not executable; downstream will fall back to ${fallback_action}."
+      _judge_should_cache="false"
+    fi
+  fi
+  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${effective_action}" ] && [ "${_judge_cache_eligible:-false}" = "true" ] && [ "${_judge_should_cache}" = "true" ]; then
     jq --arg k "${_judge_cache_key}" --arg action "${effective_action}" \
       '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
   fi
 
+  # The hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` marker on the
+  # last line is the unambiguous self-authored-by-the-orchestrator
+  # signal used by the cache-key filter at line ~6258+.  Matching on
+  # this marker is robust against deployments where the gh CLI
+  # authenticates as a PAT user (not `*[bot]`), where the previous
+  # `endswith("[bot]")` author check failed (Codex P2, PR #2522,
+  # line 6255).  A human reply that quotes the heading does not
+  # carry this hidden comment, so it stays in the cache-key hash.
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
 
@@ -6505,6 +6567,8 @@ invoke_stall_judge() {
 \`\`\`json
 ${diagnostics}
 \`\`\`
+
+<!-- ORCHESTRATOR_STALL_JUDGE -->
 "
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
     post_tracking_comment "${judge_comment}"
