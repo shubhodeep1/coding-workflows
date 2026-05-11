@@ -3901,7 +3901,12 @@ jobs:
               printf '%s\n' "missing"
               return
             fi
-            if err="$(bash -n "${path}" 2>&1 >/dev/null)"; then
+            # `bash -n` writes diagnostics to stderr only; merge them
+            # into the command substitution with `2>&1` so the err= capture
+            # actually receives them.  An earlier shape used `2>&1
+            # >/dev/null` which is order-dependent and leaks stderr to the
+            # job log instead of capturing it — see PR #2481 review.
+            if err="$(bash -n "${path}" 2>&1)"; then
               printf '%s\n' "ok"
             else
               err="$(printf '%s' "${err}" | sed 's/%/%25/g; s/\r/%0D/g' | awk 'BEGIN{ORS=""} NR>1{print "%0A"} {print}')"

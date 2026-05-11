@@ -102,19 +102,28 @@ def test_validation_prelude_carries_violations_framing() -> None:
 
 def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
 	"""The validation prelude must contain ONLY `{{KEY}}` placeholders
-	matching the renderer's auto-discovery regex (`[A-Z_][A-Z0-9_]*`).
+	whose identifier matches `[A-Z_][A-Z0-9_]*` — a stricter contract
+	than the renderer's runtime regex (`\\{\\{\\s*[A-Za-z_]\\w*\\s*\\}\\}`,
+	which also accepts spaced/lowercased forms like `{{ key }}` and
+	uppercases the captured key for env lookup). The renderer is
+	permissive at runtime so an in-flight template-style change
+	cannot strand the model on literal braces, but every shipped
+	template should stick to UPPER_SNAKE_CASE so reviewers have a
+	single canonical spelling to grep for; this test pins that
+	style invariant.
+
 	Mustache-style conditional markers like `{{#IF_VIOLATIONS}}` and
-	`{{/IF_VIOLATIONS}}` — or any `{{...}}` containing characters
-	outside that uppercase identifier set — would survive the
-	renderer's substitution loop and leak into the rendered prompt
-	as literal text. An earlier iteration of this PR shipped a
-	template with `{{#IF_VIOLATIONS}}` / `{{/IF_VIOLATIONS}}`
-	wrappers; the upstream renderer was switched to a placeholder-
-	auto-discovery design that does not strip mustache conditionals,
-	so leaving those wrappers in the file would render the literal
-	marker text into the model's prompt. This regression was caught
-	by all six claude-branch reviewers at confidence 5; this test
-	pins the contract so the leak cannot be re-introduced.
+	`{{/IF_VIOLATIONS}}` would survive the renderer's substitution
+	loop regardless (the runtime regex does not match `#`/`/` chars)
+	and leak into the rendered prompt as literal text. An earlier
+	iteration of this PR shipped a template with `{{#IF_VIOLATIONS}}`
+	/ `{{/IF_VIOLATIONS}}` wrappers; the upstream renderer was
+	switched to a placeholder-auto-discovery design that does not
+	strip mustache conditionals, so leaving those wrappers in the
+	file would render the literal marker text into the model's
+	prompt. This regression was caught by all six claude-branch
+	reviewers at confidence 5; this test pins the contract so the
+	leak cannot be re-introduced.
 
 	`{{PREVIOUS_OUTCOME_NOTICE}}` was a placeholder used by the
 	PR's earlier single-template design but is never populated on
@@ -132,8 +141,8 @@ def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
 	assert not leaked, (
 		"Validation prelude contains mustache-style conditional "
 		"markers that the renderer does not strip: "
-		f"{leaked!r}. The renderer's placeholder regex is "
-		"`{{[A-Z_][A-Z0-9_]*}}` (auto-discovered from the "
+		f"{leaked!r}. The renderer's runtime regex is "
+		r"`\{\{\s*[A-Za-z_]\w*\s*\}\}` (auto-discovered from the "
 		"template body) and it will not match `{{#…}}` or "
 		"`{{/…}}` markers, so they survive verbatim into the "
 		"rendered retry prompt. Remove the markers from the "
@@ -149,27 +158,33 @@ def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
 		"the empty string and the placeholder is dead template "
 		"baggage. Drop it from the validation prelude."
 	)
-	# Belt-and-suspenders: every remaining `{{...}}` token must
-	# match the renderer's auto-discovery regex so future template
-	# edits can't introduce a different unrendered token shape.
+	# Style invariant — stricter than the runtime regex.  Every
+	# `{{...}}` token shipped in this template should use
+	# UPPER_SNAKE_CASE with no interior whitespace, even though
+	# the renderer would accept `{{ key }}` at runtime.  Pinning
+	# the spelling here keeps reviewers from having to track
+	# multiple grep-able forms of the same placeholder.
 	all_tokens = re.findall(r"\{\{([^}]*)\}\}", body)
 	bad = [t for t in all_tokens if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", t)]
 	assert not bad, (
-		"Validation prelude contains `{{…}}` tokens that the "
-		"renderer's auto-discovery regex `[A-Z_][A-Z0-9_]*` does "
-		f"not match: {bad!r}. These tokens will survive verbatim "
-		"into the rendered prompt. Either rename them to match "
-		"the regex (uppercase identifiers) or remove them."
+		"Validation prelude contains `{{…}}` tokens outside the "
+		"UPPER_SNAKE_CASE style convention: "
+		f"{bad!r}. The renderer's runtime regex "
+		r"(`\{\{\s*[A-Za-z_]\w*\s*\}\}`) would accept these, but "
+		"every shipped template should use the canonical "
+		"`{{UPPER_KEY}}` spelling so reviewers have a single "
+		"grep-able form. Either rename them or remove them."
 	)
 
 
 def test_timeout_prelude_has_no_leaked_unprocessed_markers() -> None:
 	"""Same contract as the validation prelude: the timeout prelude
-	must contain ONLY `{{KEY}}` placeholders matching the
-	renderer's auto-discovery regex, with no mustache conditionals
-	or other unrendered token shapes. Pinning this contract on
-	both prelude files prevents the same regression from sneaking
-	in via either path."""
+	must contain ONLY `{{UPPER_KEY}}` placeholders (the style
+	convention enforced on every shipped template), with no mustache
+	conditionals or other unrendered token shapes. The renderer's
+	runtime regex (`\\{\\{\\s*[A-Za-z_]\\w*\\s*\\}\\}`) is more
+	permissive, but pinning the canonical spelling here keeps both
+	prelude files reviewable with a single grep."""
 	body = TIMEOUT_PRELUDE.read_text(encoding="utf-8")
 	conditional_marker_pattern = re.compile(
 		r"\{\{[ \t]*[#/][^}]*\}\}"
@@ -183,7 +198,7 @@ def test_timeout_prelude_has_no_leaked_unprocessed_markers() -> None:
 	bad = [t for t in all_tokens if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", t)]
 	assert not bad, (
 		"Timeout prelude contains `{{…}}` tokens outside the "
-		f"renderer's auto-discovery regex: {bad!r}."
+		f"UPPER_SNAKE_CASE template style convention: {bad!r}."
 	)
 
 
