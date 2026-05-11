@@ -253,13 +253,13 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 		echo "(none — this is the first self-heal attempt for this run)"
 	fi
 	echo
-	echo "=== CURRENT VALIDATION PROMPT FILES (with any prior self-heal patches already applied) ==="
+	echo "=== CURRENT VALIDATION PROMPT FILES (raw on-disk contents with any prior self-heal patches already applied) ==="
+	echo "Note: keep diffs anchored to the literal file text shown here; some prompts intentionally contain the runtime placeholder {{SERENA_TOOL_HINTS}}."
+	echo
 	for _target in "${ALLOWED_TARGETS[@]}"; do
 		if [ -f "prompts/${_target}" ]; then
 			echo "--- prompts/${_target} ---"
-			if ! SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh "prompts/${_target}"; then
-				grep -vE '^[[:space:]]*\{\{SERENA_TOOL_HINTS\}\}[[:space:]]*$' "prompts/${_target}" || true
-			fi
+			cat "prompts/${_target}"
 			echo
 			echo "--- end prompts/${_target} ---"
 			echo

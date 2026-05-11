@@ -83,6 +83,8 @@ def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
 	prompt_text = _self_heal_prompt_text()
 	assert 'For `failing_phase=render` or deterministic template rerender/lint recovery failures, keep self-heal scope prompt-only:' in prompt_text
 	assert 'Do not propose harness-file edits, renderer-script edits, or workflow changes.' in prompt_text
+	assert 'raw on-disk contents with any prior self-heal patches applied' in prompt_text
+	assert 'literal `{{SERENA_TOOL_HINTS}}` runtime placeholder' in prompt_text
 
 
 def test_template_mode_missing_manifest_returns_harness_error() -> None:

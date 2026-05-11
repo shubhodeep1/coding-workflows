@@ -21,8 +21,8 @@ Hard constraints:
 
 Inputs to use:
 - Self-heal attempt counter (so you know if a prior patch already tried and failed).
-- Prior accumulated self-heal patches for this run (do not re-apply them; they are already in the rendered prompts shown below).
-- The four CURRENT validation prompt files (already rendered with prior self-heal patches applied, if any).
+- Prior accumulated self-heal patches for this run (do not re-apply them; they are already reflected in the current prompt files shown below).
+- The four CURRENT validation prompt files (raw on-disk contents with any prior self-heal patches applied; some prompts intentionally contain the literal `{{SERENA_TOOL_HINTS}}` runtime placeholder).
 - Structured validation failure JSON (phase, test failures).
 - Validation log tail and container log tail.
 - Diagnosis JSON (if the diagnose phase completed).

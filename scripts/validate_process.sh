@@ -577,6 +577,7 @@ ensure_serena_bootstrap()
   bootstrap_env_file="$(mktemp "${RUNTIME_DIR}/serena-bootstrap-env.XXXXXX")"
   if ! GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh; then
     echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."
+    clear_stale_serena_codex_config
     SERENA_AVAILABLE="false"
   else
     SERENA_AVAILABLE="false"
