@@ -217,28 +217,128 @@ Scope: in PR review mode, applies only to new task lists in the current request.
 
 ## §12. PR Review Mode
 
-When the user comments `@codex change` in a PR: review all feedback and apply
-only explicitly requested changes.
+**This §12 fully supersedes the prior "Intent Preservation / Forbidden /
+Acceptance Criteria" version of §12 in this CLAUDE.md.** The parallel §12
+in `codex.md` (and any rules in `unattended_system_instructions.md`) is
+unaffected — unattended pipelines retain their own policies. Earlier
+guidance to "not introduce new scope, abstractions, or behaviors" no
+longer governs PR review work in interactive sessions; the proactive
+policy below applies instead.
 
-### Intent Preservation (NON-NEGOTIABLE)
-- Do NOT deviate from original project intent.
-- Do NOT introduce new goals, scope, abstractions, or behaviors unless approved.
-- Treat existing implementation as intentional.
+**Precedence in PR Review Mode.** While operating under §12, this section
+takes precedence over §0 (Prime Directive), §2 (Always-On Ask-First Mode —
+including its "Forbidden: Silent refactors, cleanups, or speculative
+fixes" clause), and §5 (Minimal Change Set), for the proactive-fix
+decisions enumerated in §12.B. §0 and §2 still govern items routed to
+§12.D (the explicit ask-list) and any decision outside the PR-review
+scope. §6 (naming immutability) and §10 (MongoDB contracts) remain hard
+rules even under proactive scope and are NOT superseded.
 
-### Ambiguous Feedback
-If feedback could change behavior, broaden/narrow scope, or alter semantics:
-**STOP and ask (Q/A format)** before acting.
+When the user asks Claude to address PR review feedback — via `@codex change`
+in a PR, a direct chat request, a `subscribe_pr_activity` event, or any
+equivalent trigger — apply fixes with a **wide proactive scope**. Default to
+action, not to asking. Only stop and ask on the genuinely ambiguous items
+enumerated in §12.D.
 
-### Forbidden
-- "Improving" design beyond the comment.
-- Refactoring for elegance or style.
-- Applying suggestions that conflict with existing behavior without surfacing
-  the conflict.
+### A) Single-PR Rule (NON-NEGOTIABLE)
 
-### Acceptance Criteria
-After changes: original intent preserved, behavior unchanged unless approved,
-backward compatible, no new assumptions, changes traceable to PR comments.
-If no changes needed: reply "No changes are needed."
+All fixes — whether tied to the original PR scope or discovered out-of-scope
+during review — MUST be committed to the same PR. Never spin off a follow-up
+PR for "later cleanup". If the proactive scope is genuinely too large to fit
+in this PR (review-blocker territory), STOP and ask whether to include all
+of it or drop it — never split into a new PR.
+
+### B) Auto-Apply Without Asking
+
+Apply fixes proactively, without asking, when the issue falls into any of
+these categories AND the fix passes the evaluation signals in §12.C
+(high-confidence, low-blast-radius, no §6/§10 conflict):
+
+- **Security:** injection (SQL/command/template), XSS, auth bypass, secret
+  leaks, unsafe deserialization, missing authz checks, CSRF gaps.
+- **Crash / data-loss:** null derefs, unhandled exceptions/rejections, race
+  conditions, lost writes, leaking handles or connections, missing locks,
+  off-by-one on persisted data.
+- **Correctness defects:** wrong operator, swapped arguments, inverted
+  condition, wrong env var, wrong field/index/collection name, incorrect
+  return path.
+- **Reviewer-flagged defects** with a clear, verifiable diagnosis that
+  matches the code on re-read.
+- **Missing error handling at system boundaries** — unvalidated user
+  input, unchecked external API responses, IPC payloads, or unhandled
+  failure modes that would surface in production.
+- **Type / contract violations.**
+- **Stale comments, misleading docs, wrong examples** that would mislead
+  future readers.
+- **Latent bugs in adjacent code** exercised by the same flow being fixed —
+  proactive scope is explicitly in-bounds; fix them.
+- **Production-breaking issues** identified anywhere in the touched files,
+  whether or not the reviewer called them out.
+
+### C) Weigh Before Acting
+
+Even when a fix falls in §12.B, evaluate:
+
+- **Reversibility** — prefer the cheaper fix (guard, null check, bounds
+  check) over a structural change when it solves the defect.
+- **Blast radius** — single function (act) vs many files (consider §12.D).
+- **Confidence in the reviewer's diagnosis** — re-read the code; if the
+  reviewer is wrong, surface that as a reply instead of applying.
+- **Test coverage** — add or extend tests when fixing a defect that lacked
+  coverage. Do not ship a behavior fix without verification.
+- **Conflict with §6** — renames and removals of identifiers stay forbidden
+  even under proactive scope. Add aliases alongside if needed.
+- **Conflict with §10** — DB / index / contract changes still require the
+  matching `/db/contracts/*` update; do not skip that.
+- **Public contract or hot-path performance impact** — if either, treat as
+  §12.D ask-territory.
+
+### D) STOP and ASK (Q/A format) When
+
+Even with the proactive default, ask before acting on:
+
+- Renames or removals of any identifier covered by §6 (variables,
+  functions, classes, modules, CLI flags, env vars, URL paths, JSON/DB
+  fields, index/event/metric names, log keys — public or internal).
+- Architectural refactors, new abstractions, module reorganization.
+- Multiple plausible fixes with material tradeoffs (perf vs correctness,
+  throw vs swallow, retry vs fail-fast, sync vs async).
+- Behavior changes affecting documented contracts (`README.md`,
+  `agents.md`, `/db/contracts/*`).
+- DB schema or index changes that lack an obvious contract update path.
+- Scope explosion — one review comment implies touching 10+ files. Ask
+  whether to include all of it in this PR or drop it (per §12.A, no
+  follow-up PR is allowed).
+- Anything where Claude would be guessing at intent rather than fixing a
+  verifiable defect.
+
+### E) Commit and PR Hygiene
+
+Since all fixes land in one PR (§12.A), commit hygiene is the only
+separation tool — use it deliberately:
+
+- **One commit per scope.** Commit the in-scope review feedback fixes
+  separately from out-of-scope proactive fixes. Group related proactive
+  fixes by theme (e.g. "fix null-safety gaps in user import path") rather
+  than one commit per file.
+- **Commit messages must link to the trigger** — for in-scope fixes, cite
+  the review comment; for out-of-scope fixes, explain the proactive
+  rationale (e.g. "Fix race in cache invalidation — discovered while
+  addressing review comment on `cache.go:42`").
+- **PR description must enumerate every out-of-scope fix** included in
+  this round, so reviewers can locate them without diffing
+  commit-by-commit. Use a "Proactive fixes included" subsection.
+
+### F) Acceptance Criteria
+
+After changes:
+- Every reviewer-raised defect is fixed, surfaced as a disagreement, or
+  asked about (§12.D).
+- Every proactive fix is traceable to a category in §12.B and documented in
+  the PR description (§12.E).
+- §6 (naming) and §10 (MongoDB contracts) are still honored.
+- All fixes are in this PR — none deferred to a follow-up.
+- If no changes are needed at all: reply "No changes are needed."
 
 ---
 
