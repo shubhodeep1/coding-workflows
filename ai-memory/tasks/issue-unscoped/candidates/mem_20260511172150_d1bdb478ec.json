@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:7126-7535 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The standalone conflict path can leave `STALL_RECOVERY_SHOULD_INCREMENT` true into the post-action block, causing the same poll cycle to increment stall counters twice.\n  WHY: qwen_qwen3_6-plus and x-ai_grok-4_1-fast both traced the conflict heredoc plus later post-action update as the same counter path, while the other reviewers said the control flow prevents it.\n- tests/test_orchestrate_poll_process.py:3057-3161 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The test does not uniquely prove the `_std_consume_budget=true` branch ran, so it can pass without exercising the budget-cap path.\n  WHY: qwen_qwen3_6-plus and x-ai_grok-4_1-fast both said the current assertions can be satisfied without a distinguishing side effect from the cap branch, while the other reviewers said the test is sufficient.\n- scripts/orchestrate_poll_process.sh:~7531-~7535 | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The post-action update block has mixed tabs and spaces.\n  WHY: Both reviewers reported only a readability/style issue with no runtime impact.\n- scripts/orchestrate_poll_process.sh:~7145\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Passing `\"${updated_state}\"` as a command-line argument can hit `ARG_MAX` as the state grows.\n  WHY: The reviewer noted the state dict grows monotonically, so writing to a temp file or reading from stdin avoids argv limits.\n- scripts/orchestrate_poll_process.sh:~6124\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `judge_decision_cache` grows monotonically with no eviction.\n  WHY: The reviewer noted the cache is append-only and can inflate the standalone state comment payload over many poll cycles.\n- scripts/orchestrate_poll_process.sh:~7142\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_std_conflict_rc` is captured but never checked after post-conflict dispatch.\n  WHY: The reviewer noted dispatch failures could be silently treated as success without an explicit nonzero check.\n- tests/test_orchestrate_poll_process.py:~3162+\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new standalone tests do not assert that `review_dispatches` contains the expected `pr_number` 416.\n  WHY: The reviewer noted adding that assertion would better ensure the mocked dispatch path hit the intended PR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:~7145\n  PROBLEM: Passing `\"${updated_state}\"` as a command-line argument can hit `ARG_MAX` as the state grows.\n  WHY: The reviewer noted the state dict grows monotonically, so writing to a temp file or reading from stdin avoids argv limits.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:~7531\n  PROBLEM: The post-action update block has mixed tabs and spaces.\n  WHY: The reviewer called out inconsistent indentation as a readability issue only, with no runtime impact.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:~7126-7141, ~7531+\n  PROBLEM: When the standalone conflict guard fires and `_std_consume_budget=true`, the conflict block increments counters and the later post-action block can increment them again in the same poll cycle.\n  WHY: The reviewer traced `STALL_RECOVERY_SHOULD_INCREMENT` carrying across issue-loop iterations and argued the post-action block can see a stale true value.\n- tests/test_orchestrate_poll_process.py:~3057+\n  PROBLEM: `test_standalone_conflict_sweep_consumes_budget_after_override_cap` may pass without proving the cap branch executed.\n  WHY: The reviewer said the current assertions can be satisfied by the non-cap conflict path unless the test checks a cap-specific side effect.\n- scripts/orchestrate_poll_process.sh:~6124\n  PROBLEM: `judge_decision_cache` grows monotonically with no eviction.\n  WHY: The reviewer said each stall issue adds an entry and the standalone state payload can inflate over time.\n- scripts/orchestrate_poll_process.sh:~7145\n  PROBLEM: The heredoc passes `\"${updated_state}\"` as a command-line argument, which could exceed `ARG_MAX` as the state grows.\n  WHY: The reviewer called this an unbounded growth vector and suggested moving the state through a temp file or stdin.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:~7126-7141, ~7531+\n  PROBLEM: When `_std_consume_budget=true`, the inline Python heredoc increments `phase_attempts[phase]`, but the updated post-action state block can increment it again.\n  WHY: The reviewer said the post-action block is still reachable with the increment flag set and can advance standalone ai:done issues too fast.\n- tests/test_orchestrate_poll_process.py:3057-3161\n  PROBLEM: The test asserts `stall_recovery_count==1` but does not verify the new budget-consume heredoc side effect.\n  WHY: The reviewer said it can pass if only the post-action increment fires, missing regressions where the heredoc phase increment fails.\n- .github/workflows/ci.yml:195-199\n  PROBLEM: The removed duplicate test invocation left the surrounding CI step sequence visually dense.\n  WHY: The reviewer reported this as a readability/log-scanning concern only, with no functional impact.\n- scripts/orchestrate_poll_process.sh:~7142\n  PROBLEM: `_std_conflict_rc` is captured but never checked after post-conflict dispatch.\n  WHY: The reviewer said dispatch failures can be silently treated as success without a nonzero guard.\n- tests/test_orchestrate_poll_process.py:~3162+\n  PROBLEM: The new standalone tests do not assert that `review_dispatches` contains the expected `pr_number` 416.\n  WHY: The reviewer said adding that assertion would better prove the intended PR was dispatched.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:~7535\n  PROBLEM: The post-action `if` block has inconsistent indentation with mixed tabs and spaces.\n  WHY: The reviewer called it a style-only issue and said bash ignores the whitespace differences at runtime.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9cab7c1dd38ed69dd0cb59dc24888e8959b8280eb0f4983200976fa5572aa577",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2521,
+    "run_id": "25683722872",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25683722872",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511172150_d1bdb478ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2521,
+    "run_id": "25683722872"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T17:21:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
