@@ -36,9 +36,9 @@ fi
 SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
 
 # {{SERENA_TOOL_HINTS}} resolves from the optional ${SERENA_TOOL_HINTS}
-# environment variable. Prompt consumers set it per render invocation so
-# Serena tool-usage guidance appears only when the workflow has bootstrapped
-# Serena for the current run. Unset/empty removes the placeholder line.
+# environment variable. Prompt consumers set it per render invocation so the
+# editor-only Serena guidance can be injected through the shared renderer
+# without touching reviewer or judge prompt assembly.
 SERENA_TOOL_HINTS_BLOCK="${SERENA_TOOL_HINTS:-}"
 
 line=""

@@ -298,8 +298,46 @@ def test_review_autofix_failure_log_artifact_upload_contract() -> None:
 	)
 
 
+def test_review_autofix_serena_stats_emit_contract() -> None:
+	workflow = _workflow_text()
+	stats_block = _step_block_text("Emit Serena stats")
+	cleanup_block = _step_block_text("Cleanup temporary artifacts")
+
+	assert "if: always() && env.RUNTIME_DIR != ''" in stats_block, (
+		"Serena stats emission must run under always() so cancellation/failure "
+		"paths still preserve the editor-only Serena diagnostics before cleanup"
+	)
+	assert "continue-on-error: true" in stats_block, (
+		"Serena stats emission must fail open so missing logs or helper assets "
+		"do not mask the original editor failure"
+	)
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/serena_stats_emit.py" ]; then' in stats_block, (
+		"Serena stats step must tolerate consumer-repo runs where the support "
+		"asset was not bootstrapped"
+	)
+	assert 'serena_stat_args=(--target review_autofix)' in stats_block, (
+		"Serena stats step must label review_autofix as the target surface"
+	)
+	assert "editor_attempt_*.err" in stats_block, (
+		"Serena stats step must scan per-attempt editor stderr logs before cleanup"
+	)
+	assert "${CODEX_HOME:-$HOME/.codex}/log" in stats_block, (
+		"Serena stats step must scan the surviving shared CODEX_HOME log directory"
+	)
+	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/serena_stats_emit.py" "${serena_stat_args[@]}"' in stats_block, (
+		"Serena stats step must invoke the shared emitter through the staged support path"
+	)
+	assert workflow.find("- name: Emit Serena stats") < workflow.find("- name: Cleanup temporary artifacts"), (
+		"Serena stats must run before cleanup so runtime files still exist when stats are emitted"
+	)
+	assert "CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR" in cleanup_block, (
+		"Cleanup step must still include failure-log staging cleanup after Serena stats runs"
+	)
+
+
 def main() -> int:
 	test_review_autofix_failure_log_artifact_upload_contract()
+	test_review_autofix_serena_stats_emit_contract()
 	print("OK: review_autofix failure-log upload contract assertions hold")
 	return 0
 

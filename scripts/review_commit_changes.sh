@@ -97,6 +97,18 @@ fi
 
 rm -f "${COMMITTED_FILES_FILE}"
 
+# Drop unchanged bootstrap-owned Serena runtime state before any
+# untracked-file cleanup or staging. If the repo already owned the
+# Serena project config, or Codex mutated it away from the bootstrap
+# hash, leave the tree on disk and let the staging guards below exclude
+# it from commits without deleting repo-owned content.
+if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
+  current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+  if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+    rm -rf .serena
+  fi
+fi
+
 # On the workflow source repo the editor is legitimately allowed
 # to create new files (e.g. new workflow-templates/** assets,
 # tests, prompts).  The IS_WORKFLOW_SOURCE_REPO=true branch of
@@ -123,6 +135,7 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
       # They are cleaned up after conflict resolution (or are harmless
       # untracked files if no conflicts exist).
       case "${created_file}" in
+        .serena|.serena/*) continue ;;
         scripts/*|prompts/*) continue ;;
       esac
       echo "- ${created_file}"
