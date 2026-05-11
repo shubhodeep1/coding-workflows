@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2113-2136 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The comment promises \"2s, 4s, 8s, 16s across 4 attempts,\" but with fetch_max_attempts=4 the 16s sleep is unreachable because the loop exits on the 4th failure before sleeping.\n  WHY: The code only performs 2s/4s/8s backoffs for 4 total attempts, so the documented ~30s schedule does not occur.\n- .github/workflows/review_autofix.yml:2119-2125 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The comment's claim that this is the \"existing push-retry fetch loop later in this file (search 'fetch_attempt')\" is inaccurate.\n  WHY: The later loop uses a different control flow and a fixed 2s/2-attempt retry policy, so the reference can mislead maintainers about the expected pattern.\n- .github/workflows/review_autofix.yml:2129-2131 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: On the terminal failure path, no `::warning::` is emitted for attempt 4.\n  WHY: The code jumps from the attempt-4 exhaustion check straight to `::error::`, so the log never records the final failed attempt with a warning annotation.\n- .github/workflows/review_autofix.yml:2129-2130 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The final `::error::` omits attempt count or elapsed backoff.\n  WHY: That leaves the terminal failure log less informative for triage than the prior retry warnings.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:2119-2136 | confidence=5\n  PROBLEM: The comment states \"2s, 4s, 8s, 16s across 4 attempts,\" but the code implements 4 attempts with only 3 inter-attempt sleeps (2s, 4s, 8s).\n  WHY: When fetch_attempt reaches 4, the `-ge` check fires before the sleep, so the 16s backoff never executes and the total backoff is 14s, not the comment's implied ~30s.\n- .github/workflows/review_autofix.yml:2120-2121 | confidence=4\n  PROBLEM: The comment claims \"Same shape as the existing push-retry fetch loop later in this file (search 'fetch_attempt').\"\n  WHY: The later push-retry fetch loop uses a different structure and retry policy, so the comparison is inaccurate and can mislead maintainers.\n- .github/workflows/review_autofix.yml:2129-2131 | confidence=3\n  PROBLEM: On the terminal failure path, no `::warning::` is emitted for attempt 4.\n  WHY: The warning is placed after the exhaustion check, so the final failed attempt is not recorded with the structured warning annotation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:2115-2136 | confidence=5\n  PROBLEM: The retry loop comment promises \"2s, 4s, 8s, 16s across 4 attempts,\" but with `fetch_max_attempts=4` the 16s backoff never executes.\n  WHY: The loop exits on the 4th failure before sleeping, so only 3 retries run and the total backoff is ~14s instead of the documented ~30s.\n- .github/workflows/review_autofix.yml:2115-2136\n  PROBLEM: The comment says the loop \"follows the project standard,\" but the referenced push-retry fetch loop uses a different retry shape and fixed 2s sleep.\n  WHY: The comparison is inaccurate and could confuse maintainers about the expected retry behavior in this file.\n- .github/workflows/review_autofix.yml:2129-2130\n  PROBLEM: The final error message does not include cumulative retry time.\n  WHY: Triage is slightly harder without the elapsed backoff recorded in the terminal failure log.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:2115-2136 | confidence=5\n  PROBLEM: The retry loop documents \"2s, 4s, 8s, 16s across 4 attempts,\" but with `fetch_max_attempts=4` the 16s backoff never executes.\n  WHY: The loop exits on the 4th failure before the sleep, so only 2s/4s/8s backoffs run and the code provides less retry budget than documented.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:2117-2136 | confidence=5\n  PROBLEM: The comment on lines 2117-2120 promises \"2s, 4s, 8s, 16s across 4 attempts\" but the 16 s sleep is unreachable.\n  WHY: With `fetch_max_attempts=4`, the loop exits on the 4th failure before any sleep, so only 2s/4s/8s backoff executes.\n- .github/workflows/review_autofix.yml:2119-2120 | confidence=4\n  PROBLEM: The comment states \"Same shape as the existing push-retry fetch loop later in this file (search 'fetch_attempt').\"\n  WHY: The existing push-retry fetch loop uses a different control-flow shape and fixed 2 s sleeps, so the statement is misleading.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:2115-2136 | confidence=5\n  PROBLEM: The retry loop documents \"2s, 4s, 8s, 16s across 4 attempts,\" but with fetch_max_attempts=4 the 16s backoff never executes because the exit check runs before the sleep on attempt 4. (2 related items)\n  WHY: The code provides only 3 sleeps totaling 14s, so the documented 4th backoff and ~30s budget do not occur.\n- .github/workflows/review_autofix.yml:2125 | confidence=4\n  PROBLEM: The comment/PR body claims the loop matches \"existing push-retry fetch loop later in this file (search 'fetch_attempt').\"\n  WHY: The referenced loop has a different retry shape and backoff policy, so the claim is inaccurate.\n- .github/workflows/review_autofix.yml:2129-2130 | confidence=3\n  PROBLEM: Final `::error::` omits attempt count or elapsed backoff.\n  WHY: Minor observability gap; the terminal failure log is less informative for triage without the retry timing.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:2113-2136 | confidence=5\n  PROBLEM: The comment at lines 2117-2118 claims \"Backoff follows the project standard for git fetch/pull retries: 2s, 4s, 8s, 16s across 4 attempts.\"\n  WHY: Tracing the loop shows the 16s backoff is unreachable because the exit check happens before any sleep on attempt 4, so only 4 attempts with 3 sleeps totaling 14s actually run.\n- .github/workflows/review_autofix.yml:2119-2120\n  PROBLEM: The comment claims \"Same shape as the existing push-retry fetch loop later in this file.\"\n  WHY: The referenced loop uses a different pattern and retry policy, so the comparison is misleading.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "282a53079ae9c7b87d62471a760025d502235f5a9fcfa4e0a1946e663467123f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2530,
+    "run_id": "25700938819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25700938819",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511224732_5e746ed159",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2530,
+    "run_id": "25700938819"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T22:47:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
