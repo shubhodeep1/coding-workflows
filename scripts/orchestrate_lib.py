@@ -1627,7 +1627,7 @@ def detect_stalls(
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
-		stall_duration_minutes, stall_recovery_count
+		stall_duration_minutes, stall_recovery_count, phase_attempts_count
 	"""
 	current_wave_idx = state.get("current_wave", 1) - 1
 	waves = state.get("waves", [])
