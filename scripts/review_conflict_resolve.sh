@@ -706,14 +706,20 @@ fi
 # Upper bound: the default of 3000s (50 min) is sized for 3
 # attempts × 50 min = 150 min inside the 170-min step cap
 # (review_autofix.yml's resolver step), leaving ~20 min for soft
-# validation, commit, and the EXIT-trap dispatch.  Operators can
-# raise the env var for a particular PR, but values above 3000s
-# start eating into that 20-min headroom and risk SIGKILL'ing
-# attempt 3 mid-flight on a hung run.  We clamp anything above
-# 3000s with a `::warning::` rather than rejecting it because a
-# legitimately-large per-attempt budget on a multi-file conflict
-# set is occasionally the right tuning — just not at unbounded
-# values.
+# validation, commit, and the EXIT-trap dispatch.  Overrides above
+# 3000s would consume that headroom and risk SIGKILL'ing attempt 3
+# mid-flight (or starving the EXIT-trap dispatch), so any value
+# above the default is clamped back to 3000s with a `::warning::`.
+# In other words: this env var is a knob for shrinking the budget
+# on a specific PR (e.g. forcing earlier retries on a small conflict
+# set), not for enlarging it.  If a particular conflict set
+# legitimately needs longer attempts, raise BOTH the step cap
+# (`timeout-minutes: 170`) and the outer job cap
+# (`timeout-minutes: 240`) in review_autofix.yml first, then bump
+# this max accordingly and re-do the 3 × per_attempt + ~20m
+# headroom math.  Keeping the max equal to the default makes that
+# coupling explicit: you cannot accidentally raise this env var
+# alone and have it take effect.
 CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS=3000
 if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
   echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would eat the soft-validation / commit / dispatch headroom under the 170-min step cap); clamping to ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
