@@ -1082,19 +1082,34 @@ fi
 
 # MAX_JUDGE_REPLAY caps how many consecutive cached judge decisions the
 # orchestrator will replay before forcing escalate_human. The judge
-# decision cache (see invoke_stall_judge) is keyed on sha256 of the
-# full diagnostics JSON blob — issue/phase/recovery_count, linked-PR
-# state, recent_review_workflow_outcomes, prior_recovery_actions, and
-# recent_tracking_comments (with the orchestrator's own "## 🧑‍⚖️
-# Stall Judge — Issue #N" tracking comments stripped from the hash
-# view so self-narration cannot churn the key on every cycle).  Any
-# mutable input the prompt actually carries therefore invalidates the
-# cached decision automatically.  Replaying skips the LLM when the
-# same inputs reproduce — but if the cached decision is wrong (the
-# judge picked resolve_merge_conflict on a hot-file collision the
-# resolver can't fix), replaying it forever wastes budget. After this
-# many replays, the judge cache is bypassed and the issue is
-# escalated.
+# decision cache (see invoke_stall_judge) is keyed on sha256 of a
+# NORMALIZED view of the diagnostics JSON, not the raw blob: the
+# hash input strips inputs that change every cycle even when the
+# substance of the stall is unchanged so MAX_JUDGE_REPLAY can fire
+# on repeated identical stalls.  Specifically, the hash input
+# includes issue/phase, linked-PR state (including head_sha),
+# head/base ref, recent_review_workflow_outcomes, current_wave, and
+# the stable subset of prior_recovery_actions / recent_tracking_comments;
+# it EXCLUDES:
+#   * stall_minutes (ticks every poll cycle).
+#   * recovery_count (advances after every action that consumes
+#     budget).
+#   * prior_recovery_actions[stall_recovery_count] (mirrors the same
+#     counter at the wave-issue level).
+#   * The orchestrator's own "## 🧑‍⚖️ Stall Judge — Issue #N"
+#     tracking comments AND <!-- ORCHESTRATOR_STATE_V1/V2/AI_STANDALONE_STALL_STATE_V1 -->
+#     state snapshots — all of which the orchestrator writes between
+#     ticks and would otherwise churn the hash on its own output.
+# Meaningful changes (a new commit on the branch, mergeability
+# flipping, a human comment, a different workflow outcome, an
+# operator added/changed answer) therefore DO invalidate the cached
+# decision automatically.  When the same inputs reproduce, the
+# replay skips the LLM — but if the cached decision is wrong (e.g.
+# the judge picked resolve_merge_conflict on a hot-file collision
+# the resolver can't fix), replaying forever wastes budget; after
+# this many replays the cache is bypassed and the issue is
+# escalated (with a sticky force_escalate marker so the
+# terminalization is not silently downgraded on the next tick).
 MAX_JUDGE_REPLAY="${MAX_JUDGE_REPLAY:-2}"
 if ! [[ "${MAX_JUDGE_REPLAY}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_JUDGE_REPLAY must be a non-negative integer; defaulting to 2"
@@ -5348,9 +5363,21 @@ normalize_stall_recovery_action() {
   local phase="$1"
   local recovery_count="$2"
   local candidate_action="${3:-}"
+  # Phase-lifetime counter — same scope as recovery_count but
+  # survives phase oscillation per update_issue_timestamps's reset
+  # rule.  Threading this through to resolve_effective_stall_recovery_action
+  # ensures the fallback path (when the judge returns a
+  # malformed/empty action) respects the same phase-attempt cap that
+  # detect_stalls uses; without it, the fallback would treat
+  # phase_attempts_count as 0 and silently bypass the cap (Copilot
+  # review, PR #2522, line 1527).  Callers that do not have the
+  # counter handy may omit it — the default 0 preserves the previous
+  # behaviour.
+  local phase_attempts_count="${4:-0}"
+  [[ "${phase_attempts_count}" =~ ^[0-9]+$ ]] || phase_attempts_count="0"
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" "$phase_attempts_count" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_effective_stall_recovery_action
@@ -5361,6 +5388,7 @@ candidate_action = sys.argv[3]
 max_recoveries = int(sys.argv[4])
 enable_human_terminalization = sys.argv[5].lower() == "true"
 max_done = int(sys.argv[6])
+phase_attempts_count = int(sys.argv[7])
 print(resolve_effective_stall_recovery_action(
     phase,
     recovery_count,
@@ -5368,6 +5396,7 @@ print(resolve_effective_stall_recovery_action(
     max_recoveries=max_recoveries,
     enable_stall_human_terminalization=enable_human_terminalization,
     max_recoveries_by_phase={"ai:done": max_done},
+    phase_attempts_count=phase_attempts_count,
 ))
 PY
 )" || true
@@ -6400,6 +6429,22 @@ invoke_stall_judge() {
   local judge_justification
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
+  # Look up phase_attempts_count for the current issue so the
+  # normalize fallback below (when judge_action is malformed or
+  # empty) respects the same phase-lifetime cap that detect_stalls
+  # uses.  Only meaningful for the managed path (local_id set +
+  # STATE_FILE present); standalone state does not carry
+  # phase_attempts, so 0 is the only sane default there (Copilot
+  # review, PR #2522, line 1527).
+  local _judge_phase_attempts_count=0
+  if [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
+     && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_phase_attempts_count="$(jq -r --arg lid "${local_id}" --argjson wi "${WAVE_IDX:-0}" --arg p "${phase}" \
+      '((.waves[$wi].issues[] | select(.id == $lid)) // {}) | (.phase_attempts[$p] // 0)' \
+      "${STATE_FILE}" 2>/dev/null || echo "0")"
+    [[ "${_judge_phase_attempts_count}" =~ ^[0-9]+$ ]] || _judge_phase_attempts_count=0
+  fi
+
   local effective_action
   if [ "${_judge_force_escalate:-false}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
     # Bypass normalize_stall_recovery_action for the synthetic
@@ -6416,7 +6461,7 @@ invoke_stall_judge() {
     # the global gate.
     effective_action="escalate_human"
   else
-    effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+    effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}" "${_judge_phase_attempts_count}")"
   fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
@@ -11251,7 +11296,18 @@ fi
     # (recovery_action_for_phase / normalize_stall_recovery_action) already
     # pass {"ai:done": ${MAX_STALL_RECOVERIES_DONE}} into the corresponding
     # Python helpers; this keeps the in-process bulk path consistent.
-    _stall_check_args+=(--max-recoveries-by-phase-json "$(printf '{"ai:done": %s}' "${MAX_STALL_RECOVERIES_DONE}")")
+    # Normalize to a canonical decimal integer BEFORE formatting so a
+    # value like "09" (the regex validator at line ~882 only checks
+    # `^[0-9]+$`, which permits leading zeros) does not produce
+    # invalid JSON like `{"ai:done": 09}` and silently break
+    # check-stalls into a fall-back `{count:0}` (Copilot review,
+    # PR #2522, line 11254).  `$((10#${X}))` forces base-10
+    # interpretation, stripping leading zeros without invoking an
+    # external process.  Then build the JSON via `jq --argjson` so
+    # the result is guaranteed-valid JSON.
+    local _msd_canonical
+    _msd_canonical=$(( 10#${MAX_STALL_RECOVERIES_DONE} ))
+    _stall_check_args+=(--max-recoveries-by-phase-json "$(jq -cn --argjson n "${_msd_canonical}" '{"ai:done": $n}')")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"

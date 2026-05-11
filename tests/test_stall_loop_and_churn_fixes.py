@@ -278,6 +278,97 @@ def test_standalone_judge_path_warns_when_state_file_missing():
 	)
 
 
+def test_max_recoveries_done_json_is_canonical_under_leading_zero(tmp_path):
+	"""When MAX_STALL_RECOVERIES_DONE is a non-canonical decimal like
+	`09` (which the `^[0-9]+$` regex validator at line ~882 permits),
+	the --max-recoveries-by-phase-json argument must still emit
+	valid JSON.  The production fix normalizes via `$((10#${VAL}))`
+	before jq formatting (Copilot review, PR #2522 line 11254)."""
+	script = textwrap.dedent("""
+		set -uo pipefail
+		# Reproduce the production formatter for several edge cases.
+		emit_for() {
+			local val="$1"
+			local canonical
+			canonical=$(( 10#${val} ))
+			jq -cn --argjson n "${canonical}" '{"ai:done": $n}'
+		}
+		echo "canonical=$(emit_for 5)"
+		echo "leading_zero_short=$(emit_for 09)"
+		echo "leading_zero_long=$(emit_for 099)"
+		echo "leading_zeros=$(emit_for 007)"
+		echo "zero=$(emit_for 0)"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# Every output must be valid JSON with the canonical integer.
+	import json as _json
+	assert _json.loads(out["canonical"]) == {"ai:done": 5}, out
+	assert _json.loads(out["leading_zero_short"]) == {"ai:done": 9}, out
+	assert _json.loads(out["leading_zero_long"]) == {"ai:done": 99}, out
+	assert _json.loads(out["leading_zeros"]) == {"ai:done": 7}, out
+	assert _json.loads(out["zero"]) == {"ai:done": 0}, out
+
+
+def test_normalize_stall_recovery_action_threads_phase_attempts_count(tmp_path):
+	"""normalize_stall_recovery_action must forward phase_attempts_count
+	to resolve_effective_stall_recovery_action so its fallback path
+	respects the phase-lifetime cap.  Without the threading,
+	malformed judge actions fell back as if phase_attempts were 0
+	and could bypass the cap entirely (Copilot review, PR #2522
+	line 1527).
+
+	Scenario: phase=ai:review-blocked, recovery_count=0 (zeroed by
+	phase oscillation), phase_attempts_count=5 (= the global cap),
+	empty candidate_action → fallback should return "skip" (cap
+	enforced), not the ladder action.
+	"""
+	func_src = _extract_function_body("normalize_stall_recovery_action")
+	script = textwrap.dedent(f"""
+		set -uo pipefail
+		export MAX_STALL_RECOVERIES_PER_ISSUE=5
+		export MAX_STALL_RECOVERIES_DONE=99
+		export ENABLE_STALL_HUMAN_TERMINALIZATION=false
+		# Stub recovery_action_for_phase to flag bugs where the fallback
+		# is reached (it should NOT be, the python path returns "skip").
+		recovery_action_for_phase() {{
+			echo "FALLBACK_BUG"
+		}}
+		{func_src}
+		# Empty candidate, recovery_count=0, phase_attempts_count=5 (cap).
+		# The expected outcome: Python helper returns "skip" because
+		# phase_attempts_count >= cap.  Without threading,
+		# phase_attempts_count would default to 0 and the python
+		# helper would return a ladder action.
+		result="$(normalize_stall_recovery_action ai:review-blocked 0 '' 5)"
+		echo "with_threading=$result"
+
+		# Negative control: same call without the count arg → defaults
+		# to 0 → python returns a ladder action (not skip).  Pins the
+		# diff so regressions in either direction are visible.
+		result_no_count="$(normalize_stall_recovery_action ai:review-blocked 0 '')"
+		echo "without_threading=$result_no_count"
+	""")
+	r = _run_bash(script, cwd=REPO_ROOT)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if "=" in line)
+	# When phase_attempts_count is threaded through as 5 (= cap),
+	# the cap fires and skip is returned.
+	assert out["with_threading"] == "skip", (
+		f"expected skip when phase_attempts_count=5; got {out}"
+	)
+	# When not threaded (default 0), the cap does NOT fire and a
+	# ladder action is returned.  This is the bug Copilot flagged —
+	# the test pins that the threading is REQUIRED to enforce the cap.
+	assert out["without_threading"] != "skip", (
+		f"control: without threading, cap must not fire; got {out}"
+	)
+	# And neither answer is FALLBACK_BUG (the python path handled it).
+	assert "FALLBACK_BUG" not in out["with_threading"], out
+	assert "FALLBACK_BUG" not in out["without_threading"], out
+
+
 def test_judge_cache_stores_effective_action_not_raw_judge_action(tmp_path):
 	"""When the judge returns an unrecognized action, the cache must
 	store the effective (post-normalize) action, not the raw invalid
