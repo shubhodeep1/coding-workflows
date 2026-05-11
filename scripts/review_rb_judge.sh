@@ -723,61 +723,104 @@ ${RB_FIX_DESC}"
   merge_with_followup)
     echo "Judge says merge PR #${PR_NUMBER} and open a follow-up issue for the deferred gap."
 
-    # Parse follow-up details before any state changes, so a malformed
-    # judge output surfaces as a warning before we touch labels / merge.
+    # Parse follow-up details before any state changes. The whole point
+    # of merge_with_followup is to track the deferred gap — missing
+    # details would silently downgrade the action to a plain merge with
+    # no tracking issue, defeating the purpose. Refuse the action so
+    # the review-blocked fallback path (or the next judge retry) takes
+    # over instead of papering over the omission.
     FOLLOWUP_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
     FOLLOWUP_BODY="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
     if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
-      echo "::warning::Judge chose merge_with_followup but provided no follow-up issue details — proceeding with merge only."
-    fi
-
-    # Label linked issues ready-to-merge (mirror the `merge)` branch).
-    ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-    while IFS= read -r issue_number; do
-      [ -n "${issue_number}" ] || continue
-      _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
-    done <<< "${ISSUE_NUMBERS}"
-
-    # Attempt merge (same mergeability-poll pattern as the `merge)` branch).
-    PR_STATE=""
-    PR_MERGEABLE=""
-    _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
-    _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
-    _attempt=0
-    while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
-      _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-      PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
-      PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
-      if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
-        break
-      fi
-      _attempt=$((_attempt + 1))
-      if [ "${_attempt}" -lt "${_mergeable_attempts}" ]; then
-        echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${_mergeable_sleep}s (${_attempt}/${_mergeable_attempts})."
-        sleep "${_mergeable_sleep}"
-      fi
-    done
-
-    if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-      if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        # NOTE: gh pr merge is intentionally NOT wrapped with gh_retry.
-        # See the `merge)` branch for the rationale (best-effort, non-
-        # transient failure backoff cost, etc.).
-        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
-      fi
-    elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
-      echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Follow-up issue will still be created so the deferred gap is tracked."
+      echo "::error::Judge chose merge_with_followup but provided no follow-up issue details (followup_issue.title or .body empty). Refusing the action — leaving PR in ai:review-blocked state for retry/fallback so the deferred gap is not lost."
+      # Intentionally NOT setting judge_handled=true so the existing
+      # review-blocked fallback in the workflow fires.
     else
-      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing or PR not open). Follow-up issue will still be created."
-    fi
+      # Poll mergeability BEFORE the label swap / follow-up creation so
+      # MERGE_CONFIRMED gates every observable side effect. Unlike the
+      # `merge)` branch (which only attempts a merge), this branch also
+      # creates a tracking issue — an unconfirmed merge would orphan
+      # that issue against code that never lands on the base ref.
+      PR_STATE=""
+      PR_MERGEABLE=""
+      _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
+      _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
+      _attempt=0
+      while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
+        _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+        PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
+        PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
+        if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
+          break
+        fi
+        _attempt=$((_attempt + 1))
+        if [ "${_attempt}" -lt "${_mergeable_attempts}" ]; then
+          echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${_mergeable_sleep}s (${_attempt}/${_mergeable_attempts})."
+          sleep "${_mergeable_sleep}"
+        fi
+      done
 
-    # Create follow-up issue (mirror close_and_reissue's issue-creation
-    # block). Done unconditionally on the title/body presence, even if
-    # the merge attempt above did not land — the deferred gap should
-    # always be tracked once the judge has named it.
-    if [ -n "${FOLLOWUP_TITLE}" ] && [ -n "${FOLLOWUP_BODY}" ]; then
-      FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
+      # MERGE_CONFIRMED gates phase-swap, follow-up creation, and
+      # judge_handled=true emission. Set to "true" only when we have
+      # high confidence the merge will land:
+      #   - PR_STATE="merged": already merged (rare; e.g. another
+      #     workflow merged it concurrently).
+      #   - PR_STATE="open" + PR_MERGEABLE="true" + ENABLE_AUTO_MERGE=
+      #     "true" + gh pr merge call succeeded: sync-merged or auto-
+      #     merge enrolled on a mergeable PR (high probability of
+      #     landing within seconds-to-minutes; the follow-up's clarify
+      #     phase takes longer, so the merge has landed before the
+      #     follow-up planner reads file:line refs).
+      # Set to "false" otherwise (conflicts, mergeability unknown,
+      # ENABLE_AUTO_MERGE="false" with PR still open, or gh pr merge
+      # itself failed). When unconfirmed we leave the PR in ai:review-
+      # blocked state (no judge_handled=true emitted) so stall recovery
+      # re-routes it — better that than orphan a follow-up issue against
+      # code that never lands.
+      MERGE_CONFIRMED="false"
+
+      if [ "${PR_STATE}" = "merged" ]; then
+        echo "PR #${PR_NUMBER} already merged before merge_with_followup ran — proceeding with follow-up creation."
+        MERGE_CONFIRMED="true"
+      elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
+        if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+          # NOTE: gh pr merge is intentionally NOT wrapped with gh_retry
+          # — see the `merge)` branch for the rationale (best-effort,
+          # non-transient failure backoff cost). The conditional `if`
+          # (rather than `|| true`) captures the success/failure into
+          # MERGE_CONFIRMED so we can skip the follow-up creation when
+          # neither path succeeded.
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
+              || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null; then
+            MERGE_CONFIRMED="true"
+          else
+            echo "::warning::PR #${PR_NUMBER} is mergeable but gh pr merge failed (branch protection / queue / permissions / 422) — leaving PR in ai:review-blocked state so stall recovery can re-route."
+          fi
+        else
+          echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
+        fi
+      elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+        echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code."
+      else
+        echo "::warning::PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot confirm merge (mergeability still computing or PR not open). Leaving PR in ai:review-blocked state."
+      fi
+
+      if [ "${MERGE_CONFIRMED}" = "true" ]; then
+        # Phase-swap linked issues only after merge is confirmed — a
+        # premature swap would suppress the review-blocked fallback for
+        # an issue whose PR never actually landed.
+        ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
+        while IFS= read -r issue_number; do
+          [ -n "${issue_number}" ] || continue
+          _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
+        done <<< "${ISSUE_NUMBERS}"
+
+        # Create follow-up issue (mirror close_and_reissue's issue-
+        # creation block). The judge's prompt is instructed to cite
+        # file:line refs against the merged base; with MERGE_CONFIRMED
+        # gating this block, those refs will be on the base branch by
+        # the time the follow-up's clarify / planner phases run.
+        FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
 
 ---
 **Merge-with-followup metadata**
@@ -785,29 +828,30 @@ ${RB_FIX_DESC}"
 - Parent issue: ${FIRST_ISSUE:+#${FIRST_ISSUE}}
 - Type: review-blocked-followup"
 
-      # Propagate ai:orchestrator-managed from the parent issue when it
-      # carries that label — same rationale as the close_and_reissue
-      # branch: without propagation an orchestrator-managed parent's
-      # follow-up lands with only ai:clarification (added later by
-      # clarify.yml on issues.opened) and the orchestrator-managed
-      # auto-answer fast path in clarify.yml never fires.
-      RB_FOLLOWUP_LABELS=()
-      if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
-        ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
-        RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")
-        echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to merge-with-followup issue."
+        # Propagate ai:orchestrator-managed from the parent issue when
+        # it carries that label — same rationale as the close_and_reissue
+        # branch: without propagation an orchestrator-managed parent's
+        # follow-up lands with only ai:clarification (added later by
+        # clarify.yml on issues.opened) and the orchestrator-managed
+        # auto-answer fast path in clarify.yml never fires.
+        RB_FOLLOWUP_LABELS=()
+        if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
+          ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
+          RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")
+          echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to merge-with-followup issue."
+        fi
+
+        FOLLOWUP_URL="$(gh_retry gh issue create \
+          --repo "${REPOSITORY}" \
+          --title "${FOLLOWUP_TITLE}" \
+          --body "${FULL_FOLLOWUP_BODY}" \
+          ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"
+        echo "Created follow-up issue: ${FOLLOWUP_URL}"
+
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=merge_with_followup" >> "$GITHUB_OUTPUT"
       fi
-
-      FOLLOWUP_URL="$(gh_retry gh issue create \
-        --repo "${REPOSITORY}" \
-        --title "${FOLLOWUP_TITLE}" \
-        --body "${FULL_FOLLOWUP_BODY}" \
-        ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"
-      echo "Created follow-up issue: ${FOLLOWUP_URL}"
     fi
-
-    echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-    echo "judge_action=merge_with_followup" >> "$GITHUB_OUTPUT"
     ;;
 
   close_and_reissue)

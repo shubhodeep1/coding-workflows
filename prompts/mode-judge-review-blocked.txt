@@ -64,13 +64,18 @@ Rules:
   paths/lines as bare `apps/x/y.ts:NN` without that prefix.
 - For option D (merge_with_followup): the follow-up issue body must
   describe the specific gap that was deferred and provide acceptance
-  criteria. The workflow merges the PR first and then creates the
-  follow-up issue — so the merged code IS the new base ref. Cite
-  `file:line` refs in the merged code directly without the closed-PR
-  prefix; the follow-up planner will see them on the base branch after
-  merge. Do NOT pick this action if the PR has build/test breakage or
-  critical correctness/security defects — pick close_and_reissue
-  instead.
+  criteria. The workflow merges the PR (or enrolls it in auto-merge on
+  a mergeable PR) and then creates the follow-up issue — by the time
+  the follow-up's clarify / planner phases run, the merged code is the
+  new base ref. Cite `file:line` refs in the merged code directly
+  without the closed-PR prefix. The workflow refuses this action when
+  follow-up details are missing OR the PR cannot be confirmed mergeable
+  (conflicts, ENABLE_AUTO_MERGE=false with PR still open, mergeability
+  still computing) — in those cases the PR stays in ai:review-blocked
+  for stall recovery rather than orphaning a tracking issue against
+  unmerged code. Do NOT pick this action if the PR has build/test
+  breakage or critical correctness/security defects — pick
+  close_and_reissue instead.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
 - Prefer merge_with_followup (D) over close_and_reissue (C) at IS_FINAL
