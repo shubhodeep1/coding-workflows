@@ -10139,10 +10139,19 @@ ${RB_FIX_DESC}
               RB_MERGED="true"
             elif [ "${PR_STATE}" = "closed" ]; then
               echo "::warning::PR #${RB_PR} closed without merge — skipping follow-up creation; deferred gap not tracked because source PR's changes never landed."
-            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_mwf_sha}"; then
-              # Sync merge first for real confirmation; --auto fallback
-              # with bounded merge-completion poll for protected-branch
-              # repos where checks are still pending.
+            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
+              # Note: this branch deliberately does NOT precondition on
+              # `_pr_checks_completed` (unlike the existing `merge)` case
+              # above) — sync merge will fail fast when required checks
+              # are still pending, and the --auto fallback exists
+              # specifically to handle that case in protected-branch /
+              # merge-queue repos. Gating on _pr_checks_completed would
+              # make the --auto path unreachable in the very repos that
+              # need it, leaving the issue stuck in ai:review-blocked
+              # until an orchestrator stall-recovery cycle re-fired.
+              # This matches scripts/review_rb_judge.sh's merge_with_
+              # followup ladder so the two judge implementations stay
+              # behaviourally consistent on the same prompt.
               if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
                 echo "  PR #${RB_PR} merged synchronously."
                 MERGE_CONFIRMED="true"
