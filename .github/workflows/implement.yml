@@ -464,8 +464,8 @@ jobs:
               src=".codex-workflow-src-main/scripts/${f}"
             fi
             if [ ! -f "${src}" ]; then
-              echo "::error::Missing required Serena support asset ${f} in ${wf_source}@${SCRIPT_REF}"
-              exit 1
+              echo "::notice::Optional Serena support asset ${f} is unavailable on ${SCRIPT_REF}; Serena bootstrap remains disabled."
+              continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -477,12 +477,12 @@ jobs:
             serena_template_src=".codex-workflow-src-main/scripts/templates/serena_project.yml.j2"
           fi
           if [ ! -f "${serena_template_src}" ]; then
-            echo "::error::Missing required Serena template scripts/templates/serena_project.yml.j2 in ${wf_source}@${SCRIPT_REF}"
-            exit 1
-          fi
-          install -m 0644 "${serena_template_src}" "scripts/templates/serena_project.yml.j2"
-          if [ "${is_self_repo}" = "false" ]; then
-            echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"
+            echo "::notice::Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable on ${SCRIPT_REF}; Serena bootstrap remains disabled."
+          else
+            install -m 0644 "${serena_template_src}" "scripts/templates/serena_project.yml.j2"
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"
+            fi
           fi
 
           for f in install_semble.sh semble_helpers.sh; do
@@ -2003,50 +2003,50 @@ jobs:
           upsert_repair_reasoning_into_config() {
             local cfg="$1"
             PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<'PY' || return 1
-            from pathlib import Path
-            import re
-            import sys
+          from pathlib import Path
+          import re
+          import sys
 
-            config_path = Path(sys.argv[1])
-            reasoning = sys.argv[2]
-            replacement = f'model_reasoning_effort = "{reasoning}"\n'
+          config_path = Path(sys.argv[1])
+          reasoning = sys.argv[2]
+          replacement = f'model_reasoning_effort = "{reasoning}"\n'
 
-            if not config_path.exists():
-                config_path.parent.mkdir(parents=True, exist_ok=True)
-                config_path.write_text(replacement, encoding="utf-8")
-                raise SystemExit(0)
+          if not config_path.exists():
+              config_path.parent.mkdir(parents=True, exist_ok=True)
+              config_path.write_text(replacement, encoding="utf-8")
+              raise SystemExit(0)
 
-            text = config_path.read_text(encoding="utf-8")
-            lines = text.splitlines(keepends=True)
+          text = config_path.read_text(encoding="utf-8")
+          lines = text.splitlines(keepends=True)
 
-            first_table_idx = len(lines)
-            for idx, line in enumerate(lines):
-                stripped = line.lstrip()
-                if stripped.startswith("[") and stripped.rstrip().endswith("]"):
-                    first_table_idx = idx
-                    break
+          first_table_idx = len(lines)
+          for idx, line in enumerate(lines):
+              stripped = line.lstrip()
+              if stripped.startswith("[") and stripped.rstrip().endswith("]"):
+                  first_table_idx = idx
+                  break
 
-            top_level_lines = lines[:first_table_idx]
-            rest_lines = lines[first_table_idx:]
-            pattern = re.compile(r"^[ \t]*model_reasoning_effort[ \t]*=")
+          top_level_lines = lines[:first_table_idx]
+          rest_lines = lines[first_table_idx:]
+          pattern = re.compile(r"^[ \t]*model_reasoning_effort[ \t]*=")
 
-            updated_top = []
-            replaced = False
-            for line in top_level_lines:
-                if pattern.match(line):
-                    if not replaced:
-                        updated_top.append(replacement)
-                        replaced = True
-                    continue
-                updated_top.append(line)
+          updated_top = []
+          replaced = False
+          for line in top_level_lines:
+              if pattern.match(line):
+                  if not replaced:
+                      updated_top.append(replacement)
+                      replaced = True
+                  continue
+              updated_top.append(line)
 
-            if not replaced:
-                if updated_top and not updated_top[-1].endswith("\n"):
-                    updated_top[-1] += "\n"
-                updated_top.append(replacement)
+          if not replaced:
+              if updated_top and not updated_top[-1].endswith("\n"):
+                  updated_top[-1] += "\n"
+              updated_top.append(replacement)
 
-            config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
-            PY
+          config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
+          PY
           }
           if ! upsert_repair_reasoning_into_config "${REPAIR_CODEX_CONFIG}"; then
             echo "::warning::Failed to patch ~/.codex/config.toml for repair reasoning; leaving existing config unchanged."
@@ -2062,11 +2062,11 @@ jobs:
               '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
           fi
           REPAIR_RENDERED_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-repair.rendered.txt"
-          if ! SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}" > "${REPAIR_RENDERED_PROMPT_TEMPLATE}"; then
-            echo "::error::Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}."
-            exit 1
+          if SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}" > "${REPAIR_RENDERED_PROMPT_TEMPLATE}"; then
+            REPAIR_PROMPT_TEMPLATE="${REPAIR_RENDERED_PROMPT_TEMPLATE}"
+          else
+            echo "::warning::Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt."
           fi
-          REPAIR_PROMPT_TEMPLATE="${REPAIR_RENDERED_PROMPT_TEMPLATE}"
 
           : > "${INITIAL_CHANGED_FILE}"
           while IFS= read -r -d '' path; do

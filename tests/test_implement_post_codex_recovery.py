@@ -720,6 +720,7 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
 	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
 	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
 
 
@@ -1129,6 +1130,16 @@ def test_diagnose_reasoning_patch_preserves_serena_mcp_block() -> None:
 	assert "[mcp_servers.serena]" not in diagnose.split("patch_diagnose_reasoning_into_config()", 1)[1].split("patch_diagnose_reasoning_into_config", 1)[0], (
 		"Diagnose reasoning patch must update only the top-level model_reasoning_effort key without inlining Serena table rewrites"
 	)
+
+
+def test_repair_reasoning_patch_preserves_serena_mcp_block() -> None:
+	repair_block = _extract_run_script("Attempt post-Codex syntax repair")
+	repair_patcher = repair_block.split("upsert_repair_reasoning_into_config() {", 1)[1].split('if ! upsert_repair_reasoning_into_config', 1)[0]
+	assert "\nfrom pathlib import Path\n" in repair_patcher
+	assert "top_level_lines = lines[:first_table_idx]" in repair_patcher
+	assert "rest_lines = lines[first_table_idx:]" in repair_patcher
+	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in repair_patcher
+	assert "[mcp_servers.serena]" not in repair_patcher
 
 
 def test_codex_pre_baseline_captured_before_retry_loop() -> None:

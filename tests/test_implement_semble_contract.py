@@ -74,6 +74,9 @@ def test_stage_workflow_support_files_bootstraps_serena_assets() -> None:
 	assert 'mkdir -p scripts/templates' in stage_block
 	assert 'scripts/templates/serena_project.yml.j2' in stage_block
 	assert 'echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"' in stage_block
+	assert "Optional Serena support asset ${f} is unavailable" in stage_block
+	assert "Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable" in stage_block
+	assert "Serena bootstrap remains disabled" in stage_block
 
 
 def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> None:
@@ -135,6 +138,7 @@ def test_repair_prompt_appends_bounded_semble_context() -> None:
 	assert 'build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"' in repair_block
 	assert 'semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true' in repair_block
 	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
 	assert 'Keep apply_patch as the primary write path' in repair_block
 
 
