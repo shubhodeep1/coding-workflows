@@ -365,11 +365,16 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   echo "Retries exhausted: ${IS_FINAL}"
   if [ "${IS_FINAL}" = "true" ]; then
     echo
-    echo "IMPORTANT: This is the FINAL attempt. You MUST choose either 'merge' or"
-    echo "'close_and_reissue'. The 'fix' option is NOT available because previous"
-    echo "fix attempts did not resolve the issues. Pick the action that best serves"
-    echo "the project: merge if the PR is good enough, or close and reissue if the"
-    echo "approach is fundamentally wrong."
+    echo "IMPORTANT: This is the FINAL attempt. You MUST choose 'merge',"
+    echo "'merge_with_followup', or 'close_and_reissue'. The 'fix' option is"
+    echo "NOT available because previous fix attempts did not resolve the issues."
+    echo "Pick the action that best serves the project: merge if the PR is fully"
+    echo "good as-is; merge_with_followup if the PR is shippable (no build/test"
+    echo "breakage, no critical correctness/security defects) but a deferred gap"
+    echo "remains that should be tracked in a fresh issue (preferred over"
+    echo "close_and_reissue when the PR's existing changes are worth keeping);"
+    echo "close_and_reissue only if the approach is fundamentally wrong and"
+    echo "the PR's work should be discarded."
   fi
 } > "${RB_JUDGE_PROMPT}"
 rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
@@ -713,6 +718,96 @@ ${RB_FIX_DESC}"
         echo "judge_action=merge" >> "$GITHUB_OUTPUT"
       fi
     fi
+    ;;
+
+  merge_with_followup)
+    echo "Judge says merge PR #${PR_NUMBER} and open a follow-up issue for the deferred gap."
+
+    # Parse follow-up details before any state changes, so a malformed
+    # judge output surfaces as a warning before we touch labels / merge.
+    FOLLOWUP_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
+    FOLLOWUP_BODY="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
+    if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
+      echo "::warning::Judge chose merge_with_followup but provided no follow-up issue details — proceeding with merge only."
+    fi
+
+    # Label linked issues ready-to-merge (mirror the `merge)` branch).
+    ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
+    while IFS= read -r issue_number; do
+      [ -n "${issue_number}" ] || continue
+      _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
+    done <<< "${ISSUE_NUMBERS}"
+
+    # Attempt merge (same mergeability-poll pattern as the `merge)` branch).
+    PR_STATE=""
+    PR_MERGEABLE=""
+    _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
+    _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
+    _attempt=0
+    while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
+      _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
+      PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
+      if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
+        break
+      fi
+      _attempt=$((_attempt + 1))
+      if [ "${_attempt}" -lt "${_mergeable_attempts}" ]; then
+        echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${_mergeable_sleep}s (${_attempt}/${_mergeable_attempts})."
+        sleep "${_mergeable_sleep}"
+      fi
+    done
+
+    if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
+      if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+        # NOTE: gh pr merge is intentionally NOT wrapped with gh_retry.
+        # See the `merge)` branch for the rationale (best-effort, non-
+        # transient failure backoff cost, etc.).
+        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
+          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
+      fi
+    elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+      echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Follow-up issue will still be created so the deferred gap is tracked."
+    else
+      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing or PR not open). Follow-up issue will still be created."
+    fi
+
+    # Create follow-up issue (mirror close_and_reissue's issue-creation
+    # block). Done unconditionally on the title/body presence, even if
+    # the merge attempt above did not land — the deferred gap should
+    # always be tracked once the judge has named it.
+    if [ -n "${FOLLOWUP_TITLE}" ] && [ -n "${FOLLOWUP_BODY}" ]; then
+      FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
+
+---
+**Merge-with-followup metadata**
+- Source PR: #${PR_NUMBER} (review-blocked judge merged with deferred gap tracked here)
+- Parent issue: ${FIRST_ISSUE:+#${FIRST_ISSUE}}
+- Type: review-blocked-followup"
+
+      # Propagate ai:orchestrator-managed from the parent issue when it
+      # carries that label — same rationale as the close_and_reissue
+      # branch: without propagation an orchestrator-managed parent's
+      # follow-up lands with only ai:clarification (added later by
+      # clarify.yml on issues.opened) and the orchestrator-managed
+      # auto-answer fast path in clarify.yml never fires.
+      RB_FOLLOWUP_LABELS=()
+      if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
+        ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
+        RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")
+        echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to merge-with-followup issue."
+      fi
+
+      FOLLOWUP_URL="$(gh_retry gh issue create \
+        --repo "${REPOSITORY}" \
+        --title "${FOLLOWUP_TITLE}" \
+        --body "${FULL_FOLLOWUP_BODY}" \
+        ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"
+      echo "Created follow-up issue: ${FOLLOWUP_URL}"
+    fi
+
+    echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+    echo "judge_action=merge_with_followup" >> "$GITHUB_OUTPUT"
     ;;
 
   close_and_reissue)
