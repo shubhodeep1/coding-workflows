@@ -548,3 +548,222 @@
 | `test_and_mark_stable` watcher steps | Repeated `/actions/workflows`, `/actions/runs`, `/jobs`, `/logs` | **Dozens** over long watch loops | Shared watch helper + JSON reuse |
 
 If you want, I can turn this report into a prioritized implementation checklist next, with exact workflow/script files to touch and a low-risk rollout order.
+
+## Deep Audit — Workflows & Scripts (2026-05-11)
+
+Scope reviewed: all workflow files under `.github/workflows/` and all shell/Python helpers under `scripts/`. To avoid duplicating the in-progress report already on disk, the findings below focus on additional high-confidence issues that were not already covered there.
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001 — Standalone issue close gate is effectively bypassed for non-merged PR closes
+- **ID** — `BUG-001`
+- **File path(s)** — `.github/workflows/issue_pr_status.yml:253-279,353-379`
+- **Severity** — High
+- **Category tag** — `bug`
+- **Description** — The policy comment at lines 275-278 says standalone issues should keep the original `PR_BASE_REF == main` close gate. The actual close condition at line 369 is `PR_MERGED != true || PR_BASE_REF == main || is_managed_child == true`. That first `PR_MERGED != true` clause means **every non-merged PR close event** closes linked standalone issues, even when the PR targeted a non-`main` branch. In practice, the `gh issue close` call at lines 375-377 runs for any non-merged close, which contradicts the documented standalone-policy branch immediately above it.
+- **Recommended fix** — Split the close decision into explicit branches instead of one broad `||` condition:
+  1. close orchestrator-managed child issues only when `PR_MERGED == true`,
+  2. close standalone issues only when `PR_BASE_REF == main`,
+  3. otherwise leave the issue open and only sync the phase label.  
+  Keep `FINAL_LABEL` assignment separate from the close decision so `ai:closed` / `ai:merged` labeling does not implicitly force issue closure.
+
+#### CONSIST-001 — Linked-issue lineage finalization is fail-closed, not fail-open
+- **ID** — `CONSIST-001`
+- **File path(s)** — `.github/workflows/issue_pr_status.yml:41-171,388-445`; `scripts/memory_helpers.sh:216-224`
+- **Severity** — Medium
+- **Category tag** — `consistency`
+- **Description** — `README.md:25-29` documents AI memory as fail-open: “a memory error never fails the workflow.” The PR-close workflow does the opposite in two places. First, lines 412-419 hard-fail the job when `MEMORY_HELPERS_READY` is not `1` or `scripts/memory_helpers.sh` is missing. Second, lines 435-444 call `memory_finalize_task` inside a `set -euo pipefail` loop, and `memory_finalize_task()` at lines 216-224 is a bare Python invocation with no fail-open wrapper. Any `finalize-task` error therefore aborts the workflow, even though other memory helpers in the same file are explicitly wrapped fail-open.
+- **Recommended fix** — Make lineage finalization match the existing memory contract:
+  - downgrade lines 412-419 to warnings plus `exit 0`,
+  - wrap `memory_finalize_task` the same way `memory_record_run_event` is wrapped earlier in `scripts/memory_helpers.sh`,
+  - or, at minimum, guard each `memory_finalize_task` call with `|| { echo "::warning::..."; continue; }`.  
+  The existing `memory_record_run_event` fail-open pattern in `scripts/memory_helpers.sh` is the right implementation model to reuse.
+
+#### CONSIST-002 — PR-merged Telegram fallback bypasses `ALERT_MSG_LEVEL`
+- **ID** — `CONSIST-002`
+- **File path(s)** — `.github/workflows/issue_pr_status.yml:447-538`; `scripts/tg_helpers.sh:103-129`
+- **Severity** — Low
+- **Category tag** — `consistency`
+- **Description** — The merged-alert step exports `ALERT_MSG_LEVEL` at line 453 and tries to source `scripts/tg_helpers.sh`. When that succeeds, `tg_send_msg()` honors the alert threshold via `_tg_should_send` at lines 107-109 of `scripts/tg_helpers.sh`. But if the helper is unavailable, the fallback branch at lines 534-537 sends the message with raw `curl` and **does not check `ALERT_MSG_LEVEL` at all**. That means a DEBUG-level merged alert can still be emitted even when operators intentionally configured `ERROR`, `CRITICAL`, or `SILENT`.
+- **Recommended fix** — Do not let the raw fallback bypass policy. Either:
+  - skip the alert entirely when `tg_helpers.sh` is unavailable, or
+  - inline the same threshold check before the raw `curl` send.  
+  Reusing the same alert-threshold logic already implemented in `tg_helpers.sh` is the safest path.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Distinct from the already-documented polling/watch-loop hotspots, I found the following additional API candidates.
+
+#### API-001 — `clarify.yml` fetches issue comments twice when semantic cache is enabled
+- **ID** — `API-001`
+- **File path(s)** — `.github/workflows/clarify.yml:384-414`
+- **Severity** — Low
+- **Category tag** — `api-redundancy`
+- **Current call count** — **2** comment-fetch calls per cache-enabled run:
+  - 1 bounded REST call at line 394 for `ISSUE_COMMENTS_FILE`
+  - 1 paginated REST call at lines 398-410 for `THREAD_HISTORY_FILE`
+- **Proposed call count** — **1** paginated fetch, with both artifacts derived locally
+- **Description** — The step fetches `repos/{repo}/issues/{ISSUE_NUMBER}/comments` twice. The second, paginated fetch already subsumes the first page used by `ISSUE_COMMENTS_FILE`, so the first request becomes redundant whenever `SEMANTIC_CACHE_BACKEND != none`.
+- **Recommended fix** — Fetch paginated comment JSON once into a temp file using the existing `scripts/gh_helpers.sh` file-oriented helpers (prefer `gh_api_json_to_file` or `gh_retry_to_file`), then:
+  - derive the bounded JSON written to `ISSUE_COMMENTS_FILE` locally,
+  - derive the rendered thread-history text for `THREAD_HISTORY_FILE` locally with `jq`.  
+  This reduces the path from 2 calls to 1 without changing output semantics.
+
+#### BATCH-001 — `review_rb_judge.sh` does a GraphQL number lookup, then re-fetches issue details one-by-one
+- **ID** — `BATCH-001`
+- **File path(s)** — `scripts/review_rb_judge.sh:206-244`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Current call count** — **1 GraphQL + 1..N REST** calls:
+  - 1 GraphQL call at lines 206-211 to get linked issue numbers
+  - up to N REST issue fetches at lines 227-243 while searching for the first issue/body and capturing labels
+- **Proposed call count** — **1 GraphQL** call
+- **Description** — The script already knows it needs linked issue metadata, but the first call only asks for `number`. It then loops over those numbers and calls `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}"` until it finds the first useful body, while also extracting labels for `FIRST_ISSUE`. That is a textbook N+1 pattern on a hot review-blocked path.
+- **Recommended fix** — Extend the initial GraphQL selection set so the first request returns the fields the loop actually consumes for `FIRST_ISSUE`: at minimum `number`, `body`, and labels. The existing batching pattern to extend is `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`; it already returns issue metadata keyed by issue number and matches the shape this script needs. That would collapse the path from `1 + N` to `1`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Integration-ref staging logic is duplicated across five workflows
+- **ID** — `DUP-001`
+- **File path(s)** — `.github/workflows/clarify.yml:53-125`; `.github/workflows/plan.yml:84-159`; `.github/workflows/implement.yml:259-332`; `.github/workflows/orchestrate_clarify_respond.yml:87-160`; `.github/workflows/validate.yml:72-145`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — These five workflows all embed the same long shell block to:
+  - validate an issue number,
+  - stage a checkout of `shubhodeep1/coding-workflows`,
+  - sanitize clone logs,
+  - run `scripts/resolve_integration_ref.sh`,
+  - and fail open to the default branch on any staging/resolution error.  
+  The copies are already drifting: `plan.yml` writes an extra `integration_branch_meta` output at lines 153-155 while the others do not.
+- **Recommended fix** — Move the staging/orchestration wrapper into a shared shell module, for example `scripts/integration_ref_helpers.sh`, and expose a single function such as:
+  - `resolve_integration_ref_with_stage <issue_number> <repository> <gh_token> [script_ref]`  
+  returning the resolved ref on stdout (and optional metadata via a temp output file if needed).  
+  **Callers to update:** `clarify.yml`, `plan.yml`, `implement.yml`, `orchestrate_clarify_respond.yml`, and `validate.yml`. Keep `scripts/resolve_integration_ref.sh` as the core resolver and make the helper own only the checkout/staging/fallback wrapper.
+
+#### DUP-002 — Support-repo checkout/copy helpers are reimplemented in multiple workflows
+- **ID** — `DUP-002`
+- **File path(s)** — `.github/workflows/issue_pr_status.yml:41-171,466-499,555-593`; `.github/workflows/validate.yml:185-512`; `.github/workflows/validation-improvements-intake.yml:48-140`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — The repository has several near-identical implementations of:
+  - `wf_source` / `script_ref` selection,
+  - support-repo staging under `${RUNNER_TEMP}`,
+  - `checkout_support_ref`,
+  - `fetch_from_ref_or_local` or `copy_from_ref_or_local`,
+  - fallback-to-`main` logging,
+  - copy-into-workspace logic.  
+  `issue_pr_status.yml` duplicates this pattern twice more for `tg_helpers.sh` in its merged-alert and cleanup steps, which means future changes to support checkout semantics must be edited in several places.
+- **Recommended fix** — Create a shared shell module such as `scripts/support_checkout_helpers.sh` with functions like:
+  - `stage_support_repo <wf_source> <script_ref> <stage_root>`
+  - `copy_from_staged_support <repo_path> <target_path> [require_remote=false] [allow_main_fallback=true]`  
+  **Callers to update:** the `issue_pr_status.yml` support fetch step, both `issue_pr_status.yml` Telegram helper fetch blocks, `validate.yml`, and `validation-improvements-intake.yml`. This centralizes fallback semantics and removes the copy/paste surface.
+
+#### DUP-003 — `review_autofix.yml` redefines label-helper fallbacks instead of reusing the canonical helper
+- **ID** — `DUP-003`
+- **File path(s)** — `.github/workflows/review_autofix.yml:588-614,4014-4056,4145-4176,4891-4908`; `scripts/label_helpers.sh:110-196`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — `review_autofix.yml` carries four separate inline fallback implementations of `ensure_label_exists` / `set_issue_phase_label_resilient`. The canonical implementation already exists in `scripts/label_helpers.sh` and includes central label catalogs plus phase-exclusive `PUT` semantics. The inline copies only `POST` labels and hardcode special cases (`ai:review-skipped`, `ai:ready-to-merge`, `ai:closed`, `ai:review-blocked`), so behavior can diverge if support helpers go missing late in the workflow.
+- **Recommended fix** — Make `scripts/label_helpers.sh` the only owner of label mutation behavior and call its existing signatures directly:
+  - `ensure_label_exists <label_name> [repo]`
+  - `set_issue_phase_label_resilient <issue_number> <target_label> <repo>`  
+  **Callers to update:** deterministic-skip merge labeling, the late-stage linked-issue relabel steps, and the terminal review-blocked failure path. If a minimal emergency fallback is still required, implement that fallback once inside `scripts/label_helpers.sh` instead of redefining it inline in YAML.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Static scan of interpolated `run:` bodies flagged four blocks above the repo’s requested thresholds. Counts below are estimated from the checked-in `run:` body text that contains `${{ }}` interpolation.
+
+#### EXPR-001 — `test-and-mark-stable.yml` Phase 4 wait loop is one edit away from the 21 KB ceiling
+- **ID** — `EXPR-001`
+- **File path(s)** — `.github/workflows/test-and-mark-stable.yml:1203-1587`
+- **Severity** — High
+- **Category tag** — `expression-limit`
+- **Estimated current character count** — **19,899**
+- **Headroom remaining** — **1,101**
+- **Description** — The `Phase 4: Wait for review & autofix to complete` `run:` block is already at ~94.8% of the hard 21,000-character limit. This step embeds a large polling loop, retry/backoff wrapper, live-log shortcuts, and several `${{ }}` interpolations. The repo has already hit this GitHub Actions ceiling multiple times; this block is now in the same risk band.
+- **Recommended fix** — Extract the wait-loop body into an external script such as `scripts/test_and_mark_wait_review.sh` and pass the few required values via environment variables. If extraction is not possible immediately, split the step into smaller phases: run discovery, run-state polling, live-log shortcuts, and timeout diagnostics.
+
+#### EXPR-002 — `review_autofix.yml` PR-metadata collection block is already above the 15 KB warning band
+- **ID** — `EXPR-002`
+- **File path(s)** — `.github/workflows/review_autofix.yml:1370-1759`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Estimated current character count** — **17,408**
+- **Headroom remaining** — **3,592**
+- **Description** — The `Collect PR metadata` step combines a custom retry wrapper, PR payload fetches, linked-issue GraphQL fetch/fallback logic, large inline Python for comments-context construction, and multiple `${{ }}` interpolations. It is already past the repo’s 15 KB medium-risk threshold and has limited headroom for future edits.
+- **Recommended fix** — Move this logic into a dedicated script such as `scripts/review_collect_pr_metadata.sh`, or split it into separate steps for:
+  - PR/review/comment fetch,
+  - linked-issue context construction,
+  - comments-context materialization,
+  - diff snapshot capture.  
+  Externalizing the inline Python blocks to `scripts/*.py` would reduce the expression body quickly.
+
+#### EXPR-003 — `test-and-mark-stable.yml` canary verification/retry step is also in the medium-risk band
+- **ID** — `EXPR-003`
+- **File path(s)** — `.github/workflows/test-and-mark-stable.yml:1673-2078`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Estimated current character count** — **17,408**
+- **Headroom remaining** — **3,592**
+- **Description** — The `Phase 4b: Verify editor restored canary (pytest + retry)` step contains helper functions for API retry, canary fetching, PR-state polling, pytest classification, retry dispatch, and retry-run monitoring, all inline inside one interpolated `run:` block. This is exactly the kind of growing operational script that tends to tip over the Actions parser limit during future maintenance.
+- **Recommended fix** — Extract the full flow into `scripts/test_and_mark_verify_canary.sh`. A second-best option is to split “attempt 1”, “retry dispatch/poll”, and “attempt 2 verification” into separate steps so each template body stays comfortably below the ceiling.
+
+#### EXPR-004 — `validate.yml` support-fetch step is already past the medium-risk threshold
+- **ID** — `EXPR-004`
+- **File path(s)** — `.github/workflows/validate.yml:188-512`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Estimated current character count** — **15,134**
+- **Headroom remaining** — **5,866**
+- **Description** — The `Fetch workflow support files` step includes support-repo staging, generalized file-copy helpers, multiple optional fetch branches, schema bootstrapping, and large here-doc file lists in one interpolated `run:` body. It is only barely over the medium threshold today, but it is structurally similar to earlier blocks that have already had to be extracted elsewhere in this repo.
+- **Recommended fix** — Move the support-fetch implementation into a shared script such as `scripts/fetch_workflow_support.sh` and keep YAML responsible only for inputs/outputs. This would also address `DUP-002`.
+
+**Workflow file-size note:** no workflow exceeded the 800 KB early-warning threshold. The largest files measured were `review_autofix.yml` at **297,527** bytes and `test-and-mark-stable.yml` at **274,158** bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Reserved label-repair evidence helpers are shipped but not wired into the active poller
+- **ID** — `DEAD-001`
+- **File path(s)** — `scripts/orchestrate_lib.py:988-1425`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `scripts/orchestrate_lib.py` defines a full contradiction-evidence chain:
+  - `parse_phase_failure_markers`
+  - `evaluate_phase_failure_resume`
+  - `resolve_label_repair_evidence`
+  - `choose_most_advanced_conclusive_evidence`  
+  A repository-wide search found no call sites outside this module, and both `agents.md:126-133` and `README.md:1092-1093` explicitly describe this path as “contract/reserved” and “not yet wired.” That means the code is currently inert in production while still carrying maintenance and behavioral surface area.
+- **Recommended fix** — Either:
+  - wire `resolve_label_repair_evidence(labels, comments, linked_pr)` into the active label-repair path in `scripts/orchestrate_poll_process.sh` behind an explicit feature gate, or
+  - move the reserved implementation behind a narrower module boundary with rollout tests so it is not shipped as apparently-live helper code without callers.
+
+#### SHELL-001 — Secret-file case pattern has an unreachable branch
+- **ID** — `SHELL-001`
+- **File path(s)** — `scripts/validate_changed_files_syntax.sh:70-73`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — The case arm starting with `*.env*` at line 71 already matches `.envrc` and `.env*`, so the later `*,*.envrc|*,.env*` pattern at line 73 can never be reached. ShellCheck reports this as `SC2221` / `SC2222`. The current behavior still sets `skip_dump=1`, but the redundant arm is misleading and makes future edits riskier because it looks like `.envrc` has a distinct handling path when it does not.
+- **Recommended fix** — Collapse these patterns into one canonical arm, or move any genuinely distinct `.envrc` handling before the broad `*.env*` glob. If `.envrc` is meant to behave identically, delete the later pattern entirely.
+
+**Repository-wide note:** I did not find any `TODO`, `FIXME`, or `HACK` markers under `.github/workflows/` or `scripts/` during the audit scan.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, EXPR-001 |
+| Medium | 7 | CONSIST-001, BATCH-001, DUP-001, DUP-002, EXPR-002, EXPR-003, EXPR-004 |
+| Low | 5 | CONSIST-002, API-001, DUP-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1-2 | Small |
+| API call optimization | 2-3 | Medium |
+| Code modularization | 8-10 | Large |
+| Expression size reduction | 3-6 | Large |
+| Medium/Low fixes | 4-6 | Medium |
