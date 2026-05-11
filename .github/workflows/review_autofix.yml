@@ -921,7 +921,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -3195,11 +3195,18 @@ jobs:
         # NOT a "clean review" signal and must block auto-merge.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
-        # LEDGER_ONLY_COMMIT=true: the commit contains only the autofix
-        # ledger, which is a bookkeeping write — not a productive edit — so
-        # this safety check must still run to validate the editor's no-op
-        # claim before downstream clean-review gates fire. See PR #1472.
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        # LEDGER_ONLY_COMMIT_STRICT=true: the commit's only tracked path is
+        # the autofix ledger, which is a bookkeeping write — not a
+        # productive edit — so this safety check must still run to validate
+        # the editor's no-op claim before downstream clean-review gates
+        # fire.  See PR #1472.  We deliberately read the STRICT flag here
+        # (not LEDGER_ONLY_COMMIT) because the non-strict flag is also set
+        # by the audit-convergence branch in
+        # scripts/review_commit_changes.sh, which can fire on commits that
+        # DID land real source-file edits.  Running this detector against
+        # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
+        # (bitsafe.io PR #177 / run 25653654000).
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         run: |
           set -euo pipefail
 
@@ -3366,7 +3373,14 @@ jobs:
               # informational log line and do not block auto-merge.
               # Keeps the hard failure only when there is real evidence
               # of lost edits. See: fun-token-multi-chain PR #117.
-              recheck_script="${GITHUB_WORKSPACE}/scripts/detect_editor_changes_lost.sh"
+              #
+              # The script is bootstrapped to ${SUPPORT_SCRIPTS_DIR} by the
+              # bootstrap step (REQUIRED_BOOTSTRAP_SCRIPTS).  Reading from
+              # ${GITHUB_WORKSPACE}/scripts/ would silently skip the recheck
+              # in every consumer repo (only the workflow-source repo
+              # vendors this path), which is how the bitsafe.io PR #177 /
+              # run 25653654000 false positive escaped this safety net.
+              recheck_script="${SUPPORT_SCRIPTS_DIR}/detect_editor_changes_lost.sh"
               if [ -x "${recheck_script}" ]; then
                 recheck_result="$(bash "${recheck_script}" "${EDITOR_SUMMARY_FILE}" 2>/dev/null || echo "true")"
                 if [ "${recheck_result}" = "false" ]; then
