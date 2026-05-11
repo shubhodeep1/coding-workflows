@@ -687,7 +687,7 @@ def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
 
 
 def test_detect_stalls_phase_attempts_respects_per_phase_cap():
-	"""An ai:done issue with phase_attempts == global cap must NOT be skipped
+	"""An ai:done issue with phase_attempts >= global cap must NOT be skipped
 	when the operator raised the per-phase cap via max_recoveries_by_phase.
 	Without this, the new phase-lifetime counter would prematurely route
 	ai:done stalls to the destructive "skip" action even when

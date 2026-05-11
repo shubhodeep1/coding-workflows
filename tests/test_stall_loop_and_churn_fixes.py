@@ -418,7 +418,6 @@ def test_judge_marker_survives_2000_char_truncation():
 	# Belt-and-braces: simulate the recent_comments truncation on a
 	# typical judge body and confirm the marker is preserved.  The
 	# diagnostics JSON in production is ~2-3 KB on a real stall.
-	import re as _re
 	fake_diag_blob = '{"recent_tracking_comments":[' + (',"x"' * 800) + ']}'
 	# 800*4 = 3200-char diagnostics JSON.
 	sample_body = (
@@ -459,7 +458,6 @@ def test_judge_backoff_shift_uses_dispatch_count_minus_one(tmp_path):
 	""")
 	r = _run_bash(script, cwd=tmp_path)
 	assert r.returncode == 0, f"shell error: {r.stderr}"
-	out = dict(line.split() for line in r.stdout.strip().splitlines())
 	# Parse "dc=N shift=M" rows.
 	parsed = {kv.split("=")[1]: vv.split("=")[1] for kv, vv in (line.split() for line in r.stdout.strip().splitlines())}
 	# Never dispatched (dc=0) → shift=0 (multiplier 1×; cooldown gate
