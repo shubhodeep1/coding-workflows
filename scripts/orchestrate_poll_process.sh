@@ -5413,6 +5413,16 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
 recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
+  # Optional 3rd argument: the phase-lifetime counter (survives phase
+  # oscillation per update_issue_timestamps).  Threading it to the
+  # Python helper below lets `resolve_stall_recovery_action` enforce
+  # the phase-lifetime cap exactly the same way detect_stalls does
+  # (claude-branch-review, PR #2522 line 5418).  Defaults to 0 for
+  # back-compat with callers that don't have the counter handy —
+  # notably the standalone-stall path, whose state schema does not
+  # currently carry phase_attempts.
+  local phase_attempts_count="${3:-0}"
+  [[ "${phase_attempts_count}" =~ ^[0-9]+$ ]] || phase_attempts_count="0"
 
   [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
   # Compute the per-phase effective cap, mirroring the Python helper's
@@ -5434,9 +5444,13 @@ recovery_action_for_phase() {
     echo "skip"
     return
   fi
+  if [ "${phase_attempts_count}" -ge "${_phase_effective_max}" ]; then
+    echo "skip"
+    return
+  fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" "$phase_attempts_count" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_stall_recovery_action
@@ -5446,12 +5460,14 @@ recovery_count = int(sys.argv[2])
 max_recoveries = int(sys.argv[3])
 enable_human_terminalization = sys.argv[4].lower() == "true"
 max_done = int(sys.argv[5])
+phase_attempts_count = int(sys.argv[6])
 print(resolve_stall_recovery_action(
     phase,
     recovery_count,
     max_recoveries=max_recoveries,
     enable_stall_human_terminalization=enable_human_terminalization,
     max_recoveries_by_phase={"ai:done": max_done},
+    phase_attempts_count=phase_attempts_count,
 ))
 PY
 )" || true
@@ -7694,6 +7710,7 @@ PY
                 number: (.number // null),
                 state: (.state // null),
                 head_ref: (.head.ref // null),
+                head_sha: (.head.sha // null),
                 mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
                 merge_state_status: (.mergeable_state // null)
               }' 2>/dev/null || echo "null")"

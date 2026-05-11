@@ -782,6 +782,85 @@ def test_mark_integration_sync_clean_resets_stale_counters_even_when_already_cle
 	assert got["integration_conflict_total_dispatches"] == 7, got
 
 
+def test_recovery_action_for_phase_threads_phase_attempts_count_to_python(tmp_path):
+	"""recovery_action_for_phase accepts an optional 3rd argument —
+	phase_attempts_count — and forwards it to
+	resolve_stall_recovery_action so the Python helper can enforce
+	the phase-lifetime cap.  Without threading, callers that have
+	the counter handy could not propagate it through this helper
+	(claude-branch-review, PR #2522 line 5418).
+
+	Drive three scenarios:
+	  A. Counter omitted → defaults to 0, helper returns ladder action.
+	  B. Counter passed, below cap → helper returns ladder action.
+	  C. Counter passed, at cap → helper returns "skip".
+	"""
+	func_src = _extract_function_body("recovery_action_for_phase")
+	script = textwrap.dedent(f"""
+		set -uo pipefail
+		export MAX_STALL_RECOVERIES_PER_ISSUE=5
+		export MAX_STALL_RECOVERIES_DONE=99
+		export ENABLE_STALL_HUMAN_TERMINALIZATION=false
+		{func_src}
+		# A: no phase_attempts arg (legacy 2-arg caller).
+		echo "A=$(recovery_action_for_phase ai:review-blocked 1)"
+		# B: phase_attempts below cap.
+		echo "B=$(recovery_action_for_phase ai:review-blocked 1 2)"
+		# C: phase_attempts at cap → skip.
+		echo "C=$(recovery_action_for_phase ai:review-blocked 1 5)"
+	""")
+	r = _run_bash(script, cwd=REPO_ROOT)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# A: default 0 → Python helper returns ladder action (not skip).
+	assert out["A"] != "skip", out
+	# B: count=2 < cap=5 → ladder action.
+	assert out["B"] != "skip", out
+	# C: count=5 == cap=5 → skip (enforced).
+	assert out["C"] == "skip", out
+
+
+def test_standalone_rest_retry_reconstruction_carries_head_sha(tmp_path):
+	"""When the standalone path's REST retry loop refreshes
+	_std_conflict_linked from the full PR JSON, the jq
+	reconstruction must include head_sha so downstream code
+	(notably the per-head override cap) does not need to fall
+	through to a different cache to find it (claude-branch-review,
+	PR #2522 line 7695)."""
+	# Sample full PR JSON the REST retry would feed into the jq.
+	pr_json = {
+		"number": 9001,
+		"state": "open",
+		"head": {"ref": "feat-branch", "sha": "deadbeef0000111122223333"},
+		"mergeable": False,
+		"mergeable_state": "dirty",
+	}
+	(tmp_path / "pr.json").write_text(json.dumps(pr_json))
+	script = textwrap.dedent("""
+		# Reproduce the production reconstruction verbatim.
+		jq -c '{
+			number: (.number // null),
+			state: (.state // null),
+			head_ref: (.head.ref // null),
+			head_sha: (.head.sha // null),
+			mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
+			merge_state_status: (.mergeable_state // null)
+		}' pr.json
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	linked = json.loads(r.stdout.strip())
+	# head_sha MUST survive reconstruction so the override cap can
+	# read it from _std_conflict_linked without falling through.
+	assert linked.get("head_sha") == "deadbeef0000111122223333", linked
+	# Other fields stay intact.
+	assert linked["number"] == 9001, linked
+	assert linked["state"] == "open", linked
+	assert linked["head_ref"] == "feat-branch", linked
+	assert linked["mergeable"] == "false", linked
+	assert linked["merge_state_status"] == "dirty", linked
+
+
 def test_max_budget_neutral_overrides_and_judge_replay_canonicalisation(tmp_path):
 	"""MAX_BUDGET_NEUTRAL_OVERRIDES and MAX_JUDGE_REPLAY are validated
 	with `^[0-9]+$` which permits leading-zero values like "08" /
