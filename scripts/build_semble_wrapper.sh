@@ -79,6 +79,16 @@ mark_unavailable()
 	local reason="${1:-unknown}"
 
 	log "Semble wrapper unavailable: ${reason}"
+	# Defensively remove pickle + wrapper binary so callers can use their
+	# absence as a reliable failure signal. Late failures (e.g.,
+	# wrapper-write-failed *after* build_index() already wrote the pickle)
+	# would otherwise leave the pickle present while the wrapper isn't
+	# installed, suppressing diagnostic tails in callers like
+	# orchestrate_poll.yml / review_autofix.yml that gate on
+	# `[ ! -f "${SEMBLE_INDEX_PATH}" ]`. Also clears any stale leftovers
+	# from a prior run when mark_unavailable fires before build_index()
+	# runs (python-interpreter-missing / module-missing cases).
+	rm -rf "${index_path}" "${wrapper_path}" || true
 	# Conservative: write SEMBLE_AVAILABLE=false too. install_semble.sh may
 	# have written SEMBLE_AVAILABLE=true earlier, but if we land here the
 	# wrapper at SEMBLE_BIN never gets installed, so semble_helpers.sh's
