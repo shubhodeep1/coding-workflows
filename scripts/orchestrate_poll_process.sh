@@ -10157,15 +10157,23 @@ ${RB_FIX_DESC}
             _rb_mwf_sha="$(_jq_field "${_rb_mwf_json}" '.head.sha')"
 
             MERGE_CONFIRMED="false"
-            RB_MERGED="false"
             if [ "${PR_MERGED_NOW}" = "true" ]; then
               echo "  PR #${RB_PR} already merged (.merged=true) before merge_with_followup ran."
               MERGE_CONFIRMED="true"
-              RB_MERGED="true"
             elif [ "${PR_STATE}" = "closed" ]; then
               echo "::warning::PR #${RB_PR} closed without merge — skipping follow-up creation; deferred gap not tracked because source PR's changes never landed."
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-              if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+              # _pr_checks_completed gates the merge attempt the same
+              # way the existing orchestrator `merge)` action does
+              # (line 9758). The helper checks ALL check-runs on the
+              # PR head (not just branch-protection-required ones),
+              # so non-required CI is also waited for. This prevents
+              # merge_with_followup from creating a follow-up issue
+              # while informational checks are still running — same
+              # gating as the plain merge path.
+              if ! _pr_checks_completed "${RB_PR}" "${_rb_mwf_sha}"; then
+                echo "::warning::PR #${RB_PR} mergeable=true but check-runs still pending/failing — leaving issue in ai:review-blocked. Next orchestrator poll cycle will re-fire the judge after checks complete; that run will hit the PR_MERGED_NOW=true short path (after the existing \`merge)\` action's auto-merge enrollment lands the PR)."
+              elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                 # Sync merge only — NEVER --auto enrollment. The whole
                 # point of the conservative ladder is to ensure follow-
                 # up creation happens only against a definitively-
@@ -10210,7 +10218,6 @@ ${RB_FIX_DESC}
                 if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash ${_rb_mwf_match_arg[@]+"${_rb_mwf_match_arg[@]}"} 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
-                  RB_MERGED="true"
                 else
                   echo "::warning::PR #${RB_PR} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge after merge lands; that run hits the PR_MERGED_NOW=true short path and creates the follow-up."
                 fi
