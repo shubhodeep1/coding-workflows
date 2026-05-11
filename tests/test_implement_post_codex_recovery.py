@@ -8,6 +8,7 @@ contract is validated against workflow behavior, not reimplemented logic.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1274,6 +1275,104 @@ def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_i
 	assert 'rm -rf .serena' in commit_block, (
 		"Commit cleanup must remove the full bootstrap-owned .serena directory once the project hash still matches"
 	)
+
+
+def test_serena_runtime_filter_and_cleanup_preserve_mutated_tree_and_drop_unchanged_bootstrap_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_serena_runtime_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+
+		run_codex_script = _extract_run_script("Run Codex implementation")
+		filter_helper = "filter_runtime_status_noise() {" + run_codex_script.split("filter_runtime_status_noise() {", 1)[1].split(
+			"\n\n# ────────────────────────────────────────────────────────────────", 1
+		)[0]
+		commit_script = _extract_run_script("Commit changes")
+		cleanup_start = 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then'
+		cleanup_snippet = cleanup_start + commit_script.split(cleanup_start, 1)[1].split('porcelain_status="$(git status --porcelain)"', 1)[0]
+
+		def _write_serena_tree(project_body: str) -> str:
+			project_path = repo_dir / ".serena" / "project.yml"
+			cache_path = repo_dir / ".serena" / "cache" / "state.json"
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			project_path.write_text(project_body, encoding="utf-8")
+			cache_path.write_text('{"runtime": true}\n', encoding="utf-8")
+			return hashlib.sha256(project_path.read_bytes()).hexdigest()
+
+		def _run_inline_bash(script: str, *, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+			env = os.environ.copy()
+			env.update(extra_env)
+			return subprocess.run(
+				["bash", "-s"],
+				cwd=str(repo_dir),
+				env=env,
+				input=script,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+
+		filter_script = "set -euo pipefail\n" + filter_helper + "\ngit status --porcelain -uall | filter_runtime_status_noise\n"
+		cleanup_script = "set -euo pipefail\n" + cleanup_snippet + "\n"
+
+		bootstrap_hash = _write_serena_tree("project_name: bootstrap\n")
+		filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert filter_result.returncode == 0, filter_result.stderr
+		assert ".serena/" not in filter_result.stdout, (
+			"Unchanged bootstrap-owned .serena state should be filtered out of the no-op baseline delta"
+		)
+
+		(repo_dir / ".serena" / "project.yml").write_text("project_name: mutated\n", encoding="utf-8")
+		mutated_filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert mutated_filter_result.returncode == 0, mutated_filter_result.stderr
+		assert ".serena/project.yml" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the filter from hiding .serena/project.yml"
+		)
+		assert ".serena/cache/state.json" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the filter from hiding sibling .serena runtime files"
+		)
+
+		shutil.rmtree(repo_dir / ".serena")
+		bootstrap_hash = _write_serena_tree("project_name: cleanup-bootstrap\n")
+		cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert cleanup_result.returncode == 0, cleanup_result.stderr
+		assert not (repo_dir / ".serena").exists(), (
+			"Commit cleanup must drop the unchanged bootstrap-owned .serena tree before staging"
+		)
+
+		bootstrap_hash = _write_serena_tree("project_name: cleanup-mutated\n")
+		(repo_dir / ".serena" / "project.yml").write_text("project_name: cleanup-mutated-again\n", encoding="utf-8")
+		preserved_cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert preserved_cleanup_result.returncode == 0, preserved_cleanup_result.stderr
+		assert (repo_dir / ".serena" / "project.yml").is_file(), (
+			"Commit cleanup must preserve .serena/project.yml once its content diverges from the bootstrap hash"
+		)
+		assert (repo_dir / ".serena" / "cache" / "state.json").is_file(), (
+			"Commit cleanup must preserve sibling .serena files once project.yml diverges from the bootstrap hash"
+		)
 
 
 def test_serena_preexistence_detection_runs_after_checkout() -> None:
