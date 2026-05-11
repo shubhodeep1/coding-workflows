@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:151-157 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The last AI autofix run modified `.github/workflows/review_autofix.yml` despite issue #2488 explicitly stating: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n  WHY: This is a hard scope violation; the issue required a single-file change, so the workflow edit is unauthorized.\n- N/A:lint check-run on head_sha cf18a744657c16888d0daa87a16dc82daefb6d85 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The `lint` check-run on the HEAD commit has `conclusion: failure`.\n  WHY: The PR is blocked by the failed required check-run; deepseek reports remaining Semble contract/parity failures in `clarify.yml`, `implement.yml`, `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml`, and `plan.yml`, while qwen notes the snapshot has empty title/summary and the exact subtest is not visible from the snapshot alone.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- N/A:lint check-run on head_sha cf18a744657c16888d0daa87a16dc82daefb6d85 | confidence=5\n  PROBLEM: The `lint` check-run is still failing after the last autofix run.\n  WHY: Local investigation shows the root cause is that the SEMBLE_ENABLED fix was only applied to `review_autofix.yml`, while `clarify.yml`, `implement.yml`, `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml`, and `plan.yml` still default SEMBLE_ENABLED to `'true'` and fail the contract/parity tests.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:154 | confidence=5\n  PROBLEM: The last autofix run modified `.github/workflows/review_autofix.yml` by changing the default value of `SEMBLE_ENABLED` from `'true'` to `'false'`.\n  WHY: Issue #2488 explicitly stated: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n- N/A:lint check-run on head_sha cf18a744657c16888d0daa87a16dc82daefb6d85 | confidence=5\n  PROBLEM: The `lint` check-run is failing.\n  WHY: The workflow edit expanded scope beyond issue #2488's explicit constraint; reverting it should resolve the lint failure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:154 | confidence=5\n  PROBLEM: The last autofix run modified the `SEMBLE_ENABLED` default from `'true'` to `'false'`, which is outside the scope of issue #2488.\n  WHY: Issue #2488 explicitly stated: \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n- N/A:lint check-run on head_sha cf18a744657c16888d0daa87a16dc82daefb6d85 | confidence=5\n  PROBLEM: The PR check runs context reports a failing `lint` check-run.\n  WHY: The check-run failure blocks merge/auto-merge; the snapshot does not identify whether the failure is from the Semble contract test or a stale/unrelated failure.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:lint check-run on head_sha cf18a744657c16888d0daa87a16dc82daefb6d85, empty title and summary | confidence=4\n  PROBLEM: The `lint` check-run on the HEAD commit has `conclusion: failure`.\n  WHY: The failed CI check blocks auto-merge, and the snapshot's empty title/summary prevents root-cause identification from this snapshot alone.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:@@ -151,7 +151,7 @@ (LAST RUN DIFF lines 151-157) | confidence=5\n  PROBLEM: LAST RUN DIFF modified this file.\n  WHY: This violates issue #2488 constraint \"**Only** modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n- N/A:lint check-run on head_sha cf18a744657c16888d0daa87a16dc82daefb6d85 | confidence=5\n  PROBLEM: The `lint` check-run failed after the LAST RUN DIFF commit.\n  WHY: Merge/auto-merge is blocked by the failing required check-run.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:154 | severity=critical | confidence=5\n  PROBLEM: The last AI autofix run modified this workflow file despite issue #2488 explicitly stating: \"**Only** modify tests/e2e_smoke_canary.txt - do not touch any other file.\"\n  WHY: This is a hard constraint violation; the issue specified a single-file modification scope with explicit \"do not touch any other file\" language.\n- N/A (CI check-run):lint check-run on head_sha cf18a744657c16888d0daa87a16dc82daefb6d85 | confidence=5\n  PROBLEM: The lint check-run failed after the most recent autofix commit.\n  WHY: CI gating requires all check-runs to pass, so the lint job failure blocks merge/auto-merge regardless of code logic.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a1cad79b77bf205038680f6bd054813d98e08f9673eb266d3c1ee739b3afe733",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2492,
+    "run_id": "25647678233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25647678233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511031248_92ea0d3bec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2492,
+    "run_id": "25647678233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T03:12:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
