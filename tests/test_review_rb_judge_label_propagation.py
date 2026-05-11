@@ -660,7 +660,7 @@ esac
 
 
 def _run_merge_with_followup(
-	parent_label_set: list,
+	parent_label_set: list[str],
 	followup_title: str = "Follow-up: wire deriveX into production",
 	followup_body: str = "Acceptance criteria: a production caller invokes deriveX with the same args the unit tests use.",
 	pr_state: str = "open",

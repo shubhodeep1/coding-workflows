@@ -10138,7 +10138,12 @@ ${RB_FIX_DESC}
             # vocabulary; .merged below disambiguates the two.
             PR_STATE="$(_jq_field "${_rb_mwf_json}" '.state' 'open|closed')"
             PR_MERGEABLE="$(_jq_field "${_rb_mwf_json}" '.mergeable' 'true|false')"
-            PR_MERGED_NOW="$(_jq_field "${_rb_mwf_json}" '.merged' 'true|false')"
+            # Detect merged via `(.merged_at != null) or (.merged ==
+            # true)` — matches the orchestrator's existing
+            # `.merged_at != null` pattern (see line ~8844 etc.) and
+            # survives REST payloads that omit either field
+            # individually.
+            PR_MERGED_NOW="$(_jq_field "${_rb_mwf_json}" '(.merged_at != null) or (.merged == true)' 'true|false')"
             [ -n "${PR_MERGED_NOW}" ] || PR_MERGED_NOW="false"
             _rb_mwf_sha="$(_jq_field "${_rb_mwf_json}" '.head.sha')"
 

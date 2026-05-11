@@ -187,8 +187,9 @@ fi
 # recovery path when an operator (or a prior auto-merge enrollment that
 # completed asynchronously) merged the PR and a follow-up tracking
 # issue still needs to be created for the deferred gap. GitHub's REST
-# /pulls/{N} reports the PR as state=closed for both cases; only the
-# .merged boolean distinguishes them.
+# /pulls/{N} reports the PR as state=closed for both cases; the
+# .merged_at timestamp (non-null when landed) and the .merged boolean
+# disambiguate.
 #
 # PR_ALREADY_MERGED is captured here (script-level) so the action
 # dispatch below can refuse fix / close_and_reissue on merged PRs.
@@ -198,9 +199,17 @@ fi
 # closed PR and reissue work that has already landed on the base.
 # Only merge (no-op label swap) and merge_with_followup (creates the
 # tracking issue) are safe for a merged PR.
-_pr_meta="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+#
+# Use _safe_gh_jq (which emits empty stdout on failure instead of
+# concatenating GitHub error JSON with the `|| echo '{}'` fallback —
+# the latter would yield invalid JSON that breaks downstream jq under
+# `set -euo pipefail`). Detect merged via `(.merged_at != null) or
+# (.merged == true)` so the check survives REST payloads that omit
+# either field individually; this matches gh_helpers.sh / the
+# orchestrator's `.merged_at != null` pattern.
+_pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
 _pr_state="$(echo "${_pr_meta}" | jq -r '.state // ""')"
-_pr_merged="$(echo "${_pr_meta}" | jq -r '.merged // false')"
+_pr_merged="$(echo "${_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
 PR_ALREADY_MERGED="false"
 if [ "${_pr_merged}" = "true" ]; then
   PR_ALREADY_MERGED="true"
@@ -539,15 +548,18 @@ echo "Justification: ${RB_JUSTIFICATION}"
 # still fires and the linked issue stays ai:review-blocked for
 # operator review.
 #
-# Re-fetch .merged immediately before the check — PR_ALREADY_MERGED
-# was captured by the early guard before the judge LLM ran, and the
-# LLM call can take many seconds during which auto-merge from a
-# prior `merge)` action could complete asynchronously and flip the
-# PR to merged. Using the stale flag would let fix / close_and_reissue
-# proceed against a now-merged PR (defeats the guard). One extra gh
-# api call is a cheap insurance against that race.
-_guard_pr_meta="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-_guard_pr_merged="$(echo "${_guard_pr_meta}" | jq -r '.merged // false')"
+# Re-fetch merged status immediately before the check —
+# PR_ALREADY_MERGED was captured by the early guard before the judge
+# LLM ran, and the LLM call can take many seconds during which auto-
+# merge from a prior `merge)` action could complete asynchronously
+# and flip the PR to merged. Using the stale flag would let fix /
+# close_and_reissue proceed against a now-merged PR (defeats the
+# guard). One extra API call is cheap insurance against that race.
+# _safe_gh_jq + `(.merged_at != null) or (.merged == true)` for the
+# same reasons as the early guard: avoids error-JSON contamination
+# of the fallback and survives REST payloads that omit either field.
+_guard_pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+_guard_pr_merged="$(echo "${_guard_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
 if [ "${_guard_pr_merged}" = "true" ]; then
   PR_ALREADY_MERGED="true"
 fi
@@ -812,8 +824,12 @@ ${RB_FIX_DESC}"
     FOLLOWUP_BODY="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
     if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
       echo "::error::Judge chose merge_with_followup but provided no follow-up issue details (followup_issue.title or .body empty). Refusing the action — leaving PR in ai:review-blocked state for retry/fallback so the deferred gap is not lost."
-      # Intentionally NOT setting judge_handled=true so the existing
-      # review-blocked fallback in the workflow fires.
+      # Emit structured outputs so downstream log analysis can
+      # classify this refusal explicitly (parity with the merged-PR
+      # action guard above). judge_handled stays at its initial
+      # `false` so the workflow's review-blocked fallback still fires.
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=missing_followup_details" >> "$GITHUB_OUTPUT"
     else
       # Poll mergeability BEFORE the label swap / follow-up creation so
       # MERGE_CONFIRMED gates every observable side effect. Unlike the
@@ -844,7 +860,11 @@ ${RB_FIX_DESC}"
         # without-merge from merged.
         PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
         PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
-        PR_MERGED="$(echo "${_pr_json}" | jq -r '.merged // false' | grep -xE 'true|false' || echo "false")"
+        # Detect merged via `(.merged_at != null) or (.merged == true)`
+        # — matches gh_helpers.sh + the orchestrator's `.merged_at !=
+        # null` pattern and survives REST payloads that omit either
+        # field individually.
+        PR_MERGED="$(echo "${_pr_json}" | jq -r '(.merged_at != null) or (.merged == true)' | grep -xE 'true|false' || echo "false")"
         if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
           break
         fi
