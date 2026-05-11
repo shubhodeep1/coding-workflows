@@ -430,8 +430,14 @@ jobs:
           # output is mirrored to ${RUNTIME_DIR}/semble_index.log for
           # post-mortem grepping (kept for log-analysis parity).
           if [ -f scripts/build_semble_wrapper.sh ]; then
-            if ! SEMBLE_INDEX_PATH="${semble_index_path}" \
-              bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1; then
+            # The wrapper is documented "always exit 0" (mark_unavailable() on
+            # any error), so the prior `if !` check was dead code. Gate the
+            # diagnostic tail on a real failure signal instead: the pickle
+            # file at ${semble_index_path} only exists after a successful
+            # build_index() — mark_unavailable() rms it on the failure path.
+            SEMBLE_INDEX_PATH="${semble_index_path}" \
+              bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            if [ ! -f "${semble_index_path}" ]; then
               tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
             fi
           else

@@ -1245,7 +1245,13 @@ jobs:
             wrapper_script="scripts/build_semble_wrapper.sh"
           fi
           if [ -n "${wrapper_script}" ]; then
-            if ! bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then
+            # The wrapper is documented "always exit 0" (mark_unavailable() on
+            # any error), so the prior `if !` check was dead code. Gate the
+            # diagnostic tail on a real failure signal instead: the pickle
+            # file at ${SEMBLE_INDEX_PATH} only exists after a successful
+            # build_index() — mark_unavailable() rms it on the failure path.
+            bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            if [ ! -f "${SEMBLE_INDEX_PATH}" ]; then
               tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
             fi
           else
