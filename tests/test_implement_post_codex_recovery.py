@@ -442,6 +442,7 @@ def _run_diagnose_step(
 			"DEFAULT_BRANCH": "main",
 			"MODEL_EDITOR": "openai/gpt-5.4",
 			"PR_BASE_BRANCH": "orchestrator/project-829",
+			"SERENA_AVAILABLE": "true",
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"IMPLEMENT_DIAGNOSE_PROMPT_FILE": str(prompt_file),
 			"IMPLEMENT_DIAGNOSE_OUTPUT_FILE": str(output_file),
@@ -718,6 +719,8 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
 
 
 def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
@@ -833,6 +836,8 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "tracked.txt" in stdin_prompt
 		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
 		assert "scanner error on line 3" in stdin_prompt
+		assert "Serena hints:" in stdin_prompt
+		assert "Keep apply_patch as the primary write path in implement-family runs" in stdin_prompt
 
 		created_issues = state.get("created_issues", [])
 		assert len(created_issues) == 1
@@ -1116,15 +1121,25 @@ def test_out_of_scope_noop_when_capture_file_missing():
 		assert state.get("created_issues", []) == []
 
 
+def test_diagnose_reasoning_patch_preserves_serena_mcp_block() -> None:
+	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert "top_level_lines = lines[:first_table_idx]" in diagnose
+	assert "rest_lines = lines[first_table_idx:]" in diagnose
+	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in diagnose
+	assert "[mcp_servers.serena]" not in diagnose.split("patch_diagnose_reasoning_into_config()", 1)[1].split("patch_diagnose_reasoning_into_config", 1)[0], (
+		"Diagnose reasoning patch must update only the top-level model_reasoning_effort key without inlining Serena table rewrites"
+	)
+
+
 def test_codex_pre_baseline_captured_before_retry_loop() -> None:
 	codex_block = _step_block_text("Run Codex implementation")
 	assert 'CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"' in codex_block, (
 		"Pre-Codex baseline snapshot must be captured so detection/retry-nudge/no-op "
 		"handlers can diff only real Codex-produced deltas"
 	)
-	assert 'git status --porcelain -uall > "${CODEX_PRE_BASELINE}"' in codex_block, (
+	assert 'git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}"' in codex_block, (
 		"Baseline must be written with --porcelain -uall so untracked directories "
-		"expand to stable per-file lines"
+		"expand to stable per-file lines while filtering runtime Serena noise"
 	)
 	# The baseline must be captured before the retry loop so it doesn't drift
 	# between attempts.
@@ -1153,13 +1168,16 @@ def test_success_noop_flag_cleared_before_retry_loop() -> None:
 
 def test_codex_success_detection_uses_baseline_diff() -> None:
 	codex_block = _step_block_text("Run Codex implementation")
+	assert 'filter_runtime_status_noise() {' in codex_block, (
+		"Retry and success detection must share the Serena runtime-noise filter helper"
+	)
 	# Retry-nudge check must use baseline-filtered delta, not raw porcelain.
-	assert 'codex_retry_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+	assert 'codex_retry_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
 		"Retry-nudge must use baseline-filtered delta so workflow bootstrap artifacts "
-		"(.codex-workflow-src*) don't falsely trigger the 'modify files' nudge"
+		"(.codex-workflow-src*, .serena/project.yml) don't falsely trigger the 'modify files' nudge"
 	)
 	# Success detection must also use baseline-filtered delta.
-	assert 'codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+	assert 'codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
 		"Success-detection must use baseline-filtered delta so bootstrap artifacts "
 		"don't produce a false-positive 'Codex changed files' signal"
 	)
@@ -1194,6 +1212,27 @@ def test_codex_success_detection_uses_baseline_diff() -> None:
 			f"Success-no-op regex should include the '{phrase}' completion signal "
 			f"(observed Codex phrasings on issues #1768, #1816, #1859)"
 		)
+
+
+def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_is_content_aware() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	assert 'SERENA_PROJECT_BOOTSTRAP_HASH' in _workflow_text(), (
+		"Workflow must export a Serena bootstrap hash for runtime-noise filtering"
+	)
+	assert 'current_hash="$(sha256sum .serena/project.yml' in codex_block, (
+		"Run Codex implementation must hash .serena/project.yml when deciding whether it is only runtime noise"
+	)
+	assert 'if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in codex_block, (
+		"Only the unchanged bootstrap Serena project file should be filtered from no-op detection"
+	)
+
+	commit_block = _step_block_text("Commit changes")
+	assert 'current_serena_project_hash="$(sha256sum .serena/project.yml' in commit_block, (
+		"Commit cleanup must compare the current Serena project file against the bootstrap hash before deleting it"
+	)
+	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_block, (
+		"Commit cleanup must preserve .serena/project.yml when Codex changed it"
+	)
 
 
 def test_retry_prompt_includes_exec_history_recap() -> None:
@@ -1366,6 +1405,9 @@ def test_yaml_reserved_indicator_recipe_in_repair_prompts() -> None:
 			f"{prompt_path.name} must explicitly forbid the failed strategy "
 			"(rg/grep with literal backtick)"
 		)
+		assert "{{SERENA_TOOL_HINTS}}" in body, (
+			f"{prompt_path.name} must expose the Serena guidance placeholder"
+		)
 
 
 def test_yaml_quoting_clause_in_implement_prompt() -> None:
@@ -1374,6 +1416,9 @@ def test_yaml_quoting_clause_in_implement_prompt() -> None:
 	recipe — without this, Codex keeps emitting bare scalars starting
 	with backtick / @ / etc. in db/contracts/*.yml prose."""
 	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "{{SERENA_TOOL_HINTS}}" in body, (
+		"mode-implement.txt must expose the Serena guidance placeholder"
+	)
 	assert "YAML reserved-indicator quoting" in body, (
 		"mode-implement.txt must have a labelled clause for YAML reserved-"
 		"indicator quoting so it's discoverable on review"
