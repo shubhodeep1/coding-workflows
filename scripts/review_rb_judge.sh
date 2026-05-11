@@ -189,9 +189,22 @@ fi
 # issue still needs to be created for the deferred gap. GitHub's REST
 # /pulls/{N} reports the PR as state=closed for both cases; only the
 # .merged boolean distinguishes them.
+#
+# PR_ALREADY_MERGED is captured here (script-level) so the action
+# dispatch below can refuse fix / close_and_reissue on merged PRs.
+# Those actions are structurally unsafe for a merged PR: fix would
+# push new commits to a merged branch (potentially via a force-push
+# or branch-recreate), and close_and_reissue would close an already-
+# closed PR and reissue work that has already landed on the base.
+# Only merge (no-op label swap) and merge_with_followup (creates the
+# tracking issue) are safe for a merged PR.
 _pr_meta="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
 _pr_state="$(echo "${_pr_meta}" | jq -r '.state // ""')"
 _pr_merged="$(echo "${_pr_meta}" | jq -r '.merged // false')"
+PR_ALREADY_MERGED="false"
+if [ "${_pr_merged}" = "true" ]; then
+  PR_ALREADY_MERGED="true"
+fi
 if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ] && [ "${_pr_merged}" != "true" ]; then
   echo "PR #${PR_NUMBER} is ${_pr_state} (not merged) — skipping review-blocked judge."
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
@@ -512,6 +525,24 @@ JUDGE_COMMENT="## Review-Blocked Judge Decision
 
 gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
   -f body="${JUDGE_COMMENT}" >/dev/null 2>&1 || true
+
+# -----------------------------------------------------------
+# Merged-PR action guard
+# -----------------------------------------------------------
+# The early-guard at script start (above) allows merged PRs through so
+# the judge can pick merge_with_followup for the post-merge recovery
+# flow (operator merges PR manually, expects judge to create the
+# follow-up issue against the merged base). That permissiveness opens
+# a footgun: a merged PR can still reach the case dispatch with a
+# `fix` or `close_and_reissue` action — both of which are structurally
+# unsafe for merged PRs (fix would push to a merged branch;
+# close_and_reissue would close an already-closed PR and reissue work
+# that already landed). Refuse those actions here so the merged-PR
+# pass-through stays narrowly scoped to its intended use case.
+if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] && [ "${RB_ACTION}" != "merge_with_followup" ]; then
+  echo "::error::Judge chose '${RB_ACTION}' for PR #${PR_NUMBER} which is already merged. Only 'merge' (no-op label swap) and 'merge_with_followup' (create tracking issue against merged base) are safe for merged PRs. Refusing — leaving issue in ai:review-blocked for operator review (or rerun the judge with revised context expecting it to pick merge / merge_with_followup)."
+  exit 0
+fi
 
 # -----------------------------------------------------------
 # Execute judge action
