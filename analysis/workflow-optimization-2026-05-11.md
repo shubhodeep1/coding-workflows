@@ -505,3 +505,108 @@ That is the loop to break first.
 | Logged bytes in structured Semble telemetry | Not present | No `bytes=` field on sampled fallback lines |
 | Typical fallback latency | `ms=0` | In sampled CI contract-test lines |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-11)
+
+### Section 1: Bug & Correctness Sweep
+
+I did not repeat the already-recorded Semble default drift, check-run wait-loop, or late merge-precheck findings already present in the in-progress report.
+
+#### BUG-001
+- **File path** — `scripts/resolve_integration_ref.sh:38-56`; `.github/workflows/clarify.yml:115-130`; `.github/workflows/plan.yml:146-164`; `.github/workflows/implement.yml:297-313`; `.github/workflows/validate.yml:135-150`; `.github/workflows/orchestrate_clarify_respond.yml:150-166`
+- **Severity** — High
+- **Category tag** — `bug`
+- **Description** — `resolve_integration_ref.sh` performs both issue-body lookup and branch-ref existence checks with bare `gh api` calls (`get_issue_body()` at line 40 and `branch_exists()` at line 48). `branch_exists()` only treats `404|Not Found` as a clean miss; every other API failure exits non-zero at lines 55-56. Each caller then treats any non-zero resolver exit as `ref=` and falls back to `${{ github.event.repository.default_branch }}` in the subsequent checkout step. Inference: a transient GitHub API failure or secondary rate limit can silently move clarify/plan/implement/validate/orchestrate-clarify-respond off the intended integration branch and onto the default branch for orchestrator-managed issues.
+- **Recommended fix** — Make the staged resolver source its sibling `scripts/gh_helpers.sh` and switch both API reads to the repo’s canonical retry-safe path (`gh_retry` + `_safe_gh_jq` / `gh_api_json_to_file` from `scripts/gh_helpers.sh:391-545`). Preserve the current `404 => branch missing` behavior, but distinguish `api_error` from `branch_missing` so callers can log the real failure mode instead of silently changing refs.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path** — `.github/workflows/issue_pr_status.yml:188-349,501-512`
+- **Severity** — Medium
+- **Category tag** — `api-redundancy`
+- **Description** — The `Update linked issue labels when PR closes` step already classifies linked issues in one batched GraphQL query, including labels and body text, and computes `TRACKING_ISSUES` / `MANAGED_ISSUES`. The later `Send PR merged Telegram alert` step discards that result and loops over `LINKED_ISSUE_NUMBERS`, calling `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}"` once per issue, then checking only the body marker `Managed by: AI Orchestrator`. That is both redundant and semantically weaker than the earlier label-aware classification.
+- **Current call count** — `1` batched GraphQL classification call in `issue_pr_status.yml:188-193`, then up to `N` extra REST `GET /issues/{n}` calls in `issue_pr_status.yml:505-512` for the same linked issue set.
+- **Proposed call count after fix** — `1` total call on the common path by exporting the earlier orchestrator classification (or a single `is_orchestrated` output) for reuse; `0` extra alert-time calls.
+- **Batching pattern to extend** — `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql`
+- **Recommended fix** — Export `TRACKING_ISSUES` / `MANAGED_ISSUES` or a derived boolean from the first step into `GITHUB_ENV` / step outputs and reuse it in the alert step. If recomputation is unavoidable, use the same aliased GraphQL batching pattern rather than per-issue REST reads.
+
+#### BATCH-001
+- **File path** — `scripts/orchestrate_poll_process.sh:8793-8814,10181-10207,10584-10591`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — Each wave already batch-loads current-wave issue details and labels via `_fetch_candidate_issue_details_graphql` and `_fetch_issue_labels_batch_graphql`. After review-blocked and implementation-failed handling, the script rebuilds `LABELS_JSON` with per-issue `issues/{n}/labels` REST calls for every wave issue / reissued issue instead of mutating the in-memory cache or refreshing only the delta with the existing batch helper. In the poller’s hot path, that reintroduces `O(N)` REST calls immediately after paying for the batch fetch.
+- **Current call count** — `2` initial GraphQL batch calls per wave (`_fetch_candidate_issue_details_graphql` and `_fetch_issue_labels_batch_graphql`), then up to `W + R` extra REST label calls in the recovery path (`W` current-wave issues plus `R` reissued issues).
+- **Proposed call count after fix** — Keep the original `2` batch calls and do either `0` extra calls by updating `LABELS_JSON` from known label mutations, or `+1` GraphQL delta refresh for only the missing/new issue numbers.
+- **Batching pattern to extend** — `scripts/orchestrate_poll_process.sh:_fetch_issue_labels_batch_graphql`
+- **Recommended fix** — After `gh issue edit` mutations, update `LABELS_JSON` in-place for the touched issue numbers. When a refresh is still needed, pass only the delta set through `_fetch_issue_labels_batch_graphql` instead of rebuilding the cache with per-issue REST calls.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/clarify.yml:72-124`; `.github/workflows/plan.yml:103-159`; `.github/workflows/implement.yml:254-306`; `.github/workflows/validate.yml:92-144`; `.github/workflows/orchestrate_clarify_respond.yml:107-159`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — The same “stage canonical `resolve_integration_ref.sh` from `shubhodeep1/coding-workflows`, fetch the requested ref, fall back to `main`, chmod, execute, write `ref=` to `GITHUB_OUTPUT`” shell block is duplicated in five workflows. The copies have already drifted slightly — for example, `plan.yml` emits an extra `integration_branch_meta` output that the others do not — so any future fix to auth, retries, logging, or fallback semantics must be repeated manually in five places.
+- **Recommended fix** — Move this into a shared module such as `scripts/stage_and_run_integration_ref_resolver.sh` with a function signature like `stage_and_run_integration_ref_resolver <resolver_repo> <resolver_ref> <repo> <issue_number> <github_output_path>`. Update callers in `clarify.yml`, `plan.yml`, `implement.yml`, `validate.yml`, and `orchestrate_clarify_respond.yml` to invoke that shared module.
+
+#### DUP-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:3354-3415,3530-3565,3597-3625,3653-3688,4002-4035`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — Five separate `test-and-mark-stable` steps implement the same dispatch-and-watch loop: capture `PRE`, run `gh workflow run`, poll `/actions/workflows/{wf}/runs` until a new run appears, then poll `/actions/runs/{id}` until completion. Only workflow name, deadlines, and accepted conclusions differ. The repeated blocks already carry independently maintained timeout comments and status-handling branches, which makes future deadline or retry changes easy to miss in one path.
+- **Recommended fix** — Extract a shared module such as `scripts/watch_workflow_dispatch.sh` with a signature like `watch_dispatched_workflow <repo> <workflow_file> <registration_deadline_secs> <completion_deadline_secs> <accepted_conclusions_csv> [workflow-dispatch args...]`. Update the `workflow-log-analysis`, `validation-refresh`, `update_workflows`, `internal-memory-maintenance`, and `internal-validate` watcher steps to call it.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No new expression-size findings.
+
+- Using raw interpolated `run:` body length as a screening proxy, I did not find any current `run:` or `if:` block above the `15,000`-character medium-risk threshold.
+- The largest current interpolated `run:` body I found was approximately `2,999` characters at `.github/workflows/test-and-mark-stable.yml:4619-4689`, leaving roughly `18,001` characters of headroom to the `21,000`-character expression limit.
+- The largest workflow file in the repo is `.github/workflows/review_autofix.yml` at `288,363` characters; all workflow files remain below the `800 KB` early-warning threshold and the `1 MB` hard limit.
+
+### Section 5: Cross-Cutting Concerns
+
+I found no `TODO` / `FIXME` / `HACK` / `XXX` markers in `.github/workflows/`, `scripts/`, `README.md`, `agents.md`, `CLAUDE.md`, or `.github/ai/`.
+
+#### CONSIST-001
+- **File path** — `.github/workflows/issue_pr_status.yml:466-537`; `scripts/tg_helpers.sh:77-118`
+- **Severity** — Low
+- **Category tag** — `consistency`
+- **Description** — The merged-PR alert step explicitly stages `tg_helpers.sh` “for alert level support”, but if that helper is unavailable the fallback raw `curl` path at `issue_pr_status.yml:534-537` still sends the Telegram message unconditionally. That bypasses `_tg_should_send` / `tg_send_msg` in `scripts/tg_helpers.sh`, so `ALERT_MSG_LEVEL=SILENT`, `WARNING`, or `ERROR` no longer suppresses the alert on the fallback path.
+- **Recommended fix** — Before the raw `curl` fallback, apply the same threshold check used by `scripts/tg_helpers.sh:_tg_should_send`, or source the repo-local `scripts/tg_helpers.sh` first and only fall back to raw `curl` after evaluating the alert level locally.
+
+#### CONSIST-002
+- **File path** — `scripts/gh_helpers.sh:391-445`; `.github/workflows/cancel_on_pr_close.yml:26-53`; `.github/workflows/orchestrate_poll.yml:78-112`; `.github/workflows/mark-stable.yml:316-342`; `.github/workflows/comprehensive-test-and-release.yml:72-98,315-340`; `.github/workflows/test-and-mark-stable.yml:4641-4654`
+- **Severity** — Medium
+- **Category tag** — `consistency`
+- **Description** — The repo already has a canonical GitHub retry wrapper in `scripts/gh_helpers.sh`, but multiple workflows re-implement partial variants inline. The copies do not agree on retryable failures: for example, `gh_api_safe` in `comprehensive-test-and-release.yml` only matches the substring `rate limit`, while other wrappers also match `abuse detection`, `secondary rate`, and `HTTP 429`. As a result, the same transient GitHub failure can be retried in one workflow and hard-fail in another.
+- **Recommended fix** — Extract a minimal bootstrap module such as `scripts/bootstrap_gh_retry.sh` that exposes the same retry semantics as `scripts/gh_helpers.sh::gh_retry`, and source it everywhere instead of cloning the logic inline. Update at least `cancel_on_pr_close.yml`, `orchestrate_poll.yml`, `mark-stable.yml`, `comprehensive-test-and-release.yml`, and `test-and-mark-stable.yml`.
+
+#### SHELL-001
+- **File path** — `scripts/validate_changed_files_syntax.sh:70-73`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — The secret-bearing path denylist contains unreachable case patterns: `*.env*` on line 71 already matches the `.envrc` / `.env*` variants listed on lines 72-73, which is why ShellCheck reports SC2221/SC2222 here. Runtime behavior is still “over-redact env-like files”, but the dead patterns make the policy harder to maintain and invite edits against branches that never execute.
+- **Recommended fix** — Remove the unreachable `*,*.envrc|*,.env*` fragments, or narrow the first env glob if `.envrc` truly needs distinct treatment. Keep the current conservative redaction policy, but make the case arms mutually exclusive.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 4 | API-001, BATCH-001, DUP-001, CONSIST-002 |
+| Low | 3 | DUP-002, CONSIST-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 6 | Medium |
+| API call optimization | 2 | Medium |
+| Code modularization | 8 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 9 | Medium |
