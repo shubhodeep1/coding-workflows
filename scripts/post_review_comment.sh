@@ -71,6 +71,10 @@ if [ -z "${REPOSITORY}" ]; then
 	echo "::error::post_review_comment: REPOSITORY must be set (e.g. owner/repo); GITHUB_REPOSITORY also empty." >&2
 	exit 2
 fi
+if ! [[ "${REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
+	echo "::error::post_review_comment: REPOSITORY must be in 'owner/repo' format; got '${REPOSITORY}'." >&2
+	exit 2
+fi
 if [ -z "${HEAD_SHA:-}" ]; then
 	echo "::error::post_review_comment: HEAD_SHA must be set (the commit the review covers)." >&2
 	exit 2
