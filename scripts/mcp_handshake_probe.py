@@ -15,6 +15,7 @@ from typing import Any, Sequence
 
 REQUEST_ID: int = 1
 DEFAULT_TIMEOUT_SECONDS = 15.0
+STDERR_TAIL_LIMIT_BYTES = 65536
 
 
 class ProbeError(RuntimeError):
@@ -23,6 +24,22 @@ class ProbeError(RuntimeError):
 	def __init__(self, reason: str, message: str):
 		super().__init__(message)
 		self.reason = reason
+		self.stderr_tail = ""
+
+
+class _StderrTailBuffer:
+	def __init__(self, limit_bytes: int = STDERR_TAIL_LIMIT_BYTES):
+		self.limit_bytes = limit_bytes
+		self._buffer = bytearray()
+
+	def append(self, chunk: bytes) -> None:
+		self._buffer.extend(chunk)
+		overflow = len(self._buffer) - self.limit_bytes
+		if overflow > 0:
+			del self._buffer[:overflow]
+
+	def text(self) -> str:
+		return self._buffer.decode("utf-8", errors="replace").strip()
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -142,8 +159,19 @@ def _reader_loop(stream: Any, out_queue: "queue.Queue[tuple[str, Any]]") -> None
 			except (UnicodeDecodeError, json.JSONDecodeError) as exc:
 				raise ProbeError("invalid-json", f"response body was not valid JSON: {exc}") from exc
 			out_queue.put(("message", message))
-	except BaseException as exc:  # pragma: no cover - intentionally marshalled across thread boundary
+	except Exception as exc:  # pragma: no cover - intentionally marshalled across thread boundary
 		out_queue.put(("error", exc))
+
+
+def _stderr_reader_loop(stream: Any, collector: _StderrTailBuffer) -> None:
+	try:
+		while True:
+			chunk = stream.read(4096)
+			if chunk == b"":
+				return
+			collector.append(chunk)
+	except Exception:
+		return
 
 
 def _is_notification(message: Any) -> bool:
@@ -194,7 +222,13 @@ def _cleanup_process(proc: subprocess.Popen[bytes] | None) -> str:
 			proc.kill()
 			proc.wait(timeout=1.0)
 	stderr_tail = ""
-	if proc.stderr is not None:
+	stderr_reader = getattr(proc, "_stderr_reader", None)
+	if isinstance(stderr_reader, threading.Thread):
+		stderr_reader.join(timeout=1.0)
+	stderr_collector = getattr(proc, "_stderr_collector", None)
+	if isinstance(stderr_collector, _StderrTailBuffer):
+		stderr_tail = stderr_collector.text()
+	elif proc.stderr is not None:
 		stderr_tail = proc.stderr.read().decode("utf-8", errors="replace").strip()
 	return stderr_tail
 
@@ -228,12 +262,19 @@ def probe_initialize(command: Sequence[str], *, server_name: str = "mcp", timeou
 
 	stdin = proc.stdin
 	stdout = proc.stdout
-	if stdin is None or stdout is None:
+	stderr = proc.stderr
+	if stdin is None or stdout is None or stderr is None:
 		stderr_tail = _cleanup_process(proc)
 		probe_error = ProbeError("spawn-failed", "mcp server did not provide stdio pipes")
 		if stderr_tail:
-			probe_error.stderr_tail = stderr_tail  # type: ignore[attr-defined]
+			probe_error.stderr_tail = stderr_tail
 		raise probe_error
+
+	stderr_collector = _StderrTailBuffer()
+	stderr_reader = threading.Thread(target=_stderr_reader_loop, args=(stderr, stderr_collector), daemon=True)
+	proc._stderr_collector = stderr_collector  # type: ignore[attr-defined]
+	proc._stderr_reader = stderr_reader  # type: ignore[attr-defined]
+	stderr_reader.start()
 
 	request = {
 		"jsonrpc": "2.0",
@@ -260,7 +301,7 @@ def probe_initialize(command: Sequence[str], *, server_name: str = "mcp", timeou
 		stderr_tail = _cleanup_process(proc)
 		probe_error = ProbeError("eof", f"mcp server closed stdin before initialize completed: {exc}")
 		if stderr_tail:
-			probe_error.stderr_tail = stderr_tail  # type: ignore[attr-defined]
+			probe_error.stderr_tail = stderr_tail
 		raise probe_error from exc
 
 	try:
@@ -286,7 +327,7 @@ def probe_initialize(command: Sequence[str], *, server_name: str = "mcp", timeou
 	except ProbeError as exc:
 		stderr_tail = _cleanup_process(proc)
 		if stderr_tail:
-			exc.stderr_tail = stderr_tail  # type: ignore[attr-defined]
+			exc.stderr_tail = stderr_tail
 		raise
 	except BaseException:
 		_cleanup_process(proc)

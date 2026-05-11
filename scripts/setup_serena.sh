@@ -9,9 +9,9 @@ SERENA_BIN_NAME="serena"
 SERENA_UV_PYTHON_BIN="${SERENA_UV_PYTHON_BIN:-python3}"
 SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC:-30}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
+WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 SERENA_TEMPLATE_PATH="${SCRIPT_DIR}/templates/serena_project.yml.j2"
-SERENA_PROJECT_PATH="${REPO_ROOT}/.serena/project.yml"
+SERENA_PROJECT_PATH="${WORKSPACE_ROOT}/.serena/project.yml"
 
 log()
 {
@@ -291,6 +291,10 @@ PY
 
 render_serena_project()
 {
+	if [ -f "${SERENA_PROJECT_PATH}" ]; then
+		log "preserving existing Serena project config at ${SERENA_PROJECT_PATH}"
+		return 0
+	fi
 	if [ ! -f "${SERENA_TEMPLATE_PATH}" ]; then
 		log "template missing: ${SERENA_TEMPLATE_PATH}"
 		return 1

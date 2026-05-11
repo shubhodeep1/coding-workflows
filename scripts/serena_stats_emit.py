@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Iterable
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -103,10 +104,9 @@ def _parse_plaintext_line(line: str) -> dict[str, int | str] | None:
 	return metrics
 
 
-def parse_serena_log(text: str) -> dict[str, dict[str, int]]:
-	"""Return per-tool Serena rollups for *text*."""
+def _parse_serena_lines(lines: Iterable[str]) -> dict[str, dict[str, int]]:
 	aggregate: dict[str, dict[str, int]] = defaultdict(lambda: {"calls": 0, "ms": 0, "response_bytes": 0})
-	for raw_line in text.splitlines():
+	for raw_line in lines:
 		parsed = _parse_json_line(raw_line)
 		if parsed is None:
 			parsed = _parse_plaintext_line(raw_line)
@@ -117,6 +117,11 @@ def parse_serena_log(text: str) -> dict[str, dict[str, int]]:
 		aggregate[tool]["ms"] += _coerce_non_negative_int(parsed.get("ms"))
 		aggregate[tool]["response_bytes"] += _coerce_non_negative_int(parsed.get("response_bytes"))
 	return dict(aggregate)
+
+
+def parse_serena_log(text: str) -> dict[str, dict[str, int]]:
+	"""Return per-tool Serena rollups for *text*."""
+	return _parse_serena_lines(text.splitlines())
 
 
 def emit_rollups(target: str, rollups: dict[str, dict[str, int]]) -> None:
@@ -147,10 +152,11 @@ def main(argv: list[str] | None = None) -> int:
 		if not path.is_file():
 			continue
 		try:
-			text = path.read_text(encoding="utf-8", errors="replace")
+			with path.open("r", encoding="utf-8", errors="replace") as handle:
+				parsed_rollups = _parse_serena_lines(handle)
 		except OSError:
 			continue
-		for tool, values in parse_serena_log(text).items():
+		for tool, values in parsed_rollups.items():
 			totals[tool]["calls"] += values["calls"]
 			totals[tool]["ms"] += values["ms"]
 			totals[tool]["response_bytes"] += values["response_bytes"]

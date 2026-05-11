@@ -63,6 +63,7 @@ def _run_setup(
 	full_env.update(
 		{
 			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_WORKSPACE": str(setup_script.parent.parent),
 			"HOME": str(home),
 			"GITHUB_ENV": str(github_env),
 			"PATH": path_value,
@@ -199,6 +200,42 @@ def test_setup_serena_clears_stale_block_fail_soft_when_binary_unavailable() -> 
 		assert parsed == {"existing": {"value": "keep"}}
 		assert "[mcp_servers.serena]" not in body
 		assert github_env.read_text(encoding="utf-8").splitlines()[-1] == "SERENA_AVAILABLE=false"
+
+
+def test_setup_serena_uses_workspace_for_project_path_and_preserves_existing_project() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		stage_root = root / "staged-support"
+		stage_root.mkdir()
+		setup_script = _stage_setup_serena(stage_root)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		home = root / "home"
+		home.mkdir()
+		github_env = root / "github.env"
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fake_serena = bin_dir / "serena"
+		_write_fake_serena(fake_serena)
+
+		existing_project = workspace / ".serena" / "project.yml"
+		existing_project.parent.mkdir(parents=True, exist_ok=True)
+		existing_project.write_text("project_name = \"keep\"\n", encoding="utf-8")
+
+		result = _run_setup(
+			setup_script,
+			home=home,
+			path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
+			github_env=github_env,
+			extra_env={
+				"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_happy.py"),
+				"GITHUB_WORKSPACE": str(workspace),
+			},
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert existing_project.read_text(encoding="utf-8") == 'project_name = "keep"\n'
+		assert not (stage_root / ".serena" / "project.yml").exists()
 
 
 def main() -> int:

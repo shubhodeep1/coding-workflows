@@ -87,6 +87,29 @@ def test_serena_stats_emit_cli_fails_open_on_missing_or_malformed_logs() -> None
 		assert result.stderr == ""
 
 
+def test_serena_stats_emit_cli_streams_large_log_files() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		large_log = root / "large.log"
+		with large_log.open("w", encoding="utf-8") as handle:
+			for _ in range(5000):
+				handle.write("mcp tool_result server=serena tool=find_symbol ms=1 response_bytes=2\n")
+
+		result = subprocess.run(
+			[sys.executable, str(STATS_SCRIPT), "--target", "implement", "--log", str(large_log)],
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert result.stdout == ""
+		assert result.stderr.splitlines() == [
+			"SERENA_QUERY target=implement tool=find_symbol calls=5000 response_bytes=10000 ms=5000"
+		]
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

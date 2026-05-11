@@ -45,6 +45,21 @@ def _stage_setup_serena(tmp_root: Path) -> Path:
 	return stage_scripts / "setup_serena.sh"
 
 
+def _read_supported_template_languages() -> list[str]:
+	template = (SCRIPTS_DIR / "templates" / "serena_project.yml.j2").read_text(encoding="utf-8")
+	values: list[str] = []
+	in_languages = False
+	for line in template.splitlines():
+		if line == "languages:":
+			in_languages = True
+			continue
+		if in_languages and not line.startswith("  - "):
+			break
+		if in_languages:
+			values.append(line.split('"')[1])
+	return values
+
+
 def _write_executable(path: Path, content: str) -> None:
 	path.write_text(content, encoding="utf-8")
 	path.chmod(0o755)
@@ -80,6 +95,7 @@ def _run_staged_setup(
 	full_env.update(
 		{
 			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_WORKSPACE": str(setup_script.parent.parent),
 			"HOME": str(home),
 			"GITHUB_ENV": str(github_env),
 			"PATH": path_value,
@@ -163,6 +179,67 @@ def test_validate_initialize_response_rejects_null_error_field() -> None:
 
 def test_sanitize_log_value_replaces_equals_and_whitespace() -> None:
 	assert _sanitize_log_value("mock=serena 1") == "mock_serena_1"
+
+
+def test_template_languages_match_serena_v1_2_0_fixture_contract() -> None:
+	assert _read_supported_template_languages() == [
+		"al",
+		"ansible",
+		"bash",
+		"clojure",
+		"cpp",
+		"cpp_ccls",
+		"crystal",
+		"csharp",
+		"csharp_omnisharp",
+		"dart",
+		"elixir",
+		"elm",
+		"erlang",
+		"fortran",
+		"fsharp",
+		"go",
+		"groovy",
+		"haskell",
+		"haxe",
+		"hlsl",
+		"java",
+		"json",
+		"julia",
+		"kotlin",
+		"lean4",
+		"lua",
+		"luau",
+		"markdown",
+		"matlab",
+		"msl",
+		"nix",
+		"ocaml",
+		"pascal",
+		"perl",
+		"php",
+		"php_phpactor",
+		"powershell",
+		"python",
+		"python_jedi",
+		"python_ty",
+		"r",
+		"rego",
+		"ruby",
+		"ruby_solargraph",
+		"rust",
+		"scala",
+		"solidity",
+		"swift",
+		"systemverilog",
+		"terraform",
+		"toml",
+		"typescript",
+		"typescript_vts",
+		"vue",
+		"yaml",
+		"zig",
+	]
 
 
 def test_probe_cli_happy_path() -> None:
@@ -298,6 +375,42 @@ def test_setup_serena_probe_kill_switch_forces_success() -> None:
 		config_text = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
 		assert "[mcp_servers.serena]" in config_text
 		assert github_env.read_text(encoding="utf-8").splitlines()[-1] == "SERENA_AVAILABLE=true"
+
+
+def test_setup_serena_preserves_existing_project_config_and_uses_workspace_root() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		setup_stage_root = root / "staged-support"
+		setup_stage_root.mkdir()
+		setup_script = _stage_setup_serena(setup_stage_root)
+		workspace = root / "workspace"
+		workspace.mkdir()
+		home = root / "home"
+		home.mkdir()
+		github_env = root / "github.env"
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fake_serena = bin_dir / "serena"
+		_write_fake_serena(fake_serena)
+
+		existing_project = workspace / ".serena" / "project.yml"
+		existing_project.parent.mkdir(parents=True, exist_ok=True)
+		existing_project.write_text("project_name: \"keep-me\"\n", encoding="utf-8")
+
+		result = _run_staged_setup(
+			setup_script,
+			home=home,
+			path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
+			github_env=github_env,
+			extra_env={
+				"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_happy.py"),
+				"GITHUB_WORKSPACE": str(workspace),
+			},
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert existing_project.read_text(encoding="utf-8") == 'project_name: "keep-me"\n'
+		assert not (setup_stage_root / ".serena" / "project.yml").exists()
 
 
 def main() -> int:
