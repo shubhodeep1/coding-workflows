@@ -949,7 +949,14 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         if [ -z "${PR_HEAD_SHA}" ]; then
           echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
         else
-          _check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '[]')"
+          # Fallback to '{}' (NOT '[]') on API failure — same fail-
+          # closed rationale as orchestrate_poll_process.sh's
+          # _pr_checks_completed: '[]' would match the jq filter's
+          # array branch and yield incomplete=0 (fail-open, treating
+          # an API error as "no check-runs"), while '{}' matches
+          # neither branch and trips the numeric guard below for the
+          # "could not query" refusal path.
+          _check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '{}')"
           # jq filter: --paginate --slurp emits an array of page
           # response objects; the elif branch handles legacy single-
           # object shape from tests / older callers. Either way we

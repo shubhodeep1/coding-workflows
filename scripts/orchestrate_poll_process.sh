@@ -252,7 +252,16 @@ _pr_checks_completed()
 	# elsewhere in the repo (e.g. .github/workflows/review_autofix.yml's
 	# "Collect PR check-run failures" step). Fallback to '[]' on API
 	# failure keeps the jq filter below safe under set -euo pipefail.
-	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "[]")"
+	# Fallback to '{}' (NOT '[]') on API failure. The jq filter
+	# below has two matching branches: `type == "array"` (production
+	# --paginate --slurp shape) and the elif `type == "object" and
+	# (.check_runs | type == "array")` (legacy single-object shape).
+	# An empty object '{}' matches neither — falls through to `else
+	# empty`, the numeric guard below trips, and the helper returns
+	# 1 (fail-closed). An empty array '[]' would match the first
+	# branch and produce `incomplete=0`, fail-OPEN — treating an API
+	# error as "no check-runs" and letting the merge proceed.
+	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "{}")"
 
 	# jq filter: handle both the paginated array-of-pages shape (the
 	# production --paginate --slurp call) and the single-object
