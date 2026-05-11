@@ -37,15 +37,16 @@ permissions:
 # arrive around PR creation time. PR-backed claude/** branches now use the
 # same full autofix loop as every other PR, so do not cancel in-progress PR
 # runs on autofix pushes; otherwise the [ai-autofix] synchronize event can
-# kill the run before its continuation dispatch. Only the no-PR push route
-# cancels stale in-flight reviewer-comment runs.
+# kill the run before its continuation dispatch. Keep push and pull_request
+# events in separate concurrency groups so the no-PR push route only cancels
+# stale in-flight reviewer-comment runs.
 #
 # workflow_dispatch is keyed separately on inputs.pr_number, because on
 # manual dispatch head_ref is empty and ref_name is the workflow's ref
 # (typically the default branch) — without a PR-scoped key, manual
 # re-triggers for different PRs would cancel each other.
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('internal-review-dispatch-pr-{0}', github.event.inputs.pr_number) || format('internal-review-{0}', github.head_ref || github.ref_name) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('internal-review-dispatch-pr-{0}', github.event.inputs.pr_number) || format('internal-review-{0}-{1}', github.event_name, github.head_ref || github.ref_name) }}
   cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'claude/') }}
 
 jobs:
