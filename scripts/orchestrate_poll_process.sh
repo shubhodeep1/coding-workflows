@@ -1009,6 +1009,36 @@ if ! [[ "${INTEGRATION_CONFLICT_LIFETIME_MAX}" =~ ^[0-9]+$ ]] || [ "${INTEGRATIO
   INTEGRATION_CONFLICT_LIFETIME_MAX="10"
 fi
 
+# MAX_BUDGET_NEUTRAL_OVERRIDES caps how many times the retrigger_review
+# stall recovery action may be rerouted to resolve_merge_conflict for a
+# given PR head_sha without consuming a stall-recovery attempt. The
+# rerouting itself is correct (an empty-commit push cannot resolve a
+# dirty merge), but with no cap the loop runs unboundedly while main
+# keeps moving. After this many overrides for the same head_sha, the
+# orchestrator stops giving the conflict resolver a free pass and
+# starts consuming budget so the stall ladder eventually reaches its
+# terminal step.
+MAX_BUDGET_NEUTRAL_OVERRIDES="${MAX_BUDGET_NEUTRAL_OVERRIDES:-2}"
+if ! [[ "${MAX_BUDGET_NEUTRAL_OVERRIDES}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_BUDGET_NEUTRAL_OVERRIDES must be a non-negative integer; defaulting to 2"
+  MAX_BUDGET_NEUTRAL_OVERRIDES="2"
+fi
+
+# MAX_JUDGE_REPLAY caps how many consecutive cached judge decisions the
+# orchestrator will replay before forcing escalate_human. The judge
+# decision cache (see invoke_stall_judge) keyed on
+# sha256({issue_num, head_sha, phase, last_conclusion}) skips the LLM
+# call when the same inputs reproduce — but if the cached decision is
+# wrong (the judge picked resolve_merge_conflict on a hot-file collision
+# the resolver can't fix), replaying it forever wastes budget. After
+# this many replays, the judge cache is bypassed and the issue is
+# escalated.
+MAX_JUDGE_REPLAY="${MAX_JUDGE_REPLAY:-2}"
+if ! [[ "${MAX_JUDGE_REPLAY}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_JUDGE_REPLAY must be a non-negative integer; defaulting to 2"
+  MAX_JUDGE_REPLAY="2"
+fi
+
 post_tracking_comment() {
   local comment_body="$1"
   local payload_file
@@ -3182,6 +3212,42 @@ _refresh_integration_resolver_tooling() {
 # Returns 0 if healing progressed (dispatch queued, cooldown active,
 # or judge invoked), 1 if the circuit breaker has tripped and the
 # state was marked failed.
+# _list_integration_conflict_files — enumerate the filenames that would
+# conflict if <default_branch> were merged into <integration_branch>.
+# Uses ``git merge-tree --write-tree --name-only`` for a stateless
+# three-way merge probe (same technique as probe_sibling_merge_conflicts
+# at line 304+).  Echoes one file path per line on stdout; returns 0
+# when conflicts were detected, 1 otherwise (including unavailable git
+# version, missing refs, or a clean merge).  Used by
+# heal_integration_branch_conflict (Q2c) to short-circuit the first-line
+# resolver on hot-file collisions.
+_list_integration_conflict_files() {
+  local integration_branch="$1"
+  local default_branch="$2"
+
+  [ -n "${integration_branch}" ] && [ -n "${default_branch}" ] || return 1
+  command -v git >/dev/null 2>&1 || return 1
+  if ! git merge-tree 2>&1 | grep -q -- '--write-tree'; then
+    return 1
+  fi
+
+  local ib_ref="refs/remotes/origin/${integration_branch}"
+  local db_ref="refs/remotes/origin/${default_branch}"
+  git fetch --no-tags --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null || true
+  git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
+  git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
+
+  local out
+  if out="$(git merge-tree --write-tree --name-only --no-messages "${db_ref}" "${ib_ref}" 2>/dev/null)"; then
+    # Exit 0 from merge-tree means the merge is clean.
+    return 1
+  fi
+  # On conflict, modern git prints the written tree SHA on the first
+  # line followed by conflict paths. Strip the SHA line when present.
+  printf '%s\n' "${out}" | sed '/^$/d' | awk 'NR==1 && /^[[:xdigit:]]{40}([[:xdigit:]]{24})?$/ {next} {print}'
+  return 0
+}
+
 heal_integration_branch_conflict() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -3249,6 +3315,38 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
   case "${integration_branch}" in
     orchestrator/project-*)
       effective_max_retries="${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES}"
+      # Hot-file conflict short-circuit (Q2c): when the merge produces
+      # ≤3 conflicting files and at least one is in the committed
+      # hot-files seed at .github/ai/hot_files.json, the first-line
+      # resolver has nothing useful to add — these are the god-file
+      # collisions that need the judge's sub-issue intent context.
+      # Skip the resolver entirely by forcing the retry budget to 0,
+      # which makes the unresolved_ticks check fire the judge on the
+      # very first tick.  Fail-open on any probe error.
+      local _ihb_conflict_files
+      if _ihb_conflict_files="$(_list_integration_conflict_files "${integration_branch}" "${default_branch}" 2>/dev/null)"; then
+        local _ihb_conflict_count
+        _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l)"
+        if [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
+          local _ihb_hot_files
+          _ihb_hot_files="$(jq -r '.hot_files[]? // empty' .github/ai/hot_files.json 2>/dev/null || echo "")"
+          if [ -n "${_ihb_hot_files}" ]; then
+            local _ihb_hot_hit="false"
+            local _ihb_cf
+            while IFS= read -r _ihb_cf; do
+              [ -n "${_ihb_cf}" ] || continue
+              if printf '%s\n' "${_ihb_hot_files}" | grep -Fxq -- "${_ihb_cf}"; then
+                _ihb_hot_hit="true"
+                break
+              fi
+            done <<< "${_ihb_conflict_files}"
+            if [ "${_ihb_hot_hit}" = "true" ]; then
+              echo "  [integration-heal] Hot-file conflict detected (${_ihb_conflict_count} file(s), includes hot file); skipping first-line resolver and routing to judge directly."
+              effective_max_retries=0
+            fi
+          fi
+        fi
+      fi
       ;;
   esac
   # Circuit breaker: after MAX retries, escalate to judge instead of
@@ -3286,9 +3384,21 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
   fi
 
   # Cooldown gate: don't re-dispatch resolver too frequently.
+  # Exponential backoff (Q2a): the cooldown doubles each dispatch (1×,
+  # 2×, 4×, 8×, 16×) up to a 16× cap. With the default 900s base, the
+  # gate is 15m on the first dispatch, climbing to 4h after four
+  # retries. This stops the multi-hour fixed-interval loop where main
+  # keeps moving and each dispatch fires on the same 15-minute beat.
   local elapsed=$((now_ts - last_ts))
-  if [ "${last_ts}" -gt 0 ] && [ "${elapsed}" -lt "${CONFLICT_DISPATCH_COOLDOWN_SECS}" ]; then
-    echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${CONFLICT_DISPATCH_COOLDOWN_SECS}s); deferring resolver dispatch for PR #${final_pr}."
+  local _backoff_shift="${dispatch_count}"
+  [[ "${_backoff_shift}" =~ ^[0-9]+$ ]] || _backoff_shift=0
+  if [ "${_backoff_shift}" -gt 4 ]; then
+    _backoff_shift=4
+  fi
+  local _backoff_multiplier=$(( 1 << _backoff_shift ))
+  local effective_cooldown=$(( CONFLICT_DISPATCH_COOLDOWN_SECS * _backoff_multiplier ))
+  if [ "${last_ts}" -gt 0 ] && [ "${elapsed}" -lt "${effective_cooldown}" ]; then
+    echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${effective_cooldown}s, base=${CONFLICT_DISPATCH_COOLDOWN_SECS}s × ${_backoff_multiplier}); deferring resolver dispatch for PR #${final_pr}."
     return 0
   fi
 
@@ -5242,10 +5352,12 @@ STALL_EOF
         local _rtr_pr_json
         local _rtr_mergeable
         local _rtr_merge_state
+        local _rtr_head_sha
         _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
         _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
+        _rtr_head_sha="$(_jq_field "${_rtr_pr_json}" '.head.sha')"
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ] && \
            { [ "${_rtr_mergeable}" = "false" ] || [ "${_rtr_merge_state}" = "dirty" ]; }; then
           echo "  Issue #${issue_num} PR #${pr_num} has merge conflicts (mergeable=${_rtr_mergeable:-unknown}, mergeable_state=${_rtr_merge_state:-unknown}) — routing to resolve_merge_conflict instead of pushing an empty commit."
@@ -5257,7 +5369,26 @@ STALL_EOF
           # recovery attempt.  resolve_merge_conflict sets
           # STALL_RECOVERY_SHOULD_INCREMENT="true" on its happy path (line
           # ~4405); reset it here so the override is budget-neutral.
+          #
+          # Per-head_sha cap (Q1b): track how many overrides have fired
+          # for this exact head_sha and stop being budget-neutral after
+          # MAX_BUDGET_NEUTRAL_OVERRIDES so the stall ladder can advance.
+          # head_sha changes on every new commit, so once the resolver
+          # pushes a fix, the counter restarts for the new sha.
           STALL_RECOVERY_SHOULD_INCREMENT="false"
+          if [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+            local _rtr_override_count
+            _rtr_override_count="$(jq -r --arg sha "${_rtr_head_sha}" '.conflict_override_count[$sha] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+            [[ "${_rtr_override_count}" =~ ^[0-9]+$ ]] || _rtr_override_count="0"
+            if [ "${_rtr_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} head_sha ${_rtr_head_sha} has hit budget-neutral override cap (${_rtr_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
+              STALL_RECOVERY_SHOULD_INCREMENT="true"
+            fi
+            local _rtr_next_count=$(( _rtr_override_count + 1 ))
+            jq --arg sha "${_rtr_head_sha}" --argjson n "${_rtr_next_count}" \
+              '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+          fi
           STALL_RECOVERY_EFFECTIVE_ACTION="resolve_merge_conflict"
           return "${_rtr_rc}"
         fi
@@ -5683,6 +5814,31 @@ invoke_stall_judge() {
     | .[:3]
   ' 2>/dev/null || echo '[]')"
 
+  # Judge decision cache (Q1d): memoise judge output by
+  # sha256({issue_num, head_sha, phase, last_conclusion}). When the same
+  # inputs reproduce, replay the cached action instead of burning a fresh
+  # LLM call.  After MAX_JUDGE_REPLAY consecutive replays without
+  # progress, bypass the cache and escalate so the issue isn't stuck on a
+  # bad decision forever. The cache is only consulted when STATE_FILE
+  # exists; missing-state cycles fall through to the LLM path.
+  local _judge_last_conclusion=""
+  local _judge_cache_key=""
+  local _judge_cache_hit_action=""
+  local _judge_cache_replay_count=0
+  local _judge_force_escalate="false"
+  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
+    _judge_cache_key="$(printf '%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    if [ -n "${_judge_cache_key}" ]; then
+      _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      [[ "${_judge_cache_replay_count}" =~ ^[0-9]+$ ]] || _judge_cache_replay_count=0
+      if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ]; then
+        _judge_force_escalate="true"
+      fi
+    fi
+  fi
+
   local prior_actions='[]'
   if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
     prior_actions="$(jq -c --arg lid "${local_id}" --argjson wi "${WAVE_IDX}" '
@@ -5797,18 +5953,39 @@ invoke_stall_judge() {
 
   local judge_success="false"
   local attempt
-  for attempt in 1 2; do
-    if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
-      printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
-    else
-      codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
-    fi
-    if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
-      judge_success="true"
-      break
-    fi
-    sleep $(( 8 * attempt ))
-  done
+  local _judge_from_cache="false"
+  if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_force_escalate}" = "true" ]; then
+    echo "  [stall-judge] Cache replay cap reached for issue #${issue_num} (key=${_judge_cache_key}, replays=${_judge_cache_replay_count} >= ${MAX_JUDGE_REPLAY}); forcing escalate_human."
+    local _judge_escalate_justification
+    _judge_escalate_justification="Cached judge decision '${_judge_cache_hit_action}' replayed ${_judge_cache_replay_count} times without progress; bypassing cache and escalating."
+    jq -cn --arg a "escalate_human" --arg j "${_judge_escalate_justification}" '{action:$a, justification:$j}' > "${stall_judge_output_file}"
+    judge_success="true"
+    _judge_from_cache="true"
+  elif [ -n "${_judge_cache_hit_action}" ]; then
+    echo "  [stall-judge] Cache hit for issue #${issue_num} (key=${_judge_cache_key}); replaying cached decision '${_judge_cache_hit_action}' (replay $((_judge_cache_replay_count + 1)) of max ${MAX_JUDGE_REPLAY})."
+    local _judge_replay_justification
+    _judge_replay_justification="Cached judge decision (input hash unchanged across cycles); replay $((_judge_cache_replay_count + 1)) of ${MAX_JUDGE_REPLAY}."
+    jq -cn --arg a "${_judge_cache_hit_action}" --arg j "${_judge_replay_justification}" '{action:$a, justification:$j}' > "${stall_judge_output_file}"
+    judge_success="true"
+    _judge_from_cache="true"
+    local _judge_replay_next=$(( _judge_cache_replay_count + 1 ))
+    jq --arg k "${_judge_cache_key}" --argjson n "${_judge_replay_next}" \
+      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+  else
+    for attempt in 1 2; do
+      if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
+        printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
+      else
+        codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+      fi
+      if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
+        judge_success="true"
+        break
+      fi
+      sleep $(( 8 * attempt ))
+    done
+  fi
 
   if [ "${judge_success}" != "true" ]; then
     echo "::warning::Stall judge failed for issue #${issue_num}; falling back to ${fallback_action}."
@@ -5837,6 +6014,15 @@ invoke_stall_judge() {
   STALL_JUDGE_HEAD_REF="$(echo "${judge_json}" | jq -r '.head_ref // empty')"
   if [ -z "${STALL_JUDGE_HEAD_REF}" ] && [ -n "${head_ref}" ]; then
     STALL_JUDGE_HEAD_REF="${head_ref}"
+  fi
+
+  # Cache the fresh judge decision so future identical inputs replay it
+  # rather than burning another LLM call. Skip when this run was itself
+  # served from the cache (replay count was already bumped above).
+  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${judge_action}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    jq --arg k "${_judge_cache_key}" --arg action "${judge_action}" \
+      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
   fi
 
   local judge_comment
@@ -10606,7 +10792,8 @@ from orchestrate_lib import increment_stall_recovery
 with open('${STATE_FILE}') as f:
     state = json.load(f)
 
-increment_stall_recovery(state, '${STALL_LOCAL_ID}')
+phase = '${STALL_PHASE}'
+increment_stall_recovery(state, '${STALL_LOCAL_ID}', phase if phase else None)
 
 with open('${STATE_FILE}', 'w') as f:
     json.dump(state, f, indent=2)
@@ -11374,6 +11561,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         # This triggers clarify.yml via the issues.opened event.
         # -----------------------------------------------------------
         CREATED_NUMS=""
+        ACTUALLY_CREATED_COUNT=0
         NEXT_WAVE_ISSUE_IDS="$(jq -r ".waves[${NEXT_WAVE_IDX}].issues[].id" "${STATE_FILE}")"
         for local_id in ${NEXT_WAVE_ISSUE_IDS}; do
           # Check if already created (has a github_issue number)
@@ -11422,6 +11610,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
           fi
           echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
           CREATED_NUMS="${CREATED_NUMS} ${NEW_NUM}"
+          ACTUALLY_CREATED_COUNT=$(( ACTUALLY_CREATED_COUNT + 1 ))
 
           # Update state: record the new issue number and remove from pending
           jq ".issue_number_map[\"${local_id}\"] = ${NEW_NUM} | del(.pending_issue_defs[\"${local_id}\"])" \
@@ -11436,7 +11625,14 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1 | .judge_stall_cycles = 0" \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-        WAVE_COMMENT="## Wave ${NEXT_WAVE} Dispatched
+        # Q3a: only post the "Wave N Dispatched" narration when this
+        # cycle actually created new issues. When every sub-issue in
+        # NEXT_WAVE already exists (i.e. pre-created in an earlier
+        # cycle), CREATED_NUMS is non-empty but ACTUALLY_CREATED_COUNT
+        # is 0 — posting in that case is duplicate narration that adds
+        # nothing for human readers and burns API quota.
+        if [ "${ACTUALLY_CREATED_COUNT}" -gt 0 ]; then
+          WAVE_COMMENT="## Wave ${NEXT_WAVE} Dispatched
 
 Dependencies from Wave ${CURRENT_WAVE} are met. Created and dispatched:
 
@@ -11444,8 +11640,11 @@ $(for inum in ${CREATED_NUMS}; do echo "- #${inum}"; done)
 
 These issues will enter the AI pipeline (clarify → plan → implement → review)."
 
-        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-          -f body="${WAVE_COMMENT}" >/dev/null
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+            -f body="${WAVE_COMMENT}" >/dev/null
+        else
+          echo "Wave ${NEXT_WAVE} advance: all sub-issues already exist; suppressing duplicate narration."
+        fi
       else
         # All waves dispatched but judge says in_progress with new issues
         jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"

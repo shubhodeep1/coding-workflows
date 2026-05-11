@@ -1763,6 +1763,104 @@ def test_cli_compute_waves_write_back_mutates_input():
 
 
 # ---------------------------------------------------------------------------
+# Tests: phase_attempts lifetime counter (fix 1a)
+# ---------------------------------------------------------------------------
+
+def test_phase_attempts_counter_survives_phase_oscillation():
+	"""Regression test for the loop where an autofix run nudges an issue
+	out of ai:review-blocked into ai:done and back, zeroing
+	stall_recovery_count each time and re-running the ladder forever.
+
+	After this fix, increment_stall_recovery bumps a phase-scoped
+	lifetime counter that update_issue_timestamps does NOT reset on
+	phase change, so the cap is reached even when phase flaps.
+	"""
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+
+	# Simulate three recovery cycles in ai:review-blocked with a phase
+	# flap to ai:done between each one.  After every flap,
+	# update_issue_timestamps zeroes stall_recovery_count.
+	now_ts = 1_000_000
+	for cycle in range(3):
+		# Stall observed: bump both counters.
+		orchestrate_lib.increment_stall_recovery(state, issue["id"], phase="ai:review-blocked")
+		# Phase flap: autofix flicks ai:review-blocked off and back on.
+		orchestrate_lib.update_issue_timestamps(
+			state,
+			issue_labels={str(issue["github_issue"]): ["ai:done"]},
+			now_ts=now_ts + (cycle * 100),
+		)
+		orchestrate_lib.update_issue_timestamps(
+			state,
+			issue_labels={str(issue["github_issue"]): ["ai:review-blocked"]},
+			now_ts=now_ts + (cycle * 100) + 50,
+		)
+
+	# stall_recovery_count was zeroed by the last phase change.
+	assert issue["stall_recovery_count"] == 0
+	# phase_attempts survived all three oscillations.
+	assert issue["phase_attempts"]["ai:review-blocked"] == 3
+
+
+def test_phase_attempts_count_caps_recovery_action():
+	"""When phase_attempts_count reaches max_recoveries, the resolver
+	returns 'skip' even if stall_recovery_count is 0."""
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:review-blocked",
+		recovery_count=0,
+		max_recoveries=5,
+		phase_attempts_count=5,
+	)
+	assert action == "skip"
+
+	# Below the cap, the ladder still runs.
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:review-blocked",
+		recovery_count=0,
+		max_recoveries=5,
+		phase_attempts_count=4,
+	)
+	assert action == "dispatch_rb_judge"
+
+
+def test_detect_stalls_skips_when_phase_attempts_exhausted():
+	"""detect_stalls returns recovery_action='skip' when phase_attempts
+	reaches the cap, even with a fresh stall_recovery_count of 0."""
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0  # zeroed by phase oscillation
+	issue["phase_attempts"] = {"ai:review-blocked": 5}
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip"
+	assert stalls[0]["phase_attempts_count"] == 5
+
+
+def test_increment_stall_recovery_without_phase_is_backward_compatible():
+	"""Old callers that pass only (state, issue_id) still work and do
+	not create a phase_attempts dict."""
+	state = _make_state()
+	orchestrate_lib.increment_stall_recovery(state, "issue-1")
+	issue = state["waves"][0]["issues"][0]
+	assert issue["stall_recovery_count"] == 1
+	assert "phase_attempts" not in issue
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
