@@ -212,51 +212,107 @@ case "${_resolver_reasoning_effort}" in
     ;;
 esac
 _codex_config="${HOME}/.codex/config.toml"
-# Fail-open guard around the rewrite: a sed/grep failure (permissions,
-# unexpected file shape, missing GNU sed) should fall through to a
-# ::warning:: rather than abort the resolver step under set -e — same
-# spirit as the missing-config branch below. Robust grep/sed patterns
-# tolerate whitespace and quoting variants so a non-canonical config
-# (e.g. unquoted value, extra spaces) is still updated rather than
-# silently no-op'd, which would re-introduce the empty-stdout failure
-# this fix is meant to prevent. Post-edit verification reads the file
-# back and emits a warning if the resolver value is missing.
-if [ -f "${_codex_config}" ]; then
-  _rewrite_ok=1
+
+# _apply_resolver_reasoning_effort <level>
+#
+# Rewrite ~/.codex/config.toml so the next codex invocation runs at
+# <level> (one of xhigh|high|medium|none) with
+# model_reasoning_summary = "auto" (the anti-empty-stdout safeguard).
+#
+# Extracted from the once-per-step prelude so the retry loop can
+# downgrade the level after a per-attempt-timer kill — see
+# _next_lower_reasoning_effort below and the timeout step-down
+# block inside the resolver loop. The original PR-#2453 prelude
+# rewrote config.toml exactly once; an attempt that timed out at
+# `high` would then retry at the same `high`, repeating the
+# hung-thinking failure mode rather than giving the next attempt
+# a real chance to finish under the per-attempt budget.
+#
+# Fail-open: sed/grep failure (permissions, unexpected file shape,
+# missing GNU sed) surfaces a ::warning:: rather than aborting the
+# resolver step under set -e. Robust grep/sed patterns tolerate
+# whitespace and quoting variants so a non-canonical config is
+# still updated rather than silently no-op'd, which would
+# re-introduce the empty-stdout failure mode this fix prevents.
+# Post-edit verification reads the file back and emits a warning
+# if either expected line is missing.
+_apply_resolver_reasoning_effort()
+{
+  local _arr_level="${1:?reasoning level required}"
+  local _arr_rewrite_ok
+  local _arr_verify_ok
+  case "${_arr_level}" in
+    xhigh|high|medium|none) ;;
+    *)
+      echo "::warning::_apply_resolver_reasoning_effort: invalid level '${_arr_level}'; falling back to high."
+      _arr_level="high"
+      ;;
+  esac
+  if [ ! -f "${_codex_config}" ]; then
+    echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override (${_arr_level}) skipped."
+    return 0
+  fi
+  _arr_rewrite_ok=1
   {
     if grep -qE '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${_codex_config}"; then
-      sed -i "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*|model_reasoning_effort = \"${_resolver_reasoning_effort}\"|" "${_codex_config}"
+      sed -i "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*|model_reasoning_effort = \"${_arr_level}\"|" "${_codex_config}"
     else
-      printf '\nmodel_reasoning_effort = "%s"\n' "${_resolver_reasoning_effort}" >> "${_codex_config}"
+      printf '\nmodel_reasoning_effort = "%s"\n' "${_arr_level}" >> "${_codex_config}"
     fi
     if grep -qE '^[[:space:]]*model_reasoning_summary[[:space:]]*=' "${_codex_config}"; then
       sed -i 's|^[[:space:]]*model_reasoning_summary[[:space:]]*=.*|model_reasoning_summary = "auto"|' "${_codex_config}"
     else
       sed -i '/^[[:space:]]*model_reasoning_effort[[:space:]]*=/a model_reasoning_summary = "auto"' "${_codex_config}"
     fi
-  } || _rewrite_ok=0
+  } || _arr_rewrite_ok=0
 
-  if [ "${_rewrite_ok}" -eq 0 ]; then
+  if [ "${_arr_rewrite_ok}" -eq 0 ]; then
     echo "::warning::Codex config rewrite failed for ${_codex_config}; resolver will run with whatever reasoning the editor step left in place."
-  else
-    # Independent checks (not elif) so both mismatches surface together
-    # if the rewrite somehow produced neither expected line.
-    _verify_ok=1
-    if ! grep -qE "^model_reasoning_effort = \"${_resolver_reasoning_effort}\"$" "${_codex_config}"; then
-      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${_resolver_reasoning_effort}\" line; resolver may run with stale reasoning."
-      _verify_ok=0
-    fi
-    if ! grep -qE '^model_reasoning_summary = "auto"$' "${_codex_config}"; then
-      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_summary = \"auto\" line; the anti-empty-stdout safeguard may be unset."
-      _verify_ok=0
-    fi
-    if [ "${_verify_ok}" -eq 1 ]; then
-      echo "Conflict resolver reasoning effort set to ${_resolver_reasoning_effort} (model_reasoning_summary=auto)."
-    fi
+    return 0
   fi
-else
-  echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override skipped."
-fi
+  # Independent checks (not elif) so both mismatches surface together
+  # if the rewrite somehow produced neither expected line.
+  _arr_verify_ok=1
+  if ! grep -qE "^model_reasoning_effort = \"${_arr_level}\"$" "${_codex_config}"; then
+    echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${_arr_level}\" line; resolver may run with stale reasoning."
+    _arr_verify_ok=0
+  fi
+  if ! grep -qE '^model_reasoning_summary = "auto"$' "${_codex_config}"; then
+    echo "::warning::Codex config rewrite did not produce the expected model_reasoning_summary = \"auto\" line; the anti-empty-stdout safeguard may be unset."
+    _arr_verify_ok=0
+  fi
+  if [ "${_arr_verify_ok}" -eq 1 ]; then
+    echo "Conflict resolver reasoning effort set to ${_arr_level} (model_reasoning_summary=auto)."
+  fi
+}
+
+# _next_lower_reasoning_effort <level>
+#
+# Echo the next-lower level on the README.md "Thinking levels"
+# ladder: xhigh → high → medium → none. At the floor, echo "none"
+# unchanged so the caller can detect "already at floor" via string
+# comparison without a separate sentinel. Defensive default for
+# unexpected input returns "high" because that is the resolver's
+# repo-wide default and matches the validation fallback above.
+_next_lower_reasoning_effort()
+{
+  case "${1:-}" in
+    xhigh)  printf '%s\n' high ;;
+    high)   printf '%s\n' medium ;;
+    medium) printf '%s\n' none ;;
+    none)   printf '%s\n' none ;;
+    *)      printf '%s\n' high ;;
+  esac
+}
+
+# _current_reasoning_effort tracks the level used by the most-
+# recent codex invocation. It starts at the validated env-provided
+# value and is mutated by the in-loop step-down block when the
+# previous attempt was timeout-killed. The original
+# _resolver_reasoning_effort is preserved as the "initial" level
+# for log-line provenance.
+_current_reasoning_effort="${_resolver_reasoning_effort}"
+_apply_resolver_reasoning_effort "${_current_reasoning_effort}"
 
 RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing.txt"
 RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
@@ -750,6 +806,35 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: rebuilt retry prompt (prev failure_kind=${_prev_attempt_failure_kind:-unset})."
         ;;
     esac
+    # Step-down reasoning effort after a per-attempt-timer kill.
+    #
+    # The timeout-aware prelude (PR #2453) only changes the prompt:
+    # it nudges the model to be decisive and call apply_patch
+    # early. It does not change codex's reasoning level. Production
+    # runs (most recently the review_autofix run linked to PR #155
+    # of shubhodeep1/bitsafe.io, log at 2026-05-11) show xhigh/high
+    # attempts routinely consume the entire 50-min per-attempt
+    # budget on multi-file conflicts, so attempt 2 at the same
+    # level reliably hits the same wall.
+    #
+    # Walk the README.md "Thinking levels" ladder one step on each
+    # consecutive timeout: xhigh → high → medium → none. At the
+    # floor (none) we keep retrying at none and log that the
+    # ladder is exhausted; never raise the level on a recovery, so
+    # a single transient timeout doesn't cascade the rest of the
+    # run into floor-level reasoning. Non-timeout failure kinds
+    # (exec_error, validation) leave the level unchanged — they're
+    # not evidence that thinking budget was the bottleneck.
+    if [ "${_prev_attempt_failure_kind:-}" = "timeout" ]; then
+      _next_level="$(_next_lower_reasoning_effort "${_current_reasoning_effort}")"
+      if [ "${_next_level}" != "${_current_reasoning_effort}" ]; then
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: stepping reasoning effort down ${_current_reasoning_effort} → ${_next_level} after timeout-killed previous attempt (initial level ${_resolver_reasoning_effort})."
+        _current_reasoning_effort="${_next_level}"
+        _apply_resolver_reasoning_effort "${_current_reasoning_effort}"
+      else
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt timed out at reasoning level ${_current_reasoning_effort} (ladder floor reached); not stepping down further."
+      fi
+    fi
   else
     _effective_prompt_file="${CONFLICT_RESOLVER_PROMPT_FILE}"
   fi

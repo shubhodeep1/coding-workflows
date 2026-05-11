@@ -205,6 +205,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
 
+      - name: Review conflict-resolve reasoning step-down contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
+
       - name: Review apply-fixes smoke deterministic contract test
         run: |
           set -euo pipefail
