@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What exact scope should this issue cover? Pick the smallest option that matches.\nChoices:\nA. One specific workflow, script, prompt, or doc; include its path/name in your answer. (RECOMMENDED)\nB. One named pipeline phase end-to-end (clarify, plan, implement, review/autofix, orchestrate, or validate).\nC. A cross-cutting change across multiple phases; list the exact phases/files to include.\nQ2. What kind of improvement do you want in that target area?\nChoices:\nA. Fix incorrect, flaky, or confusing existing behavior. (RECOMMENDED)\nB. Add or change workflow/automation behavior.\nC. Improve performance, runtime, or GitHub/API/LLM cost.\nD. Improve docs, logs, observability, or operator/developer UX.\nQ3. What concrete evidence should define \u201cbetter\u201d for this issue?\nChoices:\nA. A specific failing issue, PR, workflow run, or log snippet; include the identifier/link or pasted excerpt. (RECOMMENDED)\nB. A before/after behavior description with the expected end state.\nC. A short acceptance checklist we can validate against.",
+  "fingerprint": "47810fc26b78c9c71187102da30454e5dae955d8b489e1d1408ec23328352762",
+  "lineage": {
+    "issue_number": 2498,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25656801478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25656801478",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260511073955_99a6fb31dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2498,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25656801478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2498 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-11T07:39:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
