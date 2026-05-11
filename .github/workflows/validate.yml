@@ -636,6 +636,11 @@ jobs:
 
       - name: Build semble index
         if: steps.semble_gate.outputs.enabled == 'true'
+        # Defense-in-depth: the file-existence guard and shared script are
+        # both fail-soft already, but `continue-on-error: true` makes the
+        # contract explicit at the step boundary — matches the pattern in
+        # implement.yml / orchestrate_poll.yml / workflow-log-analysis.yml.
+        continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           PYTHONDONTWRITEBYTECODE: '1'

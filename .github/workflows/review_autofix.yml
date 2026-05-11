@@ -1225,6 +1225,10 @@ jobs:
 
       - name: Build semble index
         if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shared script is fail-soft already, but the
+        # step-level guard ensures a future wrapper regression still
+        # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
+        continue-on-error: true
         run: |
           set -euo pipefail
           # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh

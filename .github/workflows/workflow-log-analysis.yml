@@ -269,6 +269,11 @@ jobs:
 
       - name: Install semble
         if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft (writes
+        # SEMBLE_AVAILABLE=false on any error), but `continue-on-error: true`
+        # ensures a future environment/regression issue still degrades to
+        # blank prefetch rather than hard-failing the Codex pass.
+        continue-on-error: true
         run: |
           set -euo pipefail
           echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
@@ -885,6 +890,11 @@ jobs:
 
       - name: Install semble
         if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft (writes
+        # SEMBLE_AVAILABLE=false on any error), but `continue-on-error: true`
+        # ensures a future environment/regression issue still degrades to
+        # blank prefetch rather than hard-failing the Codex pass.
+        continue-on-error: true
         run: |
           set -euo pipefail
           echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
@@ -1313,6 +1323,11 @@ jobs:
 
       - name: Install semble
         if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft (writes
+        # SEMBLE_AVAILABLE=false on any error), but `continue-on-error: true`
+        # ensures a future environment/regression issue still degrades to
+        # blank prefetch rather than hard-failing the Codex pass.
+        continue-on-error: true
         run: |
           set -euo pipefail
           echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"

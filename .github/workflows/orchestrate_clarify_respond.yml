@@ -516,6 +516,10 @@ jobs:
 
       - name: Build semble index
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shared script is fail-soft already, but the
+        # step-level guard ensures a future wrapper regression still
+        # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
+        continue-on-error: true
         run: |
           set -euo pipefail
           : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"

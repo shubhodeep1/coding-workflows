@@ -96,10 +96,12 @@ build_index()
 	# left ${index_path} as a directory tree); under `set -euo pipefail`
 	# that would abort before mark_unavailable() can write SEMBLE_* state,
 	# breaking the "always exit 0" contract documented at the top of this
-	# file. `rm -rf ... 2>/dev/null || true` handles both file and directory
-	# leftovers and never aborts.
-	rm -rf "${index_path}" 2>/dev/null || true
-	mkdir -p "${wrapper_dir}" 2>/dev/null || true
+	# file. `rm -rf ... || true` handles both file and directory leftovers
+	# and never aborts. stderr is left unredirected so operators can see
+	# *why* cleanup failed (permission denied, ENOENT on a parent, etc.)
+	# in the workflow log without losing the fail-soft behavior.
+	rm -rf "${index_path}" || true
+	mkdir -p "${wrapper_dir}" || true
 
 	if ! "${semble_python_path}" - "${repo_root}" "${index_path}" <<'PY'
 import pickle
@@ -152,27 +154,21 @@ with index_path.open("wb") as handle:
     )
 PY
 	then
-		rm -rf "${index_path}" 2>/dev/null || true
+		rm -rf "${index_path}" || true
 		mark_unavailable "index-build-failed"
 	fi
 }
 
-write_wrapper()
+write_wrapper_body()
 {
-	# Same defensive cleanup as build_index(): a previous run could have
-	# left a directory at wrapper_path, and the redirect `> "${wrapper_path}"`
-	# would then abort the script under `set -e` before mark_unavailable
-	# could honor the fail-soft contract. rm -rf + || true covers both.
-	rm -rf "${wrapper_path}" 2>/dev/null || true
 	# Shebang must match the interpreter that has semble + bm25s installed.
 	# install_semble.sh honors SEMBLE_PYTHON_BIN (default: python3); using
 	# `#!/usr/bin/env python3` here would silently pick the wrong python on
 	# runners where install ran under a non-default interpreter (e.g.
 	# python3.11), so `import semble` would fail at query time. Resolve the
 	# absolute path now and bake it into the shebang.
-	if ! {
-		printf '#!%s\n' "${semble_python_path}"
-		cat <<'PY'
+	printf '#!%s\n' "${semble_python_path}"
+	cat <<'PY'
 import argparse
 import os
 import pickle
@@ -237,11 +233,24 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 PY
-	} > "${wrapper_path}" 2>/dev/null
-	then
-		mark_unavailable "wrapper-write-failed"
-	fi
-	chmod +x "${wrapper_path}" 2>/dev/null || mark_unavailable "wrapper-chmod-failed"
+}
+
+write_wrapper()
+{
+	# Same defensive cleanup as build_index(): a previous run could have
+	# left a directory at wrapper_path, and the redirect below would
+	# otherwise abort the script under `set -e` before mark_unavailable
+	# could honor the fail-soft contract.
+	rm -rf "${wrapper_path}" || true
+
+	# Linearized error handling: each step explicitly calls mark_unavailable
+	# on failure rather than wrapping the heredoc in `if ! { ... } > path`,
+	# which was easy to misread (the redirect-failure path was only
+	# indirectly covered by the later chmod fallback). Now the wrapper
+	# body is emitted by a dedicated helper so each step's failure mode
+	# (write vs. chmod) is unambiguous.
+	write_wrapper_body > "${wrapper_path}" || mark_unavailable "wrapper-write-failed"
+	chmod +x "${wrapper_path}" || mark_unavailable "wrapper-chmod-failed"
 }
 
 main()
