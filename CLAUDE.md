@@ -116,7 +116,6 @@ conditions, idempotency, deployment safety.
 
 - Do NOT change formats, types, or unrelated logic.
 - Do NOT reformat files unless required for the fix.
-- Do NOT create test scripts unless asked.
 - Extend existing mechanisms — never compete with them.
 
 ---
