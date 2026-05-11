@@ -194,6 +194,31 @@ def test_judge_cache_key_changes_when_head_sha_advances(tmp_path):
 	assert all(len(line) == 64 and all(c in "0123456789abcdef" for c in line) for line in lines[:2])
 
 
+def test_judge_cache_key_changes_when_recent_comments_change(tmp_path):
+	"""When recent_comments change, the memoization key must change so the
+	judge sees the new diagnostics instead of replaying a stale action."""
+	script = textwrap.dedent("""
+		set -euo pipefail
+		issue_num=2870
+		phase=ai:review-blocked
+		last=failure
+		recent1='[{"body":"first"}]'
+		recent2='[{"body":"second"}]'
+		h1=$(printf '%s' "$recent1" | sha256sum | awk '{print $1}')
+		h2=$(printf '%s' "$recent2" | sha256sum | awk '{print $1}')
+		k1=$(printf '%s|%s|%s|%s|%s' "$issue_num" "abc" "$phase" "$last" "$h1" | sha256sum | awk '{print $1}')
+		k2=$(printf '%s|%s|%s|%s|%s' "$issue_num" "abc" "$phase" "$last" "$h2" | sha256sum | awk '{print $1}')
+		echo "$k1"
+		echo "$k2"
+		[ "$k1" != "$k2" ] && echo distinct || echo equal
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	lines = r.stdout.strip().splitlines()
+	assert lines[-1] == "distinct"
+	assert all(len(line) == 64 and all(c in "0123456789abcdef" for c in line) for line in lines[:2])
+
+
 # ---------------------------------------------------------------------------
 # 2a: exponential backoff on integration conflict cooldown
 # ---------------------------------------------------------------------------
@@ -299,9 +324,11 @@ def test_production_script_contains_expected_fix_markers():
 	assert "MAX_JUDGE_REPLAY" in body
 	assert "judge_decision_cache" in body
 	assert "conflict_override_count" in body
+	assert "_judge_recent_comments_hash" in body
 	assert "_list_integration_conflict_files" in body
 	assert "ACTUALLY_CREATED_COUNT" in body
 	assert "effective_cooldown" in body
+	assert 'post_tracking_comment "${WAVE_COMMENT}"' in body
 
 
 # ---------------------------------------------------------------------------

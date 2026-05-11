@@ -322,6 +322,18 @@ def _state_comment(state: dict) -> str:
 	return "<!-- ORCHESTRATOR_STATE_V1\n" + json.dumps(state) + "\nORCHESTRATOR_STATE_V1 -->"
 
 
+def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
+	for comment in reversed(comments):
+		body = str((comment or {}).get("body", ""))
+		open_marker = "<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		close_marker = "\nAI_STANDALONE_STALL_STATE_V1 -->"
+		if not body.startswith(open_marker) or not body.endswith(close_marker):
+			continue
+		payload = body[len(open_marker):-len(close_marker)]
+		return json.loads(payload)
+	return None
+
+
 def _write_exec(path: Path, body: str) -> None:
 	path.write_text(body, encoding="utf-8")
 	path.chmod(0o755)
@@ -1154,6 +1166,7 @@ if args[0] == 'api':
 							'state': pr_state,
 							'merged': bool(pr.get('merged', False)),
 							'headRefName': pr.get('headRefName', ''),
+							'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
 							'mergeable': pr.get('mergeable', None),
 							'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 							'commits': {
@@ -1206,6 +1219,36 @@ if args[0] == 'api':
 		issue['comments'].append({'id': cid, 'body': body})
 		save()
 		print(json.dumps({'id': cid}))
+		sys.exit(0)
+
+	m = re.search(r'/issues/comments/(\d+)$', path)
+	if m and method == 'PATCH' and (fields or input_file):
+		comment_id = int(m.group(1))
+		body = ''
+		for f in fields:
+			if f.startswith('body='):
+				body = f.split('=', 1)[1]
+		if input_file:
+			if input_file == '-':
+				payload_raw = sys.stdin.read()
+			else:
+				payload_raw = Path(input_file).read_text(encoding='utf-8')
+			try:
+				payload_obj = json.loads(payload_raw)
+			except Exception:
+				payload_obj = {}
+			body = payload_obj.get('body', body)
+		updated = False
+		for issue in store['issues'].values():
+			for comment in issue.get('comments', []):
+				if int(comment.get('id', 0) or 0) == comment_id:
+					comment['body'] = body
+					updated = True
+					break
+			if updated:
+				break
+		save()
+		print(json.dumps({'id': comment_id, 'updated': updated}))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/labels$', path)
@@ -1346,6 +1389,7 @@ if args[0] == 'api':
 			print(pr.get('headRefFromApi', pr.get('headRefName', '')))
 		else:
 			print(json.dumps({
+				'number': pr_num,
 				'state': pr_state,
 				'mergeable': pr.get('mergeable', True),
 				'mergeable_state': pr.get('mergeable_state', ''),
@@ -2972,6 +3016,47 @@ def test_standalone_conflict_sweep_missing_head_ref_logs_warning_and_continues()
 	assert result["update_branch_calls"] == []
 	assert result["review_dispatches"] == []
 	assert "unavailable head ref" in (result["stdout"] + result["stderr"])
+
+
+def test_standalone_conflict_sweep_consumes_budget_after_override_cap():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"conflict_override_count": {"sha416": 2},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/issue-501",
+				"headRefFromApi": "claude/issue-501",
+				"headSha": "sha416",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["conflict_override_count"]["sha416"] == 3
+	assert len([d for d in result["review_dispatches"] if str(d.get("pr_number")) == "416"]) == 1
 
 
 

@@ -343,7 +343,8 @@ def _run_check_stalls(
 	now_ts: int = 2000,
 	max_recoveries: int = 5,
 	phase_thresholds_json: str | None = None,
-	stall_judge_trigger_count: int = 0,
+	max_recoveries_by_phase_json: str | None = None,
+	stall_judge_trigger_count: int = 2,
 	enable_stall_judge: str = "false",
 	enable_stall_human_terminalization: str = "false",
 ) -> dict:
@@ -368,6 +369,7 @@ def _run_check_stalls(
 						"threshold_minutes": str(threshold_minutes),
 						"max_recoveries": str(max_recoveries),
 						"phase_thresholds_json": phase_thresholds_json,
+						"max_recoveries_by_phase_json": max_recoveries_by_phase_json,
 					"now_ts": str(now_ts),
 					"stall_judge_trigger_count": str(stall_judge_trigger_count),
 					"enable_stall_judge": enable_stall_judge,
@@ -700,6 +702,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		stall_judge_trigger_count: int = 2,
 		enable_stall_judge: bool = True,
 		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -707,6 +710,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		captured["now_ts"] = now_ts
 		captured["max_recoveries"] = max_recoveries
 		captured["phase_thresholds"] = phase_thresholds
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
 		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
@@ -733,6 +737,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 	assert captured["now_ts"] == 777
 	assert captured["max_recoveries"] == 6
 	assert captured["phase_thresholds"] == {"ai:planning": 90}
+	assert captured["max_recoveries_by_phase"] is None
 	assert captured["stall_judge_trigger_count"] == 3
 	assert captured["enable_stall_judge"] is True
 	assert captured["enable_stall_human_terminalization"] is False
@@ -877,6 +882,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		stall_judge_trigger_count: int = 0,
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -884,6 +890,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		captured["now_ts"] = now_ts
 		captured["max_recoveries"] = max_recoveries
 		captured["phase_thresholds"] = phase_thresholds
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
 		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
@@ -910,6 +917,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 	assert captured["now_ts"] == 777
 	assert captured["max_recoveries"] == 6
 	assert captured["phase_thresholds"] == {"ai:planning": 90}
+	assert captured["max_recoveries_by_phase"] is None
 	assert captured["stall_judge_trigger_count"] == 3
 	assert captured["enable_stall_judge"] is True
 	assert captured["enable_stall_human_terminalization"] is False
@@ -929,7 +937,9 @@ def test_cmd_check_stalls_forwards_human_terminalization_flag_to_detect_stalls()
 		stall_judge_trigger_count: int = 0,
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
 	) -> list[dict[str, object]]:
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
 		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
 		return []
 
@@ -947,6 +957,41 @@ def test_cmd_check_stalls_forwards_human_terminalization_flag_to_detect_stalls()
 		orchestrate_lib.detect_stalls = original_detect_stalls
 
 	assert captured["enable_stall_human_terminalization"] is True
+	assert captured["max_recoveries_by_phase"] is None
+
+
+def test_cmd_check_stalls_forwards_phase_specific_max_recoveries_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
+	) -> list[dict[str, object]]:
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			max_recoveries_by_phase_json='{"ai:done": 99}',
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["max_recoveries_by_phase"] == {"ai:done": 99}
 
 
 # ---------------------------------------------------------------------------
@@ -1847,6 +1892,30 @@ def test_detect_stalls_skips_when_phase_attempts_exhausted():
 
 	assert len(stalls) == 1
 	assert stalls[0]["recovery_action"] == "skip"
+	assert stalls[0]["phase_attempts_count"] == 5
+
+
+def test_detect_stalls_honors_phase_specific_cap_for_phase_attempts():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	issue["phase_attempts"] = {"ai:done": 5}
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		enable_stall_judge=False,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "retrigger_review"
 	assert stalls[0]["phase_attempts_count"] == 5
 
 

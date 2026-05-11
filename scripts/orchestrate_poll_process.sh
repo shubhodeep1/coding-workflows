@@ -1120,6 +1120,11 @@ post_state_comment() {
       return 1
     fi
   done <<< "${chunk_files}"
+  if [ "${idx}" -ne "${total}" ]; then
+    echo "::error::orchestrate_state_v2 pack manifest mismatch for issue #${TRACKING_NUM}: posted ${idx} chunk(s) but manifest declared ${total} (raw_bytes=${raw_bytes}); treating V2 write as failed to avoid persisting a torn chain." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
   rm -rf "${pack_dir}"
   return 0
 }
@@ -4994,19 +4999,19 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
     return
   fi
 
@@ -5016,9 +5021,10 @@ _extract_standalone_state_json_from_comments() {
       last_seen_phase: (.last_seen_phase // ""),
       status_since_ts: ((.status_since_ts // 0) | tonumber),
       stall_recovery_count: ((.stall_recovery_count // 0) | tonumber),
+      conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -5815,20 +5821,23 @@ invoke_stall_judge() {
   ' 2>/dev/null || echo '[]')"
 
   # Judge decision cache (Q1d): memoise judge output by
-  # sha256({issue_num, head_sha, phase, last_conclusion}). When the same
-  # inputs reproduce, replay the cached action instead of burning a fresh
-  # LLM call.  After MAX_JUDGE_REPLAY consecutive replays without
+  # sha256({issue_num, head_sha, phase, last_conclusion,
+  # recent_comments_hash}). When the same inputs reproduce, replay the
+  # cached action instead of burning a fresh LLM call.  After
+  # MAX_JUDGE_REPLAY consecutive replays without
   # progress, bypass the cache and escalate so the issue isn't stuck on a
   # bad decision forever. The cache is only consulted when STATE_FILE
   # exists; missing-state cycles fall through to the LLM path.
   local _judge_last_conclusion=""
+  local _judge_recent_comments_hash=""
   local _judge_cache_key=""
   local _judge_cache_hit_action=""
   local _judge_cache_replay_count=0
   local _judge_force_escalate="false"
   if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
     _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
-    _judge_cache_key="$(printf '%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    _judge_recent_comments_hash="$(printf '%s' "${recent_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
     if [ -n "${_judge_cache_key}" ]; then
       _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
       _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
@@ -6138,7 +6147,7 @@ _fetch_standalone_marker_issues_graphql() {
 #   { "123": {"state": "open|closed",
 #             "labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
-#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null} | null },
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"head_sha":"<oid>"|null,"headPushedAt":"ISO8601"|null} | null },
 #     ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null, e.g. for squashed commits).
@@ -6211,6 +6220,7 @@ _fetch_candidate_issue_details_graphql() {
                   ... on PullRequest {
                     number state merged
                     headRefName
+                    headRefOid
                     mergeable
                     mergeStateStatus
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
@@ -6262,6 +6272,7 @@ _fetch_candidate_issue_details_graphql() {
                     state: .state,
                     merged: (.merged // false),
                     head_ref: (.headRefName // null),
+                    head_sha: (.headRefOid // null),
                     mergeable: (.mergeable // null),
                     merge_state_status: (.mergeStateStatus // null),
                     headPushedAt: (
@@ -6980,6 +6991,7 @@ PY
                 number: (.number // null),
                 state: (.state // null),
                 head_ref: (.head.ref // null),
+                head_sha: (.head.sha // null),
                 mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
                 merge_state_status: (.mergeable_state // null)
               }' 2>/dev/null || echo "null")"
@@ -7007,6 +7019,36 @@ PY
       fi
 
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
+        local _std_conflict_head_sha=""
+        local _std_override_count="0"
+        local _std_consume_budget="false"
+        _std_conflict_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // .headRefOid // empty)' 2>/dev/null || echo "")"
+        if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
+          _std_override_count="$(printf '%s' "${updated_state}" | jq -r --arg sha "${_std_conflict_head_sha}" '.conflict_override_count[$sha] // 0' 2>/dev/null || echo "0")"
+          [[ "${_std_override_count}" =~ ^[0-9]+$ ]] || _std_override_count="0"
+          if [ "${_std_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
+            echo "  [standalone-stall] Issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} head_sha ${_std_conflict_head_sha} has hit budget-neutral override cap (${_std_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
+            _std_consume_budget="true"
+          fi
+          local _std_next_count=$(( _std_override_count + 1 ))
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_next_count}" '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || echo "${updated_state}")"
+        fi
+        if [ "${_std_consume_budget}" = "true" ]; then
+          updated_state="$(python3 - "${updated_state}" <<'PY'
+import json, sys, time
+state = json.loads(sys.argv[1])
+now = int(time.time())
+try:
+	current = int(state.get("stall_recovery_count", 0) or 0)
+except (TypeError, ValueError):
+	current = 0
+state["stall_recovery_count"] = current + 1
+state["status_since_ts"] = now
+state["updated_ts"] = now
+print(json.dumps(state, separators=(",", ":")))
+PY
+)"
+        fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
@@ -10714,6 +10756,7 @@ fi
       --labels-json "${LABELS_JSON}"
       --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
+      --max-recoveries-by-phase-json "{\"ai:done\":${MAX_STALL_RECOVERIES_DONE}}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
       --enable-stall-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
@@ -11640,8 +11683,7 @@ $(for inum in ${CREATED_NUMS}; do echo "- #${inum}"; done)
 
 These issues will enter the AI pipeline (clarify → plan → implement → review)."
 
-          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-            -f body="${WAVE_COMMENT}" >/dev/null
+          post_tracking_comment "${WAVE_COMMENT}"
         else
           echo "Wave ${NEXT_WAVE} advance: all sub-issues already exist; suppressing duplicate narration."
         fi
