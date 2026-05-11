@@ -290,6 +290,16 @@ main()
 	if ! "${semble_python_path}" -c "import bm25s" >/dev/null 2>&1; then
 		mark_unavailable "bm25s-missing"
 	fi
+	# Validate the import the *generated wrapper* needs at query time.
+	# `import semble` succeeds for any sembled install, but the wrapper's
+	# `_query()` does `from semble.search import search_bm25` — if semble's
+	# package layout shifts between releases (or the install is partial),
+	# the index would build successfully and `SEMBLE_INDEX_AVAILABLE=true`
+	# would be written, only for `semble query` to ModuleNotFoundError at
+	# runtime. Catching it here keeps the build/query contract honest.
+	if ! "${semble_python_path}" -c "from semble.search import search_bm25" >/dev/null 2>&1; then
+		mark_unavailable "semble-search-import-missing"
+	fi
 
 	build_index
 	write_wrapper

@@ -564,6 +564,12 @@ jobs:
 
       - name: Install semble
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft already (writes
+        # SEMBLE_AVAILABLE=false on any error), but the step-level guard
+        # ensures a syntax regression / filesystem error / missing-script
+        # condition still degrades to SEMBLE_AVAILABLE=false instead of
+        # hard-failing under set -euo pipefail.
+        continue-on-error: true
         run: |
           set -euo pipefail
           bash scripts/install_semble.sh
