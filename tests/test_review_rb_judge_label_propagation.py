@@ -169,10 +169,19 @@ def first_value(flag: str) -> str:
 state.setdefault("calls", []).append(args)
 
 if args[:2] == ["issue", "create"]:
+	# `issue_create_should_fail` flag lets a test exercise the
+	# error-handling path in the merge_with_followup branch (when
+	# gh issue create fails after merge confirmation, the script
+	# must NOT emit judge_handled=true and must NOT swap the
+	# linked issue to ai:ready-to-merge).
+	state.setdefault("issue_create_args", []).append(args)
+	if state.get("issue_create_should_fail", False):
+		save()
+		sys.stderr.write("mock gh: simulated issue create failure\n")
+		sys.exit(1)
 	repo = first_value("--repo") or "owner/repo"
 	next_num = int(state.get("next_issue_number", 4301))
 	state["next_issue_number"] = next_num + 1
-	state.setdefault("issue_create_args", []).append(args)
 	save()
 	print(f"https://github.com/{repo}/issues/{next_num}")
 	sys.exit(0)
@@ -656,12 +665,24 @@ def _run_merge_with_followup(
 	followup_body: str = "Acceptance criteria: a production caller invokes deriveX with the same args the unit tests use.",
 	pr_state: str = "open",
 	pr_mergeable: object = True,  # bool or None (=mergeability still computing)
+	pr_merged: bool = False,  # GitHub's `.merged` field — authoritative did-this-land signal
 	enable_auto_merge: str = "true",
+	issue_create_should_fail: bool = False,
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
 	state and judge JSON.  Returns the captured gh-mock state plus the
 	contents of GITHUB_OUTPUT so callers can assert on judge_handled /
-	judge_action emission."""
+	judge_action emission.
+
+	``pr_merged`` mirrors GitHub's REST API shape — a merged PR is
+	reported as ``state=closed`` + ``merged=true`` (NEVER
+	``state=merged``).  The script's MERGE_CONFIRMED ladder reads
+	``.merged`` to detect the already-merged case; tests must use this
+	parameter (not ``pr_state``) to pin that branch.
+
+	``issue_create_should_fail`` causes the mock gh to return non-zero
+	from ``gh issue create`` so the test can exercise the error-handling
+	path (script must skip label swap + judge_handled emission)."""
 	branch = _extract_merge_with_followup_branch()
 
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_mwf_") as td:
@@ -677,12 +698,15 @@ def _run_merge_with_followup(
 		# Seed the mock's api_responses with a PR-mergeability shape
 		# keyed by the URL path suffix the script will call.  Substring
 		# match is what the mock uses, so "pulls/42" is enough.
-		pr_response: dict = {"state": pr_state}
+		pr_response: dict = {"state": pr_state, "merged": pr_merged}
 		# `mergeable: null` is meaningful (mergeability still computing);
 		# emit it explicitly so jq's `// ""` defaults fire.
 		pr_response["mergeable"] = pr_mergeable  # type: ignore[assignment]
+		_mock_config: dict = {"api_responses": {"pulls/42": pr_response}}
+		if issue_create_should_fail:
+			_mock_config["issue_create_should_fail"] = True
 		gh_state_file.write_text(
-			json.dumps({"api_responses": {"pulls/42": pr_response}}),
+			json.dumps(_mock_config),
 			encoding="utf-8",
 		)
 
@@ -720,11 +744,16 @@ def _run_merge_with_followup(
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "merge_with_followup",
 			"ENABLE_AUTO_MERGE": enable_auto_merge,
-			# Speed up the mergeability poll — one attempt is enough
+			# Speed up both polling loops — one attempt is enough
 			# because the mock returns the configured value
-			# deterministically on the first call.
+			# deterministically on the first call (sync merge succeeds
+			# via the catch-all path in the mock, so the merge-
+			# completion poll is never reached for tests with
+			# mergeable=true).
 			"PR_MERGEABLE_POLL_ATTEMPTS": "1",
 			"PR_MERGEABLE_POLL_SLEEP": "0",
+			"MERGE_COMPLETION_POLL_ATTEMPTS": "1",
+			"MERGE_COMPLETION_POLL_SLEEP": "0",
 		}
 		run_env = os.environ.copy()
 		run_env.update(env)
@@ -907,21 +936,87 @@ def test_merge_with_followup_skips_creation_when_auto_merge_disabled() -> None:
 
 def test_merge_with_followup_creates_followup_when_pr_already_merged() -> None:
 	"""PR was merged before the judge ran (rare race; e.g. a concurrent
-	workflow merged it) → MERGE_CONFIRMED=true on the PR_STATE=merged
-	short path → follow-up is created and judge_handled emitted.
-	Pins the "already merged" branch of the MERGE_CONFIRMED ladder."""
+	workflow merged it).  GitHub's REST `/pulls/{N}` reports this as
+	``state=closed`` + ``merged=true`` — NEVER ``state=merged``.  The
+	MERGE_CONFIRMED ladder must read `.merged` (boolean field), not
+	infer "merged" from `.state`.  Pins the
+	``PR_MERGED=true`` short-path of the ladder against the real GitHub
+	API response shape; an earlier draft incorrectly checked
+	``PR_STATE=merged`` and was unreachable in production."""
 	state = _run_merge_with_followup(
 		parent_label_set=["ai:orchestrator-managed"],
-		pr_state="merged",
-		pr_mergeable=None,  # GitHub returns null for merged PRs
+		pr_state="closed",  # GitHub's real shape for merged PRs
+		pr_mergeable=None,
+		pr_merged=True,  # the authoritative did-this-land signal
 	)
 
 	creates = state.get("issue_create_args", [])
 	assert len(creates) == 1, (
 		f"merge_with_followup must create the follow-up issue when the PR "
-		f"is already merged. Got: {creates}"
+		f"is already merged (.merged=true). Got: {creates}"
 	)
 	assert "judge_handled=true" in state["_github_output"]
+
+
+def test_merge_with_followup_skips_when_pr_closed_without_merge() -> None:
+	"""PR is closed but NOT merged (e.g. operator rejected and closed
+	manually) → MERGE_CONFIRMED stays false → NO follow-up issue
+	created.  Distinguishes the closed-without-merge case from the
+	merged-and-closed case (both report ``state=closed``; only
+	``.merged`` separates them).  Without this distinction, closing a
+	PR while a merge_with_followup judge run is in flight would create
+	a follow-up issue against a base ref that never received the PR's
+	changes."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_state="closed",
+		pr_mergeable=None,
+		pr_merged=False,  # closed without merge
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up when the PR "
+		f"was closed without merge — the deferred gap would reference code "
+		f"that never lands on the base ref. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"]
+
+
+def test_merge_with_followup_does_not_advance_when_issue_create_fails() -> None:
+	"""``gh issue create`` fails (transient API / disabled-issues /
+	permissions) AFTER merge confirmation → script must NOT swap the
+	linked issue to ai:ready-to-merge and must NOT emit
+	judge_handled=true.  The linked issue must stay in ai:review-
+	blocked so stall recovery / the next judge run can retry follow-up
+	creation; otherwise the PR is merged but the deferred gap is lost.
+	Pins the order-of-operations fix where follow-up creation now
+	happens BEFORE the label swap."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		issue_create_should_fail=True,
+	)
+
+	# The script DID attempt to create the issue (gh issue create was
+	# called once); we want to confirm it called it but recovered.
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"merge_with_followup must attempt the issue create when merge "
+		f"is confirmed. Got: {creates}"
+	)
+	# But after the failure, NO judge_handled emission.
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when "
+		"gh issue create failed; otherwise the workflow's review-blocked "
+		"fallback is suppressed and the deferred gap is lost"
+	)
+	# And NO ai:ready-to-merge label swap (the label swap now happens
+	# AFTER issue create succeeds — order-of-operations contract).
+	ensure_labels = state["_ensure_labels"]
+	assert "ai:ready-to-merge" not in ensure_labels, (
+		f"ai:ready-to-merge must NOT be ensured when issue create failed "
+		f"(label swap is gated on issue-create success). Got: {ensure_labels}"
+	)
 
 
 def main() -> int:
