@@ -4398,14 +4398,18 @@ jobs:
               gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
                 -f body="/approved" >/dev/null 2>&1 || true
             fi
-            # Success: the implement phase produced a PR and either is
-            # mid-review or done. The alt-model gate doesn't need to wait
-            # for review_autofix — that's already covered by the main e2e.
-            if echo "${LABELS}" | grep -qE 'ai:in-review|ai:ready-to-merge|ai:merged'; then
-              echo "✓ Alt-model run reached review/merge stage"
+            # Success: the implement phase produced a PR (ai:done) or the
+            # PR is mid-review/merged. The alt-model gate doesn't need to
+            # wait for review_autofix — that's already covered by the main
+            # e2e. Labels must match the contract in
+            # .github/ai/label_contract.v1.json; ai:in-review is not a
+            # contract label, and the implement-no-op terminal label is
+            # ai:implementation-failed (not ai:implement-failed).
+            if echo "${LABELS}" | grep -qE 'ai:done|ai:ready-to-merge|ai:merged'; then
+              echo "✓ Alt-model run reached PR-created/review/merge stage"
               exit 0
             fi
-            if echo "${LABELS}" | grep -qE 'ai:clarify-failed|ai:plan-failed|ai:implement-failed'; then
+            if echo "${LABELS}" | grep -qE 'ai:clarify-failed|ai:plan-failed|ai:implementation-failed'; then
               echo "::error::Alt-model run hit a failure label: ${LABELS}"
               exit 1
             fi
