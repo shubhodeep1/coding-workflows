@@ -81,7 +81,8 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	assert "if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'" in clear_serena_block
 	assert 'SERENA_ENABLED=false bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in clear_serena_block
 	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in clear_serena_block
-	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_serena_block
+	assert 'git ls-files --error-unmatch -- .serena' in detect_serena_block
+	assert '[ -e .serena ]' in detect_serena_block
 	assert 'echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"' in detect_serena_block
 	assert 'echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"' in detect_serena_block
 	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor") < workflow.find("- name: Apply fixes with editor model")
@@ -135,8 +136,11 @@ def test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging
 	assert 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then' in commit_changes
 	assert "current_serena_project_hash=\"$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)\"" in commit_changes
 	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_changes
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_changes
 	assert "rm -rf .serena" in commit_changes
 	assert ".serena|.serena/*) continue ;;" in commit_changes
+	assert "':!.serena'" in commit_changes
+	assert "':!.serena/**'" in commit_changes
 
 
 def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> None:

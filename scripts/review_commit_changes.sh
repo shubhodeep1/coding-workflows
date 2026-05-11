@@ -101,11 +101,15 @@ rm -f "${COMMITTED_FILES_FILE}"
 # untracked-file cleanup or staging. If the repo already owned the
 # Serena project config, or Codex mutated it away from the bootstrap
 # hash, leave the tree on disk and let the staging guards below exclude
-# it from commits without deleting repo-owned content.
+# it from commits without deleting repo-owned content. Defense-in-depth:
+# if the preexisting detector ever misclassifies the tree, never delete a
+# tracked `.serena/` subtree.
 if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
   current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
   if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
-    rm -rf .serena
+    if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then
+      rm -rf .serena
+    fi
   fi
 fi
 
@@ -309,7 +313,7 @@ else
     done < scripts/.gitignore
   fi
   git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.serena' ':!.serena/**' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
 fi
 
 echo "Staged files before commit:"

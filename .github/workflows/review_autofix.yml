@@ -2170,7 +2170,7 @@ jobs:
       - name: Detect preexisting Serena project config
         run: |
           set -euo pipefail
-          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
+          if git ls-files --error-unmatch -- .serena >/dev/null 2>&1 || [ -e .serena ]; then
             echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"
           else
             echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"
