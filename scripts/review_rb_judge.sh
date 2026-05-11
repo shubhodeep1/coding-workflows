@@ -533,9 +533,26 @@ echo "Justification: ${RB_JUSTIFICATION}"
 # merged_pr_unsafe_action plus judge_action=skip) so downstream log
 # analysis can classify the refusal explicitly — claude-branch-review
 # consensus Findings #2 (missing judge_skip_reason) and #3 (comment-
-# before-guard misleading audit trail). judge_handled stays unset so
-# the workflow's review-blocked fallback fires and the linked issue
-# stays ai:review-blocked for operator review.
+# before-guard misleading audit trail). The script wrote
+# judge_handled=false at startup (line ~135) and we do NOT set
+# judge_handled=true here, so the workflow's review-blocked fallback
+# still fires and the linked issue stays ai:review-blocked for
+# operator review.
+#
+# Re-fetch .merged immediately before the check — PR_ALREADY_MERGED
+# was captured by the early guard before the judge LLM ran, and the
+# LLM call can take many seconds during which auto-merge from a
+# prior `merge)` action could complete asynchronously and flip the
+# PR to merged. Using the stale flag would let fix / close_and_reissue
+# proceed against a now-merged PR (defeats the guard). One extra gh
+# api call is a cheap insurance against that race.
+_guard_pr_meta="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+_guard_pr_merged="$(echo "${_guard_pr_meta}" | jq -r '.merged // false')"
+if [ "${_guard_pr_merged}" = "true" ]; then
+  PR_ALREADY_MERGED="true"
+fi
+unset _guard_pr_meta _guard_pr_merged
+
 if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] && [ "${RB_ACTION}" != "merge_with_followup" ]; then
   echo "::error::Judge chose '${RB_ACTION}' for PR #${PR_NUMBER} which is already merged. Only 'merge' (no-op label swap) and 'merge_with_followup' (create tracking issue against merged base) are safe for merged PRs. Refusing — leaving issue in ai:review-blocked for operator review (or rerun the judge with revised context expecting it to pick merge / merge_with_followup)."
   echo "judge_action=skip" >> "$GITHUB_OUTPUT"
