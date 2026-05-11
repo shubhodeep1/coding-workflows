@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-log-analysis.yml:503-525, 978-1000, 1397-1420 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `head -c 6000` truncates query text at byte boundaries and can split multi-byte UTF-8 characters.\n  WHY: This can garble the BM25 query and degrade Semble prefetch; reviewers noted the fail-soft path usually turns the error into empty prefetch rather than a crash.\n- .github/workflows/workflow-log-analysis.yml:277-300, 884-910, 1303-1330 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The three \"Build semble index\" steps rely on the shell script's internal fail-soft behavior but do not set `continue-on-error: true`.\n  WHY: If the script ever exits non-zero, these jobs would hard-fail instead of degrading to `SEMBLE_INDEX_AVAILABLE=false`; reviewers framed this as defense-in-depth rather than a current bug.\n- .github/workflows/validate.yml:642-665 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The Build semble index step invokes `bash scripts/build_semble_wrapper.sh` without the existence guard or an explicit step-level fail-soft fallback.\n  WHY: On old refs where the script is absent, the validation workflow can hard-fail under `set -euo pipefail`; one reviewer called it low risk while another described a hard failure.\n- scripts/build_semble_wrapper.sh:~98-102 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `build_index()` calls Python with `repo_root` and `index_path` without pre-validating them.\n  WHY: Malformed paths or permission errors only surface as a generic `index-build-failed` path, though the script still fails soft.\n- tests/test_semble_workflow_parity_contract.py:20-25 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: `TARGET_WORKFLOWS` does not include `workflow-log-analysis.yml`.\n  WHY: The Semble parity contract test does not cover the new workflow integration, so future regressions there would not be caught.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/workflow-log-analysis.yml:~516 (and similar at ~993, ~1408) | confidence=4\n  PROBLEM: `head -c 6000` reads byte-counted text and can split multi-byte UTF-8 characters.\n  WHY: When the truncated bytes reach `semble_query_block`, the query text can be garbled and prefetch quality can degrade.\n- .github/workflows/workflow-log-analysis.yml:277, 884, 1303 | confidence=4\n  PROBLEM: The three \"Build semble index\" steps do not have `continue-on-error: true`.\n  WHY: The script is designed to fail soft, but a syntax error or unexpected failure mode could still hard-fail the job.\n- scripts/build_semble_wrapper.sh:~98-102 | confidence=3\n  PROBLEM: `build_index()` invokes Python with `repo_root` and `index_path` without validating them first.\n  WHY: Malformed paths or permission errors surface only as generic `index-build-failed` errors, though the function already fails soft.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/workflow-log-analysis.yml:515, 987, 1406 | confidence=3\n  PROBLEM: `head -c 6000` truncates by bytes, not characters, so multi-byte UTF-8 characters can be split mid-sequence.\n  WHY: The malformed bytes can degrade the semantic query passed to `semble_query_block`, lowering prefetch quality.\n- .github/workflows/workflow-log-analysis.yml:277, 884, 1303 | confidence=2\n  PROBLEM: The \"Build semble index\" steps rely entirely on the shell script's internal fail-soft behavior and omit `continue-on-error: true`.\n  WHY: This is defense-in-depth only today, but step-level fail-soft would make the contract explicit.\n- .github/workflows/validate.yml:662 | confidence=2\n  PROBLEM: `validate.yml` does not guard the `bash scripts/build_semble_wrapper.sh` call with an existence check.\n  WHY: If the optional fetch leaves the script absent, this step can hard-fail despite the intended fail-soft Semble contract.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/validate.yml:642-665 | confidence=5\n  PROBLEM: The Build semble index step invokes `bash scripts/build_semble_wrapper.sh` with no preceding `[ -f scripts/build_semble_wrapper.sh ]` guard or `continue-on-error: true`.\n  WHY: If the optional fetch leaves the script absent, `bash` fails under `set -euo pipefail` and hard-fails the validation workflow.\n- .github/workflows/workflow-log-analysis.yml:503-525, 978-1000, 1397-1420 | confidence=4\n  PROBLEM: `wla_query_text`, `audit_query_text`, and `api_query_text` truncate at byte boundaries with `head -c 6000`.\n  WHY: Splitting multi-byte UTF-8 characters can garble the query text fed into Semble and degrade semantic matches.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/workflow-log-analysis.yml:~277-300, ~884-910, ~1303-1330 | confidence=3\n  PROBLEM: The three \"Build semble index\" steps lack `continue-on-error: true`.\n  WHY: The script is currently fail-soft, but a future non-zero exit would hard-fail the workflow instead of degrading gracefully.\n- .github/workflows/workflow-log-analysis.yml:515, 987, 1406 | confidence=3\n  PROBLEM: `head -c 6000` can split multi-byte UTF-8 characters in the query text passed to `semble_query_block`.\n  WHY: This can degrade matching quality when the truncated bytes form invalid UTF-8.\n- tests/test_semble_workflow_parity_contract.py:20-25 | confidence=4\n  PROBLEM: `TARGET_WORKFLOWS` does not include `workflow-log-analysis.yml`.\n  WHY: The Semble parity contract test misses coverage for the new workflow integration, so regressions there would not be caught.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b79d5385b9b8d4c6a0d96e919eff9b6abfacefdcd34e191248f0ff485d4720ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2509,
+    "run_id": "25663755635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25663755635",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511104423_d7a02f7b36",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2509,
+    "run_id": "25663755635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T10:44:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
