@@ -1016,6 +1016,13 @@ if ! [[ "${CONFLICT_DISPATCH_COOLDOWN_SECS}" =~ ^[0-9]+$ ]] || [ "${CONFLICT_DIS
   echo "::warning::CONFLICT_DISPATCH_COOLDOWN_SECS must be a non-negative integer; defaulting to 900"
   CONFLICT_DISPATCH_COOLDOWN_SECS="900"
 fi
+# Strip any leading zeros so the downstream arithmetic expansion at
+# line ~3639 (`$(( CONFLICT_DISPATCH_COOLDOWN_SECS * ... ))`) treats
+# the value as base-10.  Without this, an operator value like "0900"
+# trips bash's "value too great for base" error and aborts the
+# poller before integration self-healing can run (Codex P2,
+# PR #2522 line 3603).
+CONFLICT_DISPATCH_COOLDOWN_SECS=$(( 10#${CONFLICT_DISPATCH_COOLDOWN_SECS} ))
 
 INTEGRATION_CONFLICT_MAX_RETRIES="${INTEGRATION_CONFLICT_MAX_RETRIES:-3}"
 if ! [[ "${INTEGRATION_CONFLICT_MAX_RETRIES}" =~ ^[0-9]+$ ]] || [ "${INTEGRATION_CONFLICT_MAX_RETRIES}" -lt 1 ]; then
@@ -1077,21 +1084,54 @@ if ! [[ "${MAX_BUDGET_NEUTRAL_OVERRIDES}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_BUDGET_NEUTRAL_OVERRIDES must be a non-negative integer; defaulting to 2"
   MAX_BUDGET_NEUTRAL_OVERRIDES="2"
 fi
+# Strip leading zeros so the downstream `-ge` comparison (line ~5724
+# / ~7666) treats the value as base-10.  Without this, an operator
+# value like "08" trips bash's "value too great for base" error
+# (claude-branch-review PR #2522; mirrors the MAX_STALL_RECOVERIES_DONE
+# / CONFLICT_DISPATCH_COOLDOWN_SECS canonicalisation pattern).
+MAX_BUDGET_NEUTRAL_OVERRIDES=$(( 10#${MAX_BUDGET_NEUTRAL_OVERRIDES} ))
 
 # MAX_JUDGE_REPLAY caps how many consecutive cached judge decisions the
 # orchestrator will replay before forcing escalate_human. The judge
-# decision cache (see invoke_stall_judge) keyed on
-# sha256({issue_num, head_sha, phase, last_conclusion,
-# recent_comments_hash}) skips the LLM call when the same inputs
-# reproduce — but if the cached decision is wrong (the judge picked
-# resolve_merge_conflict on a hot-file collision the resolver can't
-# fix), replaying it forever wastes budget. After this many replays,
-# the judge cache is bypassed and the issue is escalated.
+# decision cache (see invoke_stall_judge) is keyed on sha256 of a
+# NORMALIZED view of the diagnostics JSON, not the raw blob: the
+# hash input strips inputs that change every cycle even when the
+# substance of the stall is unchanged so MAX_JUDGE_REPLAY can fire
+# on repeated identical stalls.  Specifically, the hash input
+# includes issue/phase, linked-PR state (including head_sha),
+# head/base ref, recent_review_workflow_outcomes, current_wave, and
+# the stable subset of prior_recovery_actions / recent_tracking_comments;
+# it EXCLUDES:
+#   * stall_minutes (ticks every poll cycle).
+#   * recovery_count (advances after every action that consumes
+#     budget).
+#   * prior_recovery_actions[stall_recovery_count] (mirrors the same
+#     counter at the wave-issue level).
+#   * The orchestrator's own "## 🧑‍⚖️ Stall Judge — Issue #N"
+#     tracking comments AND <!-- ORCHESTRATOR_STATE_V1/V2/AI_STANDALONE_STALL_STATE_V1 -->
+#     state snapshots — all of which the orchestrator writes between
+#     ticks and would otherwise churn the hash on its own output.
+# Meaningful changes (a new commit on the branch, mergeability
+# flipping, a human comment, a different workflow outcome, an
+# operator added/changed answer) therefore DO invalidate the cached
+# decision automatically.  When the same inputs reproduce, the
+# replay skips the LLM — but if the cached decision is wrong (e.g.
+# the judge picked resolve_merge_conflict on a hot-file collision
+# the resolver can't fix), replaying forever wastes budget; after
+# this many replays the cache is bypassed and the issue is
+# escalated (with a sticky force_escalate marker so the
+# terminalization is not silently downgraded on the next tick).
 MAX_JUDGE_REPLAY="${MAX_JUDGE_REPLAY:-2}"
 if ! [[ "${MAX_JUDGE_REPLAY}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_JUDGE_REPLAY must be a non-negative integer; defaulting to 2"
   MAX_JUDGE_REPLAY="2"
 fi
+# Strip leading zeros so the downstream `-ge` comparison (line ~6435)
+# treats the value as base-10.  Without this, an operator value like
+# "08" trips bash's "value too great for base" error
+# (claude-branch-review PR #2522; mirrors the MAX_STALL_RECOVERIES_DONE
+# / CONFLICT_DISPATCH_COOLDOWN_SECS canonicalisation pattern).
+MAX_JUDGE_REPLAY=$(( 10#${MAX_JUDGE_REPLAY} ))
 
 post_tracking_comment() {
   local comment_body="$1"
@@ -3301,40 +3341,164 @@ _refresh_integration_resolver_tooling() {
 # Returns 0 if healing progressed (dispatch queued, cooldown active,
 # or judge invoked), 1 if the circuit breaker has tripped and the
 # state was marked failed.
-# _list_integration_conflict_files — enumerate the filenames that would
-# conflict if <default_branch> were merged into <integration_branch>.
-# Uses ``git merge-tree --write-tree --name-only`` for a stateless
-# three-way merge probe (same technique as probe_sibling_merge_conflicts
-# at line 304+).  Echoes one file path per line on stdout; returns 0
-# when conflicts were detected, 1 otherwise (including unavailable git
-# version, missing refs, or a clean merge).  Used by
-# heal_integration_branch_conflict (Q2c) to short-circuit the first-line
-# resolver on hot-file collisions.
+# _list_integration_conflict_files — enumerate the filenames that
+# would conflict when reconciling <integration_branch> with
+# <default_branch>.  The git invocation is
+# `git merge-tree --write-tree --name-only <default_branch> <integration_branch>`,
+# which technically computes "merge integration_branch INTO
+# default_branch", but the conflict-FILES set is symmetric (the
+# same paths conflict regardless of which side is the "target"),
+# so the function's contract — "would these branches reconcile
+# cleanly?" — applies in either direction.  Used by
+# heal_integration_branch_conflict (Q2c) where the goal is to
+# bring default_branch's history into integration_branch; the
+# function tells us which files block that merge.  Echoes one file
+# path per line on stdout; returns 0 when conflicts were detected,
+# 1 otherwise (including unavailable git version, missing refs, a
+# clean merge, or a probe failure — fail-open).  The technique
+# mirrors probe_sibling_merge_conflicts (~line 304); both invoke
+# the same stateless three-way `git merge-tree` probe.  Used by
+# heal_integration_branch_conflict (Q2c) to short-circuit the
+# first-line resolver on hot-file collisions.
 _list_integration_conflict_files() {
   local integration_branch="$1"
   local default_branch="$2"
 
   [ -n "${integration_branch}" ] && [ -n "${default_branch}" ] || return 1
   command -v git >/dev/null 2>&1 || return 1
-  if ! git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
+  # Feature-probe for `--write-tree`. Use `-h` so we read git's own help
+  # text (which lists supported switches) rather than `git merge-tree`
+  # with no args, which exits non-zero on a usage error. The poller
+  # runs with `set -o pipefail`, so a non-zero LHS would propagate as
+  # the pipeline status and make `if ! pipeline` fire even when grep
+  # found the switch — wrap the LHS in `|| true` to neutralize that
+  # before grep evaluates the help text.
+  if ! { git merge-tree -h 2>&1 || true; } | grep -q -- '--write-tree'; then
     return 1
   fi
 
   local ib_ref="refs/remotes/origin/${integration_branch}"
   local db_ref="refs/remotes/origin/${default_branch}"
-  git fetch --no-tags --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null || true
+  # Use --filter=blob:none so the per-tick conflict probe fetches only the
+  # commits + trees needed by `git merge-tree --name-only --no-messages`,
+  # not the blob contents (which the probe never reads).  We deliberately
+  # do NOT use --depth=1: `git merge-tree --write-tree` needs the merge-
+  # base, and a shallow fetch can strand the lookup so the probe falls back
+  # to a tree-vs-tree diff and over-reports conflicts — defeating the
+  # ≤3-conflicts hot-file short-circuit in heal_integration_branch_conflict
+  # below.
+  # Use explicit refspecs `+refs/heads/<b>:refs/remotes/origin/<b>`
+  # rather than bare branch names: `git fetch origin <b1> <b2>` without
+  # refspecs only updates FETCH_HEAD and may leave
+  # refs/remotes/origin/<b> missing or stale in single-branch /
+  # shallow clones (the orchestrator's CI checkout context), so the
+  # subsequent rev-parse checks would fail-open and the hot-file
+  # short-circuit could never fire even on a live conflict (Codex P2,
+  # PR #2522, line 3352).  The leading `+` is the
+  # `+`/`--force` flag: this script force-updates bot branches with
+  # `--force-with-lease` in the premerge/rebase paths, so the
+  # remote-tracking ref can be ahead of a rewritten branch tip.
+  # Without `+`, a non-fast-forward update is silently refused, the
+  # fetch failure is swallowed by `|| true`, and rev-parse passes
+  # against a stale tip — making the new merge-tree probe judge the
+  # wrong branch tip (Codex P2, PR #2522, line 3363).
+  local _ib_refspec="+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}"
+  local _db_refspec="+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
+  # Fail closed when BOTH fetch attempts fail (network blip, auth
+  # transient).  The previous `|| true` swallowed all errors,
+  # leaving the subsequent rev-parse checks to pass against
+  # whatever local remote-tracking refs were already present —
+  # potentially many minutes behind the real branch tip — so the
+  # hot-file probe could route a stale-state conflict (or miss a
+  # current one) to the wrong handler (Codex P2, PR #2522 line
+  # 3382).  Returning 1 lets the caller fail-open into the
+  # first-line resolver path, matching the existing missing-refs
+  # contract.
+  local _conflict_probe_fetch_ok="false"
+  if git fetch --no-tags --filter=blob:none --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null; then
+    _conflict_probe_fetch_ok="true"
+  elif git fetch --no-tags --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null; then
+    _conflict_probe_fetch_ok="true"
+  fi
+  if [ "${_conflict_probe_fetch_ok}" != "true" ]; then
+    return 1
+  fi
   git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
   git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
 
-  local out
-  if out="$(git merge-tree --write-tree --name-only --no-messages "${db_ref}" "${ib_ref}" 2>/dev/null)"; then
-    # Exit 0 from merge-tree means the merge is clean.
-    return 1
+  # The orchestrator runs under `set -euo pipefail`, and we need
+  # `git merge-tree` to return exit 1 (conflicts detected) WITHOUT
+  # killing the script before `rc=$?` runs.  Today's only caller wraps
+  # this in `if VAR=$(_list_integration_conflict_files ...)` which
+  # already disables errexit inside the function body, but defensive
+  # coding — disable errexit just for this call so the function is
+  # safe to call from any context (Copilot review, PR #2522
+  # line 3359).  Capture the entry errexit state via `$-` and only
+  # restore it if it was set, so calling this function from a
+  # context that already disabled `-e` doesn't unexpectedly
+  # re-enable it (Copilot review, PR #2522 line 3444).
+  local out rc
+  local _had_errexit="false"
+  case "$-" in *e*) _had_errexit="true" ;; esac
+  set +e
+  out="$(git merge-tree --write-tree --name-only --no-messages "${db_ref}" "${ib_ref}" 2>/dev/null)"
+  rc=$?
+  if [ "${_had_errexit}" = "true" ]; then
+    set -e
   fi
-  # On conflict, modern git prints the written tree SHA on the first
-  # line followed by conflict paths. Strip the SHA line when present.
-  printf '%s\n' "${out}" | sed '/^$/d' | awk 'NR==1 && /^[[:xdigit:]]{40}([[:xdigit:]]{24})?$/ {next} {print}'
-  return 0
+  case "${rc}" in
+    0)
+      # Clean merge — no conflicts.
+      return 1
+      ;;
+    1)
+      # Conflicts detected. Strip the leading written-tree SHA line
+      # (modern git merge-tree --write-tree always emits the tree OID
+      # on line 1, then conflict paths on lines 2+), preserving any
+      # path whose name happens to be 40-or-64 hex chars by ONLY
+      # stripping when there is a subsequent line.  Without the
+      # multi-line gate, a real conflict file named e.g.
+      # 0123456789abcdef0123456789abcdef01234567 would be silently
+      # dropped from the conflict list and the hot-file short-circuit
+      # would undercount, misrouting an actual hot-file conflict to
+      # the first-line resolver (claude-branch-review consensus,
+      # PR #2522).  The SHA test uses length() instead of an
+      # `[[:xdigit:]]{40}` repetition because some awk builds (BWK awk
+      # on certain distros) panic compiling bracket-class repetitions
+      # with `REcompile() - panic: values still on machine stack`.
+      # rc==1 with no paths after stripping is anomalous and treated
+      # as a probe failure (fail-open) so the caller's hot-file
+      # short-circuit cannot fire on imaginary conflicts.
+      local cleaned line_count first_line stripped
+      cleaned="$(printf '%s\n' "${out}" | sed '/^$/d')"
+      # `grep -c .` on empty stdin prints "0" but exits 1, so `|| echo 0`
+      # would APPEND a second "0" and yield the 3-char string "0\n0",
+      # breaking the numeric `-ge` test below.  Use `|| true` so grep's
+      # own count output is the only thing in line_count (Copilot
+      # review, PR #2522 line 3396).
+      line_count="$(printf '%s\n' "${cleaned}" | grep -c . 2>/dev/null || true)"
+      [[ "${line_count}" =~ ^[0-9]+$ ]] || line_count="0"
+      first_line="$(printf '%s\n' "${cleaned}" | head -n 1)"
+      if [ "${line_count}" -ge 2 ] \
+         && printf '%s' "${first_line}" | awk '/^[0-9a-fA-F]+$/ && (length($0)==40 || length($0)==64) {exit 0} {exit 1}'; then
+        stripped="$(printf '%s\n' "${cleaned}" | tail -n +2)"
+      else
+        stripped="${cleaned}"
+      fi
+      if [ -z "${stripped}" ]; then
+        return 1
+      fi
+      printf '%s\n' "${stripped}"
+      return 0
+      ;;
+    *)
+      # rc>=128: fatal probe error (broken git binary, OOM, malformed
+      # ref pair, unsupported merge-tree subcommand on this version).
+      # Fail-open per the function-header contract — the caller must
+      # not short-circuit the resolver on a probe we could not run.
+      return 1
+      ;;
+  esac
 }
 
 heal_integration_branch_conflict() {
@@ -3415,10 +3579,30 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       local _ihb_conflict_files
       if _ihb_conflict_files="$(_list_integration_conflict_files "${integration_branch}" "${default_branch}" 2>/dev/null)"; then
         local _ihb_conflict_count
-        _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l)"
-        if [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
+        _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+        if [[ "${_ihb_conflict_count}" =~ ^[0-9]+$ ]] && [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
           local _ihb_hot_files
-          _ihb_hot_files="$(jq -r '.hot_files[]? // empty' .github/ai/hot_files.json 2>/dev/null || echo "")"
+          # Normalize hot-file registry entries the same way
+          # scripts/orchestrate_lib.py:208-210 does on the canonical
+          # loader path: trim whitespace, replace `\` with `/`, and
+          # strip leading `./` (possibly multiple).  Consumer repos
+          # are documented to accept entries like
+          # `./scripts/orchestrate_poll_process.sh` or
+          # `scripts\orchestrate_poll_process.sh`, but `git
+          # merge-tree --name-only` emits paths in canonical form
+          # (no leading ./, forward slashes only) — so the previous
+          # raw exact-string match silently missed any
+          # non-canonical hot-file entry and routed the conflict to
+          # the first-line resolver instead of the judge (Codex P2,
+          # PR #2522 line 3536).
+          _ihb_hot_files="$(jq -r '
+            (.hot_files // [])[]?
+            | select(type == "string")
+            | sub("^\\s+"; "") | sub("\\s+$"; "")
+            | gsub("\\\\"; "/")
+            | sub("^(\\./)+"; "")
+            | select(length > 0)
+          ' .github/ai/hot_files.json 2>/dev/null || echo "")"
           if [ -n "${_ihb_hot_files}" ]; then
             local _ihb_hot_hit="false"
             local _ihb_cf
@@ -3478,9 +3662,19 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
   # gate is 15m on the first dispatch, climbing to 4h after four
   # retries. This stops the multi-hour fixed-interval loop where main
   # keeps moving and each dispatch fires on the same 15-minute beat.
+  # `dispatch_count` is incremented IMMEDIATELY after the first
+  # successful dispatch (line ~3687 below), so the SECOND attempt
+  # already sees `dispatch_count=1` here.  Subtract one before
+  # shifting — clamped to 0 — so the first retry waits the
+  # documented 1× interval rather than 2× (Codex P2, PR #2522,
+  # line 3640).
   local elapsed=$((now_ts - last_ts))
-  local _backoff_shift="${dispatch_count}"
-  [[ "${_backoff_shift}" =~ ^[0-9]+$ ]] || _backoff_shift=0
+  local _backoff_shift_raw="${dispatch_count}"
+  [[ "${_backoff_shift_raw}" =~ ^[0-9]+$ ]] || _backoff_shift_raw=0
+  local _backoff_shift=0
+  if [ "${_backoff_shift_raw}" -gt 1 ]; then
+    _backoff_shift=$(( _backoff_shift_raw - 1 ))
+  fi
   if [ "${_backoff_shift}" -gt 4 ]; then
     _backoff_shift=4
   fi
@@ -3508,11 +3702,20 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
   _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || dispatch_rc=$?
 
   if [ "${dispatch_rc}" -eq 2 ]; then
-    jq --argjson ts "${now_ts}" \
-      '.integration_sync_status = "healing" |
-       .integration_conflict_dispatch_ts = $ts' \
+    # Only update the sync status here — DO NOT refresh
+    # integration_conflict_dispatch_ts.  An in-flight resolver fires
+    # the rc=2 dedupe path on every poll tick while it runs; if we
+    # advanced the timestamp here, the exponential backoff computed
+    # against (now - dispatch_ts) at line 3578+ would keep resetting
+    # to ~0 elapsed for the lifetime of the resolver run.  After a
+    # resolver that runs for an hour, the next real retry would then
+    # wait the FULL exponential cooldown (up to ~4h at
+    # dispatch_count>=4) measured from the moment it finished rather
+    # than from the original dispatch — almost doubling the gap
+    # between real attempts (Codex P2, PR #2522, line 3575).
+    jq '.integration_sync_status = "healing"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick."
+    echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick (cooldown timer unchanged)."
     return 0
   fi
 
@@ -3556,11 +3759,37 @@ mark_integration_sync_clean() {
   ensure_integration_conflict_state_fields
   local prev_status
   prev_status="$(jq -r '.integration_sync_status // "clean"' "${STATE_FILE}")"
-  if [ "${prev_status}" != "clean" ]; then
+  # Always clear the per-episode counters when clean state is
+  # observed, not only on the non-clean → clean transition.  Legacy
+  # state files (written by versions before the post-heal reset
+  # existed) can have `integration_sync_status = clean` but
+  # `integration_conflict_dispatch_count` / `dispatch_ts` left over
+  # from an earlier episode.  Without this broader reset, the next
+  # fresh conflict episode inherits a non-zero dispatch_count, and
+  # the exponential-backoff calculation at line ~3645 immediately
+  # caps the cooldown at 16× — delaying the first real retry by
+  # 4 hours instead of the documented 15-minute first interval
+  # (Codex P2, PR #2522 line 3774).  integration_conflict_total_dispatches
+  # is the lifetime cap and is intentionally NOT reset here.
+  local prev_dispatch_count prev_dispatch_ts prev_unresolved_ticks
+  prev_dispatch_count="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
+  prev_dispatch_ts="$(jq -r '.integration_conflict_dispatch_ts // 0' "${STATE_FILE}")"
+  prev_unresolved_ticks="$(jq -r '.integration_conflict_unresolved_ticks // 0' "${STATE_FILE}")"
+  if [ "${prev_status}" != "clean" ] \
+     || [ "${prev_dispatch_count}" != "0" ] \
+     || [ "${prev_dispatch_ts}" != "0" ] \
+     || [ "${prev_unresolved_ticks}" != "0" ]; then
     jq '.integration_sync_status = "clean" |
         .integration_sync_last_error = "" |
-        .integration_conflict_unresolved_ticks = 0' \
+        .integration_conflict_unresolved_ticks = 0 |
+        .integration_conflict_dispatch_count = 0 |
+        .integration_conflict_dispatch_ts = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+  # Only post the user-facing "resolved" comment on the actual
+  # non-clean → clean transition; legacy stale-counter migrations
+  # are silent operational cleanup.
+  if [ "${prev_status}" != "clean" ]; then
     post_tracking_comment "## ✅ Integration self-healing resolved
 
 \`${default_branch}\` now merges cleanly into the integration branch. Final merge will proceed on the next poll tick."
@@ -5106,8 +5335,25 @@ _extract_standalone_state_json_from_comments() {
       status_since_ts: ((.status_since_ts // 0) | tonumber),
       stall_recovery_count: ((.stall_recovery_count // 0) | tonumber),
       phase_attempts: (if (.phase_attempts | type) == "object" then .phase_attempts else {} end),
-      conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
-      updated_ts: ((.updated_ts // 0) | tonumber)
+      updated_ts: ((.updated_ts // 0) | tonumber),
+      # Preserve the per-head-SHA conflict-override counter across poll
+      # cycles.  Without this, every cycle reads the comment back
+      # through this whitelist and the counter is discarded to 0
+      # before the standalone override-cap (Codex P2, PR #2522, line
+      # 7339) runs again, so MAX_BUDGET_NEUTRAL_OVERRIDES never trips
+      # for a PR that stays conflicted at the same head_sha.  The
+      # cap write keys this object by head_sha, so carrying it
+      # forward as-is preserves the cycle history.  Defensive
+      # type-check: only carry forward when the value is actually an
+      # object — malformed state comments otherwise inject arbitrary
+      # types that the cap-read jq would error on and silently
+      # fail-open (claude-branch-review PR #2522).
+      conflict_override_count: (
+        if ((.conflict_override_count // null) | type) == "object"
+        then .conflict_override_count
+        else {}
+        end
+      )
     }
   ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
 }
@@ -5166,19 +5412,44 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
 recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
-  local effective_max_recoveries="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+  # Optional 3rd argument: the phase-lifetime counter (survives phase
+  # oscillation per update_issue_timestamps).  Threading it to the
+  # Python helper below lets `resolve_stall_recovery_action` enforce
+  # the phase-lifetime cap exactly the same way detect_stalls does
+  # (claude-branch-review, PR #2522 line 5418).  Defaults to 0 for
+  # back-compat with callers that don't have the counter handy —
+  # notably the standalone-stall path, whose state schema does not
+  # currently carry phase_attempts.
+  local phase_attempts_count="${3:-0}"
+  [[ "${phase_attempts_count}" =~ ^[0-9]+$ ]] || phase_attempts_count="0"
 
   [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
-  if [ "${phase}" = "ai:done" ]; then
-    effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
+  # Compute the per-phase effective cap, mirroring the Python helper's
+  # _phase_specific_max_recoveries (scripts/orchestrate_lib.py).
+  # Without this, the shell short-circuits to "skip" at the global cap
+  # before the Python helper below can apply the per-phase override, so
+  # a transient judge parse/codex failure falling through to this
+  # helper from invoke_stall_judge can hard-close an ai:done review PR
+  # via the ladder even when MAX_STALL_RECOVERIES_DONE permits more
+  # recoveries.  We only honour the override when it is strictly
+  # numeric and >=1 to match the Python guard.
+  local _phase_effective_max="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+  if [ "${phase}" = "ai:done" ] \
+     && [[ "${MAX_STALL_RECOVERIES_DONE}" =~ ^[0-9]+$ ]] \
+     && [ "${MAX_STALL_RECOVERIES_DONE}" -ge 1 ]; then
+    _phase_effective_max="${MAX_STALL_RECOVERIES_DONE}"
   fi
-  if [ "${recovery_count}" -ge "${effective_max_recoveries}" ]; then
+  if [ "${recovery_count}" -ge "${_phase_effective_max}" ]; then
+    echo "skip"
+    return
+  fi
+  if [ "${phase_attempts_count}" -ge "${_phase_effective_max}" ]; then
     echo "skip"
     return
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" "$phase_attempts_count" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_stall_recovery_action
@@ -5188,12 +5459,14 @@ recovery_count = int(sys.argv[2])
 max_recoveries = int(sys.argv[3])
 enable_human_terminalization = sys.argv[4].lower() == "true"
 max_done = int(sys.argv[5])
+phase_attempts_count = int(sys.argv[6])
 print(resolve_stall_recovery_action(
     phase,
     recovery_count,
     max_recoveries=max_recoveries,
     enable_stall_human_terminalization=enable_human_terminalization,
     max_recoveries_by_phase={"ai:done": max_done},
+    phase_attempts_count=phase_attempts_count,
 ))
 PY
 )" || true
@@ -5208,9 +5481,21 @@ normalize_stall_recovery_action() {
   local phase="$1"
   local recovery_count="$2"
   local candidate_action="${3:-}"
+  # Phase-lifetime counter — same scope as recovery_count but
+  # survives phase oscillation per update_issue_timestamps's reset
+  # rule.  Threading this through to resolve_effective_stall_recovery_action
+  # ensures the fallback path (when the judge returns a
+  # malformed/empty action) respects the same phase-attempt cap that
+  # detect_stalls uses; without it, the fallback would treat
+  # phase_attempts_count as 0 and silently bypass the cap (Copilot
+  # review, PR #2522, line 1527).  Callers that do not have the
+  # counter handy may omit it — the default 0 preserves the previous
+  # behaviour.
+  local phase_attempts_count="${4:-0}"
+  [[ "${phase_attempts_count}" =~ ^[0-9]+$ ]] || phase_attempts_count="0"
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" "$phase_attempts_count" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_effective_stall_recovery_action
@@ -5221,6 +5506,7 @@ candidate_action = sys.argv[3]
 max_recoveries = int(sys.argv[4])
 enable_human_terminalization = sys.argv[5].lower() == "true"
 max_done = int(sys.argv[6])
+phase_attempts_count = int(sys.argv[7])
 print(resolve_effective_stall_recovery_action(
     phase,
     recovery_count,
@@ -5228,12 +5514,17 @@ print(resolve_effective_stall_recovery_action(
     max_recoveries=max_recoveries,
     enable_stall_human_terminalization=enable_human_terminalization,
     max_recoveries_by_phase={"ai:done": max_done},
+    phase_attempts_count=phase_attempts_count,
 ))
 PY
 )" || true
 
   if [ -z "${action}" ]; then
-    action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+    # Forward the phase-lifetime counter to the fallback helper so
+    # the phase-attempt cap fires there too — without this, an
+    # empty/invalid Python return would silently bypass the cap
+    # (claude-branch-review, PR #2522 line 5524).
+    action="$(recovery_action_for_phase "${phase}" "${recovery_count}" "${phase_attempts_count}")"
     if [ -z "${action}" ]; then
       action="retrigger_pipeline"
     fi
@@ -5462,17 +5753,27 @@ STALL_EOF
           execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rtr_rc=$?
           # Q3:B — conflict override does not consume a retrigger-style
           # recovery attempt.  resolve_merge_conflict sets
-          # STALL_RECOVERY_SHOULD_INCREMENT="true" on its happy path (line
-          # ~4405); reset it here so the override is budget-neutral.
+          # STALL_RECOVERY_SHOULD_INCREMENT="true" inside
+          # execute_stall_recovery_action only when a fresh dispatch
+          # actually happened (rc=0 path); rc=2 (already dispatched
+          # this cycle or active autofix run dedupe) leaves it unset.
+          # Capture the signal here BEFORE the explicit reset below so
+          # we can gate the per-head override counter on it — without
+          # this, repeated poll ticks while the resolver is still in
+          # flight would advance the counter on every cycle and
+          # eventually consume stall budget for work that never fired
+          # (Codex P2, PR #2522, line 5565).
+          local _rtr_did_fresh_dispatch="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
           #
           # Per-head_sha cap (Q1b): track how many overrides have fired
           # for this exact head_sha and stop being budget-neutral after
           # MAX_BUDGET_NEUTRAL_OVERRIDES so the stall ladder can advance.
           # head_sha changes on every new commit, so once the resolver
           # pushes a fix, the counter restarts for the new sha.
-          local _rtr_dispatched="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
-          STALL_RECOVERY_SHOULD_INCREMENT="false"
-          if [ "${_rtr_dispatched}" = "true" ] && [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+          if [ "${_rtr_did_fresh_dispatch}" = "true" ] \
+             && [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] \
+             && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
             local _rtr_override_count
             _rtr_override_count="$(jq -r --arg sha "${_rtr_head_sha}" '.conflict_override_count[$sha] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
             [[ "${_rtr_override_count}" =~ ^[0-9]+$ ]] || _rtr_override_count="0"
@@ -5646,7 +5947,7 @@ REISSUE_EOF
           jq --arg lid "${local_id}" --argjson new_num "${new_num}" --argjson wave_idx "${WAVE_IDX}" \
             '.issue_number_map[$lid] = $new_num |
              (.waves[$wave_idx].issues[] | select(.id == $lid)) |=
-               (.github_issue = $new_num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor) | .stall_recovery_count = 0)' \
+               (.github_issue = $new_num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor) | .stall_recovery_count = 0 | .phase_attempts = {})' \
             "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         fi
         tg_notify "Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")" "WARNING"
@@ -5841,8 +6142,61 @@ invoke_stall_judge() {
   local stall_minutes="$4"
   local local_id="${5:-}"
 
+  # Look up the phase-lifetime counter for this issue (managed runs
+  # only; standalone state does not carry phase_attempts).  This is
+  # used by:
+  #   * The fallback_action computation just below (so the initial
+  #     ladder pick respects the phase cap — claude-branch-review,
+  #     PR #2522 line 6143).
+  #   * The judge-failure / parse-error fallback branches (so a
+  #     flaky judge cannot bypass an exhausted phase cap — Codex
+  #     P2, PR #2522, line 1720).
+  #   * The normalize_stall_recovery_action call after a successful
+  #     judge response (Copilot review, line 1527).
+  # When phase_attempts is already at the cap, downgrade the
+  # failure-path fallback to "skip" so a transient judge crash
+  # cannot run another non-terminal recovery the cap was
+  # specifically supposed to prevent.
+  local _judge_phase_attempts_count=0
+  local _judge_phase_effective_max="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+  if [ "${phase}" = "ai:done" ] \
+     && [[ "${MAX_STALL_RECOVERIES_DONE}" =~ ^[0-9]+$ ]] \
+     && [ "${MAX_STALL_RECOVERIES_DONE}" -ge 1 ]; then
+    _judge_phase_effective_max="${MAX_STALL_RECOVERIES_DONE}"
+  fi
+  if [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
+     && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_phase_attempts_count="$(jq -r --arg lid "${local_id}" --argjson wi "${WAVE_IDX:-0}" --arg p "${phase}" \
+      '((.waves[$wi].issues[] | select(.id == $lid)) // {}) | (.phase_attempts[$p] // 0)' \
+      "${STATE_FILE}" 2>/dev/null || echo "0")"
+    [[ "${_judge_phase_attempts_count}" =~ ^[0-9]+$ ]] || _judge_phase_attempts_count=0
+  fi
+
   local fallback_action
-  fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+  # Thread the phase-lifetime counter into the fallback ladder pick
+  # so the cap fires consistently with detect_stalls' decision
+  # (claude-branch-review, PR #2522 line 6143).  This is largely
+  # belt-and-braces: the post-lookup override below explicitly
+  # forces fallback_action="skip" when the counter is at the cap,
+  # so the threaded value mostly matters when the counter is
+  # below the cap but still high enough that the Python ladder
+  # would otherwise advance one rung past it.
+  fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}" "${_judge_phase_attempts_count}")"
+  # Derive a STABLE exhausted/not-exhausted boolean for the cache
+  # key.  Hashing the raw _judge_phase_attempts_count would otherwise
+  # invalidate the cache after every budget-consuming recovery
+  # (phase_attempts increments alongside stall_recovery_count), so a
+  # repeated bad-judge loop below the cap could never accumulate
+  # toward MAX_JUDGE_REPLAY (Codex P2, PR #2522, line 6383).  The raw
+  # count still ships in the LLM-facing diagnostics for prompt
+  # context; only the cache-key view strips it (see filter at
+  # line ~6330).
+  local _judge_phase_attempts_exhausted="false"
+  if [ "${_judge_phase_attempts_count}" -ge "${_judge_phase_effective_max}" ]; then
+    echo "  [stall-judge] phase_attempts_count=${_judge_phase_attempts_count} >= effective_max=${_judge_phase_effective_max} for phase ${phase}; the judge-failure fallback will be forced to skip so a transient judge crash cannot bypass the phase-lifetime cap."
+    fallback_action="skip"
+    _judge_phase_attempts_exhausted="true"
+  fi
 
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
@@ -5854,14 +6208,26 @@ invoke_stall_judge() {
   local recent_comments
   # Filter out ORCHESTRATOR_STATE_V1 snapshots (they are ~57KB each and
   # are noise for the judge — it wants phase-change / recovery narrative,
-  # not state dumps) and cap each remaining body at 2000 characters. Without
-  # these two caps, 8 state snapshots produce ~260KB of argv which trips
-  # Linux MAX_ARG_STRLEN (128KB per argv entry) when passed to the final
+  # not state dumps) AND ORCHESTRATOR_STATE_V2 chunk comments (the same
+  # snapshots, just framed as multi-comment chains by post_state_comment;
+  # each chunk is the same noise and additionally churns the cache key
+  # on every poll cycle because its manifest hash changes as timestamps
+  # and counters advance — defeating MAX_JUDGE_REPLAY for orchestrator-
+  # managed stalls per Codex P2, PR #2522, line 6147) AND the
+  # standalone-state snapshot the standalone recovery loop writes via
+  # write_standalone_state_json — same noise/churn pattern as the
+  # orchestrator state, just on a per-issue tracking comment rather than
+  # the project tracking issue (Codex P2, PR #2522, line 6221 #1).  Then
+  # cap each remaining body at 2000 characters. Without these caps, 8
+  # state snapshots produce ~260KB of argv which trips Linux
+  # MAX_ARG_STRLEN (128KB per argv entry) when passed to the final
   # diagnostics jq via `--argjson recent_comments`, causing execve to
   # return E2BIG and the diagnostics blob to come out empty.
   recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '
     [.[]
       | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
+      | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V2")) | not)
+      | select(((.body // "") | startswith("<!-- AI_STANDALONE_STALL_STATE_V1")) | not)
       | {
           author: (.user.login // ""),
           created_at: (.created_at // ""),
@@ -5910,36 +6276,34 @@ invoke_stall_judge() {
     | .[:3]
   ' 2>/dev/null || echo '[]')"
 
-  # Judge decision cache (Q1d): memoise judge output by
-  # sha256({issue_num, head_sha, phase, last_conclusion,
-  # recent_comments_hash_excluding_prior_stall_judge_comments}). When the same
-  # inputs reproduce, replay the
-  # cached action instead of burning a fresh LLM call.  After
-  # MAX_JUDGE_REPLAY consecutive replays without
-  # progress, bypass the cache and escalate so the issue isn't stuck on a
-  # bad decision forever. The cache is only consulted when STATE_FILE
-  # exists; missing-state cycles fall through to the LLM path.
-  local _judge_last_conclusion=""
-  local _judge_cacheable_comments='[]'
-  local _judge_recent_comments_hash=""
+  # Judge decision cache (Q1d): memoise judge output by sha256 of the
+  # full diagnostics blob below.  Hashing the whole prompt-input JSON
+  # — instead of a hand-picked subset like {issue_num, head_sha, phase,
+  # last_conclusion} — guarantees the cache automatically invalidates
+  # whenever a mutable input the judge actually reads changes (recent
+  # tracking comments, PR mergeability / state, head_ref / base_ref,
+  # workflow outcomes beyond the latest, prior_recovery_actions, etc.).
+  # Otherwise human guidance added between cycles could be silently
+  # ignored until MAX_JUDGE_REPLAY forces escalation on stale context.
+  # When the same diagnostics reproduce, replay the cached action
+  # instead of burning a fresh LLM call.  After MAX_JUDGE_REPLAY
+  # consecutive replays without progress, bypass the cache and
+  # escalate so the issue isn't stuck on a bad decision forever.  The
+  # cache is only consulted when STATE_FILE exists; missing-state
+  # cycles fall through to the LLM path.  Initialise the loop-state
+  # variables here so the later cache-hit branch (and the cache-write
+  # branch after the LLM call) reads sane defaults on every code path,
+  # including the missing-STATE_FILE / hashing-failed fallthroughs.
   local _judge_cache_key=""
   local _judge_cache_hit_action=""
   local _judge_cache_replay_count=0
   local _judge_force_escalate="false"
-  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
-    _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
-    _judge_cacheable_comments="$(printf '%s' "${recent_comments}" | jq -c '[.[] | select(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge")) | not)]' 2>/dev/null || echo '[]')"
-    _judge_recent_comments_hash="$(printf '%s' "${_judge_cacheable_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
-    _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
-    if [ -n "${_judge_cache_key}" ]; then
-      _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-      _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
-      [[ "${_judge_cache_replay_count}" =~ ^[0-9]+$ ]] || _judge_cache_replay_count=0
-      if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ]; then
-        _judge_force_escalate="true"
-      fi
-    fi
-  fi
+  local _judge_cache_force_escalate="false"
+  # Staged replay-count value when the cache-hit branch runs; the
+  # post-dispatch cache-write block decides whether to commit it
+  # based on whether a fresh budget-consuming action actually ran
+  # (Codex P2, PR #2522 line 6550).
+  local _judge_replay_next_pending=""
 
   local prior_actions='[]'
   if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
@@ -5960,11 +6324,14 @@ invoke_stall_judge() {
     --arg phase "${phase}" \
     --argjson stall_minutes "${stall_minutes}" \
     --argjson recovery_count "${recovery_count}" \
+    --argjson phase_attempts_count "${_judge_phase_attempts_count:-0}" \
+    --argjson phase_attempts_exhausted "${_judge_phase_attempts_exhausted:-false}" \
     --argjson recent_comments "${recent_comments}" \
     --arg target_pr "${target_pr}" \
     --arg pr_state "${pr_state}" \
     --arg pr_mergeable "${pr_mergeable}" \
     --arg head_ref "${head_ref}" \
+    --arg head_sha "${head_sha}" \
     --arg base_ref "${base_ref}" \
     --argjson workflow_outcomes "${workflow_outcomes}" \
     --argjson current_wave "${CURRENT_WAVE:-1}" \
@@ -5975,12 +6342,15 @@ invoke_stall_judge() {
       phase: $phase,
       stall_minutes: $stall_minutes,
       recovery_count: $recovery_count,
+      phase_attempts_count: $phase_attempts_count,
+      phase_attempts_exhausted: $phase_attempts_exhausted,
       recent_tracking_comments: $recent_comments,
       linked_pr: {
         number: (if $target_pr == "" then null else ($target_pr | tonumber) end),
         state: (if $pr_state == "" then null else $pr_state end),
         mergeable: (if $pr_mergeable == "" then null else ($pr_mergeable == "true") end),
         head_ref: (if $head_ref == "" then null else $head_ref end),
+        head_sha: (if $head_sha == "" then null else $head_sha end),
         base_ref: (if $base_ref == "" then null else $base_ref end)
       },
       recent_review_workflow_outcomes: $workflow_outcomes,
@@ -6001,10 +6371,13 @@ invoke_stall_judge() {
       --arg phase "${phase}" \
       --argjson stall_minutes "${stall_minutes:-0}" \
       --argjson recovery_count "${recovery_count:-0}" \
+      --argjson phase_attempts_count "${_judge_phase_attempts_count:-0}" \
+      --argjson phase_attempts_exhausted "${_judge_phase_attempts_exhausted:-false}" \
       --arg target_pr "${target_pr}" \
       --arg pr_state "${pr_state}" \
       --arg pr_mergeable "${pr_mergeable}" \
       --arg head_ref "${head_ref}" \
+      --arg head_sha "${head_sha}" \
       --arg base_ref "${base_ref}" \
       '{
         issue_number: ($issue_number | tonumber? // null),
@@ -6012,15 +6385,143 @@ invoke_stall_judge() {
         phase: (if $phase == "" then null else $phase end),
         stall_minutes: $stall_minutes,
         recovery_count: $recovery_count,
+        phase_attempts_count: $phase_attempts_count,
+        phase_attempts_exhausted: $phase_attempts_exhausted,
         linked_pr: {
           number: (if $target_pr == "" then null else ($target_pr | tonumber? // null) end),
           state: (if $pr_state == "" then null else $pr_state end),
           mergeable: (if $pr_mergeable == "" then null else ($pr_mergeable == "true") end),
           head_ref: (if $head_ref == "" then null else $head_ref end),
+          head_sha: (if $head_sha == "" then null else $head_sha end),
           base_ref: (if $base_ref == "" then null else $base_ref end)
         },
         diagnostics_build_failed: true
       }' 2>/dev/null || echo '{"diagnostics_build_failed":true}')"
+  fi
+
+  # Now that the full diagnostics blob is built (or the fallback payload
+  # has been substituted), hash it as the judge-cache key.  This is the
+  # first point at which every input that goes into the judge prompt is
+  # known, so keying on the SHA256 of the JSON guarantees that any
+  # mutable input the prompt actually carries — recent tracking
+  # comments, PR state / mergeability, head_ref / base_ref, recent
+  # workflow outcomes beyond the latest conclusion, prior_recovery_actions
+  # — automatically invalidates the cached decision.
+  #
+  # Standalone-stall caveat (Codex P2, PR #2522, lines 6411 + 6210):
+  # invoke_stall_judge is also reachable from
+  # run_standalone_stall_recovery for issues outside a tracking-project
+  # run.  Those callsites have an empty local_id, and the per-issue
+  # standalone state schema (AI_STANDALONE_STALL_STATE_V1) does not
+  # currently hold the judge decision cache.  STATE_FILE on its own
+  # is NOT a safe gate: it is a global runtime variable populated
+  # inside the tracking-issue loop, and run_standalone_stall_recovery
+  # runs afterward in the same poller invocation, so a non-empty
+  # STATE_FILE here may point at an unrelated last-processed tracking
+  # issue rather than the current standalone issue's state — writing
+  # the cache there would persist nothing useful and could pollute
+  # another project's state on the next read.  Gate the cache on a
+  # managed `local_id` and surface a single warning per standalone
+  # invocation so operators understand MAX_JUDGE_REPLAY is not
+  # enforced there.
+  local _judge_cache_eligible="false"
+  if [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
+     && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_cache_eligible="true"
+  fi
+  # Rate-limit the standalone-path warning to ONCE per poller run
+  # via a process-global flag.  Without this, every stalled
+  # standalone issue triggers the warning every cycle — spamming
+  # the workflow log and burying real warnings.  The flag lives in
+  # the parent shell across this function's invocations (no `local`,
+  # so it survives) but is reset on each fresh poller process
+  # (Copilot review, PR #2522 line 6372).
+  if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then
+    if [ "${_STALL_JUDGE_STANDALONE_WARNED:-false}" != "true" ]; then
+      echo "::warning::Stall judge for issue #${issue_num} runs without a managed local_id (standalone path); MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation. Every identical stall will burn a fresh LLM call until the standalone state schema carries judge_decision_cache. (This warning is emitted once per poller run; subsequent standalone judge invocations will not repeat it.)" >&2
+      _STALL_JUDGE_STANDALONE_WARNED="true"
+    fi
+  fi
+  if [ "${_judge_cache_eligible}" = "true" ]; then
+    # Normalize the cache-key view of diagnostics before hashing so
+    # MAX_JUDGE_REPLAY can actually fire on repeated identical stalls.
+    # Three classes of churn used to leak the cache key:
+    #
+    # 1. Self-narration: every run posts a "## 🧑‍⚖️ Stall Judge —
+    #    Issue #N" tracking comment before returning, so the next
+    #    identical stall otherwise had a different key solely because
+    #    the previous judge's own narration was now in
+    #    recent_tracking_comments.
+    # 2. Volatile counters: stall_minutes ticks every minute, and
+    #    recovery_count / prior_recovery_actions[stall_recovery_count]
+    #    increment after every action that consumed budget.  Hashing
+    #    them meant a stuck loop's cache key always changed even when
+    #    the PR, phase, comments, and workflow state were stable — so
+    #    the lookup missed and replay_count never reached the cap.
+    # 3. (The bug Codex P2 line 6130 #1 flagged separately: head_sha
+    #    used to be ABSENT from diagnostics entirely, so a brand-new
+    #    commit on the same branch with the same mergeability could
+    #    replay a stale cached decision.  That is now fixed at the
+    #    diagnostics-build site above — head_sha is included in the
+    #    linked_pr object, so it naturally participates in the hash.)
+    #
+    # The unfiltered diagnostics blob still flows into the LLM prompt
+    # below (the judge benefits from seeing its own prior reasoning,
+    # the live stall_minutes, etc.); only the hash input is filtered.
+    # Fail-open: if jq fails, fall back to hashing the unfiltered
+    # blob (today's behaviour, no regression).
+    local _cache_diagnostics
+    # The judge-heading filter must NOT eat a human-authored comment.
+    # Earlier iterations tried (a) author-suffix matching, which broke
+    # under PAT-authenticated deployments (Codex P2, PR #2522, line
+    # 6255), and (b) author-agnostic body-shape matching (heading +
+    # both Decision lines), which over-filtered humans who quote a
+    # legacy judge report when replying (Codex P2, PR #2522, line
+    # 6330).  Switch to marker-only matching: strip a comment only
+    # if its body contains the hidden
+    # `<!-- ORCHESTRATOR_STALL_JUDGE -->` HTML-comment that the bot
+    # stamps on every judge tracking comment it posts
+    # (line ~6510 below).  Humans never include this exact byte
+    # sequence — the marker is invisible in rendered Markdown, so
+    # copy-paste quotes of the visible heading + Decision lines do
+    # not carry it.  Legacy bot comments posted before this PR lack
+    # the marker and will pollute the cache hash for the
+    # ≤8-comment window until they age out — acceptable transient
+    # behavior, vs. the alternative of permanently losing fresh
+    # human guidance every time a maintainer quotes the bot.
+    _cache_diagnostics="$(printf '%s' "${diagnostics}" | jq -c '
+      .recent_tracking_comments = (
+        (.recent_tracking_comments // [])
+        | map(select(((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")) | not))
+      )
+      | del(.stall_minutes)
+      | del(.recovery_count)
+      | del(.phase_attempts_count)
+      | .prior_recovery_actions = (
+          (.prior_recovery_actions // [])
+          | map(select(.key != "stall_recovery_count"))
+        )
+    ' 2>/dev/null || printf '%s' "${diagnostics}")"
+    _judge_cache_key="$(printf '%s' "${_cache_diagnostics}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    if [ -n "${_judge_cache_key}" ]; then
+      _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      [[ "${_judge_cache_replay_count}" =~ ^[0-9]+$ ]] || _judge_cache_replay_count=0
+      # Read the sticky synthetic-escalation marker that the
+      # force-escalate cache write below stamps onto entries derived
+      # from MAX_JUDGE_REPLAY.  Without this, the very next tick after
+      # the cap fires would replay the cached "escalate_human" but
+      # with _judge_force_escalate=false, so normalize would downgrade
+      # it back to the ladder and the terminal decision would be
+      # silently lost (Codex P2, PR #2522, line 6279).
+      _judge_cache_force_escalate="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].force_escalate // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+      if [ -n "${_judge_cache_hit_action}" ] && {
+           [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ] \
+           || [ "${_judge_cache_force_escalate}" = "true" ];
+         }; then
+        _judge_force_escalate="true"
+      fi
+    fi
   fi
 
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
@@ -6067,12 +6568,31 @@ invoke_stall_judge() {
   local attempt
   local _judge_from_cache="false"
   if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_force_escalate}" = "true" ]; then
-    echo "  [stall-judge] Cache replay cap reached for issue #${issue_num} (key=${_judge_cache_key}, replays=${_judge_cache_replay_count} >= ${MAX_JUDGE_REPLAY}); forcing escalate_human."
+    if [ "${_judge_cache_force_escalate:-false}" = "true" ]; then
+      echo "  [stall-judge] Replaying sticky synthetic escalate_human for issue #${issue_num} (key=${_judge_cache_key}, cache marker force_escalate=true)."
+    else
+      echo "  [stall-judge] Cache replay cap reached for issue #${issue_num} (key=${_judge_cache_key}, replays=${_judge_cache_replay_count} >= ${MAX_JUDGE_REPLAY}); forcing escalate_human."
+    fi
     local _judge_escalate_justification
     _judge_escalate_justification="Cached judge decision '${_judge_cache_hit_action}' replayed ${_judge_cache_replay_count} times without progress; bypassing cache and escalating."
     jq -cn --arg a "escalate_human" --arg j "${_judge_escalate_justification}" '{action:$a, justification:$j}' > "${stall_judge_output_file}"
     judge_success="true"
     _judge_from_cache="true"
+    # Record the forced decision in the cache with the force_escalate
+    # marker so the bypass at line ~6339 (which gates on
+    # _judge_force_escalate) re-fires on the very next tick that hits
+    # this same key — without the marker, replay_count would reset to
+    # 0 here and the next cycle's normalize call would silently
+    # downgrade the synthetic escalate_human back to the ladder
+    # action, defeating MAX_JUDGE_REPLAY entirely (Codex P2,
+    # PR #2522, line 6279).  Best-effort: a jq failure is silently
+    # swallowed, matching the existing replay / write callsites
+    # below.
+    if [ -n "${_judge_cache_key}" ] && [ "${_judge_cache_eligible:-false}" = "true" ]; then
+      jq --arg k "${_judge_cache_key}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": "escalate_human", "replay_count": 0, "force_escalate": true})' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    fi
   elif [ -n "${_judge_cache_hit_action}" ]; then
     echo "  [stall-judge] Cache hit for issue #${issue_num} (key=${_judge_cache_key}); replaying cached decision '${_judge_cache_hit_action}' (replay $((_judge_cache_replay_count + 1)) of max ${MAX_JUDGE_REPLAY})."
     local _judge_replay_justification
@@ -6080,10 +6600,18 @@ invoke_stall_judge() {
     jq -cn --arg a "${_judge_cache_hit_action}" --arg j "${_judge_replay_justification}" '{action:$a, justification:$j}' > "${stall_judge_output_file}"
     judge_success="true"
     _judge_from_cache="true"
-    local _judge_replay_next=$(( _judge_cache_replay_count + 1 ))
-    jq --arg k "${_judge_cache_key}" --argjson n "${_judge_replay_next}" \
-      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    # Defer the replay_count bump until AFTER the dispatch resolves
+    # below: if `execute_stall_recovery_action` reports rc=2
+    # (resolver/autofix already in flight — a dedupe path) it does
+    # no new work, so bumping replay_count here would silently age
+    # the cache against an in-flight resolver and eventually trip
+    # MAX_JUDGE_REPLAY into a forced human escalation while the
+    # original work is still running (Codex P2, PR #2522, line
+    # 6550).  Just stage the next count and let the post-dispatch
+    # cache-write block at the end of the function decide whether
+    # to commit it based on whether the dispatch was a fresh,
+    # budget-consuming action.
+    _judge_replay_next_pending=$(( _judge_cache_replay_count + 1 ))
   else
     for attempt in 1 2; do
       if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
@@ -6119,11 +6647,28 @@ invoke_stall_judge() {
   local judge_justification
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
+  # _judge_phase_attempts_count was looked up earlier (alongside
+  # fallback_action) so the judge-failure fallback branches above
+  # could downgrade to "skip" on phase-attempt exhaustion.  Reuse
+  # the same value here for the normalize call (Copilot review,
+  # PR #2522, line 1527) — no second jq read needed.
   local effective_action
-  if [ "${_judge_force_escalate}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
+  if [ "${_judge_force_escalate:-false}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
+    # Bypass normalize_stall_recovery_action for the synthetic
+    # MAX_JUDGE_REPLAY escalation. The operator explicitly opted into
+    # this terminalization by setting MAX_JUDGE_REPLAY, so letting the
+    # global ENABLE_STALL_HUMAN_TERMINALIZATION=false gate downgrade
+    # it back to the ladder would silently defeat the replay cap — the
+    # exact loop the cap exists to break would keep replaying / falling
+    # back instead of escalating to a human (Codex P2, PR #2522, line
+    # 6100).  The bypass is intentionally narrow: it only applies when
+    # judge_action is the synthetic "escalate_human" emitted by the
+    # force-escalate branch above.  An LLM-returned escalate_human
+    # still flows through normalize_stall_recovery_action and obeys
+    # the global gate.
     effective_action="escalate_human"
   else
-    effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+    effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}" "${_judge_phase_attempts_count}")"
   fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
@@ -6134,17 +6679,18 @@ invoke_stall_judge() {
     STALL_JUDGE_HEAD_REF="${head_ref}"
   fi
 
-  # Cache the fresh judge decision so future identical inputs replay it
-  # rather than burning another LLM call. Skip when this run was itself
-  # served from the cache (replay count was already bumped above).
-  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${judge_action}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
-    jq --arg k "${_judge_cache_key}" --arg action "${judge_action}" \
-      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-  fi
-
+  # The hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` marker is placed
+  # IMMEDIATELY after the heading (not at the bottom of the comment)
+  # so the cache-key filter at line ~6330 can find it even when the
+  # diagnostics-build truncator at line ~6017+ slices the body at
+  # 2000 chars.  A typical judge comment is 3-4 KB once the
+  # diagnostics snapshot is embedded, and an end-of-body marker
+  # would be truncated out — leaving the orchestrator's own
+  # narration in recent_tracking_comments and silently churning the
+  # cache key on every cycle (Codex P2, PR #2522, line 6614).
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
+<!-- ORCHESTRATOR_STALL_JUDGE -->
 
 **Decision (judge):** ${judge_action}
 **Decision (effective):** ${effective_action}
@@ -6167,35 +6713,110 @@ ${diagnostics}
     echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
   fi
 
+  # Dispatch the resolved action and track which action ACTUALLY ran
+  # so the cache write below stores an executable replay value.
+  # Previously the cache wrote effective_action BEFORE dispatch, so a
+  # resolve_merge_conflict whose dispatch later failed (network blip,
+  # no autofix worker available) would persist resolve_merge_conflict
+  # for the unchanged diagnostics key — and every subsequent
+  # identical stall would replay the same dead-end action, eventually
+  # tripping MAX_JUDGE_REPLAY into a human escalation on the back of
+  # ONE bad dispatch (Codex P2, PR #2522, line 6625).  Capture the
+  # rc from each dispatch path and the action we actually executed;
+  # cache that combination at the end.
+  #
+  # Reset STALL_RECOVERY_SHOULD_INCREMENT to "false" before the
+  # dispatch so the captured value below reflects ONLY this
+  # tick's work.  execute_stall_recovery_action sets it to "true"
+  # when a fresh budget-consuming action ran, and leaves it
+  # "false" for dedupe/no-op paths (rc=2 active-resolver, already-
+  # dispatched-this-cycle).  We use that signal below to decide
+  # whether the cache-replay path should age its replay_count
+  # (Codex P2, PR #2522, line 6550).
+  local _judge_dispatch_rc=0
+  local _judge_executed_action="${effective_action}"
+  STALL_RECOVERY_SHOULD_INCREMENT="false"
   case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human|skip)
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-      return $?
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
       ;;
     resolve_merge_conflict)
       if ! [[ "${STALL_JUDGE_TARGET_PR}" =~ ^[0-9]+$ ]]; then
         echo "::warning::Stall judge returned resolve_merge_conflict without target_pr; falling back to ${fallback_action}."
-        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-        return $?
-      fi
-      if [ -z "${STALL_JUDGE_HEAD_REF}" ] || [ "${STALL_JUDGE_HEAD_REF}" = "null" ]; then
+        _judge_executed_action="${fallback_action}"
+        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
+      elif [ -z "${STALL_JUDGE_HEAD_REF}" ] || [ "${STALL_JUDGE_HEAD_REF}" = "null" ]; then
         echo "::warning::Stall judge returned resolve_merge_conflict without head_ref; falling back to ${fallback_action}."
-        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-        return $?
-      fi
-      if ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
+        _judge_executed_action="${fallback_action}"
+        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
+      elif ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
         echo "::warning::resolve_merge_conflict dispatch failed for issue #${issue_num}; falling back to ${fallback_action}."
-        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-        return $?
+        _judge_executed_action="${fallback_action}"
+        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
       fi
-      return 0
       ;;
     *)
       echo "::warning::Unknown effective stall action '${effective_action}' for issue #${issue_num}; falling back to ${fallback_action}."
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-      return $?
+      _judge_executed_action="${fallback_action}"
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
       ;;
   esac
+
+  # Capture whether the dispatch was a FRESH budget-consuming
+  # action (as opposed to a dedupe / no-op).
+  # execute_stall_recovery_action sets STALL_RECOVERY_SHOULD_INCREMENT
+  # to "true" only on its rc=0 fresh-dispatch path; rc=2 dedupe
+  # (active autofix / resolver already in flight) leaves it
+  # "false".  Two cache decisions below depend on this:
+  #   * Fresh-LLM cache write (Codex P2 line 6625 + 6705):
+  #     skip when dispatch failed OR was a dedupe — caching a
+  #     replay that did no new work would burn MAX_JUDGE_REPLAY
+  #     on a single bad dispatch.
+  #   * Cache-replay count bump (Codex P2 line 6550): skip on
+  #     dedupe so the cache does not age while an existing
+  #     resolver is still working.
+  # IMPORTANT: do NOT clear STALL_RECOVERY_SHOULD_INCREMENT here.
+  # The outer stall-recovery loop reads it to decide whether to
+  # bump stall_recovery_count after invoke_stall_judge returns;
+  # clobbering it to "false" would silently lose every budget-
+  # consuming action this function dispatched.
+  local _judge_dispatch_was_fresh="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
+
+  # Persist the cache decision now that we know whether the
+  # dispatch actually ran fresh work.  Only writes happen when
+  # the dispatch succeeded (rc=0) AND a budget-consuming action
+  # actually ran (was_fresh=true).  Both gates together prevent:
+  #   * caching a dead-end action after a transient dispatch
+  #     failure (would replay the failure forever)
+  #   * aging the cache while a resolver is still in flight
+  #     (would trip MAX_JUDGE_REPLAY into a forced escalation
+  #     against still-active work)
+  # Cache `_judge_executed_action` rather than `effective_action`:
+  # if the judge's effective action was resolve_merge_conflict
+  # but the dispatch fell through to the ladder fallback (missing
+  # metadata OR dispatch failure), the fresh-LLM cache writes
+  # the action we actually ran — so the next identical stall
+  # replays a known-executable decision (Codex P2, PR #2522,
+  # lines 6359, 6625, 6705, 6550).
+  if [ "${_judge_dispatch_rc}" -eq 0 ] \
+     && [ "${_judge_dispatch_was_fresh}" = "true" ] \
+     && [ -n "${_judge_cache_key}" ] \
+     && [ "${_judge_cache_eligible:-false}" = "true" ]; then
+    if [ "${_judge_from_cache}" = "true" ] \
+       && [ -n "${_judge_replay_next_pending:-}" ]; then
+      # Cache-replay path: bump replay_count toward MAX_JUDGE_REPLAY.
+      jq --arg k "${_judge_cache_key}" --argjson n "${_judge_replay_next_pending}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    elif [ "${_judge_from_cache}" = "false" ] \
+         && [ -n "${_judge_executed_action}" ]; then
+      # Fresh-LLM cache write.
+      jq --arg k "${_judge_cache_key}" --arg action "${_judge_executed_action}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    fi
+  fi
+  return "${_judge_dispatch_rc}"
 }
 
 # Run both standalone-stall marker searches in a single GraphQL
@@ -7052,13 +7673,18 @@ PY
       local _STD_ITER_PR_NUM_CACHED=""
       local _STD_ITER_PR_JSON_CACHED=""
       _STD_ITER_PR_NUM_CACHED="$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // empty' 2>/dev/null || echo "")"
-      # API hygiene: when GraphQL already gave us PR number + head ref,
-      # seed a minimal JSON payload so retrigger_review can skip a
-      # redundant gh api pulls/{n} fetch on the non-retry fast path.
-      local _std_cached_head_ref=""
+      # API hygiene: when GraphQL already gave us PR number + head ref
+      # (and optionally headRefOid as head_sha), seed a minimal JSON
+      # payload so retrigger_review can skip a redundant gh api
+      # pulls/{n} fetch on the non-retry fast path.  Include head_sha
+      # in the seed so the standalone per-head-SHA override cap below
+      # (Codex P2, PR #2522 line 7284) can fire even when REST is
+      # skipped on a settled DIRTY/CONFLICTING state.
+      local _std_cached_head_ref="" _std_cached_head_sha=""
       _std_cached_head_ref="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_ref // .head.ref // .headRefName // empty)' 2>/dev/null || echo "")"
+      _std_cached_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // .headRefOid // empty)' 2>/dev/null || echo "")"
       if [[ "${_STD_ITER_PR_NUM_CACHED}" =~ ^[0-9]+$ ]] && [ -n "${_std_cached_head_ref}" ] && [ "${_std_cached_head_ref}" != "null" ]; then
-        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" '{number: $n, head: {ref: $hr}}' 2>/dev/null || echo "")"
+        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" --arg hs "${_std_cached_head_sha}" '{number: $n, head: {ref: $hr, sha: (if $hs == "" or $hs == "null" then null else $hs end)}}' 2>/dev/null || echo "")"
       fi
 
       # Widen the REST-fallback trigger: GitHub computes mergeability
@@ -7136,36 +7762,62 @@ PY
       fi
 
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
+        # Resolve head_sha for the per-head-SHA budget-neutral
+        # override cap below.  Try _std_conflict_linked first (GraphQL
+        # fast-path shape — top-level .head_sha when seeded by the
+        # graphql linked_pr transform), then _STD_ITER_PR_JSON_CACHED
+        # (REST shape — nested .head.sha).  Fail-open: if neither has
+        # it, skip the cap rather than block the dispatch (Codex P2,
+        # PR #2522, lines 1077 + 7284).
         local _std_conflict_head_sha=""
+        if [ -n "${_std_conflict_linked:-}" ] && [ "${_std_conflict_linked}" != "null" ]; then
+          _std_conflict_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
+        fi
+        if [ -z "${_std_conflict_head_sha}" ] && [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ]; then
+          _std_conflict_head_sha="$(printf '%s' "${_STD_ITER_PR_JSON_CACHED}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
+        fi
+        # Read the current per-head override count BEFORE dispatch so
+        # we can decide cap consumption from it, but defer the actual
+        # write (counter bump + budget consumption) to AFTER the
+        # dispatch and only apply it when the dispatch was a FRESH
+        # one (rc=0).  rc=2 means _dispatch_review_for_conflicts
+        # deduped against an in-flight autofix or an earlier dispatch
+        # this cycle — no new work happened, so neither the counter
+        # nor stall budget should advance (mirrors the managed
+        # retrigger_review fix at line 5559+ / Codex P2 line 5565).
         local _std_override_count="0"
-        local _std_next_count="0"
-        local _std_consume_budget="false"
-        _std_conflict_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // .headRefOid // empty)' 2>/dev/null || echo "")"
         if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
-          _std_override_count="$(printf '%s' "${updated_state}" | jq -r --arg sha "${_std_conflict_head_sha}" '.conflict_override_count[$sha] // 0' 2>/dev/null || echo "0")"
+          _std_override_count="$(printf '%s' "${updated_state}" | jq -r --arg sha "${_std_conflict_head_sha}" '(.conflict_override_count[$sha] // 0)' 2>/dev/null || echo "0")"
           [[ "${_std_override_count}" =~ ^[0-9]+$ ]] || _std_override_count="0"
-          if [ "${_std_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
-            echo "  [standalone-stall] Issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} head_sha ${_std_conflict_head_sha} has hit budget-neutral override cap (${_std_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
-            _std_consume_budget="true"
-          fi
-          _std_next_count=$(( _std_override_count + 1 ))
         fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
           0)
+            # Fresh dispatch — bump the per-head counter and (if the
+            # cap is now hit) consume one stall-recovery attempt,
+            # mirroring the managed retrigger_review path.  Refresh
+            # status_since_ts/updated_ts on budget consumption so the
+            # issue re-enters its phase-threshold window instead of
+            # burning the rest of the ladder on the next cron tick
+            # (Codex P2, PR #2522, line 7335).  This block runs ONLY
+            # in the rc=0 branch — rc=2 (dedupe) below does not bump
+            # the counter.
             if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
-              updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_next_count}" '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || echo "${updated_state}")"
+              if [ "${_std_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} head_sha ${_std_conflict_head_sha} has hit budget-neutral override cap (${_std_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
+                local _std_now_ts
+                _std_now_ts="$(date -u +%s)"
+                updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson now "${_std_now_ts}" \
+                  '.stall_recovery_count = ((.stall_recovery_count // 0) + 1)
+                   | .status_since_ts = $now
+                   | .updated_ts = $now' \
+                  2>/dev/null || printf '%s' "${updated_state}")"
+              fi
+              local _std_override_next=$(( _std_override_count + 1 ))
+              updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_override_next}" \
+                '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || printf '%s' "${updated_state}")"
             fi
-			if [ "${_std_consume_budget}" = "true" ]; then
-			  updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
-				.stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
-				| .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
-				| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
-				| .status_since_ts = $now
-				| .updated_ts = $now
-			  ' 2>/dev/null || echo "${updated_state}")"
-			fi
             echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver instead of '${action}'."
             echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=dispatch_conflict_resolver override_from=${action}"
             tg_notify_issue "${issue_num}" "Standalone stall recovery: PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver (phase=${phase}, stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
@@ -7427,15 +8079,24 @@ REISSUE_EOF
             --add-label 'ai:closed' 2>/dev/null || true
           gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery. Issue was stuck in '${phase}' for ${elapsed_minutes} minutes after $((recovery_count + 1)) recovery attempt(s)." 2>/dev/null || true
           local new_state
-		  new_state="$(printf '%s' "${updated_state}" | jq -c --argjson now "$(date +%s)" '
-			.last_seen_phase = ""
-			| .status_since_ts = $now
-			| .stall_recovery_count = 0
-			| .phase_attempts = {}
-			| .updated_ts = $now
-		  ' 2>/dev/null || echo "${updated_state}")"
-		  write_standalone_state_json "${new_num}" "${new_state}" ""
-		  tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
+          new_state="$(python3 - "$updated_state" <<'PY'
+import json, sys, time
+state = json.loads(sys.argv[1])
+now = int(time.time())
+state["last_seen_phase"] = ""
+state["status_since_ts"] = now
+state["stall_recovery_count"] = 0
+# Reset the phase-lifetime counter alongside stall_recovery_count so the
+# fresh issue starts with a clean recovery ladder instead of inheriting
+# the predecessor's exhausted phase_attempts (which would route
+# detect_stalls() straight to "skip" on the first stall).
+state["phase_attempts"] = {}
+state["updated_ts"] = now
+print(json.dumps(state, separators=(",", ":")))
+PY
+)"
+          write_standalone_state_json "${new_num}" "${new_state}" ""
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
 		else
 		  echo "::warning::Standalone close_and_reissue failed to create replacement issue for #${issue_num}."
 		  tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
@@ -8902,7 +9563,7 @@ The poller will resume processing on the next cycle."
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       # Update the wave entry with the github issue number
-      jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\" | .last_seen_phase = \"\" | .status_since_ts = $(date +%s) | .stall_recovery_count = 0)" \
+      jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\" | .last_seen_phase = \"\" | .status_since_ts = $(date +%s) | .stall_recovery_count = 0 | .phase_attempts = {})" \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       DEFERRED_STATE_CHANGED=true
@@ -10371,8 +11032,12 @@ ${RB_FIX_DESC}
             if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
               jq ".issue_number_map[\"${LOCAL_ID}\"] = ${NEW_NUM}" \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-              # Update the wave entry
-              jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${LOCAL_ID}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\")" \
+              # Update the wave entry.  Reset the stall counters alongside
+              # the new github_issue so the replacement issue runs the
+              # recovery ladder from scratch on its first stall instead of
+              # inheriting the predecessor's exhausted stall_recovery_count /
+              # phase_attempts and being routed straight to "skip".
+              jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${LOCAL_ID}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\" | .last_seen_phase = \"\" | .status_since_ts = $(date +%s) | .stall_recovery_count = 0 | .phase_attempts = {})" \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             fi
 
@@ -10784,11 +11449,29 @@ REISSUE_EOF
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
-      # Update state file: replace the old issue number with the new one
-      # (impl_noop_count is preserved on the issue entry since we only
-      # change github_issue, not the issue object itself)
+      # Update state file: replace the old issue number with the new
+      # one AND reset the per-issue stall-recovery accumulators on the
+      # wave entry so the fresh replacement does not inherit an
+      # exhausted phase_attempts counter from its predecessor and get
+      # routed straight to "skip" on its first stall in that phase
+      # (Codex P2, PR #2522, orchestrate_lib.py line 1814).  Matches
+      # the reset block used by the other reissue paths (see
+      # scripts/orchestrate_poll_process.sh:5733, 9061, 10535).
+      # impl_noop_count is intentionally preserved so the
+      # ancestor-chain no-op cap can still detect a chain of no-op
+      # reissues — that counter tracks the issue lineage rather than
+      # the current attempt's progress.
       if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
-        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
+        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" \
+          '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)) |= (
+             .github_issue = $new_issue_num
+             | .status = "pending"
+             | .last_seen_phase = ""
+             | .status_since_ts = (now | floor)
+             | .stall_recovery_count = 0
+             | .phase_attempts = {}
+           )
+           | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 
@@ -10871,6 +11554,28 @@ fi
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
+    # Forward MAX_STALL_RECOVERIES_DONE through to detect_stalls so the
+    # ai:done per-phase override is applied to both phase_attempts and
+    # stall_recovery_count.  Without this, an ai:done issue at
+    # phase_attempts=5 (the default global cap) is hard-closed even when
+    # the operator raised MAX_STALL_RECOVERIES_DONE=99 to avoid exactly
+    # that outcome.  The shell-side ai:done helpers
+    # (recovery_action_for_phase / normalize_stall_recovery_action) already
+    # pass {"ai:done": ${MAX_STALL_RECOVERIES_DONE}} into the corresponding
+    # Python helpers; this keeps the in-process bulk path consistent.
+    # Normalize to a canonical decimal integer BEFORE formatting so a
+    # value like "09" (the regex validator at line ~882 only checks
+    # `^[0-9]+$`, which permits leading zeros) does not produce
+    # invalid JSON like `{"ai:done": 09}` and silently break
+    # check-stalls into a fall-back `{count:0}` (Copilot review,
+    # PR #2522, line 11254).  `$((10#${X}))` forces base-10
+    # interpretation, stripping leading zeros without invoking an
+    # external process.  Then build the JSON via `jq --argjson` so
+    # the result is guaranteed-valid JSON.
+    # No `local` here — this block lives in the top-level poller body
+    # (outside any function), where `local` is a syntax error.
+    _msd_canonical=$(( 10#${MAX_STALL_RECOVERIES_DONE} ))
+    _stall_check_args+=(--max-recoveries-by-phase-json "$(jq -cn --argjson n "${_msd_canonical}" '{"ai:done": $n}')")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"

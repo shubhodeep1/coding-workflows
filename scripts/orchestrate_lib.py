@@ -1627,7 +1627,7 @@ def detect_stalls(
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
-		stall_duration_minutes, stall_recovery_count
+		stall_duration_minutes, stall_recovery_count, phase_attempts_count
 	"""
 	current_wave_idx = state.get("current_wave", 1) - 1
 	waves = state.get("waves", [])
@@ -1688,15 +1688,38 @@ def detect_stalls(
 		else:
 			phase_attempts_count = 0
 		phase_attempts_count = max(0, phase_attempts_count)
+
+		# Determine recovery action.  Apply the per-phase cap (when one is
+		# configured) to both the per-recovery counter and the phase-lifetime
+		# counter — otherwise a phase that the operator deliberately exempted
+		# from the default 5-attempt cap (e.g. ai:done with
+		# MAX_STALL_RECOVERIES_DONE=99) would still be hard-closed here at 5,
+		# bypassing the override.
+		#
+		# Phase-attempt cap routing (Codex P2, PR #2522, line 1705): when
+		# the phase oscillates (e.g. ai:review-blocked → ai:done →
+		# ai:review-blocked), update_issue_timestamps resets
+		# stall_recovery_count but phase_attempts_count keeps climbing.
+		# That makes it possible for phase_attempts to cap BEFORE
+		# recovery_count ever reaches stall_judge_trigger_count, so the
+		# old `elif phase_attempts_count >= effective_max: action = "skip"`
+		# would silently force a destructive skip without ever invoking
+		# the judge.  Route the phase-attempt-cap path through
+		# RUN_STALL_JUDGE_ACTION whenever the judge is enabled — the
+		# judge gets one chance to override (close_and_reissue, escalate,
+		# or unlock more attempts) before the ladder forces skip.  When
+		# the judge is disabled, fall back to the original behaviour
+		# (silent skip).
 		effective_max = _phase_specific_max_recoveries(
 			phase, max_recoveries, max_recoveries_by_phase
 		)
-
-		# Determine recovery action
 		if recovery_count >= effective_max:
 			action = "skip"
 		elif phase_attempts_count >= effective_max:
-			action = "skip"
+			if enable_stall_judge and stall_judge_trigger_count >= 1:
+				action = RUN_STALL_JUDGE_ACTION
+			else:
+				action = "skip"
 		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
 			action = RUN_STALL_JUDGE_ACTION
 		else:
@@ -2472,10 +2495,18 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		}
 
 	max_recoveries_by_phase: dict[str, int] | None = None
-	if getattr(args, "max_recoveries_by_phase_json", None):
-		max_recoveries_by_phase = {
-			k: int(v) for k, v in json.loads(args.max_recoveries_by_phase_json).items()
-		}
+	max_recoveries_by_phase_json = getattr(args, "max_recoveries_by_phase_json", None)
+	if max_recoveries_by_phase_json:
+		raw = json.loads(max_recoveries_by_phase_json)
+		if isinstance(raw, dict):
+			max_recoveries_by_phase = {}
+			for k, v in raw.items():
+				try:
+					iv = int(v)
+				except (TypeError, ValueError):
+					continue
+				if iv >= 1:
+					max_recoveries_by_phase[k] = iv
 
 	stalls = detect_stalls(
 		state, issue_labels, threshold, now_ts, max_recoveries,
@@ -2575,7 +2606,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--threshold-minutes", required=True, help="Fallback stall threshold in minutes (used when a phase has no specific override)")
 	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
-	p_stalls.add_argument("--max-recoveries-by-phase-json", default=None, help='Optional JSON: {"ai:done": 99, ...}. Per-phase recovery-cap overrides.')
+	p_stalls.add_argument("--max-recoveries-by-phase-json", default=None, help='Optional JSON: {"ai:done": 99}. Per-phase caps override --max-recoveries for the named phases (applied to both stall_recovery_count and phase_attempts).')
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
 	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
 	p_stalls.add_argument(

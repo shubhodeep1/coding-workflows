@@ -688,6 +688,83 @@ def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
 	assert stalls[0]["recovery_action"] == "skip"
 
 
+def test_detect_stalls_phase_attempts_respects_per_phase_cap():
+	"""An ai:done issue with phase_attempts >= global cap must NOT be skipped
+	when the operator raised the per-phase cap via max_recoveries_by_phase.
+	Without this, the new phase-lifetime counter would prematurely route
+	ai:done stalls to the destructive "skip" action even when
+	MAX_STALL_RECOVERIES_DONE was set to a higher value to keep autofix
+	cycles alive for slow review-blocked PRs (per the
+	_phase_specific_max_recoveries docstring)."""
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	state["waves"][0]["issues"][0]["phase_attempts"] = {"ai:done": 6}
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+
+	assert len(stalls) == 1
+	# 6 phase attempts < per-phase cap of 99 → must NOT be the destructive
+	# "skip" action.
+	assert stalls[0]["recovery_action"] != "skip"
+
+
+def test_detect_stalls_phase_attempts_routes_per_phase_cap_through_judge():
+	"""When max_recoveries_by_phase is supplied and phase_attempts reaches
+	that per-phase cap, the cap still fires — but with the stall judge
+	enabled, the action routes through RUN_STALL_JUDGE_ACTION so the
+	judge gets one chance to override before destructive skip (Codex
+	P2, PR #2522, line 1705).  With the judge disabled, the original
+	silent-skip behaviour persists so the cap still terminates."""
+	def _exhausted_state():
+		state = _make_state()
+		state["waves"][0]["issues"][0]["status"] = "in_progress"
+		state["waves"][0]["issues"][0]["status_since_ts"] = 1
+		state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+		state["waves"][0]["issues"][0]["phase_attempts"] = {"ai:done": 99}
+		return state
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+
+	# Judge enabled: route to RUN_STALL_JUDGE_ACTION, not skip.
+	stalls = orchestrate_lib.detect_stalls(
+		state=_exhausted_state(),
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == orchestrate_lib.RUN_STALL_JUDGE_ACTION, stalls[0]
+
+	# Judge disabled: cap still fires → silent skip (original behaviour).
+	stalls = orchestrate_lib.detect_stalls(
+		state=_exhausted_state(),
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=False,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip", stalls[0]
+
+
 def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigger_override():
 	captured: dict[str, object] = {}
 	original_detect_stalls = orchestrate_lib.detect_stalls
@@ -1869,19 +1946,26 @@ def test_phase_attempts_count_caps_recovery_action():
 	assert action == "dispatch_rb_judge"
 
 
-def test_detect_stalls_skips_when_phase_attempts_exhausted():
-	"""detect_stalls returns recovery_action='skip' when phase_attempts
-	reaches the cap, even with a fresh stall_recovery_count of 0."""
-	state = _make_state()
-	issue = state["waves"][0]["issues"][0]
-	issue["status"] = "in_progress"
-	issue["status_since_ts"] = 1
-	issue["stall_recovery_count"] = 0  # zeroed by phase oscillation
-	issue["phase_attempts"] = {"ai:review-blocked": 5}
+def test_detect_stalls_routes_exhausted_phase_attempts_through_judge():
+	"""When phase_attempts reaches the cap with a fresh
+	stall_recovery_count (e.g. zeroed by phase oscillation), the cap
+	still fires — but the action routes through RUN_STALL_JUDGE_ACTION
+	so the judge can review before a destructive skip (Codex P2,
+	PR #2522, line 1705).  With the judge disabled, the cap continues
+	to force skip."""
+	def _make_exhausted_state():
+		state = _make_state()
+		issue = state["waves"][0]["issues"][0]
+		issue["status"] = "in_progress"
+		issue["status_since_ts"] = 1
+		issue["stall_recovery_count"] = 0  # zeroed by phase oscillation
+		issue["phase_attempts"] = {"ai:review-blocked": 5}
+		return state
 	labels = {"10": ["ai:review-blocked"], "11": ["ai:merged"]}
 
+	# Judge enabled — route to judge, NOT silent skip.
 	stalls = orchestrate_lib.detect_stalls(
-		state=state,
+		state=_make_exhausted_state(),
 		issue_labels=labels,
 		threshold_minutes=120,
 		now_ts=8 * 60 * 60,
@@ -1889,9 +1973,22 @@ def test_detect_stalls_skips_when_phase_attempts_exhausted():
 		stall_judge_trigger_count=2,
 		enable_stall_judge=True,
 	)
-
 	assert len(stalls) == 1
-	assert stalls[0]["recovery_action"] == "skip"
+	assert stalls[0]["recovery_action"] == orchestrate_lib.RUN_STALL_JUDGE_ACTION, stalls[0]
+	assert stalls[0]["phase_attempts_count"] == 5
+
+	# Judge disabled — cap still binds via silent skip (backstop).
+	stalls = orchestrate_lib.detect_stalls(
+		state=_make_exhausted_state(),
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=False,
+	)
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip", stalls[0]
 	assert stalls[0]["phase_attempts_count"] == 5
 
 
