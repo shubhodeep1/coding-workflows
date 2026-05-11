@@ -37,6 +37,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
 
 permissions:
   contents: write
@@ -261,6 +262,54 @@ jobs:
             --reasoning xhigh
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
+      - name: Setup uv (Semble)
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft (writes
+        # SEMBLE_AVAILABLE=false on any error), but `continue-on-error: true`
+        # ensures a future environment/regression issue still degrades to
+        # blank prefetch rather than hard-failing the Codex pass.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shell script and the file-existence guard
+        # below are both already fail-soft, but `continue-on-error: true`
+        # makes the contract explicit at the step boundary so an unexpected
+        # non-zero exit (syntax regression, future refactor) still degrades
+        # to SEMBLE_INDEX_AVAILABLE=false rather than hard-failing the job.
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          # Pin the index location explicitly. Without this the wrapper
+          # falls back to ${RUNTIME_DIR:-${RUNNER_TEMP:-${PWD}}}/.semble-index;
+          # GitHub-hosted runners always set RUNNER_TEMP, but on self-hosted
+          # runners that don't, the index would land in the checkout root.
+          SEMBLE_INDEX_PATH: ${{ runner.temp }}/.semble-index
+        run: |
+          set -euo pipefail
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 ships no index/query CLI surface).
+          # Fail-soft: missing-script case is handled here (callers pinned to
+          # an older reusable workflow ref may not yet have it staged); all
+          # other errors are handled inside the script (writes
+          # SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV and exits 0) so the
+          # prefetch step renders blank.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not present; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Download workflow log report artifact
         uses: actions/download-artifact@v4
         with:
@@ -470,9 +519,28 @@ jobs:
             RUN_LOGS_DIR=""
           fi
 
+          # Build Semble prefetch (best-effort, fail-soft). Skipped silently
+          # when SEMBLE_ENABLED=false, install failed, or the index build
+          # failed — render_prompt.sh treats an empty SEMBLE_PREFETCH as a
+          # blank-line substitution, so a Semble miss never blocks the pass.
+          WLA_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              wla_query_text="$(head -c 6000 "${ANALYSIS_CONTEXT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+              if [ -n "${wla_query_text}" ]; then
+                WLA_SEMBLE_PREFETCH="$(semble_query_block "${wla_query_text}" 6 "Workflow Log Analysis Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
           CODEX_PROMPT_FILE="$(mktemp)"
           {
-            bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
+            SEMBLE_PREFETCH="${WLA_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
             echo
             echo "=== ANALYSIS CONTEXT ==="
             cat "${ANALYSIS_CONTEXT_FILE}"
@@ -820,6 +888,54 @@ jobs:
           git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
           git pull --rebase origin "${TARGET_BRANCH}"
 
+      - name: Setup uv (Semble)
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft (writes
+        # SEMBLE_AVAILABLE=false on any error), but `continue-on-error: true`
+        # ensures a future environment/regression issue still degrades to
+        # blank prefetch rather than hard-failing the Codex pass.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shell script and the file-existence guard
+        # below are both already fail-soft, but `continue-on-error: true`
+        # makes the contract explicit at the step boundary so an unexpected
+        # non-zero exit (syntax regression, future refactor) still degrades
+        # to SEMBLE_INDEX_AVAILABLE=false rather than hard-failing the job.
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          # Pin the index location explicitly. Without this the wrapper
+          # falls back to ${RUNTIME_DIR:-${RUNNER_TEMP:-${PWD}}}/.semble-index;
+          # GitHub-hosted runners always set RUNNER_TEMP, but on self-hosted
+          # runners that don't, the index would land in the checkout root.
+          SEMBLE_INDEX_PATH: ${{ runner.temp }}/.semble-index
+        run: |
+          set -euo pipefail
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 ships no index/query CLI surface).
+          # Fail-soft: missing-script case is handled here (callers pinned to
+          # an older reusable workflow ref may not yet have it staged); all
+          # other errors are handled inside the script (writes
+          # SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV and exits 0) so the
+          # prefetch step renders blank.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not present; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Run deep audit pass
         id: audit
         env:
@@ -897,13 +1013,29 @@ jobs:
             exit 1
           fi
 
+          # Build Semble prefetch (best-effort, fail-soft).
+          AUDIT_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              audit_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+              if [ -n "${audit_query_text}" ]; then
+                AUDIT_SEMBLE_PREFETCH="$(semble_query_block "${audit_query_text}" 6 "Workflow Deep Audit Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
           SECTION_FILE=""
           CODEX_PROMPT_FILE=""
           trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
           {
-            bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
+            SEMBLE_PREFETCH="${AUDIT_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
             echo
             echo "=== ANALYSIS CONTEXT ==="
             echo "Report file path: ${REPORT_FILE}"
@@ -1194,6 +1326,54 @@ jobs:
           git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
           git pull --rebase origin "${TARGET_BRANCH}"
 
+      - name: Setup uv (Semble)
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft (writes
+        # SEMBLE_AVAILABLE=false on any error), but `continue-on-error: true`
+        # ensures a future environment/regression issue still degrades to
+        # blank prefetch rather than hard-failing the Codex pass.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shell script and the file-existence guard
+        # below are both already fail-soft, but `continue-on-error: true`
+        # makes the contract explicit at the step boundary so an unexpected
+        # non-zero exit (syntax regression, future refactor) still degrades
+        # to SEMBLE_INDEX_AVAILABLE=false rather than hard-failing the job.
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          # Pin the index location explicitly. Without this the wrapper
+          # falls back to ${RUNTIME_DIR:-${RUNNER_TEMP:-${PWD}}}/.semble-index;
+          # GitHub-hosted runners always set RUNNER_TEMP, but on self-hosted
+          # runners that don't, the index would land in the checkout root.
+          SEMBLE_INDEX_PATH: ${{ runner.temp }}/.semble-index
+        run: |
+          set -euo pipefail
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 ships no index/query CLI surface).
+          # Fail-soft: missing-script case is handled here (callers pinned to
+          # an older reusable workflow ref may not yet have it staged); all
+          # other errors are handled inside the script (writes
+          # SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV and exits 0) so the
+          # prefetch step renders blank.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not present; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Run API redundancy pass
         id: api_redundancy
         env:
@@ -1271,13 +1451,29 @@ jobs:
             exit 1
           fi
 
+          # Build Semble prefetch (best-effort, fail-soft).
+          API_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              api_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+              if [ -n "${api_query_text}" ]; then
+                API_SEMBLE_PREFETCH="$(semble_query_block "${api_query_text}" 6 "Workflow API Redundancy Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
           SECTION_FILE=""
           CODEX_PROMPT_FILE=""
           trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
           {
-            bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
+            SEMBLE_PREFETCH="${API_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
             echo
             echo "=== ANALYSIS CONTEXT ==="
             echo "Report file path: ${REPORT_FILE}"

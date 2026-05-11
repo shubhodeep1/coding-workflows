@@ -29,11 +29,15 @@ def test_validate_workflow_fetches_semble_support_files() -> None:
 	required_snippets = [
 		'copy_from_ref_or_local "scripts/install_semble.sh" "scripts/install_semble.sh.tmp" "false" "true"',
 		'copy_from_ref_or_local "scripts/semble_helpers.sh" "scripts/semble_helpers.sh.tmp" "false" "true"',
+		# build_semble_wrapper.sh added once the inline BM25 wrapper was
+		# extracted to a shared script (semble 0.1.3 lacks index/query CLI).
+		'copy_from_ref_or_local "scripts/build_semble_wrapper.sh" "scripts/build_semble_wrapper.sh.tmp" "false" "true"',
 		'_fetched_scripts+=(install_semble.sh)',
 		'_fetched_scripts+=(semble_helpers.sh)',
+		'_fetched_scripts+=(build_semble_wrapper.sh)',
 	]
 	for snippet in required_snippets:
-		assert snippet in wf
+		assert snippet in wf, f"validate.yml missing snippet: {snippet}"
 
 
 def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
@@ -42,22 +46,32 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert "VALIDATION_USE_SEMBLE: ${{ vars.VALIDATION_USE_SEMBLE || 'true' }}" in wf
 	assert 'echo "SEMBLE_AVAILABLE=false"' in wf
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in wf
-	assert 'echo "SEMBLE_INDEX_PATH=${index_path}"' in wf
 	assert "- name: setup-uv" in wf
 	assert "uses: astral-sh/setup-uv@v7" in wf
 	assert "- name: Install semble" in wf
 	assert "bash scripts/install_semble.sh" in wf
 	assert "- name: Build semble index" in wf
-	assert "MAX_INDEX_FILES = 5000" in wf
-	assert 'Semble indexing skipped after {MAX_INDEX_FILES} files; validation will continue without Semble.' in wf
-	assert 'echo "SEMBLE_AVAILABLE=true"' in wf
-	assert 'echo "SEMBLE_INDEX_AVAILABLE=true"' in wf
-	assert 'echo "SEMBLE_BIN=${wrapper_path}"' in wf
-	assert 'echo "::notice::Semble index ready at ${index_path}."' in wf
-	assert "def _default_index_path() -> Path:" in wf
-	assert 'Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))' in wf
-	assert "payload.get('version', 'unknown')" in wf
-	assert 'print("semble 0.1.3")' not in wf
+	# Inline BM25 wrapper extracted to scripts/build_semble_wrapper.sh; the
+	# in-workflow body now delegates to that script via a one-liner.
+	assert "bash scripts/build_semble_wrapper.sh" in wf
+	assert 'SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \\' in wf
+	assert 'SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \\' in wf
+
+
+def test_shared_wrapper_script_owns_bm25_implementation() -> None:
+	# Assertions that previously inspected validate.yml's inline wrapper now
+	# inspect the shared script. Keeping them so a regression in either
+	# extraction or future renames is caught at test time.
+	wrapper = (REPO_ROOT / "scripts" / "build_semble_wrapper.sh").read_text(encoding="utf-8")
+	assert "MAX_INDEX_FILES = 5000" in wrapper
+	assert "Semble indexing skipped after {MAX_INDEX_FILES} files" in wrapper
+	assert 'write_env_kv "SEMBLE_AVAILABLE" "true"' in wrapper
+	assert 'write_env_kv "SEMBLE_INDEX_AVAILABLE" "true"' in wrapper
+	assert 'write_env_kv "SEMBLE_BIN"' in wrapper
+	assert "def _default_index_path() -> Path:" in wrapper
+	assert 'Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))' in wrapper
+	assert "payload.get('version', 'unknown')" in wrapper
+	assert 'print("semble 0.1.3")' not in wrapper
 
 
 def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
@@ -86,6 +100,7 @@ def test_self_heal_includes_semble_prompt_hook() -> None:
 def main() -> int:
 	test_validate_workflow_fetches_semble_support_files()
 	test_validate_workflow_bootstraps_and_exports_semble_state()
+	test_shared_wrapper_script_owns_bm25_implementation()
 	test_validate_process_includes_discover_and_diagnose_semble_hooks()
 	test_self_heal_includes_semble_prompt_hook()
 	return 0

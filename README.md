@@ -793,6 +793,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate_clarify_respond.yml` | `issue_comment.created` | Auto-answers clarification questions on orchestrator issues |
 | `orchestrate_poll.yml` | `schedule` (every ~5 min) | Orchestrator progress poller + judge + auto-recovery. Polling cadence is driven entirely by the wrapper workflow's cron schedule; the legacy self-retrigger path (cooldown sleep + `workflow_dispatch` at end-of-run) and its rate-limit circuit-breaker gate have been removed. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
+| `workflow-log-analysis.yml` | `workflow_dispatch` (typically called from comprehensive-test-and-release / test-and-mark-stable smoke gates) | Periodic Codex audit of workflow runs (analyze, deep-audit, api-redundancy passes); see [`probably_unnecessary_but_read_if_stuck.md`](probably_unnecessary_but_read_if_stuck.md) for the runbook |
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
 
@@ -1595,7 +1596,7 @@ coding-workflows/
 
 Consumer repos pin to `@stable` for automatic updates or exact tags for reproducibility. This repo's own `internal-*.yml` wrappers pin `@main`.
 
-> **Semble rollout note.** `workflow-templates/*.yml` remain thin caller wrappers. The opt-in `SEMBLE_ENABLED` gate plus the Semble install/index steps live in the reusable workflows under `.github/workflows/`. Consumer repos pick up those reusable-workflow changes only after a new `@stable` tag is cut; merging changes on `main` here does not update already-installed consumer wrappers by itself.
+> **Semble rollout note.** `workflow-templates/*.yml` remain thin caller wrappers. The opt-in `SEMBLE_ENABLED` gate plus the Semble install/index steps live in the reusable workflows under `.github/workflows/` (`clarify`, `plan`, `implement`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `review_autofix`, `validate`, and `workflow-log-analysis`). Consumer repos pick up those reusable-workflow changes only after a new `@stable` tag is cut; merging changes on `main` here does not update already-installed consumer wrappers by itself. `workflow-log-analysis.yml`'s three Codex passes (analyze-commit-notify, deep-audit, api-redundancy) each install Semble, build an index of the repo state they will analyze, and pass a `{{SEMBLE_PREFETCH}}` block into the rendered prompt via `scripts/render_prompt.sh`; misses are fail-soft (empty prefetch → blank placeholder).
 
 ## Contributing
 
