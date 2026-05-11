@@ -586,6 +586,344 @@ def test_loop_pins_labels_to_first_issue_even_when_body_comes_from_later_issue()
 	)
 
 
+# =============================================================================
+# merge_with_followup branch coverage
+# =============================================================================
+#
+# Pins the same label-propagation contract for the merge_with_followup
+# action (added in PR #2519) AND the new safety gates introduced when
+# review comments flagged orphan-risk on the original implementation:
+#   - Refuse the action when followup_issue title/body are missing.
+#   - Only label / create follow-up / emit judge_handled when the merge
+#     can be confirmed (mergeable=true + auto-merge enrolled, or PR
+#     already merged).
+# Without these tests, a future refactor that re-orphans the follow-up
+# tracking issue (e.g. by moving the issue creation outside the
+# MERGE_CONFIRMED gate) would slip through.
+
+
+def _extract_merge_with_followup_branch() -> str:
+	"""Pull the body of the `merge_with_followup)` case arm out of the
+	real script.  Anchored on the next case label (`close_and_reissue)`)
+	so we don't swallow the rest of the case statement."""
+	text = _rb_judge_text()
+	match = re.search(
+		r"  merge_with_followup\)\n(?P<branch>.*?)\n    ;;\n\n  close_and_reissue\)",
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError(
+			"could not extract merge_with_followup branch from review_rb_judge.sh"
+		)
+	return match.group("branch")
+
+
+def _build_merge_with_followup_harness(branch: str, github_output: Path) -> str:
+	"""Wrap the extracted merge_with_followup branch in a self-contained
+	bash harness with stubs for the helpers it depends on.
+
+	Differences from `_build_harness` (close_and_reissue):
+	  - `_safe_gh_jq` forwards to `gh api` so the mergeability-poll loop
+	    sees real (mocked) PR JSON rather than no-op'ing into empty
+	    output.  Without this the MERGE_CONFIRMED gate can never flip
+	    true and every test would skip the issue-create path.
+	  - `sleep` is no-op'd so the mergeability-poll backoff (which the
+	    real script measures in seconds) doesn't slow tests.
+	"""
+	return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+gh_retry() {{ "$@"; }}
+ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
+_resilient_phase_swap() {{ :; }}
+_safe_gh_jq() {{ gh api "$@"; }}
+sleep() {{ :; }}
+
+GITHUB_OUTPUT="{github_output}"
+
+case "${{RB_ACTION}}" in
+  merge_with_followup)
+{branch}
+    ;;
+esac
+"""
+
+
+def _run_merge_with_followup(
+	parent_label_set: list,
+	followup_title: str = "Follow-up: wire deriveX into production",
+	followup_body: str = "Acceptance criteria: a production caller invokes deriveX with the same args the unit tests use.",
+	pr_state: str = "open",
+	pr_mergeable: object = True,  # bool or None (=mergeability still computing)
+	enable_auto_merge: str = "true",
+) -> dict:
+	"""Run the merge_with_followup branch with a mocked PR mergeability
+	state and judge JSON.  Returns the captured gh-mock state plus the
+	contents of GITHUB_OUTPUT so callers can assert on judge_handled /
+	judge_action emission."""
+	branch = _extract_merge_with_followup_branch()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_mwf_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+
+		# Seed the mock's api_responses with a PR-mergeability shape
+		# keyed by the URL path suffix the script will call.  Substring
+		# match is what the mock uses, so "pulls/42" is enough.
+		pr_response: dict = {"state": pr_state}
+		# `mergeable: null` is meaningful (mergeability still computing);
+		# emit it explicitly so jq's `// ""` defaults fire.
+		pr_response["mergeable"] = pr_mergeable  # type: ignore[assignment]
+		gh_state_file.write_text(
+			json.dumps({"api_responses": {"pulls/42": pr_response}}),
+			encoding="utf-8",
+		)
+
+		labels_file = runtime_dir / "ensure_labels.txt"
+		labels_file.write_text("", encoding="utf-8")
+		github_output = runtime_dir / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+
+		script_path = runtime_dir / "rb_branch_harness.sh"
+		script_path.write_text(
+			_build_merge_with_followup_harness(branch, github_output),
+			encoding="utf-8",
+		)
+		script_path.chmod(0o755)
+
+		# Build judge JSON.  Empty title or body simulates the
+		# "missing follow-up details" case the refusal gate catches.
+		followup_payload: dict = {"title": followup_title, "body": followup_body}
+		judge_json = json.dumps({
+			"action": "merge_with_followup",
+			"justification": "PR is shippable; deferred wiring tracked separately",
+			"remaining_issues_summary": "deriveX has only test callers",
+			"followup_issue": followup_payload,
+		})
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"ENSURE_LABELS_FILE": str(labels_file),
+			"REPOSITORY": "owner/repo",
+			"PR_NUMBER": "42",
+			"ISSUE_NUMBERS": "41",
+			"FIRST_ISSUE": "41",
+			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
+			"JUDGE_JSON": judge_json,
+			"RB_ACTION": "merge_with_followup",
+			"ENABLE_AUTO_MERGE": enable_auto_merge,
+			# Speed up the mergeability poll — one attempt is enough
+			# because the mock returns the configured value
+			# deterministically on the first call.
+			"PR_MERGEABLE_POLL_ATTEMPTS": "1",
+			"PR_MERGEABLE_POLL_SLEEP": "0",
+		}
+		run_env = os.environ.copy()
+		run_env.update(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"merge_with_followup harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_ensure_labels"] = labels_file.read_text(encoding="utf-8").strip().splitlines()
+		state["_stdout"] = proc.stdout
+		state["_github_output"] = github_output.read_text(encoding="utf-8")
+		return state
+
+
+def test_merge_with_followup_branch_gates_on_orchestrator_managed_label() -> None:
+	"""Static check that mirrors the close_and_reissue branch contract:
+	the propagation gate must be exactly `index("ai:orchestrator-managed")`
+	against FIRST_ISSUE_LABELS_JSON.  Widening the gate would mislabel
+	standalone follow-ups; narrowing or removing it would re-orphan
+	orchestrator-managed lineage exactly like the bug the
+	close_and_reissue tests already pin."""
+	branch = _extract_merge_with_followup_branch()
+
+	assert "FIRST_ISSUE_LABELS_JSON" in branch, (
+		"merge_with_followup branch must reference FIRST_ISSUE_LABELS_JSON; "
+		"otherwise it cannot decide whether to propagate the label."
+	)
+	assert 'jq -e \'index("ai:orchestrator-managed")\'' in branch, (
+		"merge_with_followup branch must gate label propagation strictly "
+		"on the parent carrying ai:orchestrator-managed."
+	)
+	assert 'RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")' in branch, (
+		"merge_with_followup branch must append `--label ai:orchestrator-managed` "
+		"to the gh issue create args via the RB_FOLLOWUP_LABELS array."
+	)
+
+
+def test_merge_with_followup_orchestrator_managed_parent_propagates_label() -> None:
+	"""Parent carries ai:orchestrator-managed AND PR is mergeable AND
+	follow-up details are present → follow-up issue must be created
+	with `--label ai:orchestrator-managed` so the clarify auto-answer
+	fast path fires on the new issue."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"expected exactly one gh issue create call, got {len(creates)}: {creates}"
+	)
+	args = creates[0]
+	assert "--label" in args, (
+		f"follow-up issue must carry --label when parent is orchestrator-managed; "
+		f"got args: {args}"
+	)
+	idx = args.index("--label")
+	assert args[idx + 1] == "ai:orchestrator-managed", (
+		f"follow-up --label must be exactly 'ai:orchestrator-managed'; "
+		f"got: {args[idx + 1]!r}"
+	)
+	assert "ai:orchestrator-managed" in state["_ensure_labels"], (
+		"ensure_label_exists must be invoked for ai:orchestrator-managed "
+		"before the gh issue create call; otherwise a fresh consumer repo "
+		"could 422 on an unknown label."
+	)
+	# Confirm the metadata footer landed in the issue body.
+	idx = args.index("--body")
+	body = args[idx + 1]
+	assert "Merge-with-followup metadata" in body, (
+		f"follow-up issue body must include the metadata footer; got body:\n{body}"
+	)
+	assert "Source PR: #42" in body, (
+		"follow-up issue body must reference the source PR number so the "
+		"deferred gap can be traced back to its origin"
+	)
+	assert "Parent issue: #41" in body, (
+		"follow-up issue body must reference the parent linked issue"
+	)
+	# judge_handled must be emitted on the confirmed-merge path.
+	assert "judge_handled=true" in state["_github_output"], (
+		"merge_with_followup must emit judge_handled=true when merge is "
+		"confirmed; otherwise the workflow's review-blocked fallback re-fires"
+	)
+	assert "judge_action=merge_with_followup" in state["_github_output"]
+
+
+def test_merge_with_followup_standalone_parent_does_not_propagate_label() -> None:
+	"""Parent does NOT carry ai:orchestrator-managed → follow-up must
+	be created WITHOUT that label.  Standalone clarify semantics must
+	be preserved (mirrors the close_and_reissue contract)."""
+	state = _run_merge_with_followup(
+		parent_label_set=["bug", "review-blocked"],
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	args = creates[0]
+	assert "ai:orchestrator-managed" not in args, (
+		f"standalone follow-up must NOT carry ai:orchestrator-managed; "
+		f"got args: {args}"
+	)
+
+
+def test_merge_with_followup_refuses_without_followup_details() -> None:
+	"""Judge picked merge_with_followup but omitted follow-up
+	title/body → action must be refused: NO gh issue create call,
+	NO judge_handled=true emission.  This is the safety gate that
+	prevents the new action from silently degrading to a plain merge
+	(which would lose the deferred gap entirely)."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		followup_title="",
+		followup_body="",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create any follow-up issue when "
+		f"followup_issue is missing — that's the whole point of the safety "
+		f"refusal. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when refusing "
+		"the action; the workflow's review-blocked fallback should fire instead"
+	)
+
+
+def test_merge_with_followup_skips_creation_when_pr_not_mergeable() -> None:
+	"""PR has merge conflicts (mergeable=false) → MERGE_CONFIRMED stays
+	false → NO follow-up issue created, NO label swap, NO
+	judge_handled=true.  This prevents orphaning the tracking issue
+	against code that never lands on the base ref."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_mergeable=False,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up issue when "
+		f"the PR has merge conflicts (would orphan against unmerged code). "
+		f"Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when merge "
+		"cannot be confirmed; the PR must stay in ai:review-blocked for "
+		"stall recovery"
+	)
+
+
+def test_merge_with_followup_skips_creation_when_auto_merge_disabled() -> None:
+	"""PR is mergeable but ENABLE_AUTO_MERGE=false → operator wants to
+	merge manually → MERGE_CONFIRMED stays false → NO follow-up issue
+	created.  Avoids opening a tracking issue against a PR the
+	operator might decide not to merge."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_mergeable=True,
+		enable_auto_merge="false",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up issue when "
+		f"auto-merge is disabled and the PR is still open — the operator "
+		f"controls the merge decision. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"]
+
+
+def test_merge_with_followup_creates_followup_when_pr_already_merged() -> None:
+	"""PR was merged before the judge ran (rare race; e.g. a concurrent
+	workflow merged it) → MERGE_CONFIRMED=true on the PR_STATE=merged
+	short path → follow-up is created and judge_handled emitted.
+	Pins the "already merged" branch of the MERGE_CONFIRMED ladder."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_state="merged",
+		pr_mergeable=None,  # GitHub returns null for merged PRs
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"merge_with_followup must create the follow-up issue when the PR "
+		f"is already merged. Got: {creates}"
+	)
+	assert "judge_handled=true" in state["_github_output"]
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern (see ci.yml) rather than pytest discovery,
