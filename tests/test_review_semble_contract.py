@@ -33,7 +33,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
 	stage_block = _step_block(workflow, "Stage workflow support files")
 	init_block = _step_block(workflow, "Initialize runtime workspace")
 
-	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
+	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in stage_block
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh semble_helpers.sh"' in stage_block
 	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block

@@ -209,7 +209,7 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     install_block = _step_block(workflow, "Install semble")
     index_block = _step_block(workflow, "Build semble index")
 
-    assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
+    assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
     assert 'echo "SEMBLE_AVAILABLE=false"' in workspace_block
     assert 'echo "SEMBLE_BIN="' in workspace_block
     assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block
