@@ -726,6 +726,62 @@ def test_judge_cache_write_gated_on_dispatch_rc_and_fresh_dispatch(tmp_path):
 	assert out["F_did"] == "skipped", out
 
 
+def test_mark_integration_sync_clean_resets_stale_counters_even_when_already_clean(tmp_path):
+	"""mark_integration_sync_clean must reset
+	integration_conflict_dispatch_count / dispatch_ts /
+	unresolved_ticks whenever clean state is observed — not only on
+	the non-clean → clean transition.  Legacy state files (written
+	before the post-heal reset existed) can carry stale counters
+	while `integration_sync_status` is already "clean"; without
+	this broader reset, a fresh conflict episode inherits a
+	non-zero dispatch_count and the exponential backoff caps the
+	cooldown at 16× from the very first retry (Codex P2, PR #2522
+	line 3774).
+	"""
+	state_file = tmp_path / "state.json"
+	# Seed: status already "clean" but stale per-episode counters.
+	state_file.write_text(json.dumps({
+		"integration_sync_status": "clean",
+		"integration_sync_last_error": "old error",
+		"integration_conflict_dispatch_count": 5,
+		"integration_conflict_dispatch_ts": 1700000000,
+		"integration_conflict_unresolved_ticks": 3,
+		"integration_conflict_total_dispatches": 7,
+	}))
+	# Reproduce the production reset jq.
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export STATE_FILE='""" + str(state_file) + """'
+		prev_status="$(jq -r '.integration_sync_status // "clean"' "$STATE_FILE")"
+		prev_dispatch_count="$(jq -r '.integration_conflict_dispatch_count // 0' "$STATE_FILE")"
+		prev_dispatch_ts="$(jq -r '.integration_conflict_dispatch_ts // 0' "$STATE_FILE")"
+		prev_unresolved_ticks="$(jq -r '.integration_conflict_unresolved_ticks // 0' "$STATE_FILE")"
+		if [ "${prev_status}" != "clean" ] \
+		   || [ "${prev_dispatch_count}" != "0" ] \
+		   || [ "${prev_dispatch_ts}" != "0" ] \
+		   || [ "${prev_unresolved_ticks}" != "0" ]; then
+			jq '.integration_sync_status = "clean" |
+			    .integration_sync_last_error = "" |
+			    .integration_conflict_unresolved_ticks = 0 |
+			    .integration_conflict_dispatch_count = 0 |
+			    .integration_conflict_dispatch_ts = 0' \
+			  "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+		fi
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	got = json.loads(state_file.read_text())
+	# Per-episode counters MUST all be zero after the reset.
+	assert got["integration_conflict_dispatch_count"] == 0, got
+	assert got["integration_conflict_dispatch_ts"] == 0, got
+	assert got["integration_conflict_unresolved_ticks"] == 0, got
+	# Status remains clean (idempotent) and last_error is cleared.
+	assert got["integration_sync_status"] == "clean", got
+	assert got["integration_sync_last_error"] == "", got
+	# Lifetime-cap counter is intentionally preserved.
+	assert got["integration_conflict_total_dispatches"] == 7, got
+
+
 def test_max_budget_neutral_overrides_and_judge_replay_canonicalisation(tmp_path):
 	"""MAX_BUDGET_NEUTRAL_OVERRIDES and MAX_JUDGE_REPLAY are validated
 	with `^[0-9]+$` which permits leading-zero values like "08" /

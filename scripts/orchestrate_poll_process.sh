@@ -3761,18 +3761,37 @@ mark_integration_sync_clean() {
   ensure_integration_conflict_state_fields
   local prev_status
   prev_status="$(jq -r '.integration_sync_status // "clean"' "${STATE_FILE}")"
-  if [ "${prev_status}" != "clean" ]; then
-    # Reset the per-episode backoff counter alongside unresolved_ticks so a
-    # later independent conflict episode on the same integration branch
-    # starts the exponential-backoff ladder back at 1× (15 min) instead of
-    # inheriting the previous episode's 16× cooldown and stalling resolver
-    # retries for hours.  integration_conflict_total_dispatches is the
-    # lifetime cap and is intentionally NOT reset here.
+  # Always clear the per-episode counters when clean state is
+  # observed, not only on the non-clean → clean transition.  Legacy
+  # state files (written by versions before the post-heal reset
+  # existed) can have `integration_sync_status = clean` but
+  # `integration_conflict_dispatch_count` / `dispatch_ts` left over
+  # from an earlier episode.  Without this broader reset, the next
+  # fresh conflict episode inherits a non-zero dispatch_count, and
+  # the exponential-backoff calculation at line ~3645 immediately
+  # caps the cooldown at 16× — delaying the first real retry by
+  # 4 hours instead of the documented 15-minute first interval
+  # (Codex P2, PR #2522 line 3774).  integration_conflict_total_dispatches
+  # is the lifetime cap and is intentionally NOT reset here.
+  local prev_dispatch_count prev_dispatch_ts prev_unresolved_ticks
+  prev_dispatch_count="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
+  prev_dispatch_ts="$(jq -r '.integration_conflict_dispatch_ts // 0' "${STATE_FILE}")"
+  prev_unresolved_ticks="$(jq -r '.integration_conflict_unresolved_ticks // 0' "${STATE_FILE}")"
+  if [ "${prev_status}" != "clean" ] \
+     || [ "${prev_dispatch_count}" != "0" ] \
+     || [ "${prev_dispatch_ts}" != "0" ] \
+     || [ "${prev_unresolved_ticks}" != "0" ]; then
     jq '.integration_sync_status = "clean" |
         .integration_sync_last_error = "" |
         .integration_conflict_unresolved_ticks = 0 |
-        .integration_conflict_dispatch_count = 0' \
+        .integration_conflict_dispatch_count = 0 |
+        .integration_conflict_dispatch_ts = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+  # Only post the user-facing "resolved" comment on the actual
+  # non-clean → clean transition; legacy stale-counter migrations
+  # are silent operational cleanup.
+  if [ "${prev_status}" != "clean" ]; then
     post_tracking_comment "## ✅ Integration self-healing resolved
 
 \`${default_branch}\` now merges cleanly into the integration branch. Final merge will proceed on the next poll tick."
