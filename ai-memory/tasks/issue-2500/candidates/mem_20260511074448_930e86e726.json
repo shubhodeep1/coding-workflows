@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2500,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2500\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2505\",\"pr_number\":2505,\"branch\":\"ai/issue-2500\",\"run_id\":\"25656989703\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25656989703\",\"changed_files\":[\"tests/e2e_smoke_canary.txt\"]}",
+  "fingerprint": "1ffd563303621bebb8a62c840ee37c8d9c0ac00c1c8dd08c428a8dd6a8bf1697",
+  "lineage": {
+    "issue_number": 2500,
+    "parent_ids": [],
+    "pr_number": 2505,
+    "run_id": "25656989703",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25656989703",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2505"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260511074448_930e86e726",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2500,
+    "level": "run",
+    "pr_number": 2505,
+    "run_id": "25656989703"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2500: https://github.com/shubhodeep1/coding-workflows/pull/2505",
+  "timestamps": {
+    "created_at": "2026-05-11T07:44:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
