@@ -108,7 +108,7 @@ if grep -Fq "(No reviewer outputs available for this pass.)" "${REVIEWER_CONSENS
 fi
 
 LEDGER_BYTES="$(wc -c < "${REVIEWER_CONSENSUS_FILE}" | tr -d '[:space:]')"
-echo "post_review_comment: ledger=${REVIEWER_CONSENSUS_FILE} bytes=${LEDGER_BYTES} pr=${PR_NUMBER:-<none>} sha=${HEAD_SHA}"
+echo "post_review_comment: ledger=${REVIEWER_CONSENSUS_FILE} bytes=${LEDGER_BYTES} sha=${HEAD_SHA} pr_in=${PR_NUMBER:-<none>}"
 
 # ── Open-then-push race recovery ────────────────────────────────────────
 # review_autofix.yml's caller (internal-review.yml resolve-claude-branch-pr)
@@ -165,7 +165,7 @@ if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
 else
 	ROUTE="commit"
 fi
-echo "post_review_comment: route=${ROUTE}"
+echo "post_review_comment: route=${ROUTE} pr=${PR_NUMBER:-<none>}"
 
 # ── Build header / trailer envelope ─────────────────────────────────────
 RUN_URL=""
