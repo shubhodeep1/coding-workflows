@@ -129,10 +129,15 @@ echo "post_review_comment: ledger=${REVIEWER_CONSENSUS_FILE} bytes=${LEDGER_BYTE
 if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -n "${HEAD_REF}" ]; then
 	resolved_pr=""
 	owner="${REPOSITORY%/*}"
+	# Let gh_retry's stderr (auth errors, rate-limit warnings, permanent
+	# failures after retry exhaustion) flow through to the workflow log
+	# for observability. The numeric regex on resolved_pr below still
+	# fails open to commit-comment route on any empty / non-numeric
+	# output, so no observability gain costs us behavioural safety.
 	if resolved_pr="$(HEAD_SHA="${HEAD_SHA}" gh_retry gh api \
 		"repos/${REPOSITORY}/pulls?state=open&head=${owner}:${HEAD_REF}" \
-		--jq '[.[] | select(.head.sha == env.HEAD_SHA) | .number] | first // empty' \
-		2>/dev/null)" && [[ "${resolved_pr}" =~ ^[0-9]+$ ]]; then
+		--jq '[.[] | select(.head.sha == env.HEAD_SHA) | .number] | first // empty')" \
+		&& [[ "${resolved_pr}" =~ ^[0-9]+$ ]]; then
 		echo "post_review_comment: resolved PR_NUMBER=${resolved_pr} from HEAD_REF=${HEAD_REF} HEAD_SHA=${HEAD_SHA} (open-then-push race recovery)"
 		PR_NUMBER="${resolved_pr}"
 	else
