@@ -1086,6 +1086,12 @@ if ! [[ "${MAX_BUDGET_NEUTRAL_OVERRIDES}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_BUDGET_NEUTRAL_OVERRIDES must be a non-negative integer; defaulting to 2"
   MAX_BUDGET_NEUTRAL_OVERRIDES="2"
 fi
+# Strip leading zeros so the downstream `-ge` comparison (line ~5724
+# / ~7666) treats the value as base-10.  Without this, an operator
+# value like "08" trips bash's "value too great for base" error
+# (claude-branch-review PR #2522; mirrors the MAX_STALL_RECOVERIES_DONE
+# / CONFLICT_DISPATCH_COOLDOWN_SECS canonicalisation pattern).
+MAX_BUDGET_NEUTRAL_OVERRIDES=$(( 10#${MAX_BUDGET_NEUTRAL_OVERRIDES} ))
 
 # MAX_JUDGE_REPLAY caps how many consecutive cached judge decisions the
 # orchestrator will replay before forcing escalate_human. The judge
@@ -1122,6 +1128,12 @@ if ! [[ "${MAX_JUDGE_REPLAY}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_JUDGE_REPLAY must be a non-negative integer; defaulting to 2"
   MAX_JUDGE_REPLAY="2"
 fi
+# Strip leading zeros so the downstream `-ge` comparison (line ~6435)
+# treats the value as base-10.  Without this, an operator value like
+# "08" trips bash's "value too great for base" error
+# (claude-branch-review PR #2522; mirrors the MAX_STALL_RECOVERIES_DONE
+# / CONFLICT_DISPATCH_COOLDOWN_SECS canonicalisation pattern).
+MAX_JUDGE_REPLAY=$(( 10#${MAX_JUDGE_REPLAY} ))
 
 post_tracking_comment() {
   local comment_body="$1"
@@ -6587,11 +6599,6 @@ invoke_stall_judge() {
     STALL_JUDGE_HEAD_REF="${head_ref}"
   fi
 
-  # Cache the fresh judge decision so future identical inputs replay it
-  # rather than burning another LLM call. Skip when this run was itself
-  # served from the cache (replay count was already bumped above).
-  # Cache the EFFECTIVE action (post-normalize) rather than the raw
-  # judge_action: if the judge returns an unrecognized action like
   # The hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` marker is placed
   # IMMEDIATELY after the heading (not at the bottom of the comment)
   # so the cache-key filter at line ~6330 can find it even when the

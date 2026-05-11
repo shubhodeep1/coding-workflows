@@ -560,6 +560,50 @@ def test_judge_cache_key_stable_under_phase_attempts_count_churn(tmp_path):
 	)
 
 
+def test_max_budget_neutral_overrides_and_judge_replay_canonicalisation(tmp_path):
+	"""MAX_BUDGET_NEUTRAL_OVERRIDES and MAX_JUDGE_REPLAY are validated
+	with `^[0-9]+$` which permits leading-zero values like "08" /
+	"09".  The downstream `-ge` arithmetic comparisons would then
+	abort with bash's "value too great for base" (octal
+	interpretation).  Production canonicalises both with
+	`$((10#${VAL}))` after validation; this test pins that pattern
+	(claude-branch-review on commit 5382a89)."""
+	script = textwrap.dedent("""
+		set -euo pipefail
+		emit_for() {
+			local label="$1"
+			local val="$2"
+			local canonical
+			canonical=$(( 10#${val} ))
+			# Use the canonicalised value in the actual `-ge` test
+			# the script does (line ~5724 / ~6435 / ~7666).
+			local result
+			if [ 5 -ge "${canonical}" ]; then result="5_ge_${canonical}"; else result="5_lt_${canonical}"; fi
+			echo "${label}=${canonical} ${result}"
+		}
+		emit_for default 2
+		emit_for leading_zero_8 08
+		emit_for leading_zero_9 09
+		emit_for zero 0
+		emit_for leading_zeros 007
+		emit_for large_canonical 99
+		emit_for large_with_leading 099
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	lines = r.stdout.strip().splitlines()
+	parsed = {line.split("=", 1)[0]: line.split("=", 1)[1] for line in lines}
+	# Canonicalisation must strip leading zeros and the -ge test
+	# must not abort.
+	assert parsed["default"] == "2 5_ge_2", parsed
+	assert parsed["leading_zero_8"] == "8 5_lt_8", parsed
+	assert parsed["leading_zero_9"] == "9 5_lt_9", parsed
+	assert parsed["zero"] == "0 5_ge_0", parsed
+	assert parsed["leading_zeros"] == "7 5_lt_7", parsed
+	assert parsed["large_canonical"] == "99 5_lt_99", parsed
+	assert parsed["large_with_leading"] == "99 5_lt_99", parsed
+
+
 def test_max_recoveries_done_canonicalisation_is_top_level_safe(tmp_path):
 	"""The canonical-int normalization for MAX_STALL_RECOVERIES_DONE
 	lives in the top-level poller body (outside any function), so it
