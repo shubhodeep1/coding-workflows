@@ -79,6 +79,12 @@ mark_unavailable()
 	local reason="${1:-unknown}"
 
 	log "Semble wrapper unavailable: ${reason}"
+	# Conservative: write SEMBLE_AVAILABLE=false too. install_semble.sh may
+	# have written SEMBLE_AVAILABLE=true earlier, but if we land here the
+	# wrapper at SEMBLE_BIN never gets installed, so semble_helpers.sh's
+	# `semble query` contract can't be honored — disabling SEMBLE_AVAILABLE
+	# keeps downstream `[ "${SEMBLE_AVAILABLE}" = "true" ]` gates accurate.
+	write_env_kv "SEMBLE_AVAILABLE" "false"
 	write_env_kv "SEMBLE_INDEX_AVAILABLE" "false"
 	write_env_kv "SEMBLE_INDEX_PATH" "${index_path}"
 	exit 0
@@ -89,7 +95,7 @@ build_index()
 	rm -f "${index_path}"
 	mkdir -p "${wrapper_dir}"
 
-	if ! python3 - "${repo_root}" "${index_path}" <<'PY'
+	if ! "${semble_python_path}" - "${repo_root}" "${index_path}" <<'PY'
 import pickle
 import sys
 from pathlib import Path
@@ -147,8 +153,15 @@ PY
 
 write_wrapper()
 {
-	cat > "${wrapper_path}" <<'PY'
-#!/usr/bin/env python3
+	# Shebang must match the interpreter that has semble + bm25s installed.
+	# install_semble.sh honors SEMBLE_PYTHON_BIN (default: python3); using
+	# `#!/usr/bin/env python3` here would silently pick the wrong python on
+	# runners where install ran under a non-default interpreter (e.g.
+	# python3.11), so `import semble` would fail at query time. Resolve the
+	# absolute path now and bake it into the shebang.
+	{
+		printf '#!%s\n' "${semble_python_path}"
+		cat <<'PY'
 import argparse
 import os
 import pickle
@@ -213,6 +226,7 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 PY
+	} > "${wrapper_path}"
 	chmod +x "${wrapper_path}"
 }
 
@@ -222,13 +236,25 @@ main()
 	local index_path=""
 	local wrapper_dir=""
 	local wrapper_path=""
+	local semble_python_bin=""
+	local semble_python_path=""
 
 	resolve_paths
 
-	if ! python3 -c "import semble" >/dev/null 2>&1; then
+	# Resolve the python interpreter once so build_index() and the generated
+	# wrapper agree with whatever install_semble.sh used. SEMBLE_PYTHON_BIN
+	# is the contract there (defaults to python3); honor the same default
+	# here so callers see consistent behavior across the trio of scripts.
+	semble_python_bin="${SEMBLE_PYTHON_BIN:-python3}"
+	semble_python_path="$(command -v "${semble_python_bin}" 2>/dev/null || true)"
+	if [ -z "${semble_python_path}" ]; then
+		mark_unavailable "python-interpreter-missing:${semble_python_bin}"
+	fi
+
+	if ! "${semble_python_path}" -c "import semble" >/dev/null 2>&1; then
 		mark_unavailable "semble-python-module-missing"
 	fi
-	if ! python3 -c "import bm25s" >/dev/null 2>&1; then
+	if ! "${semble_python_path}" -c "import bm25s" >/dev/null 2>&1; then
 		mark_unavailable "bm25s-missing"
 	fi
 

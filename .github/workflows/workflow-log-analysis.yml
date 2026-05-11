@@ -282,9 +282,17 @@ jobs:
           set -euo pipefail
           # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
           # for the rationale (semble 0.1.3 ships no index/query CLI surface).
-          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV on
-          # any error and exits 0 so the prefetch step renders blank.
-          bash scripts/build_semble_wrapper.sh
+          # Fail-soft: missing-script case is handled here (callers pinned to
+          # an older reusable workflow ref may not yet have it staged); all
+          # other errors are handled inside the script (writes
+          # SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV and exits 0) so the
+          # prefetch step renders blank.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not present; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Download workflow log report artifact
         uses: actions/download-artifact@v4
@@ -881,9 +889,17 @@ jobs:
           set -euo pipefail
           # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
           # for the rationale (semble 0.1.3 ships no index/query CLI surface).
-          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV on
-          # any error and exits 0 so the prefetch step renders blank.
-          bash scripts/build_semble_wrapper.sh
+          # Fail-soft: missing-script case is handled here (callers pinned to
+          # an older reusable workflow ref may not yet have it staged); all
+          # other errors are handled inside the script (writes
+          # SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV and exits 0) so the
+          # prefetch step renders blank.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not present; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Run deep audit pass
         id: audit
@@ -1292,9 +1308,17 @@ jobs:
           set -euo pipefail
           # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
           # for the rationale (semble 0.1.3 ships no index/query CLI surface).
-          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV on
-          # any error and exits 0 so the prefetch step renders blank.
-          bash scripts/build_semble_wrapper.sh
+          # Fail-soft: missing-script case is handled here (callers pinned to
+          # an older reusable workflow ref may not yet have it staged); all
+          # other errors are handled inside the script (writes
+          # SEMBLE_INDEX_AVAILABLE=false to GITHUB_ENV and exits 0) so the
+          # prefetch step renders blank.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not present; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Run API redundancy pass
         id: api_redundancy
