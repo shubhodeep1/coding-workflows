@@ -10124,7 +10124,16 @@ ${RB_FIX_DESC}
           FOLLOWUP_TITLE="$(echo "${RB_JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
           FOLLOWUP_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
           if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
+            # Structured log + WARNING tg_notify so the refusal is
+            # observable to operators and downstream log analysis
+            # (parity with the standalone rb_judge.sh's
+            # judge_skip_reason=missing_followup_details emission;
+            # the orchestrator doesn't write GITHUB_OUTPUT but
+            # surfaces the refusal via the same MWF_REFUSAL prefix
+            # so workflow-log-analysis can grep for it).
             echo "::error::Judge chose merge_with_followup for PR #${RB_PR} (issue #${rb_issue}) but provided no follow-up details (followup_issue.title or .body empty). Refusing — leaving issue in ai:review-blocked for stall recovery."
+            echo "MWF_REFUSAL action=merge_with_followup pr=${RB_PR} issue=${rb_issue} reason=missing_followup_details"
+            tg_notify "Orchestrator merge_with_followup REFUSED for PR #${RB_PR} (issue #${rb_issue}): judge provided no follow-up issue details (followup_issue.title or .body empty). Issue stays in ai:review-blocked; stall recovery will retry. Manual fallback: open the follow-up issue manually and reference PR #${RB_PR}."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
             REVIEW_BLOCKED_STATE_CHANGED=true
           else
             # Re-fetch PR data (state may have changed since the judge
@@ -10186,7 +10195,19 @@ ${RB_FIX_DESC}
                 # them only adds backoff cost before falling through
                 # to the same warning path. Matches the standalone
                 # review_rb_judge.sh's pattern.
-                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+                #
+                # `--match-head-commit "${_rb_mwf_sha}"` binds the
+                # merge to the head SHA the PR-meta fetch above just
+                # observed. If a concurrent push lands between the
+                # judge decision and this merge, GitHub rejects it,
+                # preventing unjudged code from landing under
+                # merge_with_followup. _rb_mwf_sha may be empty if
+                # _jq_field couldn't extract it; in that case the
+                # arg is omitted and the merge degrades to legacy
+                # unbound behaviour.
+                _rb_mwf_match_arg=()
+                [ -n "${_rb_mwf_sha}" ] && _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
+                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash ${_rb_mwf_match_arg[@]+"${_rb_mwf_match_arg[@]}"} 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                   RB_MERGED="true"

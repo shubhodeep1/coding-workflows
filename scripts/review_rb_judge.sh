@@ -848,6 +848,7 @@ ${RB_FIX_DESC}"
       PR_STATE=""
       PR_MERGEABLE=""
       PR_MERGED=""
+      PR_HEAD_SHA=""
       _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
       _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
       _attempt=0
@@ -860,6 +861,12 @@ ${RB_FIX_DESC}"
         # without-merge from merged.
         PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
         PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
+        # Capture the head SHA so the eventual gh pr merge call can
+        # bind the merge to the judged head via --match-head-commit.
+        # That closes the TOCTOU race where a concurrent push between
+        # the judge's decision and our merge attempt would otherwise
+        # land unjudged code.
+        PR_HEAD_SHA="$(echo "${_pr_json}" | jq -r '.head.sha // ""' | grep -xE '[a-f0-9]{7,40}' || echo "")"
         # Detect merged via `(.merged_at != null) or (.merged == true)`
         # — matches gh_helpers.sh + the orchestrator's `.merged_at !=
         # null` pattern and survives REST payloads that omit either
@@ -923,7 +930,19 @@ ${RB_FIX_DESC}"
           # NOTE: gh pr merge is intentionally NOT wrapped with
           # gh_retry — see the `merge)` branch for the rationale
           # (best-effort, non-transient failure backoff cost).
-          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null; then
+          #
+          # `--match-head-commit "${PR_HEAD_SHA}"` binds the merge to
+          # the head SHA the mergeability poll just observed. If a
+          # concurrent push lands between the poll and this merge call,
+          # GitHub rejects the merge — preventing unjudged code from
+          # landing under merge_with_followup's authority. PR_HEAD_SHA
+          # may be empty if jq couldn't extract it from the (possibly
+          # malformed) PR JSON, in which case --match-head-commit is
+          # omitted (degrades to legacy unbound merge rather than
+          # always-failing).
+          _match_head_arg=()
+          [ -n "${PR_HEAD_SHA}" ] && _match_head_arg=(--match-head-commit "${PR_HEAD_SHA}")
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash ${_match_head_arg[@]+"${_match_head_arg[@]}"} 2>/dev/null; then
             echo "PR #${PR_NUMBER} merged synchronously."
             MERGE_CONFIRMED="true"
           else
