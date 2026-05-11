@@ -363,11 +363,12 @@ and must not be cited as if they did.
   violation surfaced by CI must be fixed even when the violation was
   introduced by an earlier commit on this branch, lives in a file the
   current PR did not otherwise touch, or is in code Claude has not
-  modified in this session. The "scope explosion" carve-out in §12.D
-  does NOT apply to mechanical lint sweeps — bring the branch green
-  even if that touches many files. §6 (naming immutability) still
-  binds: if the only mechanical fix would rename a public identifier
-  flagged by a style rule, route to §12.D instead of renaming.
+  modified in this session. The "scope explosion" STOP condition in
+  §12.D does NOT apply to mechanical lint sweeps — bring the branch
+  green even if that touches many files. §6 (naming immutability)
+  still binds: if the only mechanical fix would rename a public
+  identifier flagged by a style rule, route to §12.D instead of
+  renaming.
 - **Merge conflicts with the base branch.** Resolve them automatically
   so the PR is mergeable. Prefer the resolution that preserves both
   sides' intent over the resolution that drops one side; never silently
