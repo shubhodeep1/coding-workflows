@@ -341,6 +341,7 @@ probe_mcp_handshake()
 {
 	local serena_bin="${1:?probe_mcp_handshake: serena binary path required}"
 
+	MCP_HANDSHAKE_PROBE_TIMEOUT="${MCP_HANDSHAKE_PROBE_TIMEOUT:-${SERENA_STARTUP_TIMEOUT_SEC}}" \
 	PYTHONDONTWRITEBYTECODE=1 \
 	"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py" \
 		--name "serena" \

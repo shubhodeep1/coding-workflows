@@ -83,6 +83,34 @@ def _write_fake_serena(path: Path, *, version: str = "1.2.0") -> None:
 	)
 
 
+def _write_slow_happy_fixture(path: Path, *, delay_seconds: float) -> None:
+	_write_executable(
+		path,
+		"#!/usr/bin/env python3\n"
+		"from __future__ import annotations\n"
+		"\n"
+		"import json\n"
+		"import sys\n"
+		"import time\n"
+		"\n"
+		"headers = {}\n"
+		"while True:\n"
+		"\tline = sys.stdin.buffer.readline()\n"
+		"\tif line in (b'\\n', b'\\r\\n'):\n"
+		"\t\tbreak\n"
+		"\tdecoded = line.decode('ascii')\n"
+		"\tname, value = decoded.split(':', 1)\n"
+		"\theaders[name.strip().lower()] = value.strip()\n"
+		"length = int(headers['content-length'])\n"
+		"request = json.loads(sys.stdin.buffer.read(length).decode('utf-8'))\n"
+		f"time.sleep({delay_seconds!r})\n"
+		"payload = json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': {'serverInfo': {'name': 'slow-serena', 'version': '0.0.1'}}}, separators=(',', ':')).encode('utf-8')\n"
+		"sys.stdout.buffer.write(f'Content-Length: {len(payload)}\\r\\n\\r\\n'.encode('ascii'))\n"
+		"sys.stdout.buffer.write(payload)\n"
+		"sys.stdout.buffer.flush()\n",
+	)
+
+
 def _run_staged_setup(
 	setup_script: Path,
 	*,
@@ -375,6 +403,38 @@ def test_setup_serena_probe_kill_switch_forces_success() -> None:
 		config_text = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
 		assert "[mcp_servers.serena]" in config_text
 		assert github_env.read_text(encoding="utf-8").splitlines()[-1] == "SERENA_AVAILABLE=true"
+
+
+def test_setup_serena_uses_startup_timeout_for_probe_when_no_probe_override_is_set() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		setup_script = _stage_setup_serena(root)
+		home = root / "home"
+		home.mkdir()
+		github_env = root / "github.env"
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fake_serena = bin_dir / "serena"
+		_write_fake_serena(fake_serena)
+		slow_fixture = root / "slow_happy.py"
+		_write_slow_happy_fixture(slow_fixture, delay_seconds=2.0)
+
+		result = _run_staged_setup(
+			setup_script,
+			home=home,
+			path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
+			github_env=github_env,
+			extra_env={
+				"FAKE_SERENA_FIXTURE": str(slow_fixture),
+				"SERENA_STARTUP_TIMEOUT_SEC": "1",
+			},
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert "reason=timeout" in result.stderr
+		assert github_env.read_text(encoding="utf-8").splitlines()[-1] == "SERENA_AVAILABLE=false"
+		config_path = home / ".codex" / "config.toml"
+		assert not config_path.exists()
 
 
 def test_setup_serena_preserves_existing_project_config_and_uses_workspace_root() -> None:

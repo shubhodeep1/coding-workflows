@@ -31,15 +31,18 @@ class _StderrTailBuffer:
 	def __init__(self, limit_bytes: int = STDERR_TAIL_LIMIT_BYTES):
 		self.limit_bytes = limit_bytes
 		self._buffer = bytearray()
+		self._lock = threading.Lock()
 
 	def append(self, chunk: bytes) -> None:
-		self._buffer.extend(chunk)
-		overflow = len(self._buffer) - self.limit_bytes
-		if overflow > 0:
-			del self._buffer[:overflow]
+		with self._lock:
+			self._buffer.extend(chunk)
+			overflow = len(self._buffer) - self.limit_bytes
+			if overflow > 0:
+				del self._buffer[:overflow]
 
 	def text(self) -> str:
-		return self._buffer.decode("utf-8", errors="replace").strip()
+		with self._lock:
+			return self._buffer.decode("utf-8", errors="replace").strip()
 
 
 def _env_flag(name: str, default: bool) -> bool:
