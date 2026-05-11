@@ -201,7 +201,11 @@ def _print_version() -> int:
     return 0
 
 
-def _query(argv: list[str]) -> int:
+def _query(argv) -> int:
+    # `argv` is untyped on purpose: `list[str]` is PEP 585 (Python 3.9+),
+    # but SEMBLE_PYTHON_BIN may point to an older interpreter on self-hosted
+    # runners. Dropping the annotation keeps the wrapper parseable down to
+    # Python 3.5 (the `-> int` PEP 484 return hint is 3.5-compatible).
     parser = argparse.ArgumentParser(prog="semble query")
     parser.add_argument("query")
     parser.add_argument("--index", required=True)
