@@ -9625,11 +9625,16 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "Retries exhausted: ${IS_FINAL}"
         if [ "${IS_FINAL}" = "true" ]; then
           echo
-          echo "IMPORTANT: This is the FINAL attempt. You MUST choose either 'merge' or"
-          echo "'close_and_reissue'. The 'fix' option is NOT available because previous"
-          echo "fix attempts did not resolve the issues. Pick the action that best serves"
-          echo "the project: merge if the PR is good enough, or close and reissue if the"
-          echo "approach is fundamentally wrong."
+          echo "IMPORTANT: This is the FINAL attempt. You MUST choose 'merge',"
+          echo "'merge_with_followup', or 'close_and_reissue'. The 'fix' option is"
+          echo "NOT available because previous fix attempts did not resolve the issues."
+          echo "Pick the action that best serves the project: merge if the PR is fully"
+          echo "good as-is; merge_with_followup if the PR is shippable (no build/test"
+          echo "breakage, no critical correctness/security defects) but a deferred gap"
+          echo "remains that should be tracked in a fresh issue (preferred over"
+          echo "close_and_reissue when the PR's existing changes are worth keeping);"
+          echo "close_and_reissue only if the approach is fundamentally wrong and"
+          echo "the PR's work should be discarded."
         fi
         if [ "${RB_COMBINED_MODE}" = "true" ]; then
           echo
@@ -9642,8 +9647,10 @@ ${FOLLOWUP_BLOCK_REASON}"
           echo "  that blocked the review. Do not create new files unless absolutely required."
           echo "  After applying fixes, emit the JSON with action=\"fix\" and fix_description"
           echo "  describing what you changed."
-          echo "- If you choose action=\"merge\" or action=\"close_and_reissue\": DO NOT modify"
-          echo "  any files. Emit the JSON with the chosen action and an empty fix_description."
+          echo "- If you choose action=\"merge\", action=\"merge_with_followup\", or"
+          echo "  action=\"close_and_reissue\": DO NOT modify any files. Emit the JSON with"
+          echo "  the chosen action and an empty fix_description. For merge_with_followup,"
+          echo "  populate the followup_issue { title, body } payload."
         fi
       } > "${RB_JUDGE_PROMPT_FILE}"
       rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
@@ -10140,48 +10147,37 @@ ${RB_FIX_DESC}
             elif [ "${PR_STATE}" = "closed" ]; then
               echo "::warning::PR #${RB_PR} closed without merge — skipping follow-up creation; deferred gap not tracked because source PR's changes never landed."
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-              # Note: this branch deliberately does NOT precondition on
-              # `_pr_checks_completed` (unlike the existing `merge)` case
-              # above) — sync merge will fail fast when required checks
-              # are still pending, and the --auto fallback exists
-              # specifically to handle that case in protected-branch /
-              # merge-queue repos. Gating on _pr_checks_completed would
-              # make the --auto path unreachable in the very repos that
-              # need it, leaving the issue stuck in ai:review-blocked
-              # until an orchestrator stall-recovery cycle re-fired.
-              # This matches scripts/review_rb_judge.sh's merge_with_
-              # followup ladder so the two judge implementations stay
-              # behaviourally consistent on the same prompt.
-              if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
-                echo "  PR #${RB_PR} merged synchronously."
-                MERGE_CONFIRMED="true"
-                RB_MERGED="true"
-              elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
-                echo "  PR #${RB_PR} sync merge unavailable (required checks pending?); auto-merge enrolled. Polling for completion..."
-                _mc_attempts="${MERGE_COMPLETION_POLL_ATTEMPTS:-6}"
-                _mc_sleep="${MERGE_COMPLETION_POLL_SLEEP:-5}"
-                _mc_attempt=0
-                while [ "${_mc_attempt}" -lt "${_mc_attempts}" ]; do
-                  _post_json="$(_fetch_pr_json "${RB_PR}")"
-                  _post_merged="$(_jq_field "${_post_json}" '.merged' 'true|false')"
-                  [ -n "${_post_merged}" ] || _post_merged="false"
-                  if [ "${_post_merged}" = "true" ]; then
-                    echo "  PR #${RB_PR} merge completed during polling (attempt $((_mc_attempt + 1))/${_mc_attempts})."
-                    MERGE_CONFIRMED="true"
-                    RB_MERGED="true"
-                    break
-                  fi
-                  _mc_attempt=$((_mc_attempt + 1))
-                  if [ "${_mc_attempt}" -lt "${_mc_attempts}" ]; then
-                    sleep "${_mc_sleep}"
-                  fi
-                done
-                if [ "${MERGE_CONFIRMED}" != "true" ]; then
-                  echo "::warning::PR #${RB_PR} auto-merge enrolled but not yet merged after ~$((${_mc_attempts} * ${_mc_sleep}))s polling. Creating follow-up anyway (orphan-hedge) — merge will likely complete asynchronously. If checks ultimately fail, locate orphans via 'Source PR: #${RB_PR}' reference in the follow-up issue body."
+              if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+                # Sync merge only — NEVER --auto enrollment. The whole
+                # point of the conservative ladder is to ensure follow-
+                # up creation happens only against a definitively-
+                # merged base. `gh pr merge --squash` (no --auto)
+                # returns 0 iff the merge actually landed (all required
+                # checks satisfied, no conflicts, no merge-queue
+                # rejection). When checks are still pending it returns
+                # non-zero — we leave the issue in ai:review-blocked
+                # and let the orchestrator's next ~5min poll re-fire
+                # the judge. That run will hit the PR_MERGED_NOW=true
+                # short path (after the existing `merge)` action has
+                # had a chance to enroll auto-merge and the merge has
+                # actually landed asynchronously) and create the
+                # follow-up against the now-real base ref. This
+                # eliminates the orphan-follow-up risk of --auto
+                # enrollment; the trade-off is that protected-branch
+                # repos need one extra poll cycle to materialize the
+                # follow-up. Matches scripts/review_rb_judge.sh's
+                # merge_with_followup ladder so the two judge
+                # implementations stay behaviourally consistent on
+                # the same shared prompt.
+                if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+                  echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
+                  RB_MERGED="true"
+                else
+                  echo "::warning::PR #${RB_PR} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge after merge lands; that run hits the PR_MERGED_NOW=true short path and creates the follow-up."
                 fi
               else
-                echo "::warning::PR #${RB_PR} both sync and auto-merge enrollment failed (branch protection / queue / permissions / 422) — leaving issue in ai:review-blocked for stall recovery."
+                echo "::warning::PR #${RB_PR} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving issue in ai:review-blocked so the follow-up is not opened against unmerged code; operator should merge manually and the next orchestrator poll cycle will create the follow-up via the PR_MERGED_NOW=true short path."
               fi
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
               echo "::warning::PR #${RB_PR} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving issue in ai:review-blocked so conflicts can be resolved before follow-up creation."

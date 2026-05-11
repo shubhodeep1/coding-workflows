@@ -181,12 +181,19 @@ if [ "${CAN_PUSH:-false}" != "true" ]; then
   exit 0
 fi
 
-# Early guard: skip judge if the PR is no longer open (e.g. already merged
-# by a prior run). This prevents wasting AI compute and posting duplicate
-# decisions on closed/merged PRs even if upstream gate/env guards fail.
-_pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
-if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ]; then
-  echo "PR #${PR_NUMBER} is ${_pr_state} — skipping review-blocked judge (PR not open)."
+# Early guard: skip judge when the PR is closed-without-merge. Merged
+# PRs (state=closed + merged=true) ARE allowed through so the judge can
+# choose merge_with_followup against an already-merged PR — that's the
+# recovery path when an operator (or a prior auto-merge enrollment that
+# completed asynchronously) merged the PR and a follow-up tracking
+# issue still needs to be created for the deferred gap. GitHub's REST
+# /pulls/{N} reports the PR as state=closed for both cases; only the
+# .merged boolean distinguishes them.
+_pr_meta="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+_pr_state="$(echo "${_pr_meta}" | jq -r '.state // ""')"
+_pr_merged="$(echo "${_pr_meta}" | jq -r '.merged // false')"
+if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ] && [ "${_pr_merged}" != "true" ]; then
+  echo "PR #${PR_NUMBER} is ${_pr_state} (not merged) — skipping review-blocked judge."
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=skip" >> "$GITHUB_OUTPUT"
   echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT"
@@ -195,7 +202,7 @@ if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ]; then
   fi
   exit 0
 fi
-unset _pr_state
+unset _pr_meta _pr_state _pr_merged
 
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
@@ -772,30 +779,29 @@ ${RB_FIX_DESC}"
       done
 
       # MERGE_CONFIRMED gates phase-swap, follow-up creation, and
-      # judge_handled=true emission. Set to "true" only when we have
-      # high confidence the merge has landed (or will land within a
-      # short bounded poll):
-      #   - PR_MERGED="true": already merged (manual/concurrent merge,
-      #     or auto-merge from a prior judge run that has since
-      #     completed).
+      # judge_handled=true emission. Only "true" when the PR has
+      # definitively merged into the base — never on auto-merge
+      # enrollment, never on a bounded-poll hedge. Two valid paths:
+      #   - PR_MERGED="true": already merged (manual recovery flow:
+      #     operator merged the PR and reran the judge to create the
+      #     follow-up; or a concurrent workflow merged it).
       #   - PR_STATE="open" + PR_MERGEABLE="true" + ENABLE_AUTO_MERGE=
-      #     "true" + sync merge succeeded: PR is merged immediately.
-      #   - Same as above + sync merge failed (checks pending) + auto-
-      #     merge enrollment succeeded + bounded poll observes merge
-      #     completion within MERGE_COMPLETION_POLL_ATTEMPTS *
-      #     MERGE_COMPLETION_POLL_SLEEP seconds.
-      # Set to "false" otherwise (conflicts, mergeability unknown,
-      # ENABLE_AUTO_MERGE="false" with PR still open, auto-merge
-      # enrolled but merge did not complete within the polling window,
-      # or both gh pr merge invocations failed). When unconfirmed we
-      # leave the PR in ai:review-blocked state (no judge_handled=true
-      # emitted) so stall recovery re-routes it once the merge actually
-      # lands — better that than orphan a follow-up issue against code
-      # that never actually landed on the base ref.
+      #     "true" + `gh pr merge --squash` (sync, NO --auto) returned
+      #     0: required checks were all green and the PR is now
+      #     atomically merged.
+      # Set to "false" otherwise — including the protected-branch case
+      # where required checks are still pending (sync merge fails-fast
+      # in that state). The PR stays in ai:review-blocked so stall
+      # recovery re-dispatches the judge later, after checks complete;
+      # the next run hits the PR_MERGED=true short path and creates
+      # the follow-up against the now-real base ref. This eliminates
+      # the orphan-follow-up risk of --auto enrollment entirely; the
+      # trade-off is that protected-branch repos may need one extra
+      # stall-recovery cycle to materialize the follow-up.
       MERGE_CONFIRMED="false"
 
       if [ "${PR_MERGED}" = "true" ]; then
-        echo "PR #${PR_NUMBER} already merged before merge_with_followup ran (merged=true) — proceeding with follow-up creation against the merged base."
+        echo "PR #${PR_NUMBER} already merged (merged=true) — proceeding with follow-up creation against the merged base."
         MERGE_CONFIRMED="true"
       elif [ "${PR_STATE}" = "closed" ]; then
         # Closed without merge — operator (or some other workflow)
@@ -804,12 +810,18 @@ ${RB_FIX_DESC}"
         echo "::warning::PR #${PR_NUMBER} is closed without merge (merged=false). Skipping follow-up creation; the deferred gap will not be tracked because the source PR's changes never landed."
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
         if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-          # Try synchronous merge first (no --auto). When all required
-          # checks have already passed, this succeeds and the PR is
-          # merged immediately — giving us real merge confirmation
-          # rather than just auto-merge enrollment. When required
-          # checks are still pending, sync merge fails, and we fall
-          # back to --auto with a bounded merge-completion poll.
+          # Sync merge only — NEVER --auto enrollment. The whole point
+          # of the conservative ladder is to ensure follow-up creation
+          # happens only against a definitively-merged base. `gh pr
+          # merge --squash` returns 0 iff the merge actually landed
+          # (all required checks satisfied, no conflicts, no merge-
+          # queue rejection). When checks are still pending it returns
+          # non-zero — we leave the PR in ai:review-blocked and let
+          # stall recovery re-fire the judge later. That next run hits
+          # the PR_MERGED=true short path above (because by then
+          # auto-merge would have already landed asynchronously via
+          # the existing `merge)` action enrolled by a prior judge run,
+          # or because the operator merged manually).
           #
           # NOTE: gh pr merge is intentionally NOT wrapped with
           # gh_retry — see the `merge)` branch for the rationale
@@ -817,49 +829,8 @@ ${RB_FIX_DESC}"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null; then
             echo "PR #${PR_NUMBER} merged synchronously."
             MERGE_CONFIRMED="true"
-          elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null; then
-            echo "PR #${PR_NUMBER} sync merge unavailable (required checks may be pending); auto-merge enrolled. Polling for completion..."
-            # Bounded poll for actual merge completion. Default
-            # 6 attempts * 5s = 30s — long enough to catch the
-            # common "checks finish within seconds of enrollment"
-            # case, short enough not to block the judge step
-            # excessively. Slower protected-branch repos fall
-            # through to the orphan-hedge below, which still
-            # creates the follow-up (because the alternative is
-            # the linked issue stuck in ai:review-blocked forever
-            # if stall recovery never re-fires).
-            _mc_attempts="${MERGE_COMPLETION_POLL_ATTEMPTS:-6}"
-            _mc_sleep="${MERGE_COMPLETION_POLL_SLEEP:-5}"
-            _mc_attempt=0
-            while [ "${_mc_attempt}" -lt "${_mc_attempts}" ]; do
-              _post_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-              _post_merged="$(echo "${_post_json}" | jq -r '.merged // false' | grep -xE 'true|false' || echo "false")"
-              if [ "${_post_merged}" = "true" ]; then
-                echo "PR #${PR_NUMBER} merge completed during polling (attempt $((_mc_attempt + 1))/${_mc_attempts})."
-                MERGE_CONFIRMED="true"
-                break
-              fi
-              _mc_attempt=$((_mc_attempt + 1))
-              if [ "${_mc_attempt}" -lt "${_mc_attempts}" ]; then
-                sleep "${_mc_sleep}"
-              fi
-            done
-            if [ "${MERGE_CONFIRMED}" != "true" ]; then
-              # Orphan-hedge: auto-merge enrolled but did not
-              # complete within ~30s. Most likely cause is slower
-              # required checks; the merge will probably still land
-              # asynchronously. Create the follow-up anyway because
-              # the alternative (leave linked issue in ai:review-
-              # blocked indefinitely until stall recovery re-fires)
-              # is operationally worse. The follow-up body includes
-              # "Source PR: #N" so an orphan (if required checks
-              # ultimately fail) can be identified and closed
-              # manually.
-              echo "::warning::PR #${PR_NUMBER} auto-merge enrolled but not merged after ~$((${_mc_attempts} * ${_mc_sleep}))s of polling. Creating follow-up anyway (orphan-hedge) — the merge will likely complete asynchronously via required-checks resolution. If checks ultimately fail, locate orphans via the 'Source PR: #${PR_NUMBER}' reference in the follow-up issue body and close them manually."
-              MERGE_CONFIRMED="true"
-            fi
           else
-            echo "::warning::PR #${PR_NUMBER} is mergeable but both sync merge and auto-merge enrollment failed (branch protection / queue / permissions / 422) — leaving PR in ai:review-blocked state so stall recovery can re-route."
+            echo "::warning::PR #${PR_NUMBER} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving PR in ai:review-blocked state — stall recovery will re-fire the judge after the merge lands; the next run hits the PR_MERGED=true short path and creates the follow-up."
           fi
         else
           echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
