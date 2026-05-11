@@ -68,25 +68,33 @@ Rules:
   auto-merge enrollment) and creates the follow-up issue ONLY when
   the PR is definitively merged — either because it was already merged
   before the judge ran, or because the synchronous merge just landed
-  in this turn. Cite `file:line` refs in the merged code directly
-  without the closed-PR prefix; they will be on the base branch by
-  the time the follow-up's clarify / planner phases run. The workflow
-  refuses this action when: follow-up details are missing; the PR
-  has merge conflicts; ENABLE_AUTO_MERGE=false with the PR still
-  open; or sync merge fails (typically because required checks are
-  still pending in protected-branch repos). In those refusal cases
-  the PR stays in ai:review-blocked. For ORCHESTRATOR-MANAGED PRs the
-  orchestrator's ~5min poll re-fires the judge on a later cycle —
-  after the merge actually lands (e.g. via the existing `merge`
-  action's auto-merge enrollment) — and that subsequent judge run
-  hits the already-merged short path to create the follow-up. For
-  STANDALONE (non-orchestrator) PRs the recovery flow is currently
-  not wired through the workflow gate; if you pick this action and
-  the sync merge fails, the deferred gap may need manual operator
-  intervention to track. Prefer close_and_reissue for standalone
-  PRs when there's any doubt the sync merge will succeed. Do NOT
-  pick this action if the PR has build/test breakage or critical
-  correctness/security defects — pick close_and_reissue instead.
+  in this turn. Both the standalone and orchestrator paths gate the
+  merge on ALL check-runs (required AND informational) being
+  completed with success/neutral/skipped/cancelled — so the merge
+  never lands while CI is still validating. Both paths also bind
+  the merge to the judged head SHA via `--match-head-commit`, so a
+  concurrent push between judge decision and merge is rejected by
+  GitHub. Cite `file:line` refs in the merged code directly without
+  the closed-PR prefix; they will be on the base branch by the time
+  the follow-up's clarify / planner phases run. The workflow refuses
+  this action when: follow-up details are missing; the PR has merge
+  conflicts; ENABLE_AUTO_MERGE=false with the PR still open; any
+  check-run is still pending or has a non-success conclusion; the
+  head SHA cannot be resolved; or the bound sync merge fails (e.g.,
+  branch protection / merge queue / concurrent push). In those
+  refusal cases the PR stays in ai:review-blocked. For ORCHESTRATOR-
+  MANAGED PRs the orchestrator's ~5min poll re-fires the judge on a
+  later cycle — after the merge actually lands (e.g. via the
+  existing `merge` action's auto-merge enrollment) — and that
+  subsequent judge run hits the already-merged short path to create
+  the follow-up. For STANDALONE (non-orchestrator) PRs the recovery
+  flow is currently not wired through the workflow gate; if you
+  pick this action and the sync merge fails, the deferred gap may
+  need manual operator intervention to track. Prefer
+  close_and_reissue for standalone PRs when there's any doubt the
+  sync merge will succeed. Do NOT pick this action if the PR has
+  build/test breakage or critical correctness/security defects —
+  pick close_and_reissue instead.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
 - Prefer merge_with_followup (D) over close_and_reissue (C) at IS_FINAL

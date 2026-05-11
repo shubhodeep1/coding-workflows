@@ -10173,6 +10173,16 @@ ${RB_FIX_DESC}
               # gating as the plain merge path.
               if ! _pr_checks_completed "${RB_PR}" "${_rb_mwf_sha}"; then
                 echo "::warning::PR #${RB_PR} mergeable=true but check-runs still pending/failing — leaving issue in ai:review-blocked. Next orchestrator poll cycle will re-fire the judge after checks complete; that run will hit the PR_MERGED_NOW=true short path (after the existing \`merge)\` action's auto-merge enrollment lands the PR)."
+              elif [ -z "${_rb_mwf_sha}" ]; then
+                # Defensive: `_pr_checks_completed` may have re-fetched
+                # the SHA locally and returned 0 while our outer
+                # `_rb_mwf_sha` is still empty (transient API failure
+                # at the initial fetch). Refuse the merge here so we
+                # never call `gh pr merge` without --match-head-commit
+                # — an unbound merge could let a concurrent push slip
+                # in. Leave the issue in ai:review-blocked for the
+                # next poll cycle, which re-fetches PR metadata.
+                echo "::warning::PR #${RB_PR} head SHA could not be resolved from the PR-meta fetch — refusing merge_with_followup to avoid an unbound merge (no --match-head-commit guard against concurrent pushes). Leaving issue in ai:review-blocked."
               elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                 # Sync merge only — NEVER --auto enrollment. The whole
                 # point of the conservative ladder is to ensure follow-
@@ -10205,17 +10215,13 @@ ${RB_FIX_DESC}
                 # review_rb_judge.sh's pattern.
                 #
                 # `--match-head-commit "${_rb_mwf_sha}"` binds the
-                # merge to the head SHA the PR-meta fetch above just
-                # observed. If a concurrent push lands between the
-                # judge decision and this merge, GitHub rejects it,
-                # preventing unjudged code from landing under
-                # merge_with_followup. _rb_mwf_sha may be empty if
-                # _jq_field couldn't extract it; in that case the
-                # arg is omitted and the merge degrades to legacy
-                # unbound behaviour.
-                _rb_mwf_match_arg=()
-                [ -n "${_rb_mwf_sha}" ] && _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
-                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash ${_rb_mwf_match_arg[@]+"${_rb_mwf_match_arg[@]}"} 2>/dev/null; then
+                # merge to the head SHA the PR-meta fetch observed.
+                # The `elif [ -z "${_rb_mwf_sha}" ]` branch above
+                # ensures we never reach here with an empty SHA, so
+                # the merge is always bound — no concurrent-push
+                # window between judge decision and merge.
+                _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
+                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                 else

@@ -666,8 +666,10 @@ def _run_merge_with_followup(
 	pr_state: str = "open",
 	pr_mergeable: object = True,  # bool or None (=mergeability still computing)
 	pr_merged: bool = False,  # GitHub's `.merged` field — authoritative did-this-land signal
+	pr_head_sha: str = "abcdef1234567890abcdef1234567890abcdef12",
 	enable_auto_merge: str = "true",
 	issue_create_should_fail: bool = False,
+	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
 	state and judge JSON.  Returns the captured gh-mock state plus the
@@ -698,11 +700,43 @@ def _run_merge_with_followup(
 		# Seed the mock's api_responses with a PR-mergeability shape
 		# keyed by the URL path suffix the script will call.  Substring
 		# match is what the mock uses, so "pulls/42" is enough.
-		pr_response: dict = {"state": pr_state, "merged": pr_merged}
+		# Include `head.sha` so the check-runs gate has a SHA to query
+		# against (matches GitHub's real shape).
+		pr_response: dict = {
+			"state": pr_state,
+			"merged": pr_merged,
+			"head": {"sha": pr_head_sha},
+		}
 		# `mergeable: null` is meaningful (mergeability still computing);
 		# emit it explicitly so jq's `// ""` defaults fire.
 		pr_response["mergeable"] = pr_mergeable  # type: ignore[assignment]
-		_mock_config: dict = {"api_responses": {"pulls/42": pr_response}}
+
+		# Check-runs response — the new check-runs gate in
+		# merge_with_followup (round 12) fetches
+		# /commits/{sha}/check-runs and refuses the merge if any
+		# check-run is incomplete or has a non-success conclusion.
+		# Default to one passing check-run so the gate clears; tests
+		# that want to exercise the "checks pending" refusal pass
+		# check_runs_state="pending".
+		if check_runs_state == "pending":
+			check_runs_response: dict = {
+				"check_runs": [
+					{"status": "in_progress", "conclusion": None, "name": "ci/test"},
+				],
+			}
+		else:
+			check_runs_response = {
+				"check_runs": [
+					{"status": "completed", "conclusion": "success", "name": "ci/test"},
+				],
+			}
+
+		_mock_config: dict = {
+			"api_responses": {
+				"pulls/42": pr_response,
+				f"commits/{pr_head_sha}/check-runs": check_runs_response,
+			},
+		}
 		if issue_create_should_fail:
 			_mock_config["issue_create_should_fail"] = True
 		gh_state_file.write_text(
@@ -949,6 +983,30 @@ def test_merge_with_followup_skips_creation_when_auto_merge_disabled() -> None:
 		f"controls the merge decision. Got: {creates}"
 	)
 	assert "judge_handled=true" not in state["_github_output"]
+
+
+def test_merge_with_followup_refuses_when_check_runs_pending() -> None:
+	"""PR is mergeable=true but a check-run is still in_progress →
+	the new check-runs gate must refuse the merge, leaving the issue
+	in ai:review-blocked. Without this gate, sync merge could land
+	code that subsequently fails informational CI (claude-branch-
+	review consensus round 12)."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		check_runs_state="pending",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up issue when "
+		f"check-runs are still pending — the gate exists to prevent "
+		f"creating a tracking issue against unvalidated code. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when "
+		"check-runs are pending; the PR must stay in ai:review-blocked "
+		"for stall recovery to retry after checks complete"
+	)
 
 
 def test_merge_with_followup_creates_followup_when_pr_already_merged() -> None:

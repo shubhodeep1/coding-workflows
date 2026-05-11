@@ -932,43 +932,65 @@ Leaving PR #${PR_NUMBER} in ai:review-blocked. The workflow's review-blocked fal
         # that doesn't contain the PR's changes.
         echo "::warning::PR #${PR_NUMBER} is closed without merge (merged=false). Skipping follow-up creation; the deferred gap will not be tracked because the source PR's changes never landed."
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-        if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-          # Sync merge only — NEVER --auto enrollment. The whole point
-          # of the conservative ladder is to ensure follow-up creation
-          # happens only against a definitively-merged base. `gh pr
-          # merge --squash` returns 0 iff the merge actually landed
-          # (all required checks satisfied, no conflicts, no merge-
-          # queue rejection). When checks are still pending it returns
-          # non-zero — we leave the PR in ai:review-blocked and let
-          # stall recovery re-fire the judge later. That next run hits
-          # the PR_MERGED=true short path above (because by then
-          # auto-merge would have already landed asynchronously via
-          # the existing `merge)` action enrolled by a prior judge run,
-          # or because the operator merged manually).
-          #
-          # NOTE: gh pr merge is intentionally NOT wrapped with
-          # gh_retry — see the `merge)` branch for the rationale
-          # (best-effort, non-transient failure backoff cost).
-          #
-          # `--match-head-commit "${PR_HEAD_SHA}"` binds the merge to
-          # the head SHA the mergeability poll just observed. If a
-          # concurrent push lands between the poll and this merge call,
-          # GitHub rejects the merge — preventing unjudged code from
-          # landing under merge_with_followup's authority. PR_HEAD_SHA
-          # may be empty if jq couldn't extract it from the (possibly
-          # malformed) PR JSON, in which case --match-head-commit is
-          # omitted (degrades to legacy unbound merge rather than
-          # always-failing).
-          _match_head_arg=()
-          [ -n "${PR_HEAD_SHA}" ] && _match_head_arg=(--match-head-commit "${PR_HEAD_SHA}")
-          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash ${_match_head_arg[@]+"${_match_head_arg[@]}"} 2>/dev/null; then
-            echo "PR #${PR_NUMBER} merged synchronously."
-            MERGE_CONFIRMED="true"
-          else
-            echo "::warning::PR #${PR_NUMBER} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving PR in ai:review-blocked state — stall recovery will re-fire the judge after the merge lands; the next run hits the PR_MERGED=true short path and creates the follow-up."
-          fi
+        # Check-runs gate: mirror the orchestrator's `_pr_checks_completed`
+        # helper. Fetches /repos/{owner}/{repo}/commits/{sha}/check-runs
+        # and refuses the merge while ANY check-run is still incomplete
+        # or has a non-success conclusion (not just branch-protection-
+        # required ones). This prevents merge_with_followup from
+        # creating a follow-up issue against code that fails an
+        # informational check later — `gh pr merge --squash` only
+        # waits for REQUIRED checks per branch protection, so without
+        # this gate the action could land code that subsequently fails
+        # validation. claude-branch-review consensus Finding (round
+        # 12): the standalone implementation must mirror the
+        # orchestrator's existing gate (see _pr_checks_completed at
+        # scripts/orchestrate_poll_process.sh:232).
+        if [ -z "${PR_HEAD_SHA}" ]; then
+          echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving PR in ai:review-blocked."
         else
-          echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
+          _check_runs_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '')"
+          _incomplete_checks="$(printf '%s' "${_check_runs_json}" | jq -r '
+            if (type == "object" and (.check_runs | type == "array")) then
+              [.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+            else
+              empty
+            end
+          ' 2>/dev/null | tail -n1)"
+          if ! [[ "${_incomplete_checks}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving PR in ai:review-blocked."
+          elif [ "${_incomplete_checks}" -gt 0 ]; then
+            echo "::warning::PR #${PR_NUMBER} has ${_incomplete_checks} blocking check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until all checks complete with success/neutral/skipped/cancelled. Leaving PR in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+            # Sync merge only — NEVER --auto enrollment. The whole point
+            # of the conservative ladder is to ensure follow-up creation
+            # happens only against a definitively-merged base. With the
+            # check-runs gate above, `gh pr merge --squash` is now only
+            # attempted when ALL check-runs have settled, so the merge
+            # success (return 0) reliably implies the PR landed against
+            # validated code.
+            #
+            # NOTE: gh pr merge is intentionally NOT wrapped with
+            # gh_retry — see the `merge)` branch for the rationale
+            # (best-effort, non-transient failure backoff cost).
+            #
+            # `--match-head-commit "${PR_HEAD_SHA}"` binds the merge to
+            # the head SHA the mergeability poll just observed. If a
+            # concurrent push lands between the poll and this merge,
+            # GitHub rejects it — preventing unjudged code from
+            # landing under merge_with_followup's authority. The
+            # PR_HEAD_SHA non-empty check above guarantees we never
+            # fall back to an unbound merge: the check-runs gate
+            # requires PR_HEAD_SHA, so reaching here means it's set.
+            _match_head_arg=(--match-head-commit "${PR_HEAD_SHA}")
+            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
+              echo "PR #${PR_NUMBER} merged synchronously."
+              MERGE_CONFIRMED="true"
+            else
+              echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving PR in ai:review-blocked state — stall recovery will re-fire the judge."
+            fi
+          else
+            echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
+          fi
         fi
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
         echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code."
