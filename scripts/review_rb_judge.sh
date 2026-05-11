@@ -949,7 +949,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         if [ -z "${PR_HEAD_SHA}" ]; then
           echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
         else
-          _check_runs_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '')"
+          _check_runs_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '{}')"
           _incomplete_checks="$(printf '%s' "${_check_runs_json}" | jq -r '
             if (type == "object" and (.check_runs | type == "array")) then
               [.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
