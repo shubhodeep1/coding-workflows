@@ -217,10 +217,22 @@ Scope: in PR review mode, applies only to new task lists in the current request.
 
 ## §12. PR Review Mode
 
-**This section fully supersedes the prior "Intent Preservation / Forbidden /
-Acceptance Criteria" version of §12.** Earlier guidance to "not introduce
-new scope, abstractions, or behaviors" no longer governs PR review work; the
-proactive policy below applies instead.
+**This §12 fully supersedes the prior "Intent Preservation / Forbidden /
+Acceptance Criteria" version of §12 in this CLAUDE.md.** The parallel §12
+in `codex.md` (and any rules in `unattended_system_instructions.md`) is
+unaffected — unattended pipelines retain their own policies. Earlier
+guidance to "not introduce new scope, abstractions, or behaviors" no
+longer governs PR review work in interactive sessions; the proactive
+policy below applies instead.
+
+**Precedence in PR Review Mode.** While operating under §12, this section
+takes precedence over §0 (Prime Directive), §2 (Always-On Ask-First Mode —
+including its "Forbidden: Silent refactors, cleanups, or speculative
+fixes" clause), and §5 (Minimal Change Set), for the proactive-fix
+decisions enumerated in §12.B. §0 and §2 still govern items routed to
+§12.D (the explicit ask-list) and any decision outside the PR-review
+scope. §6 (naming immutability) and §10 (MongoDB contracts) remain hard
+rules even under proactive scope and are NOT superseded.
 
 When the user asks Claude to address PR review feedback — via `@codex change`
 in a PR, a direct chat request, a `subscribe_pr_activity` event, or any
@@ -239,7 +251,8 @@ of it or drop it — never split into a new PR.
 ### B) Auto-Apply Without Asking
 
 Apply fixes proactively, without asking, when the issue falls into any of
-these categories AND the fix is high-confidence and low-blast-radius:
+these categories AND the fix passes the evaluation signals in §12.C
+(high-confidence, low-blast-radius, no §6/§10 conflict):
 
 - **Security:** injection (SQL/command/template), XSS, auth bypass, secret
   leaks, unsafe deserialization, missing authz checks, CSRF gaps.
@@ -251,7 +264,9 @@ these categories AND the fix is high-confidence and low-blast-radius:
   return path.
 - **Reviewer-flagged defects** with a clear, verifiable diagnosis that
   matches the code on re-read.
-- **Missing error handling** at system boundaries (per §3).
+- **Missing error handling at system boundaries** — unvalidated user
+  input, unchecked external API responses, IPC payloads, or unhandled
+  failure modes that would surface in production.
 - **Type / contract violations.**
 - **Stale comments, misleading docs, wrong examples** that would mislead
   future readers.
@@ -282,7 +297,9 @@ Even when a fix falls in §12.B, evaluate:
 
 Even with the proactive default, ask before acting on:
 
-- Renames or removals of public identifiers (hard §6 rule).
+- Renames or removals of any identifier covered by §6 (variables,
+  functions, classes, modules, CLI flags, env vars, URL paths, JSON/DB
+  fields, index/event/metric names, log keys — public or internal).
 - Architectural refactors, new abstractions, module reorganization.
 - Multiple plausible fixes with material tradeoffs (perf vs correctness,
   throw vs swallow, retry vs fail-fast, sync vs async).
