@@ -516,6 +516,269 @@ def test_standalone_head_sha_extracted_from_graphql_and_rest_shapes(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 1j: _extract_standalone_state_json_from_comments must preserve the
+# conflict_override_count map across poll cycles (Codex P2, PR #2522
+# line 7339).  Without preservation, the standalone override-cap
+# counter is reset to 0 on every read, so MAX_BUDGET_NEUTRAL_OVERRIDES
+# never trips for a PR that stays conflicted at the same head_sha.
+# ---------------------------------------------------------------------------
+
+def test_standalone_state_parser_preserves_conflict_override_count(tmp_path):
+	"""Drive _extract_standalone_state_json_from_comments through the
+	full extract pipeline (marker-wrapped comment body, sed extraction,
+	jq normalize) and confirm conflict_override_count survives."""
+	# A standalone state comment matching the production marker.
+	state_payload = {
+		"schema_version": 1,
+		"last_seen_phase": "ai:done",
+		"status_since_ts": 1700000000,
+		"stall_recovery_count": 2,
+		"updated_ts": 1700000100,
+		"conflict_override_count": {"deadbeef0": 3, "cafebabe1": 1},
+	}
+	body = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps(state_payload)
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	comments_json = json.dumps([{
+		"id": 1,
+		"user": {"login": "github-actions[bot]"},
+		"created_at": "2026-01-01T00:00:00Z",
+		"body": body,
+	}])
+	(tmp_path / "comments.json").write_text(comments_json)
+
+	func_src = _extract_function_body("_extract_standalone_state_json_from_comments")
+	script = textwrap.dedent(f"""
+		set -uo pipefail
+		export STANDALONE_STATE_MARKER_OPEN='<!-- AI_STANDALONE_STALL_STATE_V1'
+		export STANDALONE_STATE_MARKER_CLOSE='AI_STANDALONE_STALL_STATE_V1 -->'
+		{func_src}
+		_extract_standalone_state_json_from_comments "$(cat comments.json)"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}\nstdout: {r.stdout}"
+	# Parse the JSON the extractor printed.
+	got = json.loads(r.stdout.strip().splitlines()[-1])
+	# Existing whitelist fields survive.
+	assert got["stall_recovery_count"] == 2, got
+	assert got["last_seen_phase"] == "ai:done", got
+	# NEW: conflict_override_count map round-trips intact.
+	assert got["conflict_override_count"] == {"deadbeef0": 3, "cafebabe1": 1}, got
+
+
+def test_standalone_state_parser_defaults_conflict_override_count(tmp_path):
+	"""When the source state comment has no conflict_override_count
+	(legacy V1 payload), the parser must default it to {} so
+	downstream jq writes can still bump it without exploding."""
+	state_payload = {
+		"schema_version": 1,
+		"last_seen_phase": "ai:done",
+		"status_since_ts": 1700000000,
+		"stall_recovery_count": 0,
+	}
+	body = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps(state_payload)
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	comments_json = json.dumps([{
+		"id": 1,
+		"user": {"login": "github-actions[bot]"},
+		"created_at": "2026-01-01T00:00:00Z",
+		"body": body,
+	}])
+	(tmp_path / "comments.json").write_text(comments_json)
+
+	func_src = _extract_function_body("_extract_standalone_state_json_from_comments")
+	script = textwrap.dedent(f"""
+		set -uo pipefail
+		export STANDALONE_STATE_MARKER_OPEN='<!-- AI_STANDALONE_STALL_STATE_V1'
+		export STANDALONE_STATE_MARKER_CLOSE='AI_STANDALONE_STALL_STATE_V1 -->'
+		{func_src}
+		_extract_standalone_state_json_from_comments "$(cat comments.json)"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	got = json.loads(r.stdout.strip().splitlines()[-1])
+	assert got["conflict_override_count"] == {}, got
+
+
+# ---------------------------------------------------------------------------
+# 1k: Standalone budget-consumption must refresh status_since_ts and
+# updated_ts so the issue re-enters its phase-threshold window, instead
+# of burning through the rest of the ladder on every poll tick while
+# the resolver is still in flight (Codex P2, PR #2522, line 7335).
+# ---------------------------------------------------------------------------
+
+def test_standalone_cap_consumption_refreshes_stall_timer(tmp_path):
+	"""Reproduce the cap-consumption jq sequence and confirm that
+	status_since_ts AND updated_ts advance to the current time when
+	the cap is hit (so the standalone loop will wait the phase
+	threshold before its next attempt)."""
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export MAX_BUDGET_NEUTRAL_OVERRIDES=2
+		# Pre-cap: count=2 hits the cap on this iteration.
+		updated_state='{"schema_version":1,"last_seen_phase":"ai:done","status_since_ts":100,"updated_ts":100,"stall_recovery_count":0,"conflict_override_count":{"sha_x":2}}'
+		sha="sha_x"
+		_std_override_count="$(printf '%s' "${updated_state}" | jq -r --arg sha "${sha}" '(.conflict_override_count[$sha] // 0)')"
+		# Cap is hit (count >= MAX_BUDGET_NEUTRAL_OVERRIDES) — consume
+		# budget AND refresh timestamps.
+		now_ts="$(date -u +%s)"
+		if [ "${_std_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
+			updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson now "${now_ts}" \
+				'.stall_recovery_count = ((.stall_recovery_count // 0) + 1)
+				 | .status_since_ts = $now
+				 | .updated_ts = $now')"
+		fi
+		printf '%s\n' "${updated_state}"
+		echo "NOW=${now_ts}"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	lines = r.stdout.strip().splitlines()
+	state = json.loads(lines[0])
+	now = int(lines[-1].split("=", 1)[1])
+	# Budget consumed.
+	assert state["stall_recovery_count"] == 1, state
+	# Timestamps advanced to "now" (or very close).
+	assert state["status_since_ts"] >= now - 2 and state["status_since_ts"] <= now, state
+	assert state["updated_ts"] >= now - 2 and state["updated_ts"] <= now, state
+	# And the stale 100 was overwritten.
+	assert state["status_since_ts"] != 100, state
+	assert state["updated_ts"] != 100, state
+
+
+# ---------------------------------------------------------------------------
+# 1l: Override cap must NOT bump the per-head counter on no-op
+# dispatches (rc=2 / dedupe).  The managed retrigger_review path
+# captures STALL_RECOVERY_SHOULD_INCREMENT after execute_stall_recovery_action
+# as the fresh-dispatch signal; the standalone path defers the counter
+# bump into the rc=0 case branch (Codex P2, PR #2522, line 5565).
+# ---------------------------------------------------------------------------
+
+def test_managed_override_counter_skipped_on_no_op_dispatch(tmp_path):
+	"""Reproduce the managed path's signal-capture pattern and confirm
+	the counter only bumps when STALL_RECOVERY_SHOULD_INCREMENT was
+	set to "true" by execute_stall_recovery_action."""
+	script = textwrap.dedent("""
+		set -uo pipefail
+		STATE_FILE=state.json
+		echo '{"conflict_override_count":{}}' > "$STATE_FILE"
+		export MAX_BUDGET_NEUTRAL_OVERRIDES=2
+		_rtr_head_sha="sha_x"
+
+		# Stub: simulate execute_stall_recovery_action's behaviour.
+		# fresh-dispatch path (rc=0): sets SHOULD_INCREMENT=true.
+		fake_execute_fresh() {
+			STALL_RECOVERY_SHOULD_INCREMENT="true"
+			return 0
+		}
+		# dedupe path (rc=0 but no fresh dispatch): does NOT set.
+		fake_execute_dedupe() {
+			# Note: rc=2 was mapped to 0 inside execute_stall_recovery_action.
+			# STALL_RECOVERY_SHOULD_INCREMENT stays whatever the caller initialised.
+			return 0
+		}
+
+		bump_counter_if_fresh() {
+			local _rtr_rc=0
+			"$1" || _rtr_rc=$?
+			local _rtr_did_fresh_dispatch="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
+			STALL_RECOVERY_SHOULD_INCREMENT="false"
+			if [ "${_rtr_did_fresh_dispatch}" = "true" ] \
+			   && [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ]; then
+				local cur
+				cur="$(jq -r --arg sha "${_rtr_head_sha}" '.conflict_override_count[$sha] // 0' "$STATE_FILE")"
+				local nxt=$((cur + 1))
+				jq --arg sha "${_rtr_head_sha}" --argjson n "$nxt" \
+					'.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' \
+					"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+			fi
+		}
+
+		# Round 1: dedupe path — counter must NOT bump.
+		STALL_RECOVERY_SHOULD_INCREMENT="false"
+		bump_counter_if_fresh fake_execute_dedupe
+		echo "after_dedupe=$(jq -r '.conflict_override_count.sha_x // 0' "$STATE_FILE")"
+
+		# Round 2: fresh dispatch — counter bumps to 1.
+		bump_counter_if_fresh fake_execute_fresh
+		echo "after_fresh1=$(jq -r '.conflict_override_count.sha_x // 0' "$STATE_FILE")"
+
+		# Round 3: another dedupe — counter stays at 1.
+		bump_counter_if_fresh fake_execute_dedupe
+		echo "after_dedupe2=$(jq -r '.conflict_override_count.sha_x // 0' "$STATE_FILE")"
+
+		# Round 4: another fresh — counter to 2.
+		bump_counter_if_fresh fake_execute_fresh
+		echo "after_fresh2=$(jq -r '.conflict_override_count.sha_x // 0' "$STATE_FILE")"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# Dedupe paths must NOT advance the counter.
+	assert out["after_dedupe"] == "0", out
+	assert out["after_fresh1"] == "1", out
+	assert out["after_dedupe2"] == "1", out
+	assert out["after_fresh2"] == "2", out
+
+
+# ---------------------------------------------------------------------------
+# 1m: recent_comments builder must filter <!-- ORCHESTRATOR_STATE_V2
+# chunks alongside V1 snapshots so the judge cache key does not churn
+# every poll cycle on otherwise-identical stalls (Codex P2, PR #2522
+# line 6147).  V2 chunks have changing manifest hashes/timestamps and
+# would otherwise leak into the diagnostics blob and the cache hash.
+# ---------------------------------------------------------------------------
+
+def test_recent_comments_filter_strips_state_v1_and_v2(tmp_path):
+	"""Build a synthetic comments_json with a mix of V1, V2, and
+	human/orchestrator narration; apply the production filter and
+	confirm only the non-state comments survive."""
+	comments = [
+		{"id": 1, "user": {"login": "alice"}, "created_at": "2026-01-01T00:00:00Z",
+		 "body": "human guidance: please retry"},
+		{"id": 2, "user": {"login": "github-actions[bot]"}, "created_at": "2026-01-01T01:00:00Z",
+		 "body": "<!-- ORCHESTRATOR_STATE_V1\n{...}\nORCHESTRATOR_STATE_V1 -->"},
+		{"id": 3, "user": {"login": "github-actions[bot]"}, "created_at": "2026-01-01T02:00:00Z",
+		 "body": "<!-- ORCHESTRATOR_STATE_V2 part=1/2 manifest=" + ("a" * 64) + " -->\nchunk body\n<!-- /ORCHESTRATOR_STATE_V2 -->"},
+		{"id": 4, "user": {"login": "github-actions[bot]"}, "created_at": "2026-01-01T03:00:00Z",
+		 "body": "<!-- ORCHESTRATOR_STATE_V2 part=2/2 manifest=" + ("a" * 64) + " -->\nchunk body 2\n<!-- /ORCHESTRATOR_STATE_V2 -->"},
+		{"id": 5, "user": {"login": "bob"}, "created_at": "2026-01-01T04:00:00Z",
+		 "body": "another human comment"},
+	]
+	(tmp_path / "comments.json").write_text(json.dumps(comments))
+
+	# Reproduce the production jq filter from invoke_stall_judge.
+	script = textwrap.dedent("""
+		set -uo pipefail
+		jq -c '
+			[.[]
+				| select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
+				| select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V2")) | not)
+				| {
+						author: (.user.login // ""),
+						created_at: (.created_at // ""),
+						body: ((.body // "") | if length > 2000 then .[:1988] + "…[truncated]" else . end)
+					}
+			] | (if length > 8 then .[-8:] else . end)
+		' comments.json
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = json.loads(r.stdout.strip())
+	# Only the 2 human-narration comments should survive.
+	authors = [c["author"] for c in out]
+	bodies = [c["body"] for c in out]
+	assert authors == ["alice", "bob"], f"V1/V2 not filtered: {out}"
+	assert not any("ORCHESTRATOR_STATE_V1" in b for b in bodies), out
+	assert not any("ORCHESTRATOR_STATE_V2" in b for b in bodies), out
+
+
+# ---------------------------------------------------------------------------
 # 1i: implementation-failed reissue must reset the per-issue stall
 # accumulators (last_seen_phase / status_since_ts / stall_recovery_count
 # / phase_attempts) on the wave entry, mirroring the other reissue
@@ -958,6 +1221,22 @@ def test_production_script_contains_expected_fix_markers():
 	# Codex P2 1814 (orchestrate_lib.py reference): impl-failed reissue resets stall accumulators.
 	assert "orchestrate_lib.py line 1814" in body, (
 		"impl-failed reissue reset comment marker is missing"
+	)
+	# Codex P2 7339: standalone state parser carries conflict_override_count forward.
+	assert "conflict_override_count: (.conflict_override_count // {})" in body, (
+		"standalone state parser must preserve conflict_override_count"
+	)
+	# Codex P2 7335: standalone cap consumption refreshes status_since_ts/updated_ts.
+	assert "status_since_ts = $now" in body and "updated_ts = $now" in body, (
+		"standalone cap consumption must refresh stall timestamps"
+	)
+	# Codex P2 5565: override counter only bumps on fresh dispatches (managed path).
+	assert "_rtr_did_fresh_dispatch" in body, (
+		"managed retrigger_review must capture the fresh-dispatch signal"
+	)
+	# Codex P2 6147: recent_comments filter strips V2 chunks too.
+	assert 'startswith("<!-- ORCHESTRATOR_STATE_V2")) | not' in body, (
+		"recent_comments filter must strip ORCHESTRATOR_STATE_V2 chunks"
 	)
 
 

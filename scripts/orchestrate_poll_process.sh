@@ -5181,9 +5181,18 @@ _extract_standalone_state_json_from_comments() {
       last_seen_phase: (.last_seen_phase // ""),
       status_since_ts: ((.status_since_ts // 0) | tonumber),
       stall_recovery_count: ((.stall_recovery_count // 0) | tonumber),
-      updated_ts: ((.updated_ts // 0) | tonumber)
+      updated_ts: ((.updated_ts // 0) | tonumber),
+      # Preserve the per-head-SHA conflict-override counter across poll
+      # cycles.  Without this, every cycle reads the comment back
+      # through this whitelist and the counter is discarded to 0
+      # before the standalone override-cap (Codex P2, PR #2522, line
+      # 7339) runs again, so MAX_BUDGET_NEUTRAL_OVERRIDES never trips
+      # for a PR that stays conflicted at the same head_sha.  The
+      # cap write keys this object by head_sha, so carrying it
+      # forward as-is preserves the cycle history.
+      conflict_override_count: (.conflict_override_count // {})
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -5547,16 +5556,27 @@ STALL_EOF
           execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rtr_rc=$?
           # Q3:B — conflict override does not consume a retrigger-style
           # recovery attempt.  resolve_merge_conflict sets
-          # STALL_RECOVERY_SHOULD_INCREMENT="true" on its happy path (line
-          # ~4405); reset it here so the override is budget-neutral.
+          # STALL_RECOVERY_SHOULD_INCREMENT="true" inside
+          # execute_stall_recovery_action only when a fresh dispatch
+          # actually happened (rc=0 path); rc=2 (already dispatched
+          # this cycle or active autofix run dedupe) leaves it unset.
+          # Capture the signal here BEFORE the explicit reset below so
+          # we can gate the per-head override counter on it — without
+          # this, repeated poll ticks while the resolver is still in
+          # flight would advance the counter on every cycle and
+          # eventually consume stall budget for work that never fired
+          # (Codex P2, PR #2522, line 5565).
+          local _rtr_did_fresh_dispatch="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
           #
           # Per-head_sha cap (Q1b): track how many overrides have fired
           # for this exact head_sha and stop being budget-neutral after
           # MAX_BUDGET_NEUTRAL_OVERRIDES so the stall ladder can advance.
           # head_sha changes on every new commit, so once the resolver
           # pushes a fix, the counter restarts for the new sha.
-          STALL_RECOVERY_SHOULD_INCREMENT="false"
-          if [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+          if [ "${_rtr_did_fresh_dispatch}" = "true" ] \
+             && [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] \
+             && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
             local _rtr_override_count
             _rtr_override_count="$(jq -r --arg sha "${_rtr_head_sha}" '.conflict_override_count[$sha] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
             [[ "${_rtr_override_count}" =~ ^[0-9]+$ ]] || _rtr_override_count="0"
@@ -5938,14 +5958,21 @@ invoke_stall_judge() {
   local recent_comments
   # Filter out ORCHESTRATOR_STATE_V1 snapshots (they are ~57KB each and
   # are noise for the judge — it wants phase-change / recovery narrative,
-  # not state dumps) and cap each remaining body at 2000 characters. Without
-  # these two caps, 8 state snapshots produce ~260KB of argv which trips
-  # Linux MAX_ARG_STRLEN (128KB per argv entry) when passed to the final
-  # diagnostics jq via `--argjson recent_comments`, causing execve to
-  # return E2BIG and the diagnostics blob to come out empty.
+  # not state dumps) AND ORCHESTRATOR_STATE_V2 chunk comments (the same
+  # snapshots, just framed as multi-comment chains by post_state_comment;
+  # each chunk is the same noise and additionally churns the cache key
+  # on every poll cycle because its manifest hash changes as timestamps
+  # and counters advance — defeating MAX_JUDGE_REPLAY for orchestrator-
+  # managed stalls per Codex P2, PR #2522, line 6147).  Then cap each
+  # remaining body at 2000 characters. Without these caps, 8 state
+  # snapshots produce ~260KB of argv which trips Linux MAX_ARG_STRLEN
+  # (128KB per argv entry) when passed to the final diagnostics jq via
+  # `--argjson recent_comments`, causing execve to return E2BIG and the
+  # diagnostics blob to come out empty.
   recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '
     [.[]
       | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
+      | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V2")) | not)
       | {
           author: (.user.login // ""),
           created_at: (.created_at // ""),
@@ -7296,29 +7323,13 @@ PY
       fi
 
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
-        # Per-head_sha budget-neutral override cap for the standalone
-        # path (Codex P2, PR #2522, line 1077).  Mirrors the managed
-        # retrigger_review path at lines 5532-5550: track how many
-        # times we've rerouted a stalled standalone PR to the
-        # conflict resolver without consuming stall budget, and start
-        # consuming budget after MAX_BUDGET_NEUTRAL_OVERRIDES so the
-        # ladder can advance even when the same head_sha keeps coming
-        # back dirty.  Without this, the standalone pre-dispatch guard
-        # `continue`s before the stall_recovery_count increment at
-        # line 7613+, so the resolver loop is unbounded for standalone
-        # PRs.  The counter lives in the standalone state JSON
-        # alongside stall_recovery_count so it travels with the
-        # per-issue tracking comment.  Fail-open: if head_sha is
-        # unavailable or jq fails, skip the cap rather than block the
-        # dispatch.
-        # Try multiple sources in order so the cap can fire on every
-        # path that ends up here.  GraphQL's _std_conflict_linked is
-        # the primary signal on the settled-state fast path (no REST
-        # retry needed); _STD_ITER_PR_JSON_CACHED is the REST fallback
-        # plus the seed at line 7190 which now includes head_sha from
-        # the GraphQL response.  Both shapes use either .head_sha or
-        # .head.sha — accept whichever is present (Codex P2, PR #2522,
-        # line 7284).
+        # Resolve head_sha for the per-head-SHA budget-neutral
+        # override cap below.  Try _std_conflict_linked first (GraphQL
+        # fast-path shape — top-level .head_sha when seeded by the
+        # graphql linked_pr transform), then _STD_ITER_PR_JSON_CACHED
+        # (REST shape — nested .head.sha).  Fail-open: if neither has
+        # it, skip the cap rather than block the dispatch (Codex P2,
+        # PR #2522, lines 1077 + 7284).
         local _std_conflict_head_sha=""
         if [ -n "${_std_conflict_linked:-}" ] && [ "${_std_conflict_linked}" != "null" ]; then
           _std_conflict_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
@@ -7326,22 +7337,48 @@ PY
         if [ -z "${_std_conflict_head_sha}" ] && [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ]; then
           _std_conflict_head_sha="$(printf '%s' "${_STD_ITER_PR_JSON_CACHED}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
         fi
+        # Read the current per-head override count BEFORE dispatch so
+        # we can decide cap consumption from it, but defer the actual
+        # write (counter bump + budget consumption) to AFTER the
+        # dispatch and only apply it when the dispatch was a FRESH
+        # one (rc=0).  rc=2 means _dispatch_review_for_conflicts
+        # deduped against an in-flight autofix or an earlier dispatch
+        # this cycle — no new work happened, so neither the counter
+        # nor stall budget should advance (mirrors the managed
+        # retrigger_review fix at line 5559+ / Codex P2 line 5565).
+        local _std_override_count="0"
         if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
-          local _std_override_count
           _std_override_count="$(printf '%s' "${updated_state}" | jq -r --arg sha "${_std_conflict_head_sha}" '(.conflict_override_count[$sha] // 0)' 2>/dev/null || echo "0")"
           [[ "${_std_override_count}" =~ ^[0-9]+$ ]] || _std_override_count="0"
-          if [ "${_std_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
-            echo "  [standalone-stall] Issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} head_sha ${_std_conflict_head_sha} has hit budget-neutral override cap (${_std_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
-            updated_state="$(printf '%s' "${updated_state}" | jq -c '.stall_recovery_count = ((.stall_recovery_count // 0) + 1)' 2>/dev/null || printf '%s' "${updated_state}")"
-          fi
-          local _std_override_next=$(( _std_override_count + 1 ))
-          updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_override_next}" \
-            '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || printf '%s' "${updated_state}")"
         fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
           0)
+            # Fresh dispatch — bump the per-head counter and (if the
+            # cap is now hit) consume one stall-recovery attempt,
+            # mirroring the managed retrigger_review path.  Refresh
+            # status_since_ts/updated_ts on budget consumption so the
+            # issue re-enters its phase-threshold window instead of
+            # burning the rest of the ladder on the next cron tick
+            # (Codex P2, PR #2522, line 7335).  This block runs ONLY
+            # in the rc=0 branch — rc=2 (dedupe) below does not bump
+            # the counter.
+            if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
+              if [ "${_std_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} head_sha ${_std_conflict_head_sha} has hit budget-neutral override cap (${_std_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
+                local _std_now_ts
+                _std_now_ts="$(date -u +%s)"
+                updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson now "${_std_now_ts}" \
+                  '.stall_recovery_count = ((.stall_recovery_count // 0) + 1)
+                   | .status_since_ts = $now
+                   | .updated_ts = $now' \
+                  2>/dev/null || printf '%s' "${updated_state}")"
+              fi
+              local _std_override_next=$(( _std_override_count + 1 ))
+              updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_override_next}" \
+                '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || printf '%s' "${updated_state}")"
+            fi
             echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver instead of '${action}'."
             echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=dispatch_conflict_resolver override_from=${action}"
             tg_notify_issue "${issue_num}" "Standalone stall recovery: PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver (phase=${phase}, stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
