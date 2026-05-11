@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The required three lines in `tests/e2e_smoke_canary.txt` have incorrect values.\n  WHY: The smoke test compares the file byte-for-byte against `status: ok`, `run_id: 25643130622`, and `updated-by: ai-pipeline`, and all reviewers report these lines do not match.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `tests/e2e_smoke_canary.txt` contains extra lines beyond the required three-line spec, including the bait marker on line 6.\n  WHY: The issue requires exactly three lines with a trailing newline, and the smoke gate rejects any extra content or bait marker.\n- N/A:N/A | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The lint check-run on the PR head SHA is failing.\n  WHY: A failing required status check blocks merge eligibility, even if some reviewers note it may be pre-existing.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The file does not match the issue spec and contains wrong values plus extra baited content.\n  WHY: The smoke test expects the exact three-line payload, so the whole file fails byte-for-byte validation.\n- tests/e2e_smoke_canary.txt:1 | confidence=5\n  PROBLEM: `status` is `BROKEN_BY_E2E_BAIT_25643130622` instead of `ok`.\n  WHY: The spec requires `status: ok`, so the first line mismatches immediately.\n- tests/e2e_smoke_canary.txt:2 | confidence=5\n  PROBLEM: `run_id` is `WRONG_VALUE_SHOULD_BE_25643130622` instead of `25643130622`.\n  WHY: The spec requires the exact run ID, so the second line fails byte comparison.\n- tests/e2e_smoke_canary.txt:3 | confidence=5\n  PROBLEM: `updated-by` is `e2e-bait-injector` instead of `ai-pipeline`.\n  WHY: The third line does not match the required value.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: Three extra lines are present beyond the required three-line format, including the bait comment on line 6.\n  WHY: The issue requires exactly three lines, so any extra content breaks the exact-match check.\n- tests/e2e_smoke_canary.txt:6 | confidence=5\n  PROBLEM: The bait marker `E2E_EDITOR_BAIT_25643130622` is still present.\n  WHY: The smoke test explicitly asserts that marker must not appear in the file.\n- N/A:N/A | confidence=4\n  PROBLEM: The lint check-run on the PR head SHA is failing.\n  WHY: A failed required status check blocks merge eligibility.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The three required lines have incorrect values that do not match the issue specification.\n  WHY: The smoke test performs byte-for-byte validation against the exact spec, so these mismatches cause the pipeline to fail.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: The file contains three extra lines beyond the required three-line spec.\n  WHY: The issue specification explicitly requires exactly three lines, so the extra content and bait marker violate the exact-match requirement.\n- N/A:N/A | confidence=3\n  PROBLEM: The lint check-run is failing.\n  WHY: A failing lint check blocks merge eligibility.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The file content does not match the required three-line specification from issue #2473.\n  WHY: The E2E smoke test performs a byte-for-byte comparison against the expected content, so these mismatches cause validation to fail.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: The file includes three extraneous lines beyond the required exactly three-line format.\n  WHY: The smoke test expects precisely three lines with a trailing newline only, so extra content causes validation failure.\n- N/A:N/A | confidence=4\n  PROBLEM: The lint check-run is failing on the PR head SHA.\n  WHY: A failing lint check blocks merge eligibility regardless of file content correctness.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: All three required lines have incorrect values that do not match the issue specification.\n  WHY: The E2E smoke test performs exact content validation against the three-line spec, so each wrong value causes the byte-for-byte comparison to fail.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: Three extraneous lines are present that violate the issue constraint of exactly three lines.\n  WHY: The smoke test expects precisely three lines with a trailing newline, so the extra content and bait marker cause a content-length mismatch.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: Lines 1-3 contain incorrect values that do not match the exact specification from issue #2473.\n  WHY: The E2E smoke test performs byte-for-byte validation against the required content, so these mismatches cause assertion failure.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: The file includes three extraneous lines beyond the required exactly three-line format.\n  WHY: The smoke test expects precisely three lines with a trailing newline only, so extra content causes validation failure.\n- N/A:N/A | confidence=5\n  PROBLEM: The `lint` check-run failed on the PR head SHA.\n  WHY: GitHub required status checks block merge until `lint` passes.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: The three required lines have completely incorrect values that do not match the linked issue spec.\n  WHY: The E2E smoke test performs a byte-for-byte comparison against the expected three-line payload, so each mismatch causes the smoke gate validation to fail.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: The file contains three extra lines beyond the required three-line spec.\n  WHY: The linked issue requires exactly these three lines, so any additional content breaks the exact-match validation.\n- N/A:N/A | confidence=3\n  PROBLEM: The `lint` check-run failed with conclusion `failure` on the PR head SHA.\n  WHY: A failing lint check blocks the PR from merging.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "47fe35d59fd893ec9f4e9c4b226e97530f130d712fd22ad8cc58e0caefb58b1e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2479,
+    "run_id": "25643263584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25643263584",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511001546_10925856c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2479,
+    "run_id": "25643263584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T00:15:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
