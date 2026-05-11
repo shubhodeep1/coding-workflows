@@ -6,8 +6,11 @@
 # Routing (matches CLAUDE.md Q3 decision: PR-comment when an open PR exists,
 # fall back to commit comment otherwise):
 #   * If PR_NUMBER is set + numeric → POST to /repos/{repo}/issues/{pr}/comments
-#   * Else (push event without an open PR for the head SHA) → POST to
-#     /repos/{repo}/commits/{sha}/comments
+#   * Else, re-check for an open PR on HEAD_REF whose head.sha == HEAD_SHA
+#     (open-then-push race recovery: review_autofix's caller checks for a
+#     PR once at push time, but the PR is often opened seconds later while
+#     the ~hour-long review proceeds). On match → POST to that PR.
+#   * Else (no matching open PR) → POST to /repos/{repo}/commits/{sha}/comments
 #
 # Chunking (matches Q4: chunk on finding boundaries; never mid-finding):
 #   GitHub caps a single comment body at 65 536 chars. We aim for a soft
@@ -102,6 +105,40 @@ fi
 
 LEDGER_BYTES="$(wc -c < "${REVIEWER_CONSENSUS_FILE}" | tr -d '[:space:]')"
 echo "post_review_comment: ledger=${REVIEWER_CONSENSUS_FILE} bytes=${LEDGER_BYTES} pr=${PR_NUMBER:-<none>} sha=${HEAD_SHA}"
+
+# ── Open-then-push race recovery ────────────────────────────────────────
+# review_autofix.yml's caller (internal-review.yml resolve-claude-branch-pr)
+# checks for an open PR exactly once, ~milliseconds after the push event
+# fires. When the user pushes the branch and opens the PR a few seconds
+# later (the open-then-push race documented in PR #1729 for concurrency),
+# the resolve job sees no PR, the codex-agent runs in claude-branch-review
+# mode with PR_NUMBER="", and the consensus ledger lands on the commit
+# comment thread instead of the PR. The review takes ~30–60 minutes, so
+# by the time we post the PR almost always exists.
+#
+# Re-check here, at the actual routing decision point, so we capture any
+# PR opened during the entire review window. Reuse the same head-ref
+# query pattern as resolve-claude-branch-pr (internal-review.yml line 99)
+# and add a head.sha guard so a force-push during the review (PR head
+# advanced past what we reviewed) still falls through to the commit
+# comment route — posting a stale-SHA review on a force-pushed PR would
+# mislead readers.
+#
+# Fail-open: any API error / empty result falls through to the existing
+# commit-comment route, which is the current behaviour.
+if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -n "${HEAD_REF}" ]; then
+	resolved_pr=""
+	owner="${REPOSITORY%/*}"
+	if resolved_pr="$(HEAD_SHA="${HEAD_SHA}" gh_retry gh api \
+		"repos/${REPOSITORY}/pulls?state=open&head=${owner}:${HEAD_REF}" \
+		--jq '[.[] | select(.head.sha == env.HEAD_SHA) | .number] | first // empty' \
+		2>/dev/null)" && [[ "${resolved_pr}" =~ ^[0-9]+$ ]]; then
+		echo "post_review_comment: resolved PR_NUMBER=${resolved_pr} from HEAD_REF=${HEAD_REF} HEAD_SHA=${HEAD_SHA} (open-then-push race recovery)"
+		PR_NUMBER="${resolved_pr}"
+	else
+		echo "post_review_comment: no matching open PR for HEAD_REF=${HEAD_REF} HEAD_SHA=${HEAD_SHA}; routing to commit comment"
+	fi
+fi
 
 # ── Routing decision ────────────────────────────────────────────────────
 ROUTE=""
