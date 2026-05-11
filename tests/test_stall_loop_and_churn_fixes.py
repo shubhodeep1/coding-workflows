@@ -284,12 +284,18 @@ def test_standalone_judge_path_warns_when_local_id_empty():
 		"cache eligibility must require BOTH non-empty local_id AND STATE_FILE"
 	)
 	# The standalone warning must trigger on empty local_id (no longer
-	# gated on STATE_FILE absence).
+	# gated on STATE_FILE absence) AND be rate-limited to once per
+	# poller run via a process-global flag (Copilot review,
+	# PR #2522 line 6372).
 	assert (
 		'if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then\n'
-		'    echo "::warning::Stall judge for issue #${issue_num} runs without a managed local_id'
+		'    if [ "${_STALL_JUDGE_STANDALONE_WARNED:-false}" != "true" ]; then'
 	) in body, (
-		"standalone-path warning must trigger on empty local_id, not STATE_FILE absence"
+		"standalone-path warning must trigger on empty local_id and "
+		"be guarded by _STALL_JUDGE_STANDALONE_WARNED"
+	)
+	assert "_STALL_JUDGE_STANDALONE_WARNED=" in body, (
+		"the once-per-run guard flag must be set after the first warning emit"
 	)
 
 
@@ -558,6 +564,83 @@ def test_judge_cache_key_stable_under_phase_attempts_count_churn(tmp_path):
 		f"phase_attempts_exhausted flipping true MUST change the cache key "
 		f"(else cap-exhausted escalation replays prior non-exhausted decision): {keys}"
 	)
+
+
+def test_list_integration_conflict_files_errexit_toggle_preserves_caller_state(tmp_path):
+	"""_list_integration_conflict_files toggles `set +e/-e` to capture
+	rc=$? from `git merge-tree`.  The restore must NOT
+	unconditionally re-enable errexit — if a caller had `set +e`
+	before calling the function, the function's state-restore
+	should keep errexit OFF (Copilot review, PR #2522 line 3444)."""
+	script = textwrap.dedent("""
+		# Reproduce the production state-save pattern verbatim.
+		toggle_errexit() {
+			local _had_errexit="false"
+			case "$-" in *e*) _had_errexit="true" ;; esac
+			set +e
+			# (simulated merge-tree call)
+			:
+			if [ "${_had_errexit}" = "true" ]; then
+				set -e
+			fi
+		}
+
+		# Scenario A: caller has set -e on entry → must be set -e on exit.
+		set -e
+		toggle_errexit
+		case "$-" in *e*) echo "A=errexit_on" ;; *) echo "A=errexit_off" ;; esac
+
+		# Scenario B: caller has set +e on entry → must STAY set +e on exit.
+		set +e
+		toggle_errexit
+		case "$-" in *e*) echo "B=errexit_on" ;; *) echo "B=errexit_off" ;; esac
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# Caller's errexit state must be preserved.
+	assert out["A"] == "errexit_on", f"set -e caller must end in set -e: {out}"
+	assert out["B"] == "errexit_off", f"set +e caller must STAY in set +e: {out}"
+
+
+def test_standalone_state_parser_early_returns_include_conflict_override_count(tmp_path):
+	"""All three early-return paths of
+	_extract_standalone_state_json_from_comments — no marker,
+	extraction empty, invalid JSON — must emit JSON that includes
+	`conflict_override_count: {}` so downstream readers/writers
+	don't need to handle multiple shapes (Copilot review,
+	PR #2522 line 5315)."""
+	func_src = _extract_function_body("_extract_standalone_state_json_from_comments")
+	script = textwrap.dedent(f"""
+		set -uo pipefail
+		export STANDALONE_STATE_MARKER_OPEN='<!-- AI_STANDALONE_STALL_STATE_V1'
+		export STANDALONE_STATE_MARKER_CLOSE='AI_STANDALONE_STALL_STATE_V1 -->'
+		{func_src}
+
+		# Path 1: empty comments list (no marker found).
+		echo "no_marker=$(_extract_standalone_state_json_from_comments '[]')"
+
+		# Path 2: marker present but extraction returns empty body.
+		# Construct a malformed comment where the open marker matches
+		# but the inner content is missing.
+		empty_body='[{{"body":"<!-- AI_STANDALONE_STALL_STATE_V1\\nAI_STANDALONE_STALL_STATE_V1 -->","created_at":"2026-01-01T00:00:00Z"}}]'
+		echo "empty_body=$(_extract_standalone_state_json_from_comments "${{empty_body}}")"
+
+		# Path 3: marker + body that is not valid JSON.
+		invalid_json='[{{"body":"<!-- AI_STANDALONE_STALL_STATE_V1\\nthis is not json\\nAI_STANDALONE_STALL_STATE_V1 -->","created_at":"2026-01-01T00:00:00Z"}}]'
+		echo "invalid_json=$(_extract_standalone_state_json_from_comments "${{invalid_json}}")"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	for label, json_str in out.items():
+		got = json.loads(json_str)
+		assert "conflict_override_count" in got, (
+			f"early-return path {label!r} must include conflict_override_count: got {got}"
+		)
+		assert got["conflict_override_count"] == {}, (
+			f"early-return path {label!r} must default conflict_override_count to {{}}: got {got['conflict_override_count']!r}"
+		)
 
 
 def test_max_budget_neutral_overrides_and_judge_replay_canonicalisation(tmp_path):

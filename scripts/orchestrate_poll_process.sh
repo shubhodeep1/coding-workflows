@@ -3435,13 +3435,19 @@ _list_integration_conflict_files() {
   # already disables errexit inside the function body, but defensive
   # coding — disable errexit just for this call so the function is
   # safe to call from any context (Copilot review, PR #2522
-  # line 3359).  Matches the toggle pattern used elsewhere in this
-  # script (e.g. post_state_chunk_comment around line 1231).
+  # line 3359).  Capture the entry errexit state via `$-` and only
+  # restore it if it was set, so calling this function from a
+  # context that already disabled `-e` doesn't unexpectedly
+  # re-enable it (Copilot review, PR #2522 line 3444).
   local out rc
+  local _had_errexit="false"
+  case "$-" in *e*) _had_errexit="true" ;; esac
   set +e
   out="$(git merge-tree --write-tree --name-only --no-messages "${db_ref}" "${ib_ref}" 2>/dev/null)"
   rc=$?
-  set -e
+  if [ "${_had_errexit}" = "true" ]; then
+    set -e
+  fi
   case "${rc}" in
     0)
       # Clean merge — no conflicts.
@@ -5289,19 +5295,19 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
     return
   fi
 
@@ -6367,8 +6373,18 @@ invoke_stall_judge() {
      && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
     _judge_cache_eligible="true"
   fi
+  # Rate-limit the standalone-path warning to ONCE per poller run
+  # via a process-global flag.  Without this, every stalled
+  # standalone issue triggers the warning every cycle — spamming
+  # the workflow log and burying real warnings.  The flag lives in
+  # the parent shell across this function's invocations (no `local`,
+  # so it survives) but is reset on each fresh poller process
+  # (Copilot review, PR #2522 line 6372).
   if [ -z "${local_id}" ] || [ "${local_id}" = "null" ]; then
-    echo "::warning::Stall judge for issue #${issue_num} runs without a managed local_id (standalone path); MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation. Every identical stall will burn a fresh LLM call until the standalone state schema carries judge_decision_cache." >&2
+    if [ "${_STALL_JUDGE_STANDALONE_WARNED:-false}" != "true" ]; then
+      echo "::warning::Stall judge for issue #${issue_num} runs without a managed local_id (standalone path); MAX_JUDGE_REPLAY cannot enforce a replay cap on this invocation. Every identical stall will burn a fresh LLM call until the standalone state schema carries judge_decision_cache. (This warning is emitted once per poller run; subsequent standalone judge invocations will not repeat it.)" >&2
+      _STALL_JUDGE_STANDALONE_WARNED="true"
+    fi
   fi
   if [ "${_judge_cache_eligible}" = "true" ]; then
     # Normalize the cache-key view of diagnostics before hashing so
