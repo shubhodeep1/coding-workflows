@@ -343,12 +343,19 @@ After changes:
 ### G) Autofix CI / Address-Comments Mode Add-ons
 
 When Claude is invoked under the **autofix CI / address-comments mode** —
-i.e. the `review_autofix` workflow loop, a `subscribe_pr_activity` event
-tied to a failing required check, an `@codex change` / "address the review
-comments" request on a PR, or any equivalent trigger that tasks Claude
-with making the branch green and the review thread satisfied — the
-following are first-class auto-apply categories on top of §12.B. Fix
-them without asking:
+i.e. an **interactive Claude Code session** driven by a
+`subscribe_pr_activity` event tied to a failing required check, an
+`@codex change` / "address the review comments" request on a PR, or any
+equivalent trigger that tasks the interactive session with making the
+branch green and the review thread satisfied — the following are
+first-class auto-apply categories on top of §12.B. Fix them without
+asking.
+
+This subsection governs **interactive sessions only**, consistent with
+the preface at the top of this file (lines 7–10): the unattended
+`review_autofix` pipeline reads `unattended_system_instructions.md` and
+keeps its own policy, so the rules below do not flow into that pipeline
+and must not be cited as if they did.
 
 - **Lint / formatter / static-analysis failures**, **including failures
   whose offending line is outside the current PR's diff.** Owning a green
