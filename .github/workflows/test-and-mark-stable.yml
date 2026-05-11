@@ -4412,7 +4412,7 @@ jobs:
               echo "✓ Alt-model run reached implement-done/review/merge stage"
               exit 0
             fi
-            if echo "${LABELS}" | grep -qE 'ai:clarify-failed|ai:plan-failed|ai:implement-failed'; then
+            if echo "${LABELS}" | grep -qE 'ai:clarify-failed|ai:plan-failed|ai:implementation-failed'; then
               echo "::error::Alt-model run hit a failure label: ${LABELS}"
               exit 1
             fi
