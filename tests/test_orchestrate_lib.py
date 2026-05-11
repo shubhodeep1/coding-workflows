@@ -686,6 +686,64 @@ def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
 	assert stalls[0]["recovery_action"] == "skip"
 
 
+def test_detect_stalls_phase_attempts_respects_per_phase_cap():
+	"""An ai:done issue with phase_attempts == global cap must NOT be skipped
+	when the operator raised the per-phase cap via max_recoveries_by_phase.
+	Without this, the new phase-lifetime counter would prematurely route
+	ai:done stalls to the destructive "skip" action even when
+	MAX_STALL_RECOVERIES_DONE was set to a higher value to keep autofix
+	cycles alive for slow review-blocked PRs (per the
+	_phase_specific_max_recoveries docstring)."""
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	state["waves"][0]["issues"][0]["phase_attempts"] = {"ai:done": 6}
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+
+	assert len(stalls) == 1
+	# 6 phase attempts < per-phase cap of 99 → must NOT be the destructive
+	# "skip" action.
+	assert stalls[0]["recovery_action"] != "skip"
+
+
+def test_detect_stalls_phase_attempts_skips_at_per_phase_cap():
+	"""When max_recoveries_by_phase is supplied and phase_attempts reaches
+	that per-phase cap, the early-skip path still fires.  This guards
+	against accidentally turning the per-phase cap into a never-skip."""
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	state["waves"][0]["issues"][0]["phase_attempts"] = {"ai:done": 99}
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip"
+
+
 def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigger_override():
 	captured: dict[str, object] = {}
 	original_detect_stalls = orchestrate_lib.detect_stalls
@@ -700,6 +758,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		stall_judge_trigger_count: int = 2,
 		enable_stall_judge: bool = True,
 		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -877,6 +936,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		stall_judge_trigger_count: int = 0,
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -929,6 +989,7 @@ def test_cmd_check_stalls_forwards_human_terminalization_flag_to_detect_stalls()
 		stall_judge_trigger_count: int = 0,
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
 	) -> list[dict[str, object]]:
 		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
 		return []

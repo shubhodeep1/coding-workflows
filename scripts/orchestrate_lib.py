@@ -1608,6 +1608,7 @@ def detect_stalls(
 	stall_judge_trigger_count: int = 2,
 	enable_stall_judge: bool = True,
 	enable_stall_human_terminalization: bool = False,
+	max_recoveries_by_phase: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -1688,10 +1689,18 @@ def detect_stalls(
 			phase_attempts_count = 0
 		phase_attempts_count = max(0, phase_attempts_count)
 
-		# Determine recovery action
-		if recovery_count >= max_recoveries:
+		# Determine recovery action.  Apply the per-phase cap (when one is
+		# configured) to both the per-recovery counter and the phase-lifetime
+		# counter — otherwise a phase that the operator deliberately exempted
+		# from the default 5-attempt cap (e.g. ai:done with
+		# MAX_STALL_RECOVERIES_DONE=99) would still be hard-closed here at 5,
+		# bypassing the override.
+		effective_max = _phase_specific_max_recoveries(
+			phase, max_recoveries, max_recoveries_by_phase
+		)
+		if recovery_count >= effective_max:
 			action = "skip"
-		elif phase_attempts_count >= max_recoveries:
+		elif phase_attempts_count >= effective_max:
 			action = "skip"
 		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
 			action = RUN_STALL_JUDGE_ACTION
@@ -1701,6 +1710,7 @@ def detect_stalls(
 				recovery_count,
 				max_recoveries=max_recoveries,
 				enable_stall_human_terminalization=enable_stall_human_terminalization,
+				max_recoveries_by_phase=max_recoveries_by_phase,
 				phase_attempts_count=phase_attempts_count,
 			)
 
@@ -2466,12 +2476,27 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 			k: int(v) for k, v in json.loads(args.phase_thresholds_json).items()
 		}
 
+	max_recoveries_by_phase: dict[str, int] | None = None
+	max_recoveries_by_phase_json = getattr(args, "max_recoveries_by_phase_json", None)
+	if max_recoveries_by_phase_json:
+		raw = json.loads(max_recoveries_by_phase_json)
+		if isinstance(raw, dict):
+			max_recoveries_by_phase = {}
+			for k, v in raw.items():
+				try:
+					iv = int(v)
+				except (TypeError, ValueError):
+					continue
+				if iv >= 1:
+					max_recoveries_by_phase[k] = iv
+
 	stalls = detect_stalls(
 		state, issue_labels, threshold, now_ts, max_recoveries,
 		phase_thresholds=phase_thresholds,
 		stall_judge_trigger_count=stall_judge_trigger_count,
 		enable_stall_judge=enable_stall_judge,
 		enable_stall_human_terminalization=enable_stall_human_terminalization,
+		max_recoveries_by_phase=max_recoveries_by_phase,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -2563,6 +2588,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--threshold-minutes", required=True, help="Fallback stall threshold in minutes (used when a phase has no specific override)")
 	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
+	p_stalls.add_argument("--max-recoveries-by-phase-json", default=None, help='Optional JSON: {"ai:done": 99}. Per-phase caps override --max-recoveries for the named phases (applied to both stall_recovery_count and phase_attempts).')
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
 	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
 	p_stalls.add_argument(

@@ -3559,9 +3559,16 @@ mark_integration_sync_clean() {
   local prev_status
   prev_status="$(jq -r '.integration_sync_status // "clean"' "${STATE_FILE}")"
   if [ "${prev_status}" != "clean" ]; then
+    # Reset the per-episode backoff counter alongside unresolved_ticks so a
+    # later independent conflict episode on the same integration branch
+    # starts the exponential-backoff ladder back at 1× (15 min) instead of
+    # inheriting the previous episode's 16× cooldown and stalling resolver
+    # retries for hours.  integration_conflict_total_dispatches is the
+    # lifetime cap and is intentionally NOT reset here.
     jq '.integration_sync_status = "clean" |
         .integration_sync_last_error = "" |
-        .integration_conflict_unresolved_ticks = 0' \
+        .integration_conflict_unresolved_ticks = 0 |
+        .integration_conflict_dispatch_count = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_tracking_comment "## ✅ Integration self-healing resolved
 
@@ -5641,7 +5648,7 @@ REISSUE_EOF
           jq --arg lid "${local_id}" --argjson new_num "${new_num}" --argjson wave_idx "${WAVE_IDX}" \
             '.issue_number_map[$lid] = $new_num |
              (.waves[$wave_idx].issues[] | select(.id == $lid)) |=
-               (.github_issue = $new_num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor) | .stall_recovery_count = 0)' \
+               (.github_issue = $new_num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor) | .stall_recovery_count = 0 | .phase_attempts = {})' \
             "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         fi
         tg_notify "Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")" "WARNING"
@@ -5905,30 +5912,28 @@ invoke_stall_judge() {
     | .[:3]
   ' 2>/dev/null || echo '[]')"
 
-  # Judge decision cache (Q1d): memoise judge output by
-  # sha256({issue_num, head_sha, phase, last_conclusion}). When the same
-  # inputs reproduce, replay the cached action instead of burning a fresh
-  # LLM call.  After MAX_JUDGE_REPLAY consecutive replays without
-  # progress, bypass the cache and escalate so the issue isn't stuck on a
-  # bad decision forever. The cache is only consulted when STATE_FILE
-  # exists; missing-state cycles fall through to the LLM path.
-  local _judge_last_conclusion=""
+  # Judge decision cache (Q1d): memoise judge output by sha256 of the
+  # full diagnostics blob below.  Hashing the whole prompt-input JSON
+  # — instead of a hand-picked subset like {issue_num, head_sha, phase,
+  # last_conclusion} — guarantees the cache automatically invalidates
+  # whenever a mutable input the judge actually reads changes (recent
+  # tracking comments, PR mergeability / state, head_ref / base_ref,
+  # workflow outcomes beyond the latest, prior_recovery_actions, etc.).
+  # Otherwise human guidance added between cycles could be silently
+  # ignored until MAX_JUDGE_REPLAY forces escalation on stale context.
+  # When the same diagnostics reproduce, replay the cached action
+  # instead of burning a fresh LLM call.  After MAX_JUDGE_REPLAY
+  # consecutive replays without progress, bypass the cache and
+  # escalate so the issue isn't stuck on a bad decision forever.  The
+  # cache is only consulted when STATE_FILE exists; missing-state
+  # cycles fall through to the LLM path.  Initialise the loop-state
+  # variables here so the later cache-hit branch (and the cache-write
+  # branch after the LLM call) reads sane defaults on every code path,
+  # including the missing-STATE_FILE / hashing-failed fallthroughs.
   local _judge_cache_key=""
   local _judge_cache_hit_action=""
   local _judge_cache_replay_count=0
   local _judge_force_escalate="false"
-  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
-    _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
-    _judge_cache_key="$(printf '%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" | sha256sum 2>/dev/null | awk '{print $1}')"
-    if [ -n "${_judge_cache_key}" ]; then
-      _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-      _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
-      [[ "${_judge_cache_replay_count}" =~ ^[0-9]+$ ]] || _judge_cache_replay_count=0
-      if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ]; then
-        _judge_force_escalate="true"
-      fi
-    fi
-  fi
 
   local prior_actions='[]'
   if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
@@ -6012,6 +6017,26 @@ invoke_stall_judge() {
       }' 2>/dev/null || echo '{"diagnostics_build_failed":true}')"
   fi
 
+  # Now that the full diagnostics blob is built (or the fallback payload
+  # has been substituted), hash it as the judge-cache key.  This is the
+  # first point at which every input that goes into the judge prompt is
+  # known, so keying on the SHA256 of the JSON guarantees that any
+  # mutable input the prompt actually carries — recent tracking
+  # comments, PR state / mergeability, head_ref / base_ref, recent
+  # workflow outcomes beyond the latest conclusion, prior_recovery_actions
+  # — automatically invalidates the cached decision.
+  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_cache_key="$(printf '%s' "${diagnostics}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    if [ -n "${_judge_cache_key}" ]; then
+      _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      [[ "${_judge_cache_replay_count}" =~ ^[0-9]+$ ]] || _judge_cache_replay_count=0
+      if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ]; then
+        _judge_force_escalate="true"
+      fi
+    fi
+  fi
+
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
   local stall_judge_semble_query_file="${RUNTIME_DIR}/stall_judge_semble_query_${issue_num}.txt"
@@ -6062,6 +6087,18 @@ invoke_stall_judge() {
     jq -cn --arg a "escalate_human" --arg j "${_judge_escalate_justification}" '{action:$a, justification:$j}' > "${stall_judge_output_file}"
     judge_success="true"
     _judge_from_cache="true"
+    # Record the forced decision in the cache and reset the replay counter
+    # so a next-tick cache hit on the same diagnostics serves "escalate_human"
+    # directly instead of running through the force-escalate ladder again
+    # (and accidentally credit-burning another replay on the previous
+    # action).  The cache write itself is best-effort: a jq failure is
+    # logged via the jq error stream and silently swallowed, matching the
+    # existing replay / write callsites below.
+    if [ -n "${_judge_cache_key}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+      jq --arg k "${_judge_cache_key}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": "escalate_human", "replay_count": 0})' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    fi
   elif [ -n "${_judge_cache_hit_action}" ]; then
     echo "  [stall-judge] Cache hit for issue #${issue_num} (key=${_judge_cache_key}); replaying cached decision '${_judge_cache_hit_action}' (replay $((_judge_cache_replay_count + 1)) of max ${MAX_JUDGE_REPLAY})."
     local _judge_replay_justification
@@ -7382,6 +7419,11 @@ now = int(time.time())
 state["last_seen_phase"] = ""
 state["status_since_ts"] = now
 state["stall_recovery_count"] = 0
+# Reset the phase-lifetime counter alongside stall_recovery_count so the
+# fresh issue starts with a clean recovery ladder instead of inheriting
+# the predecessor's exhausted phase_attempts (which would route
+# detect_stalls() straight to "skip" on the first stall).
+state["phase_attempts"] = {}
 state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
@@ -8868,7 +8910,7 @@ The poller will resume processing on the next cycle."
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       # Update the wave entry with the github issue number
-      jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\" | .last_seen_phase = \"\" | .status_since_ts = $(date +%s) | .stall_recovery_count = 0)" \
+      jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\" | .last_seen_phase = \"\" | .status_since_ts = $(date +%s) | .stall_recovery_count = 0 | .phase_attempts = {})" \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       DEFERRED_STATE_CHANGED=true
@@ -10337,8 +10379,12 @@ ${RB_FIX_DESC}
             if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
               jq ".issue_number_map[\"${LOCAL_ID}\"] = ${NEW_NUM}" \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-              # Update the wave entry
-              jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${LOCAL_ID}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\")" \
+              # Update the wave entry.  Reset the stall counters alongside
+              # the new github_issue so the replacement issue runs the
+              # recovery ladder from scratch on its first stall instead of
+              # inheriting the predecessor's exhausted stall_recovery_count /
+              # phase_attempts and being routed straight to "skip".
+              jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${LOCAL_ID}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\" | .last_seen_phase = \"\" | .status_since_ts = $(date +%s) | .stall_recovery_count = 0 | .phase_attempts = {})" \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             fi
 
@@ -10836,6 +10882,16 @@ fi
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
+    # Forward MAX_STALL_RECOVERIES_DONE through to detect_stalls so the
+    # ai:done per-phase override is applied to both phase_attempts and
+    # stall_recovery_count.  Without this, an ai:done issue at
+    # phase_attempts=5 (the default global cap) is hard-closed even when
+    # the operator raised MAX_STALL_RECOVERIES_DONE=99 to avoid exactly
+    # that outcome.  The shell-side ai:done helpers
+    # (recovery_action_for_phase / normalize_stall_recovery_action) already
+    # pass {"ai:done": ${MAX_STALL_RECOVERIES_DONE}} into the corresponding
+    # Python helpers; this keeps the in-process bulk path consistent.
+    _stall_check_args+=(--max-recoveries-by-phase-json "$(printf '{"ai:done": %s}' "${MAX_STALL_RECOVERIES_DONE}")")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
