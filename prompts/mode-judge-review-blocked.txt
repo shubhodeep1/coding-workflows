@@ -51,6 +51,16 @@ Rules:
   paths/lines as bare `apps/x/y.ts:NN` without that prefix.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
+- If the autofix editor's iteration summaries show the same finding (same
+  `file:line` anchor) deferred ≥2 times as "out of scope" /
+  "CONSOLIDATOR_OVERRIDDEN" / "accepted-residual", treat that ceiling as
+  the editor's caution — not yours. The autofix editor is constrained to
+  the original issue's scope; YOU are not. For wiring / integration /
+  call-site gaps localizable to files already in the diff (e.g. a newly
+  added helper that has only test callers, or a missing call to an
+  existing function), prefer fix (B) over close_and_reissue (C) and apply
+  the wiring directly. Reserve C for cases where the approach itself is
+  wrong, not where the editor was conservative about scope.
 
 EDIT TOOL DISCIPLINE for option B:
 - Try `apply_patch` first for single-file surgical edits — it produces the
