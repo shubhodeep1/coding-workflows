@@ -767,3 +767,172 @@ Static scan of interpolated `run:` bodies flagged four blocks above the repo’s
 | Code modularization | 8-10 | Large |
 | Expression size reduction | 3-6 | Large |
 | Medium/Low fixes | 4-6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-11)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven local and semantics-preserving from static inspection alone. `NEEDS_VERIFICATION` means the overlap is real, but a human or follow-on analysis must confirm freshness, fallback, and cross-step behavior before changing it. `RISKY_SKIP` means the overlap is visible but sits in a retry/poll/race-defense/pagination-sensitive path, so it must **not** be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — SAFE_TO_MERGE
+- **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:443-449`
+- **Current call count** — 2
+- **Proposed call count** — 1
+- **Endpoint(s)** — `POST /repos/{owner}/{repo}/issues`; `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence** — The step creates an issue, extracts only `.number`, then immediately re-fetches the same issue only to read `.html_url`:
+  ```bash
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+  The create-issue response already contains both `number` and `html_url`, so the follow-up GET is a strict subset of data already returned by the POST.
+- **Proposed fix** — In the `Create E2E test issue` step, capture the full POST response once into a temp JSON variable/file, then extract both `.number` and `.html_url` locally before writing `issue_number` to `$GITHUB_OUTPUT` and logging the created URL.
+- **Safety rationale** — Same workflow step, same auth scope, no pagination, no retry/poll loop, no intervening mutation, and the second read is strictly redundant with fields already returned by the first response.
+- **Downstream signal** — Replace the create-issue step’s POST+GET pair with one POST whose JSON is parsed locally for both `ISSUE_NUMBER` and `ISSUE_URL`.
+
+#### MERGE-002 — RISKY_SKIP
+- **File path and line ranges** — `scripts/orchestrate_poll_process.sh:3659-3664`, `scripts/orchestrate_poll_process.sh:3715-3720`, `scripts/orchestrate_poll_process.sh:3768-3771`
+- **Current call count** — 8 GETs to the same PR endpoint per final-merge attempt on the path shown here
+- **Proposed call count** — 3 GETs total, one per checkpoint, with local field extraction from each fetched PR JSON
+- **Endpoint(s)** — `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence** — The same PR is fetched repeatedly for adjacent fields within the same final-merge routine:
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  ```bash
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  ```bash
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  Within each checkpoint cluster, a single JSON fetch could supply all three fields.
+- **Proposed fix** — If this path is ever manually optimized, keep the optimization strictly per-checkpoint: fetch `repos/.../pulls/${final_pr}` once into a cycle-local temp JSON variable at each checkpoint, then read `.state`, `.mergeable`, and `.merged_at` locally with `jq`. Do **not** collapse across checkpoints separated by PR creation or merge attempts. If maintainers prefer a formal helper, model the cache contract after the cycle-local reuse patterns referenced in `CLAUDE.md` §15 and `agents.md:92-105`.
+- **Safety rationale** — This is inside `scripts/orchestrate_poll_process.sh`, a poller/race-defense path wrapped in `gh_retry`; the user rubric explicitly requires `RISKY_SKIP` treatment for this file class and for upstream-race defensive logic.
+- **Downstream signal** — Do not auto-implement; manual review must confirm that any per-checkpoint caching preserves retry semantics, merge-race handling, and current log/state transitions in the final-merge path.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — NEEDS_VERIFICATION
+- **File path and line ranges** — `.github/workflows/issue_pr_status.yml:284-320`, `.github/workflows/issue_pr_status.yml:383-386`, `.github/workflows/issue_pr_status.yml:503-512`
+- **Current call count** — 1 batched GraphQL classification call + up to `N` later REST issue GETs in the merged-alert step
+- **Proposed call count** — 1 batched GraphQL classification call + 0 later REST issue GETs
+- **Endpoint(s)** — `POST /graphql`; `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence** — The PR-close step already classifies linked issues from a batched response that includes both labels and body:
+  ```bash
+  ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+  ...
+  _managed_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+    .data.repository | to_entries[] | .value | select(. != null) |
+    select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
+    select(
+      ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+      or
+      ((.body // "") | contains("Managed by: AI Orchestrator"))
+    ) | .number
+  ' 2>/dev/null || echo '')"
+  ```
+  But the later merged-alert step re-fetches each linked issue body to answer the same “is any linked issue orchestrator-managed?” question:
+  ```bash
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+      IS_ORCHESTRATED="true"
+      break
+    fi
+  done <<< "${LINKED_ISSUE_NUMBERS}"
+  ```
+  The later loop is also weaker than the earlier classifier because it ignores the `ai:orchestrator-managed` label path the batch step already computed.
+- **Proposed fix** — In `Update linked issue labels when PR closes`, export either `MANAGED_ISSUES` or a normalized boolean such as `HAS_ORCHESTRATED_LINKED_ISSUE=true|false` to `$GITHUB_ENV` alongside `LINKED_ISSUE_NUMBERS`. Then update `Send PR merged Telegram alert` to consume that exported result instead of re-fetching issue bodies.
+- **Safety rationale** — The overlap is real, but it crosses workflow steps and the earlier step has both GraphQL-success and per-issue-REST fallback branches; the implementer must verify that the exported classification remains accurate on every path.
+- **Downstream signal** — Verify on merged PRs with (a) standalone linked issues, (b) `ai:orchestrator-managed` children, (c) `ai:orchestrator-tracking` issues, and (d) forced GraphQL-batch fallback that the alert-skip decision matches current behavior before removing the later REST loop.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:65-80`, `.github/workflows/orchestrate_clarify_respond.yml:391-418`
+- **Current call count** — 4 GETs on orchestrator runs with a tracking issue: 2 to `/issues/{ISSUE_NUMBER}` and 2 to `/issues/{TRACKING_NUM}`
+- **Proposed call count** — 2 GETs total: 1 child-issue fetch and 1 tracking-issue fetch, both persisted for reuse
+- **Endpoint(s)** — `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence** — The early `Check orchestrator metadata` step already fetches the child issue and, when present, its tracking issue:
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+  Later, `Fetch issue and tracking context` re-fetches both resources:
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+- **Proposed fix** — Extend `Check orchestrator metadata` to persist the child issue payload and, when `TRACKING_NUM` is present, fetch/store the tracking issue payload once with both `title` and `body` available. A temp file under `${RUNNER_TEMP}` or a compact JSON blob exported via `$GITHUB_ENV` is sufficient. Then have `Fetch issue and tracking context` reuse those persisted payloads and only fall back to `gh api` if the files/vars are absent.
+- **Safety rationale** — This reuse crosses steps separated by checkout/setup work, so freshness assumptions must be validated before the later reads stop querying GitHub directly.
+- **Downstream signal** — Verify with one orchestrator-managed child linked to a normal tracking issue and one linked to the `[Orchestrator] E2E ...` smoke parent that `ALERT_MSG_LEVEL`, `issue_body.txt`, `tracking_body.txt`, and downstream prompt assembly are unchanged before deleting the second GET pair.
+
+#### REUSE-003 — NEEDS_VERIFICATION
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:1455-1469`, `scripts/review_rb_judge.sh:213-216`, `scripts/review_rb_judge.sh:267-289`
+- **Current call count** — 2 GETs to the same PR endpoint on review-blocked judge runs where `closingIssuesReferences` is empty: 1 early metadata fetch + 1 later fallback PR fetch
+- **Proposed call count** — 1 GET total, with the later fallback reading the already-materialized `PR_META_FILE` first
+- **Endpoint(s)** — `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence** — `review_autofix.yml` already fetches and materializes PR metadata before the judge runs:
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  ...
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  But `review_rb_judge.sh` falls back to another PR GET when no linked issues were returned by GraphQL:
+  ```bash
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    ...
+  fi
+  ```
+  The same script later already trusts the preloaded files:
+  ```bash
+  PRELOADED_PR_META="$(jq -c '{
+    title: (.title // ""),
+    body: (.body // ""),
+    head_ref: (.head_ref // .head.ref // .headRefName // ""),
+    base_ref: (.base_ref // .base.ref // .baseRefName // ""),
+    head_sha: (.head_sha // .head.sha // .headSha // "")
+  }' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+  ```
+- **Proposed fix** — In `scripts/review_rb_judge.sh`, change the fallback order to: read `PR_DATA` from `PR_META_FILE` (or `PR_PAYLOAD_FILE`) first with local `jq`, and only fall back to `_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}"` if the file is missing, unreadable, or empty. This keeps the existing fail-open behavior while removing the redundant network read on the normal workflow path.
+- **Safety rationale** — The overlap is clear, but it spans a workflow step and a later script fallback path; a verifier must confirm the preloaded files are present for every invocation of `review_rb_judge.sh`, including `review_rb_judge_dispatch.yml` runs.
+- **Downstream signal** — Verify that `PR_META_FILE` and `PR_PAYLOAD_FILE` are always populated for (a) normal `review_autofix` PR runs and (b) `review_rb_judge_dispatch.yml` force-judge dispatches, then switch the no-linked-issues fallback to local-file-first with API as last resort.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — agreed; the proposed consolidation depends on a `--paginate` path serving two artifacts, so page-boundary and fail-open semantics need manual review.
+- BATCH-001: NEEDS_VERIFICATION — agreed; extending the GraphQL selection set is likely correct, but the implementer must preserve `FIRST_ISSUE`, first-non-empty-body, and parent-label propagation behavior.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | MERGE-001 |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- MERGE-001
