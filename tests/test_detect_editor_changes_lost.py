@@ -245,6 +245,35 @@ def test_reference_clause_capitalised_verb_is_stripped(tmp_path: Path) -> None:
 	)
 
 
+def test_reference_clause_all_caps_verb_is_stripped(tmp_path: Path) -> None:
+	"""Same reproducer, but with the verb in ALL CAPS
+	('This MATCHES `Y`'). The strip regex is full-word case-
+	insensitive (per-letter `[Aa]`-style alternation), so all-caps
+	and mixed-case spellings ('mIrRoRs', 'REFERENCES') must also be
+	stripped — not just title case."""
+	_init_clean_repo(tmp_path)
+	external_dir = tmp_path.parent / f"{tmp_path.name}-fixtures"
+	external_dir.mkdir(parents=True, exist_ok=True)
+	fixture = FIXTURES / "narrative_reference_clause_status_edited.txt"
+	mutated = external_dir / "narrative_reference_clause_all_caps.txt"
+	mutated.write_text(
+		fixture.read_text(encoding="utf-8").replace(
+			"This matches", "This MATCHES"
+		),
+		encoding="utf-8",
+	)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- apps/api/test/auth-service-verification.test.mjs\n",
+	)
+	result = _run_shim(tmp_path, mutated, committed_files=committed)
+	assert result == "false", (
+		"Expected shim to strip the trailing 'This MATCHES `Y`' reference "
+		f"clause even when the verb is all-caps; got {result!r}."
+	)
+
+
 def test_committed_files_file_unset_preserves_legacy_behaviour(tmp_path: Path) -> None:
 	"""When COMMITTED_FILES_FILE is unset the shim must behave exactly as
 	before — the new subset check is purely additive. narrative_real_edit
