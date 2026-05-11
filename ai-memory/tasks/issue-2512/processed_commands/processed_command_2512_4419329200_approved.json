@@ -5,13 +5,35 @@
   "entry_id": "processed_command_2512_4419329200_approved",
   "issue_number": 2512,
   "metadata": {
+    "branch": "ai/issue-2512",
+    "changed_files": [
+      "scripts/mcp_handshake_probe.py",
+      "scripts/serena_stats_emit.py",
+      "scripts/setup_serena.sh",
+      "scripts/templates/serena_project.yml.j2",
+      "tests/fixtures/mcp_handshake/mock_mcp_close_on_init.py",
+      "tests/fixtures/mcp_handshake/mock_mcp_error_response.py",
+      "tests/fixtures/mcp_handshake/mock_mcp_happy.py",
+      "tests/fixtures/mcp_handshake/mock_mcp_id_mismatch.py",
+      "tests/fixtures/mcp_handshake/mock_mcp_invalid_json.py",
+      "tests/fixtures/mcp_handshake/mock_mcp_timeout.py",
+      "tests/fixtures/mcp_handshake/mock_server_lib.py",
+      "tests/test_mcp_handshake_probe.py",
+      "tests/test_serena_stats_emit.py",
+      "tests/test_setup_serena_toml.py"
+    ],
+    "issue_number": 2512,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2512",
+    "pr_number": 2517,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2517",
+    "run_attempt": "1",
+    "run_id": "25662305689",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25662305689"
   },
   "run_attempt": 1,
   "run_id": "25662305689",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-11T09:37:54Z",
+  "status": "completed",
+  "timestamp": "2026-05-11T10:03:28Z",
   "workflow": "implement"
 }
