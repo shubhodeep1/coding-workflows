@@ -37,6 +37,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
 
 permissions:
   contents: write
@@ -261,6 +262,42 @@ jobs:
             --reasoning xhigh
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
+      - name: Setup uv (Semble)
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          semble_index_path="${RUNNER_TEMP}/.semble-index"
+          echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "::warning::Semble binary not found on PATH after install; continuing without index."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          rm -rf "${semble_index_path}"
+          if semble index . --out "${semble_index_path}"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Semble index build failed; continuing without index."
+            rm -rf "${semble_index_path}"
+          fi
+
       - name: Download workflow log report artifact
         uses: actions/download-artifact@v4
         with:
@@ -470,9 +507,25 @@ jobs:
             RUN_LOGS_DIR=""
           fi
 
+          # Build Semble prefetch (best-effort, fail-soft). Skipped silently
+          # when SEMBLE_ENABLED=false, install failed, or the index build
+          # failed — render_prompt.sh treats an empty SEMBLE_PREFETCH as a
+          # blank-line substitution, so a Semble miss never blocks the pass.
+          WLA_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              wla_query_text="$(head -c 6000 "${ANALYSIS_CONTEXT_FILE}" 2>/dev/null || true)"
+              if [ -n "${wla_query_text}" ]; then
+                WLA_SEMBLE_PREFETCH="$(semble_query_block "${wla_query_text}" 6 "Workflow Log Analysis Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
           CODEX_PROMPT_FILE="$(mktemp)"
           {
-            bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
+            SEMBLE_PREFETCH="${WLA_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
             echo
             echo "=== ANALYSIS CONTEXT ==="
             cat "${ANALYSIS_CONTEXT_FILE}"
@@ -820,6 +873,42 @@ jobs:
           git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
           git pull --rebase origin "${TARGET_BRANCH}"
 
+      - name: Setup uv (Semble)
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          semble_index_path="${RUNNER_TEMP}/.semble-index"
+          echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "::warning::Semble binary not found on PATH after install; continuing without index."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          rm -rf "${semble_index_path}"
+          if semble index . --out "${semble_index_path}"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Semble index build failed; continuing without index."
+            rm -rf "${semble_index_path}"
+          fi
+
       - name: Run deep audit pass
         id: audit
         env:
@@ -897,13 +986,26 @@ jobs:
             exit 1
           fi
 
+          # Build Semble prefetch (best-effort, fail-soft).
+          AUDIT_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              audit_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null || true)"
+              if [ -n "${audit_query_text}" ]; then
+                AUDIT_SEMBLE_PREFETCH="$(semble_query_block "${audit_query_text}" 6 "Workflow Deep Audit Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
           SECTION_FILE=""
           CODEX_PROMPT_FILE=""
           trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
           {
-            bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
+            SEMBLE_PREFETCH="${AUDIT_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
             echo
             echo "=== ANALYSIS CONTEXT ==="
             echo "Report file path: ${REPORT_FILE}"
@@ -1194,6 +1296,42 @@ jobs:
           git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
           git pull --rebase origin "${TARGET_BRANCH}"
 
+      - name: Setup uv (Semble)
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          semble_index_path="${RUNNER_TEMP}/.semble-index"
+          echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+          if ! command -v semble >/dev/null 2>&1; then
+            echo "::warning::Semble binary not found on PATH after install; continuing without index."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          rm -rf "${semble_index_path}"
+          if semble index . --out "${semble_index_path}"; then
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Semble index build failed; continuing without index."
+            rm -rf "${semble_index_path}"
+          fi
+
       - name: Run API redundancy pass
         id: api_redundancy
         env:
@@ -1271,13 +1409,26 @@ jobs:
             exit 1
           fi
 
+          # Build Semble prefetch (best-effort, fail-soft).
+          API_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              api_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null || true)"
+              if [ -n "${api_query_text}" ]; then
+                API_SEMBLE_PREFETCH="$(semble_query_block "${api_query_text}" 6 "Workflow API Redundancy Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
           SECTION_FILE=""
           CODEX_PROMPT_FILE=""
           trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
           {
-            bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
+            SEMBLE_PREFETCH="${API_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
             echo
             echo "=== ANALYSIS CONTEXT ==="
             echo "Report file path: ${REPORT_FILE}"
