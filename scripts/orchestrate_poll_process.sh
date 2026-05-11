@@ -7140,28 +7140,16 @@ PY
           local _std_next_count=$(( _std_override_count + 1 ))
           updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_next_count}" '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || echo "${updated_state}")"
         fi
-        if [ "${_std_consume_budget}" = "true" ]; then
-          updated_state="$(python3 - "${updated_state}" "${phase}" <<'PY'
-import json, sys, time
-state = json.loads(sys.argv[1])
-phase = sys.argv[2]
-now = int(time.time())
-try:
-	current = int(state.get("stall_recovery_count", 0) or 0)
-except (TypeError, ValueError):
-	current = 0
-state["stall_recovery_count"] = current + 1
-phase_attempts = state.get("phase_attempts")
-if not isinstance(phase_attempts, dict):
-	phase_attempts = {}
-state["phase_attempts"] = phase_attempts
-phase_attempts[phase] = max(0, int(phase_attempts.get(phase, 0) or 0)) + 1
-state["status_since_ts"] = now
-state["updated_ts"] = now
-print(json.dumps(state, separators=(",", ":")))
-PY
-          )"
-        fi
+		if [ "${_std_consume_budget}" = "true" ]; then
+		  updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
+			.stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+			| .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+			| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+			| .status_since_ts = $now
+			| .updated_ts = $now
+		  ')
+		  "
+		fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
@@ -7427,43 +7415,27 @@ REISSUE_EOF
             --add-label 'ai:closed' 2>/dev/null || true
           gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery. Issue was stuck in '${phase}' for ${elapsed_minutes} minutes after $((recovery_count + 1)) recovery attempt(s)." 2>/dev/null || true
           local new_state
-          new_state="$(python3 - "$updated_state" <<'PY'
-import json, sys, time
-state = json.loads(sys.argv[1])
-now = int(time.time())
-state["last_seen_phase"] = ""
-state["status_since_ts"] = now
-state["stall_recovery_count"] = 0
-state["phase_attempts"] = {}
-state["updated_ts"] = now
-print(json.dumps(state, separators=(",", ":")))
-PY
-          )"
-          write_standalone_state_json "${new_num}" "${new_state}" ""
-          tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
+		  new_state="$(printf '%s' "${updated_state}" | jq -c --argjson now "$(date +%s)" '
+			.last_seen_phase = ""
+			| .status_since_ts = $now
+			| .stall_recovery_count = 0
+			| .phase_attempts = {}
+			| .updated_ts = $now
+		  ')
+		  "
+		  write_standalone_state_json "${new_num}" "${new_state}" ""
+		  tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
 		else
 		  echo "::warning::Standalone close_and_reissue failed to create replacement issue for #${issue_num}."
 		  tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
-			  failed_reissue_state="$(python3 - "$updated_state" "${phase}" <<'PY'
-import json, sys, time
-state = json.loads(sys.argv[1])
-phase = sys.argv[2]
-now = int(time.time())
-try:
-    current = int(state.get("stall_recovery_count", 0) or 0)
-except (TypeError, ValueError):
-    current = 0
-state["stall_recovery_count"] = current + 1
-phase_attempts = state.get("phase_attempts")
-if not isinstance(phase_attempts, dict):
-    phase_attempts = {}
-state["phase_attempts"] = phase_attempts
-phase_attempts[phase] = max(0, int(phase_attempts.get(phase, 0) or 0)) + 1
-state["status_since_ts"] = now
-state["updated_ts"] = now
-print(json.dumps(state, separators=(",", ":")))
-PY
-			  )"
+			  failed_reissue_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
+				.stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+				| .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+				| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+				| .status_since_ts = $now
+				| .updated_ts = $now
+			  ')
+			  "
 		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
 		fi
 		took_action="true"
@@ -7532,28 +7504,16 @@ PY
     esac
 
 	    if [ "${took_action}" = "true" ] && [ "${action}" != "close_and_reissue" ]; then
-	      updated_state="$(python3 - "$updated_state" "$STALL_RECOVERY_SHOULD_INCREMENT" "$phase" <<'PY'
-import json, sys, time
-state = json.loads(sys.argv[1])
-should_increment = sys.argv[2].lower() == "true"
-phase = sys.argv[3]
-now = int(time.time())
-if should_increment:
-    try:
-        current = int(state.get("stall_recovery_count", 0) or 0)
-    except (TypeError, ValueError):
-        current = 0
-    state["stall_recovery_count"] = current + 1
-    phase_attempts = state.get("phase_attempts")
-    if not isinstance(phase_attempts, dict):
-        phase_attempts = {}
-    state["phase_attempts"] = phase_attempts
-    phase_attempts[phase] = max(0, int(phase_attempts.get(phase, 0) or 0)) + 1
-state["status_since_ts"] = now
-state["updated_ts"] = now
-print(json.dumps(state, separators=(",", ":")))
-PY
-	      )"
+	      updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --arg should_increment "${STALL_RECOVERY_SHOULD_INCREMENT}" --argjson now "$(date +%s)" '
+			(if ($should_increment | ascii_downcase) == "true" then
+			  .stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+			  | .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+			  | .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+			 else . end)
+			| .status_since_ts = $now
+			| .updated_ts = $now
+	      ')
+	      "
       write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
     fi
   done
