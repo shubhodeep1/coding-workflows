@@ -383,8 +383,23 @@ def test_apply_fixes_contains_editor_input_authority_contract() -> None:
 
 def test_workflow_uses_defense_in_depth_shim() -> None:
 	wf = REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
-	assert "scripts/detect_editor_changes_lost.sh" in wf, (
-		"Expected review_autofix.yml to invoke the defense-in-depth shim"
+	# The shim must be installed by the bootstrap step so consumer
+	# repos — not just the workflow-source repo — actually have the
+	# script on disk at runtime.  Reading it from a non-bootstrapped
+	# path silently no-ops the recheck in every consumer (bitsafe.io
+	# PR #177 / run 25653654000 escape).
+	bootstrap_line = next(
+		(line for line in wf.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	assert "detect_editor_changes_lost.sh" in bootstrap_line, (
+		"Expected detect_editor_changes_lost.sh in REQUIRED_BOOTSTRAP_SCRIPTS so the shim is reachable in consumer repos"
+	)
+	# The recheck must read from the bootstrapped directory; the
+	# previous `${GITHUB_WORKSPACE}/scripts/` path only exists in the
+	# workflow-source repo and silently failed in every consumer.
+	assert '${SUPPORT_SCRIPTS_DIR}/detect_editor_changes_lost.sh' in wf, (
+		"Expected review_autofix.yml to invoke the defense-in-depth shim from SUPPORT_SCRIPTS_DIR"
 	)
 	assert "treating as false positive (no warning, auto-merge not blocked)" in wf
 
