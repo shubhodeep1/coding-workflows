@@ -257,7 +257,9 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 	for _target in "${ALLOWED_TARGETS[@]}"; do
 		if [ -f "prompts/${_target}" ]; then
 			echo "--- prompts/${_target} ---"
-			cat "prompts/${_target}"
+			if ! SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh "prompts/${_target}"; then
+				cat "prompts/${_target}"
+			fi
 			echo
 			echo "--- end prompts/${_target} ---"
 			echo

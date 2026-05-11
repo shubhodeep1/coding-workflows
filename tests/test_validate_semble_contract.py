@@ -148,6 +148,7 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	assert 'self_heal_semble_query="$(build_self_heal_semble_query || true)"' in text
 	assert 'self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"' in text
 	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt' in text
+	assert 'if ! SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh "prompts/${_target}"; then' in text
 	assert 'append_self_heal_semble_context "${self_heal_semble_query}"' in text
 
 
