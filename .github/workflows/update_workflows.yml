@@ -32,7 +32,12 @@ name: Update Workflow Wrappers
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  # Default is SILENT (not DEBUG like other workflows) so the per-run
+  # "🔍 DEBUG: Workflow wrappers updated in <repo>…" notification at line ~452
+  # is suppressed by tg_helpers.sh::_tg_should_send. Consumer repos that
+  # want the wrapper-update alert back can set vars.ALERT_MSG_LEVEL=DEBUG
+  # (or any level ≤ DEBUG=0), or pass alert_msg_level=DEBUG on dispatch.
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'SILENT' }}
 
 jobs:
   update-wrappers:
