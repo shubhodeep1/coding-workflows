@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/post_review_comment.sh:126-127 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: No explicit post-assignment validation or diagnostic if jq exits non-zero on malformed HEAD_REF (despite [ -n ] guard); set -euo pipefail terminates abruptly after jq stderr (visible but undifferentiated from later gh api failures in logs).\n  WHY: Script exits mid-recovery without distinguishing jq encoding failure from no-PR case; operators misdiagnose as API/rate-limit issue instead of branch-name malformation.\n- scripts/post_review_comment.sh:135-136 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Assumes at most one matching open PR via | first // empty; if API returns multiple open PRs with identical head.sha (e.g., rapid cross-branch pushes of same SHA during review, or API pagination edge combining distinct refs/pages), arbitrarily selects first PR.number.\n  WHY: Posts consensus ledger to wrong (unrelated/stale) PR; intended PR receives no review comment, defeating race recovery.\n- scripts/post_review_comment.sh:144-152 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: jq stderr visibility concern\n  WHY: gh_retry stderr explicitly flows through (lines 145-149); jq @uri cannot fail on valid string input\n- scripts/post_review_comment.sh:152 | severity=medium | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: filter assumes single matching PR via | first // empty\n  WHY: extremely rare edge case (multiple open PRs with same head.sha); SHA guard is correct approach; wrong-PR consequence is minor routing issue, not correctness failure\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/post_review_comment.sh:144-152 | severity=low | confidence=2\n  PROBLEM: jq stderr visibility concern\n  WHY: gh_retry stderr explicitly flows through (lines 145-149); jq @uri cannot fail on valid string input\n- scripts/post_review_comment.sh:152 | severity=medium | confidence=2\n  PROBLEM: filter assumes single matching PR via | first // empty\n  WHY: extremely rare edge case (multiple open PRs with same head.sha); SHA guard is correct approach; wrong-PR consequence is minor routing issue, not correctness failure\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/post_review_comment.sh:135-136 | confidence=2\n  PROBLEM: Assumes at most one matching open PR via | first // empty; if API returns multiple open PRs with identical head.sha (e.g., rapid cross-branch pushes of same SHA during review, or API pagination edge combining distinct refs/pages), arbitrarily selects first PR.number.\n  WHY: Posts consensus ledger to wrong (unrelated/stale) PR; intended PR receives no review comment, defeating race recovery.\n- scripts/post_review_comment.sh:126-127 | confidence=2\n  PROBLEM: No explicit post-assignment validation or diagnostic if jq exits non-zero on malformed HEAD_REF (despite [ -n ] guard); set -euo pipefail terminates abruptly after jq stderr (visible but undifferentiated from later gh api failures in logs).\n  WHY: Script exits mid-recovery without distinguishing jq encoding failure from no-PR case; operators misdiagnose as API/rate-limit issue instead of branch-name malformation.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "185b5ba7d5567c9cf73323d76e4f8d4499e7efdd3f38012822761c482e54bc91",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2520,
+    "run_id": "25669224833",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25669224833",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511123632_075acd6193",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2520,
+    "run_id": "25669224833"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-11T12:36:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
