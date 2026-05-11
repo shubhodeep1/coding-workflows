@@ -725,6 +725,56 @@ def test_judge_cache_suppresses_resolve_merge_conflict_without_target_metadata(t
 	assert out["escalate_no_meta"] == "true", out
 
 
+def test_judge_cache_stores_executed_action_after_dispatch_fallback(tmp_path):
+	"""When the judge returns resolve_merge_conflict but the
+	resolver dispatch fails (rc=1) or the linked-PR metadata is
+	missing, invoke_stall_judge falls back to a ladder action.
+	The cache write must persist the action ACTUALLY executed —
+	otherwise next-tick replays would keep re-trying the dead-end
+	resolve_merge_conflict and trip MAX_JUDGE_REPLAY into a human
+	escalation on the back of one bad dispatch (Codex P2,
+	PR #2522 line 6625)."""
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps({}))
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export STATE_FILE='""" + str(state_file) + """'
+		key=cache_key_xyz
+		# Simulate the three "dispatch fell back to the ladder"
+		# scenarios from invoke_stall_judge:
+		#   A. resolve_merge_conflict + no target_pr → fallback.
+		#   B. resolve_merge_conflict + no head_ref  → fallback.
+		#   C. resolve_merge_conflict + dispatch fails → fallback.
+		# In all three, _judge_executed_action ends up as the
+		# fallback action; the cache write stores THAT, not the
+		# original effective_action.
+		cache_executed() {
+			local executed="$1"
+			jq --arg k "$key" --arg action "$executed" \
+				'.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
+				"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+			jq -r --arg k "$key" '.judge_decision_cache[$k].action' "$STATE_FILE"
+		}
+		echo "no_target_pr=$(cache_executed retrigger_pipeline)"
+		echo "no_head_ref=$(cache_executed retrigger_pipeline)"
+		echo "dispatch_failed=$(cache_executed retrigger_pipeline)"
+		# Happy path: dispatch succeeds → cache the original action.
+		echo "happy=$(cache_executed resolve_merge_conflict)"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# Every fallback path persists the LADDER action (not
+	# resolve_merge_conflict), so next-tick replays go to a known-
+	# executable decision.
+	assert out["no_target_pr"] == "retrigger_pipeline", out
+	assert out["no_head_ref"] == "retrigger_pipeline", out
+	assert out["dispatch_failed"] == "retrigger_pipeline", out
+	# Happy path: cache the original resolve_merge_conflict so
+	# subsequent identical stalls replay the (successful) dispatch.
+	assert out["happy"] == "resolve_merge_conflict", out
+
+
 def test_judge_cache_stores_effective_action_not_raw_judge_action(tmp_path):
 	"""When the judge returns an unrecognized action, the cache must
 	store the effective (post-normalize) action, not the raw invalid
@@ -2117,11 +2167,18 @@ def test_production_script_contains_expected_fix_markers():
 	assert "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" in body, (
 		"conflict probe must use forced refspecs (+refs/heads/...) so rewritten branches refresh"
 	)
-	# Codex P2 6448: don't cache resolve_merge_conflict without
-	# target_pr / head_ref — the action is not executable and the
-	# bad decision would replay on every future identical stall.
-	assert "Suppressing cache write of resolve_merge_conflict" in body, (
-		"cache write must suppress resolve_merge_conflict without target_pr/head_ref"
+	# Codex P2 6448 + 6625: the judge cache now stores
+	# _judge_executed_action (the action that ACTUALLY ran) rather
+	# than effective_action.  When resolve_merge_conflict's
+	# dispatch falls back to the ladder action (missing metadata
+	# OR dispatch failure), the cache stores the executed
+	# fallback so the next identical stall does not replay a dead-
+	# end action.
+	assert "_judge_executed_action" in body, (
+		"judge cache must track the actually-executed action, not the LLM's effective_action"
+	)
+	assert '--arg action "${_judge_executed_action}"' in body, (
+		"cache jq write must reference _judge_executed_action"
 	)
 	# Codex P2 1720: judge-failure fallback honors phase-attempt cap.
 	assert "the judge-failure fallback will be forced to skip so a transient judge crash cannot bypass the phase-lifetime cap" in body, (
@@ -2134,9 +2191,16 @@ def test_production_script_contains_expected_fix_markers():
 	assert "_judge_cache_force_escalate" in body, (
 		"cache read must propagate force_escalate to _judge_force_escalate"
 	)
-	# Codex P2 6359: cache effective_action (post-normalize), not raw judge_action.
-	assert '--arg action "${effective_action}"' in body, (
-		"fresh-LLM cache write must store effective_action so invalid LLM actions don't loop"
+	# Codex P2 6359 + 6625: cache the actually-executed action
+	# (post-normalize AND post-dispatch-fallback), not the raw
+	# judge_action.  An invalid LLM action gets normalized; a
+	# resolve_merge_conflict whose dispatch fails gets the ladder
+	# fallback — both replayed safely on identical stalls.
+	# The marker assertion is the explicit `_judge_executed_action`
+	# check above (and the absence of `--arg action "${judge_action}"`).
+	assert '--arg action "${judge_action}"' not in body, (
+		"fresh-LLM cache write must NOT store the raw judge_action "
+		"(invalid actions would loop) — it must store _judge_executed_action"
 	)
 	# Codex P2 3575: rc=2 active-resolver dedupe does NOT refresh dispatch_ts.
 	assert "cooldown timer unchanged" in body, (

@@ -6592,40 +6592,6 @@ invoke_stall_judge() {
   # served from the cache (replay count was already bumped above).
   # Cache the EFFECTIVE action (post-normalize) rather than the raw
   # judge_action: if the judge returns an unrecognized action like
-  # `rerun_review`, normalize_stall_recovery_action safely falls back
-  # to the ladder for this tick, but caching the raw invalid string
-  # would replay the same bogus action on every future identical
-  # stall — repeatedly burning fallbacks until MAX_JUDGE_REPLAY fires
-  # human escalation on the back of one bad model response.  Caching
-  # the executable action breaks that loop and matches the action
-  # we actually executed (Codex P2, PR #2522, line 6359).  Skip the
-  # cache write when effective_action ended up empty (defensive
-  # belt-and-braces, though normalize never returns empty in
-  # practice).
-  #
-  # Additionally, skip caching `resolve_merge_conflict` when the
-  # judge did not also produce the linked-PR metadata
-  # (STALL_JUDGE_TARGET_PR + STALL_JUDGE_HEAD_REF) that
-  # execute_stall_recovery_action needs to actually dispatch the
-  # resolver: without those, the action is not executable, the
-  # downstream branch falls back to retrigger_pipeline anyway, and
-  # caching the unexecutable action would replay the same dead-end
-  # decision on every future identical stall until MAX_JUDGE_REPLAY
-  # escalates a human based on one malformed judge response (Codex
-  # P2, PR #2522, line 6448).
-  local _judge_should_cache="true"
-  if [ "${effective_action}" = "resolve_merge_conflict" ]; then
-    if ! [[ "${STALL_JUDGE_TARGET_PR:-}" =~ ^[0-9]+$ ]] || [ -z "${STALL_JUDGE_HEAD_REF:-}" ]; then
-      echo "  [stall-judge] Suppressing cache write of resolve_merge_conflict for issue #${issue_num}: linked-PR metadata missing (target_pr=${STALL_JUDGE_TARGET_PR:-empty}, head_ref=${STALL_JUDGE_HEAD_REF:-empty}). Action is not executable; downstream will fall back to ${fallback_action}."
-      _judge_should_cache="false"
-    fi
-  fi
-  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${effective_action}" ] && [ "${_judge_cache_eligible:-false}" = "true" ] && [ "${_judge_should_cache}" = "true" ]; then
-    jq --arg k "${_judge_cache_key}" --arg action "${effective_action}" \
-      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-  fi
-
   # The hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` marker is placed
   # IMMEDIATELY after the heading (not at the bottom of the comment)
   # so the cache-key filter at line ~6330 can find it even when the
@@ -6660,35 +6626,65 @@ ${diagnostics}
     echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
   fi
 
+  # Dispatch the resolved action and track which action ACTUALLY ran
+  # so the cache write below stores an executable replay value.
+  # Previously the cache wrote effective_action BEFORE dispatch, so a
+  # resolve_merge_conflict whose dispatch later failed (network blip,
+  # no autofix worker available) would persist resolve_merge_conflict
+  # for the unchanged diagnostics key — and every subsequent
+  # identical stall would replay the same dead-end action, eventually
+  # tripping MAX_JUDGE_REPLAY into a human escalation on the back of
+  # ONE bad dispatch (Codex P2, PR #2522, line 6625).  Capture the
+  # rc from each dispatch path and the action we actually executed;
+  # cache that combination at the end.
+  local _judge_dispatch_rc=0
+  local _judge_executed_action="${effective_action}"
   case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human|skip)
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-      return $?
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
       ;;
     resolve_merge_conflict)
       if ! [[ "${STALL_JUDGE_TARGET_PR}" =~ ^[0-9]+$ ]]; then
         echo "::warning::Stall judge returned resolve_merge_conflict without target_pr; falling back to ${fallback_action}."
-        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-        return $?
-      fi
-      if [ -z "${STALL_JUDGE_HEAD_REF}" ] || [ "${STALL_JUDGE_HEAD_REF}" = "null" ]; then
+        _judge_executed_action="${fallback_action}"
+        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
+      elif [ -z "${STALL_JUDGE_HEAD_REF}" ] || [ "${STALL_JUDGE_HEAD_REF}" = "null" ]; then
         echo "::warning::Stall judge returned resolve_merge_conflict without head_ref; falling back to ${fallback_action}."
-        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-        return $?
-      fi
-      if ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
+        _judge_executed_action="${fallback_action}"
+        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
+      elif ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
         echo "::warning::resolve_merge_conflict dispatch failed for issue #${issue_num}; falling back to ${fallback_action}."
-        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-        return $?
+        _judge_executed_action="${fallback_action}"
+        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
       fi
-      return 0
       ;;
     *)
       echo "::warning::Unknown effective stall action '${effective_action}' for issue #${issue_num}; falling back to ${fallback_action}."
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-      return $?
+      _judge_executed_action="${fallback_action}"
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
       ;;
   esac
+
+  # Cache the judge decision so future identical inputs replay it
+  # rather than burning another LLM call.  Skip when this run was
+  # itself served from the cache (replay count was already bumped
+  # in the cache-hit branch above).  Cache `_judge_executed_action`
+  # rather than `effective_action`: if the judge's effective action
+  # was resolve_merge_conflict but the dispatch fell through to the
+  # ladder fallback (missing metadata OR dispatch failure), the
+  # cache stores the action we actually ran — so the next identical
+  # stall replays a known-executable decision instead of looping
+  # forever on the dead-end resolve_merge_conflict (Codex P2,
+  # PR #2522, lines 6359 + 6625).
+  if [ "${_judge_from_cache}" = "false" ] \
+     && [ -n "${_judge_cache_key}" ] \
+     && [ -n "${_judge_executed_action}" ] \
+     && [ "${_judge_cache_eligible:-false}" = "true" ]; then
+    jq --arg k "${_judge_cache_key}" --arg action "${_judge_executed_action}" \
+      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+  fi
+  return "${_judge_dispatch_rc}"
 }
 
 # Run both standalone-stall marker searches in a single GraphQL
