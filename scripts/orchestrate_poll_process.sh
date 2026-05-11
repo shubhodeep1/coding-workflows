@@ -6041,6 +6041,7 @@ invoke_stall_judge() {
     --arg pr_state "${pr_state}" \
     --arg pr_mergeable "${pr_mergeable}" \
     --arg head_ref "${head_ref}" \
+    --arg head_sha "${head_sha}" \
     --arg base_ref "${base_ref}" \
     --argjson workflow_outcomes "${workflow_outcomes}" \
     --argjson current_wave "${CURRENT_WAVE:-1}" \
@@ -6057,6 +6058,7 @@ invoke_stall_judge() {
         state: (if $pr_state == "" then null else $pr_state end),
         mergeable: (if $pr_mergeable == "" then null else ($pr_mergeable == "true") end),
         head_ref: (if $head_ref == "" then null else $head_ref end),
+        head_sha: (if $head_sha == "" then null else $head_sha end),
         base_ref: (if $base_ref == "" then null else $base_ref end)
       },
       recent_review_workflow_outcomes: $workflow_outcomes,
@@ -6081,6 +6083,7 @@ invoke_stall_judge() {
       --arg pr_state "${pr_state}" \
       --arg pr_mergeable "${pr_mergeable}" \
       --arg head_ref "${head_ref}" \
+      --arg head_sha "${head_sha}" \
       --arg base_ref "${base_ref}" \
       '{
         issue_number: ($issue_number | tonumber? // null),
@@ -6093,6 +6096,7 @@ invoke_stall_judge() {
           state: (if $pr_state == "" then null else $pr_state end),
           mergeable: (if $pr_mergeable == "" then null else ($pr_mergeable == "true") end),
           head_ref: (if $head_ref == "" then null else $head_ref end),
+          head_sha: (if $head_sha == "" then null else $head_sha end),
           base_ref: (if $base_ref == "" then null else $base_ref end)
         },
         diagnostics_build_failed: true
@@ -6108,24 +6112,45 @@ invoke_stall_judge() {
   # workflow outcomes beyond the latest conclusion, prior_recovery_actions
   # — automatically invalidates the cached decision.
   if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
-    # Strip the orchestrator's own "## 🧑‍⚖️ Stall Judge — Issue #N"
-    # tracking narration from the cache-key view of diagnostics before
-    # hashing.  Every run of this function posts one of these comments
-    # before returning, so without the filter the next identical stall
-    # has a different key solely because the previous judge run's own
-    # narration is now in recent_tracking_comments.  That defeats
-    # MAX_JUDGE_REPLAY entirely — the poller never replays/escalates
-    # in the normal repeated-stall path and keeps invoking the LLM.
+    # Normalize the cache-key view of diagnostics before hashing so
+    # MAX_JUDGE_REPLAY can actually fire on repeated identical stalls.
+    # Three classes of churn used to leak the cache key:
+    #
+    # 1. Self-narration: every run posts a "## 🧑‍⚖️ Stall Judge —
+    #    Issue #N" tracking comment before returning, so the next
+    #    identical stall otherwise had a different key solely because
+    #    the previous judge's own narration was now in
+    #    recent_tracking_comments.
+    # 2. Volatile counters: stall_minutes ticks every minute, and
+    #    recovery_count / prior_recovery_actions[stall_recovery_count]
+    #    increment after every action that consumed budget.  Hashing
+    #    them meant a stuck loop's cache key always changed even when
+    #    the PR, phase, comments, and workflow state were stable — so
+    #    the lookup missed and replay_count never reached the cap.
+    # 3. (The bug Codex P2 line 6130 #1 flagged separately: head_sha
+    #    used to be ABSENT from diagnostics entirely, so a brand-new
+    #    commit on the same branch with the same mergeability could
+    #    replay a stale cached decision.  That is now fixed at the
+    #    diagnostics-build site above — head_sha is included in the
+    #    linked_pr object, so it naturally participates in the hash.)
+    #
     # The unfiltered diagnostics blob still flows into the LLM prompt
-    # below (so the judge can see its prior reasoning) — only the hash
-    # input is filtered.  Fail-open: if jq fails, fall back to hashing
-    # the unfiltered blob (today's behaviour, no regression).
+    # below (the judge benefits from seeing its own prior reasoning,
+    # the live stall_minutes, etc.); only the hash input is filtered.
+    # Fail-open: if jq fails, fall back to hashing the unfiltered
+    # blob (today's behaviour, no regression).
     local _cache_diagnostics
     _cache_diagnostics="$(printf '%s' "${diagnostics}" | jq -c '
       .recent_tracking_comments = (
         (.recent_tracking_comments // [])
         | map(select((.body // "") | contains("Stall Judge — Issue #") | not))
       )
+      | del(.stall_minutes)
+      | del(.recovery_count)
+      | .prior_recovery_actions = (
+          (.prior_recovery_actions // [])
+          | map(select(.key != "stall_recovery_count"))
+        )
     ' 2>/dev/null || printf '%s' "${diagnostics}")"
     _judge_cache_key="$(printf '%s' "${_cache_diagnostics}" | sha256sum 2>/dev/null | awk '{print $1}')"
     if [ -n "${_judge_cache_key}" ]; then
@@ -6468,6 +6493,7 @@ _fetch_candidate_issue_details_graphql() {
                   ... on PullRequest {
                     number state merged
                     headRefName
+                    headRefOid
                     mergeable
                     mergeStateStatus
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
@@ -6519,6 +6545,7 @@ _fetch_candidate_issue_details_graphql() {
                     state: .state,
                     merged: (.merged // false),
                     head_ref: (.headRefName // null),
+                    head_sha: (.headRefOid // null),
                     mergeable: (.mergeable // null),
                     merge_state_status: (.mergeStateStatus // null),
                     headPushedAt: (
@@ -7181,13 +7208,18 @@ PY
       local _STD_ITER_PR_NUM_CACHED=""
       local _STD_ITER_PR_JSON_CACHED=""
       _STD_ITER_PR_NUM_CACHED="$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // empty' 2>/dev/null || echo "")"
-      # API hygiene: when GraphQL already gave us PR number + head ref,
-      # seed a minimal JSON payload so retrigger_review can skip a
-      # redundant gh api pulls/{n} fetch on the non-retry fast path.
-      local _std_cached_head_ref=""
+      # API hygiene: when GraphQL already gave us PR number + head ref
+      # (and optionally headRefOid as head_sha), seed a minimal JSON
+      # payload so retrigger_review can skip a redundant gh api
+      # pulls/{n} fetch on the non-retry fast path.  Include head_sha
+      # in the seed so the standalone per-head-SHA override cap below
+      # (Codex P2, PR #2522 line 7284) can fire even when REST is
+      # skipped on a settled DIRTY/CONFLICTING state.
+      local _std_cached_head_ref="" _std_cached_head_sha=""
       _std_cached_head_ref="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_ref // .head.ref // .headRefName // empty)' 2>/dev/null || echo "")"
+      _std_cached_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // .headRefOid // empty)' 2>/dev/null || echo "")"
       if [[ "${_STD_ITER_PR_NUM_CACHED}" =~ ^[0-9]+$ ]] && [ -n "${_std_cached_head_ref}" ] && [ "${_std_cached_head_ref}" != "null" ]; then
-        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" '{number: $n, head: {ref: $hr}}' 2>/dev/null || echo "")"
+        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" --arg hs "${_std_cached_head_sha}" '{number: $n, head: {ref: $hr, sha: (if $hs == "" or $hs == "null" then null else $hs end)}}' 2>/dev/null || echo "")"
       fi
 
       # Widen the REST-fallback trigger: GitHub computes mergeability
@@ -7279,9 +7311,20 @@ PY
         # per-issue tracking comment.  Fail-open: if head_sha is
         # unavailable or jq fails, skip the cap rather than block the
         # dispatch.
+        # Try multiple sources in order so the cap can fire on every
+        # path that ends up here.  GraphQL's _std_conflict_linked is
+        # the primary signal on the settled-state fast path (no REST
+        # retry needed); _STD_ITER_PR_JSON_CACHED is the REST fallback
+        # plus the seed at line 7190 which now includes head_sha from
+        # the GraphQL response.  Both shapes use either .head_sha or
+        # .head.sha — accept whichever is present (Codex P2, PR #2522,
+        # line 7284).
         local _std_conflict_head_sha=""
-        if [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ]; then
-          _std_conflict_head_sha="$(printf '%s' "${_STD_ITER_PR_JSON_CACHED}" | jq -r '.head.sha // empty' 2>/dev/null || echo "")"
+        if [ -n "${_std_conflict_linked:-}" ] && [ "${_std_conflict_linked}" != "null" ]; then
+          _std_conflict_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
+        fi
+        if [ -z "${_std_conflict_head_sha}" ] && [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ]; then
+          _std_conflict_head_sha="$(printf '%s' "${_STD_ITER_PR_JSON_CACHED}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
         fi
         if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
           local _std_override_count
@@ -10944,11 +10987,29 @@ REISSUE_EOF
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
-      # Update state file: replace the old issue number with the new one
-      # (impl_noop_count is preserved on the issue entry since we only
-      # change github_issue, not the issue object itself)
+      # Update state file: replace the old issue number with the new
+      # one AND reset the per-issue stall-recovery accumulators on the
+      # wave entry so the fresh replacement does not inherit an
+      # exhausted phase_attempts counter from its predecessor and get
+      # routed straight to "skip" on its first stall in that phase
+      # (Codex P2, PR #2522, orchestrate_lib.py line 1814).  Matches
+      # the reset block used by the other reissue paths (see
+      # scripts/orchestrate_poll_process.sh:5733, 9061, 10535).
+      # impl_noop_count is intentionally preserved so the
+      # ancestor-chain no-op cap can still detect a chain of no-op
+      # reissues — that counter tracks the issue lineage rather than
+      # the current attempt's progress.
       if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
-        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
+        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" \
+          '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)) |= (
+             .github_issue = $new_issue_num
+             | .status = "pending"
+             | .last_seen_phase = ""
+             | .status_since_ts = (now | floor)
+             | .stall_recovery_count = 0
+             | .phase_attempts = {}
+           )
+           | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 

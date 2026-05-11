@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import textwrap
 from pathlib import Path
+
+shlex_quote = shlex.quote
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -171,57 +174,128 @@ def test_judge_cache_replay_path_bumps_counter_then_escalates(tmp_path):
 	], lines
 
 
-def test_judge_cache_key_changes_when_diagnostics_inputs_change(tmp_path):
-	"""When any meaningful diagnostics field changes (PR mergeability,
-	head_ref advancing, recovery_count bumping, workflow outcomes,
-	etc.), the production cache key — sha256 of the filtered
-	diagnostics blob — must differ so the next cycle goes to the LLM
-	rather than replaying a stale decision.
+# The production cache-key filter mirrors the jq pipeline in
+# scripts/orchestrate_poll_process.sh's invoke_stall_judge (~line 6087).
+# Tests share it through this constant so the test-side filter cannot
+# silently drift from production.  When production changes, update both.
+PRODUCTION_CACHE_KEY_FILTER = (
+	'.recent_tracking_comments = '
+	'((.recent_tracking_comments // []) '
+	'| map(select((.body // "") | contains("Stall Judge — Issue #") | not))) '
+	'| del(.stall_minutes) '
+	'| del(.recovery_count) '
+	'| .prior_recovery_actions = '
+	'((.prior_recovery_actions // []) '
+	'| map(select(.key != "stall_recovery_count")))'
+)
 
-	This replaces an earlier simplified test that hashed a 4-field
-	pipe-delimited string; the production cache key actually hashes
-	the full diagnostics JSON (with self-narration filtered out), so
-	the simplified hash gave false confidence about real cache-
-	invalidation behaviour (claude-branch-review consensus,
-	PR #2522)."""
-	base = {
+
+def _diag_base() -> dict:
+	"""Diagnostics scaffold used by the cache-key tests."""
+	return {
 		"issue_number": 2870,
 		"local_id": "wave-1/issue-1",
 		"phase": "ai:review-blocked",
 		"stall_minutes": 30,
 		"recovery_count": 1,
 		"recent_tracking_comments": [],
-		"linked_pr": {"number": 9001, "state": "open", "mergeable": False, "head_ref": "feat-v1", "base_ref": "main"},
-		"recent_review_workflow_outcomes": [{"id": 111, "workflow": "Review Autofix", "conclusion": "failure", "status": "completed", "head_branch": "feat-v1", "created_at": "2026-01-01T00:00:00Z"}],
+		"linked_pr": {
+			"number": 9001,
+			"state": "open",
+			"mergeable": False,
+			"head_ref": "feat-v1",
+			"head_sha": "abc1234567890abcdef1234567890abcdef12345",
+			"base_ref": "main",
+		},
+		"recent_review_workflow_outcomes": [{
+			"id": 111,
+			"workflow": "Review Autofix",
+			"conclusion": "failure",
+			"status": "completed",
+			"head_branch": "feat-v1",
+			"created_at": "2026-01-01T00:00:00Z",
+		}],
 		"current_wave": 1,
-		"prior_recovery_actions": [{"key": "stall_recovery_count", "value": 1}],
+		"prior_recovery_actions": [
+			{"key": "stall_recovery_count", "value": 1},
+			{"key": "last_seen_phase", "value": "ai:review-blocked"},
+			{"key": "status", "value": "review-blocked"},
+		],
 	}
-	variants = {
-		"base": base,
-		"head_ref_advanced": {**base, "linked_pr": {**base["linked_pr"], "head_ref": "feat-v2"}},
-		"mergeable_flipped": {**base, "linked_pr": {**base["linked_pr"], "mergeable": True}},
-		"recovery_count_bumped": {**base, "recovery_count": 2},
-		"workflow_outcome_changed": {**base, "recent_review_workflow_outcomes": [{**base["recent_review_workflow_outcomes"][0], "conclusion": "success"}]},
-	}
+
+
+def _hash_variants(tmp_path, variants: dict) -> dict:
+	"""Run the production cache-key filter over each variant and return
+	{name: sha256_hex}."""
 	for name, diag in variants.items():
 		(tmp_path / f"{name}.json").write_text(json.dumps(diag))
-	script = textwrap.dedent("""
+	# Build a small shell script that hashes each file.  The filter
+	# lives in a single-quoted bash assignment to keep its inner
+	# double quotes intact.
+	script = textwrap.dedent(f"""
 		set -uo pipefail
-		filter='.recent_tracking_comments = ((.recent_tracking_comments // []) | map(select((.body // "") | contains("Stall Judge — Issue #") | not)))'
-		for f in base head_ref_advanced mergeable_flipped recovery_count_bumped workflow_outcome_changed; do
-			echo "${f}=$(jq -c "$filter" "${f}.json" | sha256sum | awk '{print $1}')"
+		filter={shlex_quote(PRODUCTION_CACHE_KEY_FILTER)}
+		for f in {' '.join(variants)}; do
+			echo "${{f}}=$(jq -c "$filter" "${{f}}.json" | sha256sum | awk '{{print $1}}')"
 		done
 	""")
 	r = _run_bash(script, cwd=tmp_path)
 	assert r.returncode == 0, f"shell error: {r.stderr}"
-	keys = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
-	# All five variant keys must be distinct (every meaningful change
-	# invalidates the cache).
+	return dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+
+
+def test_judge_cache_key_changes_when_decision_inputs_change(tmp_path):
+	"""Decision-relevant diagnostics fields must invalidate the cache:
+	head_sha (a new commit on the same branch), mergeable flipping, the
+	head_ref changing, or a recent workflow outcome changing.  Codex
+	flagged that head_sha was missing entirely; this test pins both the
+	presence of head_sha in the hash AND the standard "any meaningful
+	field change → fresh LLM call" invariant (Codex P2, PR #2522
+	line 6130)."""
+	base = _diag_base()
+	variants = {
+		"base": base,
+		"head_sha_advanced": {**base, "linked_pr": {**base["linked_pr"], "head_sha": "def" + base["linked_pr"]["head_sha"][3:]}},
+		"head_ref_advanced": {**base, "linked_pr": {**base["linked_pr"], "head_ref": "feat-v2"}},
+		"mergeable_flipped": {**base, "linked_pr": {**base["linked_pr"], "mergeable": True}},
+		"workflow_outcome_changed": {**base, "recent_review_workflow_outcomes": [{**base["recent_review_workflow_outcomes"][0], "conclusion": "success"}]},
+	}
+	keys = _hash_variants(tmp_path, variants)
 	distinct = set(keys.values())
-	assert len(distinct) == len(keys), f"keys should all be distinct: {keys}"
-	# And each must be a 64-char hex sha256.
+	assert len(distinct) == len(keys), f"decision-relevant changes must all invalidate the key: {keys}"
 	for name, k in keys.items():
 		assert len(k) == 64 and all(c in "0123456789abcdef" for c in k), f"{name}: malformed key {k!r}"
+
+
+def test_judge_cache_key_stable_across_volatile_counters(tmp_path):
+	"""Volatile counters that change every cycle (stall_minutes ticking
+	with poll cadence, recovery_count incrementing after every action,
+	prior_recovery_actions[stall_recovery_count] mirroring the same)
+	must NOT invalidate the cache; otherwise MAX_JUDGE_REPLAY never
+	fires on the exact repeated-stall loop it exists to break (Codex
+	P2, PR #2522 line 6130, second comment)."""
+	base = _diag_base()
+	# Mutate the stall_recovery_count entry without touching the other
+	# prior_recovery_actions entries.
+	prior_bumped = [
+		{**entry, "value": 2} if entry["key"] == "stall_recovery_count" else entry
+		for entry in base["prior_recovery_actions"]
+	]
+	variants = {
+		"base": base,
+		"stall_minutes_ticked": {**base, "stall_minutes": 31},
+		"stall_minutes_jumped": {**base, "stall_minutes": 90},
+		"recovery_count_bumped": {**base, "recovery_count": 2},
+		"prior_actions_stall_count_bumped": {**base, "prior_recovery_actions": prior_bumped},
+	}
+	keys = _hash_variants(tmp_path, variants)
+	# Every variant should map to the SAME cache key as "base".
+	base_key = keys["base"]
+	for name, k in keys.items():
+		assert k == base_key, (
+			f"{name}: volatile-counter change should not change the key. "
+			f"Got {k}; base {base_key}; all {keys}"
+		)
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +462,127 @@ def test_standalone_override_cap_isolated_per_head_sha(tmp_path):
 	# of how many overrides the previous sha accumulated.
 	assert out["count_for_new"] == "0", out
 	assert out["would_consume_budget"] == "false", out
+
+
+def test_standalone_head_sha_extracted_from_graphql_and_rest_shapes(tmp_path):
+	"""The standalone override cap reads head_sha from two shapes:
+	  GraphQL `_std_conflict_linked` has `.head_sha` at the top level.
+	  REST `_STD_ITER_PR_JSON_CACHED` has `.head.sha` nested.
+	The cap check must succeed in either case (Codex P2, PR #2522
+	line 7284) — otherwise the GraphQL fast path (which is the common
+	case on settled DIRTY/CONFLICTING merges) silently skips the cap."""
+	script = textwrap.dedent("""
+		set -uo pipefail
+
+		# Reproduce the production extraction logic verbatim.
+		extract_head_sha() {
+			local linked="$1"
+			local cached="$2"
+			local out=""
+			if [ -n "${linked}" ] && [ "${linked}" != "null" ]; then
+				out="$(printf '%s' "${linked}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
+			fi
+			if [ -z "${out}" ] && [ -n "${cached}" ]; then
+				out="$(printf '%s' "${cached}" | jq -r '(.head_sha // .head.sha // empty)' 2>/dev/null || echo "")"
+			fi
+			printf '%s' "${out}"
+		}
+
+		# Case A: GraphQL shape only (REST cache is empty).
+		linked_gql='{"number":1,"head_ref":"feat","head_sha":"deadbeef0","mergeable":"FALSE","merge_state_status":"DIRTY"}'
+		echo "A=$(extract_head_sha "${linked_gql}" "")"
+
+		# Case B: REST shape only (GraphQL linked is null).
+		cached_rest='{"number":1,"head":{"ref":"feat","sha":"cafebabe1"}}'
+		echo "B=$(extract_head_sha "" "${cached_rest}")"
+
+		# Case C: Both shapes present — GraphQL wins (read first).
+		linked_gql_c='{"head_sha":"graphql_sha"}'
+		cached_rest_c='{"head":{"sha":"rest_sha"}}'
+		echo "C=$(extract_head_sha "${linked_gql_c}" "${cached_rest_c}")"
+
+		# Case D: Neither has head_sha — empty result (fail-open).
+		linked_no_sha='{"number":1,"head_ref":"feat"}'
+		cached_no_sha='{"number":1,"head":{"ref":"feat"}}'
+		echo "D=$(extract_head_sha "${linked_no_sha}" "${cached_no_sha}")"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	assert out["A"] == "deadbeef0", f"GraphQL shape: {out}"
+	assert out["B"] == "cafebabe1", f"REST shape: {out}"
+	assert out["C"] == "graphql_sha", f"GraphQL takes priority: {out}"
+	assert out["D"] == "", f"neither shape has sha — fail-open: {out}"
+
+
+# ---------------------------------------------------------------------------
+# 1i: implementation-failed reissue must reset the per-issue stall
+# accumulators (last_seen_phase / status_since_ts / stall_recovery_count
+# / phase_attempts) on the wave entry, mirroring the other reissue
+# paths.  Without this, a fresh replacement inherits an exhausted
+# phase_attempts map and can be routed straight to "skip" on its first
+# stall in that phase (Codex P2, PR #2522, orchestrate_lib.py
+# line 1814).
+# ---------------------------------------------------------------------------
+
+def test_impl_failed_reissue_resets_stall_accumulators(tmp_path):
+	"""Exercise the jq update used by the impl-failed reissue path and
+	confirm it resets the per-issue stall counters while preserving the
+	ancestor-chain no-op tracker (impl_noop_count)."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"current_wave": 1,
+		"waves": [{
+			"issues": [{
+				"id": "wave-1/issue-1",
+				"github_issue": "100",
+				"status": "implementation-failed",
+				"last_seen_phase": "ai:clarification",
+				"status_since_ts": 1700000000,
+				"stall_recovery_count": 3,
+				"phase_attempts": {"ai:clarification": 5},
+				"impl_noop_count": 2,
+			}],
+		}],
+		"issue_number_map": {"wave-1/issue-1": "100"},
+	}
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(state))
+
+	script = textwrap.dedent(f"""
+		set -uo pipefail
+		if_issue=100
+		NEW_ISSUE_NUM=200
+		IF_LOCAL_ID="wave-1/issue-1"
+		WAVE_IDX=0
+		jq --arg if_issue "${{if_issue}}" --arg new_issue_num "${{NEW_ISSUE_NUM}}" --arg local_id "${{IF_LOCAL_ID}}" --argjson wave_idx "${{WAVE_IDX}}" \\
+			'(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)) |= (
+				 .github_issue = $new_issue_num
+				 | .status = "pending"
+				 | .last_seen_phase = ""
+				 | .status_since_ts = (now | floor)
+				 | .stall_recovery_count = 0
+				 | .phase_attempts = {{}}
+			   )
+			   | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \\
+			'{state_file}' > '{state_file}.tmp' && mv '{state_file}.tmp' '{state_file}'
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	updated = json.loads(state_file.read_text())
+	entry = updated["waves"][0]["issues"][0]
+	# Counters reset.
+	assert entry["github_issue"] == "200", entry
+	assert entry["status"] == "pending", entry
+	assert entry["last_seen_phase"] == "", entry
+	assert entry["stall_recovery_count"] == 0, entry
+	assert entry["phase_attempts"] == {}, entry
+	# Timestamp refreshed.
+	assert entry["status_since_ts"] > 1700000000, entry
+	# impl_noop_count preserved (ancestor-chain tracker stays alive).
+	assert entry["impl_noop_count"] == 2, entry
+	# issue_number_map remapped.
+	assert updated["issue_number_map"]["wave-1/issue-1"] == "200", updated
 
 
 # ---------------------------------------------------------------------------
@@ -575,15 +770,17 @@ def test_judge_cache_key_stable_across_self_judge_narration(tmp_path):
 	for name, diag in [("t1", diag_t1), ("t2", diag_t2), ("t3", diag_t3)]:
 		(tmp_path / f"{name}.json").write_text(json.dumps(diag))
 
-	script = textwrap.dedent("""
+	# Use the shared PRODUCTION_CACHE_KEY_FILTER so this test cannot
+	# silently drift from production when the filter evolves.
+	script = textwrap.dedent(f"""
 		set -uo pipefail
-		filter='.recent_tracking_comments = ((.recent_tracking_comments // []) | map(select((.body // "") | contains("Stall Judge — Issue #") | not)))'
-		hash_filtered() {
-			jq -c "$filter" "$1" | sha256sum | awk '{print $1}'
-		}
-		hash_unfiltered() {
-			jq -c '.' "$1" | sha256sum | awk '{print $1}'
-		}
+		filter={shlex_quote(PRODUCTION_CACHE_KEY_FILTER)}
+		hash_filtered() {{
+			jq -c "$filter" "$1" | sha256sum | awk '{{print $1}}'
+		}}
+		hash_unfiltered() {{
+			jq -c '.' "$1" | sha256sum | awk '{{print $1}}'
+		}}
 		echo "filtered_t1=$(hash_filtered t1.json)"
 		echo "filtered_t2=$(hash_filtered t2.json)"
 		echo "filtered_t3=$(hash_filtered t3.json)"
@@ -745,6 +942,22 @@ def test_production_script_contains_expected_fix_markers():
 	# 3322: pipefail-safe merge-tree feature probe.
 	assert "git merge-tree -h 2>&1 || true" in body, (
 		"pipefail-safe merge-tree -h probe is missing"
+	)
+	# Codex P2 6130 #1: head_sha included in diagnostics (main + fallback build).
+	assert 'head_sha: (if $head_sha == ""' in body, (
+		"head_sha missing from diagnostics build (cache key cannot invalidate on new commits)"
+	)
+	# Codex P2 6130 #2: cache-key filter strips volatile counters.
+	assert "del(.stall_minutes)" in body and "del(.recovery_count)" in body, (
+		"cache-key filter must strip volatile counters"
+	)
+	# Codex P2 7284: GraphQL headRefOid plumbed so head_sha is available in the GraphQL fast path.
+	assert "headRefOid" in body, (
+		"GraphQL must select headRefOid so the standalone override cap can fire"
+	)
+	# Codex P2 1814 (orchestrate_lib.py reference): impl-failed reissue resets stall accumulators.
+	assert "orchestrate_lib.py line 1814" in body, (
+		"impl-failed reissue reset comment marker is missing"
 	)
 
 
