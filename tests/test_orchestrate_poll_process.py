@@ -6723,6 +6723,155 @@ def test_verify_integration_fingerprints_still_fails_on_real_violation_when_mixe
 		shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def test_verify_integration_fingerprints_cross_issue_exact_conflicts_prefer_newer_capture():
+	# Historic merged-subissue state can contain the exact same (file, regex)
+	# pair across DIFFERENT issues with opposite intent: an older issue kept
+	# a line under must_contain, then a newer issue intentionally deleted that
+	# same line under must_not_contain. The verifier should prefer the newer
+	# captured_at intent rather than report an impossible contradiction.
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	legacy_line = "# Serena tool-usage guidance appears only when the workflow has bootstrapped"
+	files = {
+		"scripts/render_prompt.sh": (
+			"# Serena tool-usage guidance stays prompt-local and renders to an empty block\n"
+			"# when Serena is unavailable.\n"
+		),
+	}
+	fingerprints = {
+		"2523": {
+			"issue": 2523,
+			"pr": 2524,
+			"captured_at": "2026-05-11T18:16:20Z",
+			"must_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+			"must_not_contain": [],
+		},
+		"2525": {
+			"issue": 2525,
+			"pr": 2527,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [],
+			"must_not_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+		},
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	stdout_buf = io.StringIO()
+	try:
+		os.chdir(sandbox)
+		with contextlib.redirect_stdout(stdout_buf):
+			rc = mod.main([str(fp)])
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+	assert rc == 0, f"verify must PASS when newer exact conflicting capture wins; got rc={rc}"
+	captured = stdout_buf.getvalue()
+	assert "::warning::Fingerprint cross-issue exact-conflict dedup" in captured, (
+		"verifier must emit a ::warning:: naming the cross-issue exact-conflict dedup so "
+		f"operators can see the stale-state cause; got stdout={captured!r}"
+	)
+	assert "#2525 (PR #2527)" in captured, (
+		"warning should name the newer winning capture so operators can trace provenance; "
+		f"got stdout={captured!r}"
+	)
+
+
+
+def test_verify_integration_fingerprints_cross_issue_exact_conflicts_require_strictly_newer_capture():
+	# Conservative guardrail: if opposite-intent exact conflicts tie on
+	# captured_at, the verifier must NOT guess. Leave the contradiction live
+	# so verify mode fails instead of silently preferring one side.
+	mod = _verifier_module()
+	legacy_line = "# Serena tool-usage guidance appears only when the workflow has bootstrapped"
+	files = {
+		"scripts/render_prompt.sh": (
+			"# Serena tool-usage guidance stays prompt-local and renders to an empty block\n"
+			"# when Serena is unavailable.\n"
+		),
+	}
+	fingerprints = {
+		"2523": {
+			"issue": 2523,
+			"pr": 2524,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+			"must_not_contain": [],
+		},
+		"2525": {
+			"issue": 2525,
+			"pr": 2527,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [],
+			"must_not_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+		},
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+
+def test_verify_integration_fingerprints_list_mode_skips_cross_issue_exact_conflicts():
+	# list-violated-files shares the verify-mode dedup logic, but must stay
+	# silent on stdout except for genuinely violated file paths. A stale older
+	# exact conflict superseded by a newer capture must therefore produce no
+	# file-path output at all.
+	mod = _verifier_module()
+	legacy_line = "# Serena tool-usage guidance appears only when the workflow has bootstrapped"
+	files = {
+		"scripts/render_prompt.sh": (
+			"# Serena tool-usage guidance stays prompt-local and renders to an empty block\n"
+			"# when Serena is unavailable.\n"
+		),
+	}
+	fingerprints = {
+		"2523": {
+			"issue": 2523,
+			"pr": 2524,
+			"captured_at": "2026-05-11T18:16:20Z",
+			"must_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+			"must_not_contain": [],
+		},
+		"2525": {
+			"issue": 2525,
+			"pr": 2527,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [],
+			"must_not_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+		},
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		rc, out, err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		assert out == ""
+		assert err == ""
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def test_verify_integration_fingerprints_substring_dedups_self_contradictory_pairs():
 	# Companion path to test_verify_integration_fingerprints_cross_dedups_self_
 	# contradictory_pairs for state files captured before the capture-side

@@ -13,7 +13,7 @@ You have full access to the repository checkout and all tools (shell,
 file reads). Use them to inspect the actual code — do not rely solely on
 comment summaries.
 
-Inspect the PR diff and all editor summary comments to understand what was fixed and what remains. Check the actual repository code to verify the current state. Assess severity of remaining issues — cosmetic/style-only (typos, naming, formatting), functional but non-critical (edge cases, minor inefficiencies), or critical (build failures, security vulnerabilities, data loss, logic errors affecting core functionality) — then choose one of three actions below.
+Inspect the PR diff and all editor summary comments to understand what was fixed and what remains. Check the actual repository code to verify the current state. Assess severity of remaining issues — cosmetic/style-only (typos, naming, formatting), functional but non-critical (edge cases, minor inefficiencies), or critical (build failures, security vulnerabilities, data loss, logic errors affecting core functionality) — then choose one of four actions below.
 
 Decision options:
 
@@ -33,6 +33,19 @@ C) **close_and_reissue** — The PR is fundamentally broken (wrong approach,
    The PR should be closed and a new issue created with more specific
    guidance so the pipeline can start fresh with a better approach.
 
+D) **merge_with_followup** — Available primarily when retries are
+   exhausted (IS_FINAL=true; the prompt-driver tells you when this is the
+   case). The PR is shippable (no build/test breakage, no critical
+   correctness or security defects), but a real gap remains that cannot
+   be fixed within this PR's scope — typically an architectural
+   integration the autofix editor correctly deferred (e.g. "missing
+   critical functionality that requires creating a new code path",
+   "helper added but no production caller wired"). Merge the PR as-is
+   AND open a follow-up issue describing the gap so the pipeline picks
+   it up in a fresh cycle. Prefer this over close_and_reissue when the
+   PR's existing changes are worth keeping — close_and_reissue throws
+   away all in-PR work; this keeps it.
+
 Rules:
 - Be precise. Cite specific files and line numbers.
 - Do not refactor, redesign, or expand scope.
@@ -49,8 +62,54 @@ Rules:
   the context (the PR you are about to close) — so downstream planners do
   not interpret them as prerequisites on the base/current ref. Do NOT cite
   paths/lines as bare `apps/x/y.ts:NN` without that prefix.
+- For option D (merge_with_followup): the follow-up issue body must
+  describe the specific gap that was deferred and provide acceptance
+  criteria. The workflow attempts a SYNCHRONOUS squash merge (no
+  auto-merge enrollment) and creates the follow-up issue ONLY when
+  the PR is definitively merged — either because it was already merged
+  before the judge ran, or because the synchronous merge just landed
+  in this turn. Both the standalone and orchestrator paths gate the
+  merge on ALL check-runs (required AND informational) being
+  completed with success/neutral/skipped/cancelled — so the merge
+  never lands while CI is still validating. Both paths also bind
+  the merge to the judged head SHA via `--match-head-commit`, so a
+  concurrent push between judge decision and merge is rejected by
+  GitHub. Cite `file:line` refs in the merged code directly without
+  the closed-PR prefix; they will be on the base branch by the time
+  the follow-up's clarify / planner phases run. The workflow refuses
+  this action when: follow-up details are missing; the PR has merge
+  conflicts; ENABLE_AUTO_MERGE=false with the PR still open; any
+  check-run is still pending or has a non-success conclusion; the
+  head SHA cannot be resolved; or the bound sync merge fails (e.g.,
+  branch protection / merge queue / concurrent push). In those
+  refusal cases the PR stays in ai:review-blocked. For ORCHESTRATOR-
+  MANAGED PRs the orchestrator's ~5min poll re-fires the judge on a
+  later cycle — after the merge actually lands (e.g. via the
+  existing `merge` action's auto-merge enrollment) — and that
+  subsequent judge run hits the already-merged short path to create
+  the follow-up. For STANDALONE (non-orchestrator) PRs the recovery
+  flow is currently not wired through the workflow gate; if you
+  pick this action and the sync merge fails, the deferred gap may
+  need manual operator intervention to track. Prefer
+  close_and_reissue for standalone PRs when there's any doubt the
+  sync merge will succeed. Do NOT pick this action if the PR has
+  build/test breakage or critical correctness/security defects —
+  pick close_and_reissue instead.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
+- Prefer merge_with_followup (D) over close_and_reissue (C) at IS_FINAL
+  when the PR is shippable. Reserve C for PRs that genuinely break the
+  build / are unsafe to merge / take an entirely wrong approach.
+- If the autofix editor's iteration summaries show the same finding (same
+  `file:line` anchor) deferred ≥2 times as "out of scope" /
+  "CONSOLIDATOR_OVERRIDDEN" / "accepted-residual", treat that ceiling as
+  the editor's caution — not yours. The autofix editor is constrained to
+  the original issue's scope; YOU are not. For wiring / integration /
+  call-site gaps localizable to files already in the diff (e.g. a newly
+  added helper that has only test callers, or a missing call to an
+  existing function), prefer fix (B) over close_and_reissue (C) and apply
+  the wiring directly. Reserve C for cases where the approach itself is
+  wrong, not where the editor was conservative about scope.
 
 EDIT TOOL DISCIPLINE for option B:
 - Try `apply_patch` first for single-file surgical edits — it produces the
@@ -86,14 +145,19 @@ Output contract:
 - Output MUST be a single valid JSON object. No markdown fences or surrounding text.
 - Schema:
   {
-    "action": "merge" | "fix" | "close_and_reissue",
+    "action": "merge" | "fix" | "merge_with_followup" | "close_and_reissue",
     "justification": "<why this action; what was assessed>",
     "remaining_issues_summary": "<brief list of unresolved issues and their severity>",
-    "fix_description": "<if action=fix: what you changed. if action=merge: empty. if action=close_and_reissue: empty>",
+    "fix_description": "<if action=fix: what you changed. else: empty>",
     "new_issue": {
       "title": "<only if action=close_and_reissue>",
       "body": "<only if action=close_and_reissue: full issue body with implementation guidance>"
+    },
+    "followup_issue": {
+      "title": "<only if action=merge_with_followup>",
+      "body": "<only if action=merge_with_followup: describes the deferred gap with acceptance criteria>"
     }
   }
 - new_issue: null unless action is close_and_reissue.
+- followup_issue: null unless action is merge_with_followup.
 - fix_description: empty string unless action is fix.

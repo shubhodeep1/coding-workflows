@@ -44,11 +44,15 @@ def test_validate_workflow_fetches_semble_support_files() -> None:
 	required_snippets = [
 		'copy_from_ref_or_local "scripts/install_semble.sh" "scripts/install_semble.sh.tmp" "false" "true"',
 		'copy_from_ref_or_local "scripts/semble_helpers.sh" "scripts/semble_helpers.sh.tmp" "false" "true"',
+		# build_semble_wrapper.sh added once the inline BM25 wrapper was
+		# extracted to a shared script (semble 0.1.3 lacks index/query CLI).
+		'copy_from_ref_or_local "scripts/build_semble_wrapper.sh" "scripts/build_semble_wrapper.sh.tmp" "false" "true"',
 		'_fetched_scripts+=(install_semble.sh)',
 		'_fetched_scripts+=(semble_helpers.sh)',
+		'_fetched_scripts+=(build_semble_wrapper.sh)',
 	]
 	for snippet in required_snippets:
-		assert snippet in wf
+		assert snippet in wf, f"validate.yml missing snippet: {snippet}"
 
 
 def test_validate_workflow_fetches_serena_support_files() -> None:
@@ -85,21 +89,32 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert "- name: Install semble\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
 	assert 'echo "::notice::VALIDATION_USE_SEMBLE is not true; skipping Semble install."' in wf
 	assert "bash scripts/install_semble.sh" in wf
-	assert "- name: Build semble index\n        if: steps.semble_gate.outputs.enabled == 'true'" in wf
-	assert "MAX_INDEX_FILES = 5000" in wf
-	assert 'Semble indexing skipped after {MAX_INDEX_FILES} files; validation will continue without Semble.' in wf
-	assert 'echo "SEMBLE_AVAILABLE=true"' in wf
-	assert 'echo "SEMBLE_INDEX_AVAILABLE=true"' in wf
-	assert 'echo "SEMBLE_BIN=${wrapper_path}"' in wf
-	assert 'echo "::notice::Semble index ready at ${index_path}."' in wf
-	assert "def _default_index_path() -> Path:" in wf
-	assert 'Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))' in wf
-	assert "payload.get('version', 'unknown')" in wf
-	assert 'print("semble 0.1.3")' not in wf
+	assert "- name: Build semble index" in _workflow_text()
+	# Inline BM25 wrapper extracted to scripts/build_semble_wrapper.sh; the
+	# in-workflow body now delegates to that script via a one-liner.
+	assert "bash scripts/build_semble_wrapper.sh" in wf
+	assert 'SEMBLE_INDEX_PATH="${RUNTIME_DIR}/.semble-index" \\' in wf
+	assert 'SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" \\' in wf
 	assert "- name: Emit Serena stats" in wf
 	assert 'serena_stat_args=(--target validate)' in wf
 	assert "validate_discover.log' -o -name 'validate_diagnose.log' -o -name 'validate_self_heal.log'" in wf
 	assert wf.index("- name: Emit Serena stats") < wf.index("- name: Upload validation artifacts")
+
+
+def test_shared_wrapper_script_owns_bm25_implementation() -> None:
+	# Assertions that previously inspected validate.yml's inline wrapper now
+	# inspect the shared script. Keeping them so a regression in either
+	# extraction or future renames is caught at test time.
+	wrapper = (REPO_ROOT / "scripts" / "build_semble_wrapper.sh").read_text(encoding="utf-8")
+	assert "MAX_INDEX_FILES = 5000" in wrapper
+	assert "Semble indexing skipped after {MAX_INDEX_FILES} files" in wrapper
+	assert 'write_env_kv "SEMBLE_AVAILABLE" "true"' in wrapper
+	assert 'write_env_kv "SEMBLE_INDEX_AVAILABLE" "true"' in wrapper
+	assert 'write_env_kv "SEMBLE_BIN"' in wrapper
+	assert "def _default_index_path() -> Path:" in wrapper
+	assert 'Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))' in wrapper
+	assert "payload.get('version', 'unknown')" in wrapper
+	assert 'print("semble 0.1.3")' not in wrapper
 
 
 def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
@@ -163,6 +178,7 @@ def main() -> int:
 	test_validate_workflow_fetches_semble_support_files()
 	test_validate_workflow_fetches_serena_support_files()
 	test_validate_workflow_bootstraps_and_exports_semble_state()
+	test_shared_wrapper_script_owns_bm25_implementation()
 	test_validate_process_includes_serena_bootstrap_and_prompt_hooks()
 	test_validate_process_includes_discover_and_diagnose_semble_hooks()
 	test_self_heal_includes_semble_and_serena_prompt_hooks()

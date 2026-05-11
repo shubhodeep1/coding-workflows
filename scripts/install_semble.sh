@@ -62,6 +62,21 @@ PY
 current_semble_version()
 {
 	local semble_bin=""
+	local module_version=""
+
+	# Prefer the python module's version constant: semble 0.1.3 ships no
+	# `--version` CLI flag at all, so the legacy CLI probe always fails
+	# even when a correctly-pinned install is on disk. Falling back to
+	# the CLI keeps detection working for hypothetical newer releases
+	# that re-introduce the flag.
+	if command -v "${SEMBLE_PYTHON_BIN}" >/dev/null 2>&1; then
+		module_version="$("${SEMBLE_PYTHON_BIN}" -c 'import semble.version as v; print(v.__version__)' 2>/dev/null || true)"
+		module_version="${module_version%%$'\n'*}"
+		if [ -n "${module_version}" ]; then
+			printf '%s\n' "${module_version}"
+			return 0
+		fi
+	fi
 
 	semble_bin="$(command -v semble 2>/dev/null || true)"
 	if [ -z "${semble_bin}" ]; then

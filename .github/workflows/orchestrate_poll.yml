@@ -299,7 +299,7 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          for f in install_semble.sh semble_helpers.sh; do
+          for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -423,29 +423,32 @@ jobs:
         run: |
           set -euo pipefail
           semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"
-          echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"
-          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
-          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
-            echo "::notice::Semble is unavailable; skipping poller index build."
-            exit 0
-          fi
-
-          semble_bin="${SEMBLE_BIN:-$(command -v semble 2>/dev/null || true)}"
-          if [ -z "${semble_bin}" ]; then
-            echo "::warning::Semble binary is unavailable on PATH after install; leaving Semble disabled for this poll run."
-            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          mkdir -p "$(dirname "${semble_index_path}")"
-          rm -rf "${semble_index_path}"
-          if "${semble_bin}" index . --out "${semble_index_path}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then
-            echo "SEMBLE_BIN=${semble_bin}" >> "$GITHUB_ENV"
-            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 lacks the index/query CLI).
+          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
+          # exits 0, leaving Semble disabled for this poll run. Wrapper
+          # output is mirrored to ${RUNTIME_DIR}/semble_index.log for
+          # post-mortem grepping (kept for log-analysis parity).
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            # The wrapper is documented "always exit 0" (every failure path
+            # routes through mark_unavailable() which exits 0), so the prior
+            # `if !` check was dead code. Gate the diagnostic tail on the
+            # wrapper's own failure marker in the captured log instead of on
+            # pickle absence: a cleanup-of-cleanup failure (rm -rf fails to
+            # remove the pickle inside mark_unavailable) would leave the
+            # pickle on disk and falsely suppress the tail. The "Semble
+            # wrapper unavailable: <reason>" line is written via log() to
+            # stderr before any cleanup runs, so it's always present in the
+            # captured log on failure.
+            SEMBLE_INDEX_PATH="${semble_index_path}" \
+              bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+            fi
           else
-            echo "::warning::Semble index build failed; continuing without Semble-backed prompt context."
-            tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
-            rm -rf "${semble_index_path}"
+            echo "::notice::scripts/build_semble_wrapper.sh not staged; leaving Semble disabled for this poll run."
+            echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
 
       - name: Record poll run start

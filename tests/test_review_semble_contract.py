@@ -35,7 +35,10 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble() -> None:
 
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in stage_block
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh semble_helpers.sh"' in stage_block
+	# build_semble_wrapper.sh added once the BM25 wrapper was extracted to a
+	# shared script (semble 0.1.3 ships no index/query CLI). Kept in the same
+	# optional-bootstrap loop so callers without it still fail-soft.
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_block
 	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
 	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
 	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block
@@ -54,8 +57,14 @@ def test_workflow_adds_gated_setup_install_and_index_steps() -> None:
 	assert "env.SEMBLE_ENABLED == 'true'" in uv_block
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"' in install_block
 	assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
-	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' in index_block
-	assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in index_block
+	# Inline `semble index . --out ...` was unreachable code on the pinned
+	# semble (0.1.3 lacks the CLI). The shared wrapper builder owns the
+	# index build now and writes SEMBLE_INDEX_AVAILABLE=true on success.
+	assert 'bash "${wrapper_script}"' in index_block
+	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' not in index_block
+	# Either the staged support copy or the local checkout copy may win.
+	assert '${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh' in index_block
+	assert 'scripts/build_semble_wrapper.sh' in index_block
 
 
 def test_reviewer_prompt_assembles_semble_context_in_dynamic_section() -> None:

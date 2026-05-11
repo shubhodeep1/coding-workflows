@@ -936,7 +936,7 @@ jobs:
           # gated on the script's existence and falls open with a
           # warning when missing.
           OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
-          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh semble_helpers.sh"
+          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -1206,6 +1206,11 @@ jobs:
 
       - name: Install semble
         if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft already (writes
+        # SEMBLE_AVAILABLE=false on any error), but `source` under
+        # set -euo pipefail can still hard-fail on a syntax regression
+        # before the script's internal fail-soft logic runs.
+        continue-on-error: true
         run: |
           set -euo pipefail
 
@@ -1225,31 +1230,43 @@ jobs:
 
       - name: Build semble index
         if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shared script is fail-soft already, but the
+        # step-level guard ensures a future wrapper regression still
+        # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
+        continue-on-error: true
         run: |
           set -euo pipefail
-
-          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
-
-          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
-            echo "Semble unavailable; skipping index build."
-            exit 0
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 lacks the index/query CLI).
+          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
+          # exits 0, continuing without Semble-backed prompt context.
+          # Honors SUPPORT_SCRIPTS_DIR (the staged-bootstrap dir) ahead of
+          # local scripts/ so review_autofix's @stable-pinned support root
+          # wins when it's populated.
+          wrapper_script=""
+          if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" ]; then
+            wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"
+          elif [ -f scripts/build_semble_wrapper.sh ]; then
+            wrapper_script="scripts/build_semble_wrapper.sh"
           fi
-
-          SEMBLE_BIN_PATH="${SEMBLE_BIN:-$(command -v semble 2>/dev/null || true)}"
-          if [ -z "${SEMBLE_BIN_PATH}" ]; then
-            echo "::warning::Semble binary unavailable after install step; skipping index build."
-            exit 0
-          fi
-
-          rm -rf "${SEMBLE_INDEX_PATH}"
-          mkdir -p "$(dirname "${SEMBLE_INDEX_PATH}")"
-          if "${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then
-            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
-            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
-            echo "Built Semble index at ${SEMBLE_INDEX_PATH}"
+          if [ -n "${wrapper_script}" ]; then
+            # The wrapper is documented "always exit 0" (every failure path
+            # routes through mark_unavailable() which exits 0), so the prior
+            # `if !` check was dead code. Gate the diagnostic tail on the
+            # wrapper's own failure marker in the captured log instead of on
+            # pickle absence: a cleanup-of-cleanup failure (rm -rf fails to
+            # remove the pickle inside mark_unavailable) would leave the
+            # pickle on disk and falsely suppress the tail. The "Semble
+            # wrapper unavailable: <reason>" line is written via log() to
+            # stderr before any cleanup runs, so it's always present in the
+            # captured log on failure.
+            bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+            fi
           else
-            echo "::warning::Semble index build failed; continuing without Semble-backed prompt context."
-            tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+            echo "::notice::build_semble_wrapper.sh not staged; continuing without Semble-backed prompt context."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
 
       - name: Record review run start in memory (fail-open)
