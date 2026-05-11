@@ -1018,6 +1018,13 @@ if ! [[ "${CONFLICT_DISPATCH_COOLDOWN_SECS}" =~ ^[0-9]+$ ]] || [ "${CONFLICT_DIS
   echo "::warning::CONFLICT_DISPATCH_COOLDOWN_SECS must be a non-negative integer; defaulting to 900"
   CONFLICT_DISPATCH_COOLDOWN_SECS="900"
 fi
+# Strip any leading zeros so the downstream arithmetic expansion at
+# line ~3639 (`$(( CONFLICT_DISPATCH_COOLDOWN_SECS * ... ))`) treats
+# the value as base-10.  Without this, an operator value like "0900"
+# trips bash's "value too great for base" error and aborts the
+# poller before integration self-healing can run (Codex P2,
+# PR #2522 line 3603).
+CONFLICT_DISPATCH_COOLDOWN_SECS=$(( 10#${CONFLICT_DISPATCH_COOLDOWN_SECS} ))
 
 INTEGRATION_CONFLICT_MAX_RETRIES="${INTEGRATION_CONFLICT_MAX_RETRIES:-3}"
 if ! [[ "${INTEGRATION_CONFLICT_MAX_RETRIES}" =~ ^[0-9]+$ ]] || [ "${INTEGRATION_CONFLICT_MAX_RETRIES}" -lt 1 ]; then
@@ -3377,9 +3384,25 @@ _list_integration_conflict_files() {
   # wrong branch tip (Codex P2, PR #2522, line 3363).
   local _ib_refspec="+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}"
   local _db_refspec="+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
-  git fetch --no-tags --filter=blob:none --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null \
-    || git fetch --no-tags --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null \
-    || true
+  # Fail closed when BOTH fetch attempts fail (network blip, auth
+  # transient).  The previous `|| true` swallowed all errors,
+  # leaving the subsequent rev-parse checks to pass against
+  # whatever local remote-tracking refs were already present —
+  # potentially many minutes behind the real branch tip — so the
+  # hot-file probe could route a stale-state conflict (or miss a
+  # current one) to the wrong handler (Codex P2, PR #2522 line
+  # 3382).  Returning 1 lets the caller fail-open into the
+  # first-line resolver path, matching the existing missing-refs
+  # contract.
+  local _conflict_probe_fetch_ok="false"
+  if git fetch --no-tags --filter=blob:none --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null; then
+    _conflict_probe_fetch_ok="true"
+  elif git fetch --no-tags --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null; then
+    _conflict_probe_fetch_ok="true"
+  fi
+  if [ "${_conflict_probe_fetch_ok}" != "true" ]; then
+    return 1
+  fi
   git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
   git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
 
@@ -3533,7 +3556,27 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
         _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
         if [[ "${_ihb_conflict_count}" =~ ^[0-9]+$ ]] && [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
           local _ihb_hot_files
-          _ihb_hot_files="$(jq -r '.hot_files[]? // empty' .github/ai/hot_files.json 2>/dev/null || echo "")"
+          # Normalize hot-file registry entries the same way
+          # scripts/orchestrate_lib.py:208-210 does on the canonical
+          # loader path: trim whitespace, replace `\` with `/`, and
+          # strip leading `./` (possibly multiple).  Consumer repos
+          # are documented to accept entries like
+          # `./scripts/orchestrate_poll_process.sh` or
+          # `scripts\orchestrate_poll_process.sh`, but `git
+          # merge-tree --name-only` emits paths in canonical form
+          # (no leading ./, forward slashes only) — so the previous
+          # raw exact-string match silently missed any
+          # non-canonical hot-file entry and routed the conflict to
+          # the first-line resolver instead of the judge (Codex P2,
+          # PR #2522 line 3536).
+          _ihb_hot_files="$(jq -r '
+            (.hot_files // [])[]?
+            | select(type == "string")
+            | sub("^\\s+"; "") | sub("\\s+$"; "")
+            | gsub("\\\\"; "/")
+            | sub("^(\\./)+"; "")
+            | select(length > 0)
+          ' .github/ai/hot_files.json 2>/dev/null || echo "")"
           if [ -n "${_ihb_hot_files}" ]; then
             local _ihb_hot_hit="false"
             local _ihb_cf
@@ -6176,6 +6219,7 @@ invoke_stall_judge() {
     --arg phase "${phase}" \
     --argjson stall_minutes "${stall_minutes}" \
     --argjson recovery_count "${recovery_count}" \
+    --argjson phase_attempts_count "${_judge_phase_attempts_count:-0}" \
     --argjson recent_comments "${recent_comments}" \
     --arg target_pr "${target_pr}" \
     --arg pr_state "${pr_state}" \
@@ -6192,6 +6236,7 @@ invoke_stall_judge() {
       phase: $phase,
       stall_minutes: $stall_minutes,
       recovery_count: $recovery_count,
+      phase_attempts_count: $phase_attempts_count,
       recent_tracking_comments: $recent_comments,
       linked_pr: {
         number: (if $target_pr == "" then null else ($target_pr | tonumber) end),
@@ -6219,6 +6264,7 @@ invoke_stall_judge() {
       --arg phase "${phase}" \
       --argjson stall_minutes "${stall_minutes:-0}" \
       --argjson recovery_count "${recovery_count:-0}" \
+      --argjson phase_attempts_count "${_judge_phase_attempts_count:-0}" \
       --arg target_pr "${target_pr}" \
       --arg pr_state "${pr_state}" \
       --arg pr_mergeable "${pr_mergeable}" \
@@ -6231,6 +6277,7 @@ invoke_stall_judge() {
         phase: (if $phase == "" then null else $phase end),
         stall_minutes: $stall_minutes,
         recovery_count: $recovery_count,
+        phase_attempts_count: $phase_attempts_count,
         linked_pr: {
           number: (if $target_pr == "" then null else ($target_pr | tonumber? // null) end),
           state: (if $pr_state == "" then null else $pr_state end),
@@ -6305,32 +6352,28 @@ invoke_stall_judge() {
     # Fail-open: if jq fails, fall back to hashing the unfiltered
     # blob (today's behaviour, no regression).
     local _cache_diagnostics
-    # The judge-heading filter must NOT eat a human-authored comment
-    # whose body happens to start with the copied bot heading.  The
-    # earlier `endswith("[bot]")` author check broke in deployments
-    # where the gh CLI is authenticated as a PAT user (Codex P2,
-    # PR #2522, line 6255).  Switch to body-shape matching using the
-    # hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` HTML-comment marker
-    # that the bot stamps on every judge tracking comment it posts
-    # (line ~6510 above) — humans cannot accidentally include this
-    # exact byte sequence in a reply.  The OR fallback (heading +
-    # both Decision lines) matches legacy judge comments written
-    # before the marker was added; both conditions are body-shape
-    # checks that survive any author-attribution drift.
+    # The judge-heading filter must NOT eat a human-authored comment.
+    # Earlier iterations tried (a) author-suffix matching, which broke
+    # under PAT-authenticated deployments (Codex P2, PR #2522, line
+    # 6255), and (b) author-agnostic body-shape matching (heading +
+    # both Decision lines), which over-filtered humans who quote a
+    # legacy judge report when replying (Codex P2, PR #2522, line
+    # 6330).  Switch to marker-only matching: strip a comment only
+    # if its body contains the hidden
+    # `<!-- ORCHESTRATOR_STALL_JUDGE -->` HTML-comment that the bot
+    # stamps on every judge tracking comment it posts
+    # (line ~6510 below).  Humans never include this exact byte
+    # sequence — the marker is invisible in rendered Markdown, so
+    # copy-paste quotes of the visible heading + Decision lines do
+    # not carry it.  Legacy bot comments posted before this PR lack
+    # the marker and will pollute the cache hash for the
+    # ≤8-comment window until they age out — acceptable transient
+    # behavior, vs. the alternative of permanently losing fresh
+    # human guidance every time a maintainer quotes the bot.
     _cache_diagnostics="$(printf '%s' "${diagnostics}" | jq -c '
       .recent_tracking_comments = (
         (.recent_tracking_comments // [])
-        | map(select(
-            (
-              ((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->"))
-              or (
-                ((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #"))
-                and ((.body // "") | contains("**Decision (judge):**"))
-                and ((.body // "") | contains("**Decision (effective):**"))
-              )
-            )
-            | not
-          ))
+        | map(select(((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")) | not))
       )
       | del(.stall_minutes)
       | del(.recovery_count)

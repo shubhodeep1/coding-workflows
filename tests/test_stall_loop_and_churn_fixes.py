@@ -293,6 +293,163 @@ def test_standalone_judge_path_warns_when_local_id_empty():
 	)
 
 
+def test_conflict_dispatch_cooldown_secs_canonicalises_leading_zeros(tmp_path):
+	"""CONFLICT_DISPATCH_COOLDOWN_SECS validator at line ~1017 only
+	checks `^[0-9]+$`, which permits leading-zero values like
+	"0900".  The downstream arithmetic expansion (line ~3639)
+	treats that as octal and aborts the poller with "value too
+	great for base".  Production canonicalises the value with
+	`$((10#${VAL}))` after validation; this test reproduces the
+	normalization and confirms it survives every edge case (Codex
+	P2, PR #2522 line 3603)."""
+	script = textwrap.dedent("""
+		set -euo pipefail
+		emit_for() {
+			local val="$1"
+			local canonical
+			canonical=$(( 10#${val} ))
+			# Use the canonicalised value in an arithmetic expansion
+			# the way production does (line ~3639).
+			local product
+			product=$(( canonical * 4 ))
+			echo "in=${val} canonical=${canonical} product=${product}"
+		}
+		emit_for 900
+		emit_for 0900
+		emit_for 0
+		emit_for 00900
+		emit_for 1800
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	lines = r.stdout.strip().splitlines()
+	# Parse "in=X canonical=Y product=Z" rows.
+	parsed = []
+	for line in lines:
+		kvs = dict(kv.split("=", 1) for kv in line.split())
+		parsed.append((kvs["in"], int(kvs["canonical"]), int(kvs["product"])))
+	# All values canonicalise to the same integer the operator
+	# intended; arithmetic expansion produces the expected product.
+	assert parsed[0] == ("900", 900, 3600), parsed
+	assert parsed[1] == ("0900", 900, 3600), parsed
+	assert parsed[2] == ("0", 0, 0), parsed
+	assert parsed[3] == ("00900", 900, 3600), parsed
+	assert parsed[4] == ("1800", 1800, 7200), parsed
+
+
+def test_hot_file_registry_normalisation_matches_python_loader(tmp_path):
+	"""The shell hot-file probe at scripts/orchestrate_poll_process.sh:3536+
+	must normalise registry entries the same way
+	scripts/orchestrate_lib.py:_load_hot_files_seed does (lines
+	208-210): trim whitespace, replace `\\` with `/`, strip leading
+	`./`.  Otherwise consumer repos with `./scripts/foo.sh` or
+	`scripts\\foo.sh` entries silently miss the hot-file
+	short-circuit (Codex P2, PR #2522 line 3536)."""
+	registry = {
+		"hot_files": [
+			"scripts/canonical.sh",
+			"./scripts/with_leading_dot.sh",
+			"./././scripts/many_leading_dots.sh",
+			"scripts\\with_backslash.sh",
+			"  scripts/with_whitespace.sh  ",
+			"",  # empty — must be dropped
+			"./",  # only dot-slash — must be dropped after strip
+		],
+	}
+	(tmp_path / "hot_files.json").write_text(json.dumps(registry))
+	# Reproduce the production normaliser jq verbatim.
+	script = textwrap.dedent("""
+		jq -r '
+			(.hot_files // [])[]?
+			| select(type == "string")
+			| sub("^\\\\s+"; "") | sub("\\\\s+$"; "")
+			| gsub("\\\\\\\\"; "/")
+			| sub("^(\\\\./)+"; "")
+			| select(length > 0)
+		' hot_files.json
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	normalised = r.stdout.strip().splitlines()
+	expected = [
+		"scripts/canonical.sh",
+		"scripts/with_leading_dot.sh",
+		"scripts/many_leading_dots.sh",
+		"scripts/with_backslash.sh",
+		"scripts/with_whitespace.sh",
+	]
+	assert sorted(normalised) == sorted(expected), (
+		f"hot-file normaliser must match the canonical Python loader. "
+		f"Expected: {expected!r}; got: {normalised!r}"
+	)
+
+
+def test_judge_diagnostics_includes_phase_attempts_count(tmp_path):
+	"""When detect_stalls routes to the judge because phase_attempts
+	hit the cap (while recovery_count is still low), the diagnostics
+	JSON must include phase_attempts_count so the judge can see the
+	real reason it was invoked, and the cache key must include it
+	so an exhausted-phase decision does not replay against an
+	earlier non-exhausted decision (Codex P2, PR #2522 line 6050)."""
+	script = textwrap.dedent("""
+		set -euo pipefail
+		# Reproduce a stripped-down version of the diagnostics jq.
+		recent_comments='[]'
+		workflow_outcomes='[]'
+		prior_actions='[]'
+		diagnostics="$(jq -cn \\
+			--arg issue_number "2870" \\
+			--arg phase "ai:review-blocked" \\
+			--argjson stall_minutes 45 \\
+			--argjson recovery_count 1 \\
+			--argjson phase_attempts_count 5 \\
+			--argjson recent_comments "${recent_comments}" \\
+			--argjson workflow_outcomes "${workflow_outcomes}" \\
+			--argjson prior_actions "${prior_actions}" \\
+			'{
+				issue_number: ($issue_number | tonumber),
+				phase: $phase,
+				stall_minutes: $stall_minutes,
+				recovery_count: $recovery_count,
+				phase_attempts_count: $phase_attempts_count,
+				recent_tracking_comments: $recent_comments,
+				recent_review_workflow_outcomes: $workflow_outcomes,
+				prior_recovery_actions: $prior_actions
+			}')"
+		printf '%s\\n' "${diagnostics}"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	diag = json.loads(r.stdout.strip())
+	# The field is present and carries the cap-trigger count.
+	assert "phase_attempts_count" in diag, diag
+	assert diag["phase_attempts_count"] == 5, diag
+
+
+def test_judge_cache_key_changes_with_phase_attempts_count(tmp_path):
+	"""Once phase_attempts_count participates in the diagnostics
+	JSON, the production cache-key filter MUST hash differently
+	when the count crosses the cap.  Without this, an exhausted-
+	phase escalation could replay a cached non-terminal decision
+	(Codex P2, PR #2522 line 6050)."""
+	base_diag = {
+		"issue_number": 2870,
+		"phase": "ai:review-blocked",
+		"stall_minutes": 45,
+		"recovery_count": 1,
+		"phase_attempts_count": 4,
+		"recent_tracking_comments": [],
+		"recent_review_workflow_outcomes": [],
+		"prior_recovery_actions": [{"key": "last_seen_phase", "value": "ai:review-blocked"}],
+	}
+	low = dict(base_diag)
+	high = {**base_diag, "phase_attempts_count": 5}
+	keys = _hash_variants(tmp_path, {"low": low, "high": high})
+	assert keys["low"] != keys["high"], (
+		f"cache key must differ when phase_attempts_count differs: {keys}"
+	)
+
+
 def test_max_recoveries_done_canonicalisation_is_top_level_safe(tmp_path):
 	"""The canonical-int normalization for MAX_STALL_RECOVERIES_DONE
 	lives in the top-level poller body (outside any function), so it
@@ -535,12 +692,7 @@ def test_heal_integration_conflict_rc2_does_not_refresh_dispatch_ts(tmp_path):
 PRODUCTION_CACHE_KEY_FILTER = (
 	'.recent_tracking_comments = '
 	'((.recent_tracking_comments // []) '
-	'| map(select('
-	'(((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")) '
-	'or (((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #")) '
-	'and ((.body // "") | contains("**Decision (judge):**")) '
-	'and ((.body // "") | contains("**Decision (effective):**")))) '
-	'| not))) '
+	'| map(select(((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")) | not))) '
 	'| del(.stall_minutes) '
 	'| del(.recovery_count) '
 	'| .prior_recovery_actions = '
@@ -1810,19 +1962,24 @@ def test_production_script_contains_expected_fix_markers():
 	assert 'startswith("<!-- ORCHESTRATOR_STATE_V2")) | not' in body, (
 		"recent_comments filter must strip ORCHESTRATOR_STATE_V2 chunks"
 	)
-	# Codex P2 6200 + 6255: cache-key filter uses body-shape match
-	# (hidden ORCHESTRATOR_STALL_JUDGE marker OR full heading +
-	# Decision lines), NOT author-suffix, so deployments where gh
-	# authenticates as a PAT user still correctly strip the bot's
-	# own narration.
+	# Codex P2 6200 + 6255 + 6330: cache-key filter is marker-only
+	# (hidden ORCHESTRATOR_STALL_JUDGE).  Author-suffix was tried
+	# first and broke under PATs; author-agnostic body-shape was
+	# tried second and over-filtered humans who quote the bot.  The
+	# hidden marker is invisible in rendered Markdown so humans
+	# almost never carry it.
 	assert "<!-- ORCHESTRATOR_STALL_JUDGE -->" in body, (
 		"bot judge tracking comment must include the hidden ORCHESTRATOR_STALL_JUDGE marker"
 	)
 	assert 'contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")' in body, (
 		"cache-key filter must match the hidden ORCHESTRATOR_STALL_JUDGE marker"
 	)
-	assert 'contains("**Decision (judge):**")' in body, (
-		"cache-key filter must also match the legacy heading+Decision shape"
+	# The legacy heading+Decision shape fallback has been DROPPED to
+	# avoid over-filtering humans who quote a legacy judge report;
+	# this anchor pins that the fallback is not reintroduced.
+	assert 'contains("**Decision (effective):**")' not in body, (
+		"legacy heading+Decision body-shape fallback must not be reintroduced "
+		"(over-filters human quotes of bot reports)"
 	)
 	# Codex P2 6221 #1: standalone state marker filtered from recent_comments.
 	assert 'startswith("<!-- AI_STANDALONE_STALL_STATE_V1")) | not' in body, (
