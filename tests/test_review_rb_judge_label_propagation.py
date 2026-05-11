@@ -781,13 +781,9 @@ def _run_merge_with_followup(
 			# Speed up both polling loops — one attempt is enough
 			# because the mock returns the configured value
 			# deterministically on the first call (sync merge succeeds
-			# via the catch-all path in the mock, so the merge-
-			# completion poll is never reached for tests with
-			# mergeable=true).
+			# via the catch-all path in the mock).
 			"PR_MERGEABLE_POLL_ATTEMPTS": "1",
 			"PR_MERGEABLE_POLL_SLEEP": "0",
-			"MERGE_COMPLETION_POLL_ATTEMPTS": "1",
-			"MERGE_COMPLETION_POLL_SLEEP": "0",
 		}
 		run_env = os.environ.copy()
 		run_env.update(env)

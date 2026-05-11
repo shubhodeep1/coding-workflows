@@ -244,11 +244,29 @@ _pr_checks_completed()
 	fi
 
 	local check_runs_json
-	check_runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "")"
+	# --paginate --slurp walks all pages and emits an array of page
+	# response objects (each shaped {"total_count": N, "check_runs":
+	# [...]}). Without pagination a commit with >100 check-runs hides
+	# pending/failing runs on later pages and the gate would
+	# incorrectly report success. Matches the canonical pattern used
+	# elsewhere in the repo (e.g. .github/workflows/review_autofix.yml's
+	# "Collect PR check-run failures" step). Fallback to '[]' on API
+	# failure keeps the jq filter below safe under set -euo pipefail.
+	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "[]")"
 
+	# jq filter: handle both the paginated array-of-pages shape (the
+	# production --paginate --slurp call) and the single-object
+	# shape (backward compatibility with callers / tests that
+	# pre-date the pagination change). In either case, flatten every
+	# page check_runs and count items that are NOT yet completed
+	# with an acceptable conclusion. (Note: comments stay outside
+	# the jq script — apostrophes in jq-internal comments would
+	# terminate the outer single-quoted expression early.)
 	local incomplete
 	incomplete="$(printf '%s' "${check_runs_json}" | jq -r '
-		if (type == "object" and (.check_runs | type == "array")) then
+		if (type == "array") then
+			[.[]? | (.check_runs // [])[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+		elif (type == "object" and (.check_runs | type == "array")) then
 			[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
 		else
 			empty

@@ -949,9 +949,21 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         if [ -z "${PR_HEAD_SHA}" ]; then
           echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
         else
-          _check_runs_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '{}')"
+          _check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '[]')"
+          # jq filter: --paginate --slurp emits an array of page
+          # response objects; the elif branch handles legacy single-
+          # object shape from tests / older callers. Either way we
+          # flatten every page check_runs and count items that have
+          # not yet completed with an acceptable conclusion. Without
+          # pagination, commits with >100 check-runs would hide
+          # pending/failing runs on later pages and let the gate
+          # incorrectly report success. (Note: comments stay outside
+          # the jq script — apostrophes inside the heredoc-style
+          # single-quoted jq expression would terminate it early.)
           _incomplete_checks="$(printf '%s' "${_check_runs_json}" | jq -r '
-            if (type == "object" and (.check_runs | type == "array")) then
+            if (type == "array") then
+              [.[]? | (.check_runs // [])[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+            elif (type == "object" and (.check_runs | type == "array")) then
               [.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
             else
               empty
