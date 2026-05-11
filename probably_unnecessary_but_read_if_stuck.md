@@ -686,7 +686,7 @@ The analyzer is now a context-prep stage only — it loads the collector report,
 
 ## 21. Semble rollout and observability
 
-- `SEMBLE_ENABLED` defaults to `false`. That default is intentional: Semble-backed context retrieval is opt-in per caller repo until operators are ready to soak it.
+- `SEMBLE_ENABLED` defaults to `true` on this repo's reusable workflows. Caller repos can still set `SEMBLE_ENABLED=false` to opt out, and older consumer wrappers continue to follow the reusable-workflow ref they are pinned to.
 - The install/index path lives in the reusable workflows under `.github/workflows/`, not in `workflow-templates/*.yml`. Consumer templates stay thin `uses:` wrappers pinned to `@stable`; a job that uses a reusable workflow cannot also define its own `steps:` block for local install/index setup.
 - Merging Semble changes on this repo's `main` branch updates the source-of-truth reusable workflows for this repo's own internal wrappers, but consumer repos do not receive those changes until a separate operational step cuts a new `@stable` tag. That tag cut and the downstream repository-dispatch fanout are operational rollout steps, not part of a docs/observability-only issue.
 - Expected success telemetry in job logs:
@@ -697,7 +697,7 @@ The analyzer is now a context-prep stage only — it loads the collector report,
   - Repeated fallbacks for the same workflow/target over a rolling window usually mean the rollout is misconfigured (for example installer drift, missing index setup, or a query path that is systematically failing) rather than a one-off transient.
   - `scripts/cost_audit.py` now aggregates Semble telemetry by workflow and `target=` because current emitters do not expose a universal `phase=` field. Prefer workflow+target trend checks over phase-name assumptions when triaging.
 - Operational checklist when Semble looks unhealthy:
-  1. Confirm the caller repo intentionally set `SEMBLE_ENABLED=true`.
+  1. Confirm the caller repo has not explicitly disabled Semble (`SEMBLE_ENABLED=false`). If it is pinned to an older reusable-workflow ref or pre-rollout `@stable`, confirm that ref includes the default-on Semble rollout.
   2. Check the reusable-workflow run log for `Install semble` / `Build semble index` step outcomes.
   3. Inspect whether fallbacks cluster on one `target=` value (for example `overflow`, `reviewer-context`, or `judge`) before broadening the investigation.
   4. If consumer repos need the fix, remember that updating this repo alone is insufficient — the separate `@stable` promotion must happen after validation.

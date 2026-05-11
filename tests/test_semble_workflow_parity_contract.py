@@ -17,7 +17,7 @@ TARGET_WORKFLOWS = {
 }
 
 REQUIRED_SNIPPETS = (
-	"SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}",
+	"SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}",
 	"install_semble.sh",
 	"uses: astral-sh/setup-uv@v3",
 	"- name: Install semble",

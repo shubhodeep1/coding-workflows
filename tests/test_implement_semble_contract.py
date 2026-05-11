@@ -54,7 +54,7 @@ def _step_run_text(step_name: str) -> str:
 
 def test_semble_repo_var_defaults_false() -> None:
 	workflow = _workflow_text()
-	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'false' }}" in workflow
+	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
 
 
 def test_runtime_workspace_exports_fail_open_semble_defaults() -> None:
