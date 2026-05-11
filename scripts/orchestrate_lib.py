@@ -1467,12 +1467,25 @@ def resolve_stall_recovery_action(
 	actions_by_phase: dict[str, list[str]] | None = None,
 	fallback_action: str = "retrigger_pipeline",
 	max_recoveries_by_phase: dict[str, int] | None = None,
+	phase_attempts_count: int = 0,
 ) -> str:
-	"""Resolve the declarative stall recovery action for a phase/recovery count."""
+	"""Resolve the declarative stall recovery action for a phase/recovery count.
+
+	``phase_attempts_count`` is a sibling counter to ``recovery_count`` that
+	survives phase oscillation (see :func:`update_issue_timestamps`, which
+	zeroes ``stall_recovery_count`` on phase change but leaves
+	``phase_attempts`` untouched).  When an autofix run flaps a label
+	transiently — e.g. ai:review-blocked -> ai:done -> ai:review-blocked —
+	the per-recovery counter restarts at 0 each time, so the ladder would
+	otherwise run forever.  Capping on either counter bounds the lifetime
+	work done for one phase.
+	"""
 	effective_max = _phase_specific_max_recoveries(
 		phase, max_recoveries, max_recoveries_by_phase
 	)
 	if recovery_count >= effective_max:
+		return "skip"
+	if phase_attempts_count >= effective_max:
 		return "skip"
 
 	recovery_idx = max(recovery_count, 0)
@@ -1501,6 +1514,7 @@ def resolve_effective_stall_recovery_action(
 	max_recoveries: int = 5,
 	enable_stall_human_terminalization: bool = False,
 	max_recoveries_by_phase: dict[str, int] | None = None,
+	phase_attempts_count: int = 0,
 ) -> str:
 	"""Normalize a candidate action (e.g. stall judge output) into a safe action."""
 	fallback_action = resolve_stall_recovery_action(
@@ -1509,6 +1523,7 @@ def resolve_effective_stall_recovery_action(
 		max_recoveries=max_recoveries,
 		enable_stall_human_terminalization=enable_stall_human_terminalization,
 		max_recoveries_by_phase=max_recoveries_by_phase,
+		phase_attempts_count=phase_attempts_count,
 	)
 
 	if not isinstance(candidate_action, str) or not candidate_action:
@@ -1663,8 +1678,20 @@ def detect_stalls(
 			recovery_count = 0
 		recovery_count = max(0, recovery_count)
 
+		raw_phase_attempts = issue.get("phase_attempts", {})
+		if isinstance(raw_phase_attempts, dict):
+			try:
+				phase_attempts_count = int(raw_phase_attempts.get(phase, 0) or 0)
+			except (TypeError, ValueError):
+				phase_attempts_count = 0
+		else:
+			phase_attempts_count = 0
+		phase_attempts_count = max(0, phase_attempts_count)
+
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
+			action = "skip"
+		elif phase_attempts_count >= max_recoveries:
 			action = "skip"
 		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
 			action = RUN_STALL_JUDGE_ACTION
@@ -1674,6 +1701,7 @@ def detect_stalls(
 				recovery_count,
 				max_recoveries=max_recoveries,
 				enable_stall_human_terminalization=enable_stall_human_terminalization,
+				phase_attempts_count=phase_attempts_count,
 			)
 
 		stalled.append({
@@ -1683,6 +1711,7 @@ def detect_stalls(
 			"recovery_action": action,
 			"stall_duration_minutes": int(elapsed / 60),
 			"stall_recovery_count": recovery_count,
+			"phase_attempts_count": phase_attempts_count,
 		})
 
 	return stalled
@@ -1733,10 +1762,17 @@ def update_issue_timestamps(
 def increment_stall_recovery(
 	state: dict[str, Any],
 	issue_id: str,
+	phase: str | None = None,
 ) -> dict[str, Any]:
 	"""Increment the stall recovery counter for *issue_id* in the current wave.
 
 	Also resets ``status_since_ts`` to now so the threshold restarts.
+	When *phase* is supplied, additionally bumps a phase-scoped lifetime
+	counter at ``issue["phase_attempts"][phase]``.  Unlike
+	``stall_recovery_count``, which :func:`update_issue_timestamps` zeroes
+	on phase change, ``phase_attempts`` is never reset by phase oscillation,
+	so it caps re-issue loops where an autofix run transiently flips a
+	label (e.g. ai:review-blocked -> ai:done -> ai:review-blocked).
 	Mutates *state* in-place.
 	"""
 	current_wave_idx = state.get("current_wave", 1) - 1
@@ -1755,6 +1791,17 @@ def increment_stall_recovery(
 				recovery_count = 0
 			issue["stall_recovery_count"] = max(0, recovery_count) + 1
 			issue["status_since_ts"] = now_ts
+			if phase:
+				raw_phase_attempts = issue.get("phase_attempts")
+				if not isinstance(raw_phase_attempts, dict):
+					raw_phase_attempts = {}
+					issue["phase_attempts"] = raw_phase_attempts
+				try:
+					prev_phase_count = int(raw_phase_attempts.get(phase, 0) or 0)
+				except (TypeError, ValueError):
+					print(f"::warning::Malformed phase_attempts[{phase}] for issue {issue.get('id')}; resetting to 0", file=sys.stderr)
+					prev_phase_count = 0
+				raw_phase_attempts[phase] = max(0, prev_phase_count) + 1
 			break
 
 	return state
