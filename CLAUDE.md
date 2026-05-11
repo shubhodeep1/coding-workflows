@@ -340,6 +340,53 @@ After changes:
 - All fixes are in this PR — none deferred to a follow-up.
 - If no changes are needed at all: reply "No changes are needed."
 
+### G) Autofix CI / Address-Comments Mode Add-ons
+
+When Claude is invoked under the **autofix CI / address-comments mode** —
+i.e. an **interactive Claude Code session** driven by a
+`subscribe_pr_activity` event tied to a failing required check, an
+`@codex change` / "address the review comments" request on a PR, or any
+equivalent trigger that tasks the interactive session with making the
+branch green and the review thread satisfied — the following are
+first-class auto-apply categories on top of §12.B. Fix them without
+asking.
+
+This subsection governs **interactive sessions only**, consistent with
+the preface at the top of this file (lines 7–10): the unattended
+`review_autofix` pipeline reads `unattended_system_instructions.md` and
+keeps its own policy, so the rules below do not flow into that pipeline
+and must not be cited as if they did.
+
+- **Lint / formatter / static-analysis failures**, **including failures
+  whose offending line is outside the current PR's diff.** Owning a green
+  branch is part of this mode, so a lint, formatter, or static-analysis
+  violation surfaced by CI must be fixed even when the violation was
+  introduced by an earlier commit on this branch, lives in a file the
+  current PR did not otherwise touch, or is in code Claude has not
+  modified in this session. The "scope explosion" STOP condition in
+  §12.D does NOT apply to mechanical lint sweeps — bring the branch
+  green even if that touches many files. §6 (naming immutability)
+  still binds: if the only mechanical fix would rename a public
+  identifier flagged by a style rule, route to §12.D instead of
+  renaming.
+- **Merge conflicts with the base branch.** Resolve them automatically
+  so the PR is mergeable. Prefer the resolution that preserves both
+  sides' intent over the resolution that drops one side; never silently
+  discard either side's changes. When both sides genuinely conflict and
+  the correct resolution is non-obvious from the diff (semantic intent
+  unclear, both branches changed the same invariant in incompatible
+  ways, or the resolution would alter a documented contract per §12.D),
+  STOP and ask in Q/A format before committing the resolution. Record
+  the resolution in the merge commit message and call it out in the PR
+  description's "Proactive fixes included" subsection (§12.E).
+
+These add-ons inherit the rest of §12 unchanged: §12.A (one PR — lint
+sweeps and conflict fixes land in this PR, never a follow-up), §12.C
+(weigh reversibility, blast radius, and §6/§10 conflicts before acting),
+§12.E (commit hygiene — group the lint sweep into its own commit
+distinct from the in-scope review fixes; record the conflict resolution
+in its own commit), and §12.F (acceptance criteria).
+
 ---
 
 ## §13. Repository Hygiene
