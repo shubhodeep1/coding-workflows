@@ -75,13 +75,18 @@ Rules:
   has merge conflicts; ENABLE_AUTO_MERGE=false with the PR still
   open; or sync merge fails (typically because required checks are
   still pending in protected-branch repos). In those refusal cases
-  the PR stays in ai:review-blocked and the orchestrator / stall
-  recovery re-fires the judge on a later cycle, after the merge
-  actually lands via the existing `merge` action's auto-merge
-  enrollment — that subsequent judge run hits the already-merged
-  short path and creates the follow-up. Do NOT pick this action if
-  the PR has build/test breakage or critical correctness/security
-  defects — pick close_and_reissue instead.
+  the PR stays in ai:review-blocked. For ORCHESTRATOR-MANAGED PRs the
+  orchestrator's ~5min poll re-fires the judge on a later cycle —
+  after the merge actually lands (e.g. via the existing `merge`
+  action's auto-merge enrollment) — and that subsequent judge run
+  hits the already-merged short path to create the follow-up. For
+  STANDALONE (non-orchestrator) PRs the recovery flow is currently
+  not wired through the workflow gate; if you pick this action and
+  the sync merge fails, the deferred gap may need manual operator
+  intervention to track. Prefer close_and_reissue for standalone
+  PRs when there's any doubt the sync merge will succeed. Do NOT
+  pick this action if the PR has build/test breakage or critical
+  correctness/security defects — pick close_and_reissue instead.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
 - Prefer merge_with_followup (D) over close_and_reissue (C) at IS_FINAL

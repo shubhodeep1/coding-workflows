@@ -177,18 +177,6 @@ jobs:
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
           PR_BODY: ${{ inputs.pr_body }}
-          # force_rb_judge is the stall-recovery / merge_with_followup-post-
-          # merge-recovery override: when review_rb_judge_dispatch.yml (or a
-          # workflow_dispatch caller) sets this to true, the gate must allow
-          # merged PRs through so the retrigger_guard's force_rb_judge
-          # short-circuit can run the rb_judge step against a merged PR
-          # (e.g. operator manually merged after a partial merge_with_
-          # followup run; deferred gap still needs the follow-up issue).
-          # Without this, the consensus Finding #1 from claude-branch-review
-          # applies: the gate exits with SHOULD_RUN=false / pr_closed, the
-          # rb_judge step never runs, and merge_with_followup's already-
-          # merged short path is dead code outside the orchestrator.
-          FORCE_RB_JUDGE_INPUT: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
           AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
           AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
           # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
@@ -261,26 +249,10 @@ jobs:
             SKIP_REASON="pr_state_unknown"
             echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
           elif [ "${pr_state}" = "closed" ]; then
-            if [ "${FORCE_RB_JUDGE_INPUT:-false}" = "true" ] && [ "${pr_merged}" = "true" ]; then
-              # Stall-recovery / post-merge-recovery override: allow the
-              # workflow to run on a merged PR so retrigger_guard's
-              # force_rb_judge short-circuit can dispatch the rb_judge
-              # step. This is the path for merge_with_followup's
-              # already-merged recovery flow (operator manually merged
-              # after a partial merge_with_followup run; deferred gap
-              # still needs the follow-up issue created against the
-              # merged base). Without this allowance the rb_judge's
-              # PR_MERGED=true short path is unreachable for standalone
-              # PRs — see claude-branch-review consensus Finding #1.
-              echo "AUTOFIX_GATE_MERGED_PR_FORCED reason=force_rb_judge_post_merge_recovery pr=${PR_NUMBER}"
-              SHOULD_RUN="true"
+            SHOULD_RUN="false"
+            SKIP_REASON="pr_closed"
+            if [ "${pr_merged}" = "true" ]; then
               POST_MERGE_DISPATCH="true"
-            else
-              SHOULD_RUN="false"
-              SKIP_REASON="pr_closed"
-              if [ "${pr_merged}" = "true" ]; then
-                POST_MERGE_DISPATCH="true"
-              fi
             fi
           elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
             SHOULD_RUN="false"
