@@ -1082,12 +1082,18 @@ fi
 
 # MAX_JUDGE_REPLAY caps how many consecutive cached judge decisions the
 # orchestrator will replay before forcing escalate_human. The judge
-# decision cache (see invoke_stall_judge) keyed on
-# sha256({issue_num, head_sha, phase, last_conclusion}) skips the LLM
-# call when the same inputs reproduce — but if the cached decision is
-# wrong (the judge picked resolve_merge_conflict on a hot-file collision
-# the resolver can't fix), replaying it forever wastes budget. After
-# this many replays, the judge cache is bypassed and the issue is
+# decision cache (see invoke_stall_judge) is keyed on sha256 of the
+# full diagnostics JSON blob — issue/phase/recovery_count, linked-PR
+# state, recent_review_workflow_outcomes, prior_recovery_actions, and
+# recent_tracking_comments (with the orchestrator's own "## 🧑‍⚖️
+# Stall Judge — Issue #N" tracking comments stripped from the hash
+# view so self-narration cannot churn the key on every cycle).  Any
+# mutable input the prompt actually carries therefore invalidates the
+# cached decision automatically.  Replaying skips the LLM when the
+# same inputs reproduce — but if the cached decision is wrong (the
+# judge picked resolve_merge_conflict on a hot-file collision the
+# resolver can't fix), replaying it forever wastes budget. After this
+# many replays, the judge cache is bypassed and the issue is
 # escalated.
 MAX_JUDGE_REPLAY="${MAX_JUDGE_REPLAY:-2}"
 if ! [[ "${MAX_JUDGE_REPLAY}" =~ ^[0-9]+$ ]]; then
@@ -3358,17 +3364,32 @@ _list_integration_conflict_files() {
       ;;
     1)
       # Conflicts detected. Strip the leading written-tree SHA line
-      # (modern git prints it before the conflict paths) and verify at
-      # least one conflict path remains; rc==1 with no paths after
-      # stripping is anomalous and treated as a probe failure
-      # (fail-open) so the caller's hot-file short-circuit cannot fire
-      # on imaginary conflicts.  The SHA test uses length() instead of
-      # an `[[:xdigit:]]{40}` repetition because some awk builds (BWK
-      # awk on certain distros) panic compiling bracket-class
-      # repetitions with `REcompile() - panic: values still on machine
-      # stack`.
-      local stripped
-      stripped="$(printf '%s\n' "${out}" | sed '/^$/d' | awk 'NR==1 && /^[0-9a-fA-F]+$/ && (length==40 || length==64) {next} {print}')"
+      # (modern git merge-tree --write-tree always emits the tree OID
+      # on line 1, then conflict paths on lines 2+), preserving any
+      # path whose name happens to be 40-or-64 hex chars by ONLY
+      # stripping when there is a subsequent line.  Without the
+      # multi-line gate, a real conflict file named e.g.
+      # 0123456789abcdef0123456789abcdef01234567 would be silently
+      # dropped from the conflict list and the hot-file short-circuit
+      # would undercount, misrouting an actual hot-file conflict to
+      # the first-line resolver (claude-branch-review consensus,
+      # PR #2522).  The SHA test uses length() instead of an
+      # `[[:xdigit:]]{40}` repetition because some awk builds (BWK awk
+      # on certain distros) panic compiling bracket-class repetitions
+      # with `REcompile() - panic: values still on machine stack`.
+      # rc==1 with no paths after stripping is anomalous and treated
+      # as a probe failure (fail-open) so the caller's hot-file
+      # short-circuit cannot fire on imaginary conflicts.
+      local cleaned line_count first_line stripped
+      cleaned="$(printf '%s\n' "${out}" | sed '/^$/d')"
+      line_count="$(printf '%s\n' "${cleaned}" | grep -c . 2>/dev/null || echo 0)"
+      first_line="$(printf '%s\n' "${cleaned}" | head -n 1)"
+      if [ "${line_count}" -ge 2 ] \
+         && printf '%s' "${first_line}" | awk '/^[0-9a-fA-F]+$/ && (length==40 || length==64) {exit 0} {exit 1}'; then
+        stripped="$(printf '%s\n' "${cleaned}" | tail -n +2)"
+      else
+        stripped="${cleaned}"
+      fi
       if [ -z "${stripped}" ]; then
         return 1
       fi

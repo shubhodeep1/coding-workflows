@@ -171,27 +171,57 @@ def test_judge_cache_replay_path_bumps_counter_then_escalates(tmp_path):
 	], lines
 
 
-def test_judge_cache_key_changes_when_head_sha_advances(tmp_path):
-	"""When the head_sha changes (e.g. resolver pushed a commit), the
-	cache key is different so the new inputs go to the LLM rather than
-	replaying a stale decision."""
+def test_judge_cache_key_changes_when_diagnostics_inputs_change(tmp_path):
+	"""When any meaningful diagnostics field changes (PR mergeability,
+	head_ref advancing, recovery_count bumping, workflow outcomes,
+	etc.), the production cache key — sha256 of the filtered
+	diagnostics blob — must differ so the next cycle goes to the LLM
+	rather than replaying a stale decision.
+
+	This replaces an earlier simplified test that hashed a 4-field
+	pipe-delimited string; the production cache key actually hashes
+	the full diagnostics JSON (with self-narration filtered out), so
+	the simplified hash gave false confidence about real cache-
+	invalidation behaviour (claude-branch-review consensus,
+	PR #2522)."""
+	base = {
+		"issue_number": 2870,
+		"local_id": "wave-1/issue-1",
+		"phase": "ai:review-blocked",
+		"stall_minutes": 30,
+		"recovery_count": 1,
+		"recent_tracking_comments": [],
+		"linked_pr": {"number": 9001, "state": "open", "mergeable": False, "head_ref": "feat-v1", "base_ref": "main"},
+		"recent_review_workflow_outcomes": [{"id": 111, "workflow": "Review Autofix", "conclusion": "failure", "status": "completed", "head_branch": "feat-v1", "created_at": "2026-01-01T00:00:00Z"}],
+		"current_wave": 1,
+		"prior_recovery_actions": [{"key": "stall_recovery_count", "value": 1}],
+	}
+	variants = {
+		"base": base,
+		"head_ref_advanced": {**base, "linked_pr": {**base["linked_pr"], "head_ref": "feat-v2"}},
+		"mergeable_flipped": {**base, "linked_pr": {**base["linked_pr"], "mergeable": True}},
+		"recovery_count_bumped": {**base, "recovery_count": 2},
+		"workflow_outcome_changed": {**base, "recent_review_workflow_outcomes": [{**base["recent_review_workflow_outcomes"][0], "conclusion": "success"}]},
+	}
+	for name, diag in variants.items():
+		(tmp_path / f"{name}.json").write_text(json.dumps(diag))
 	script = textwrap.dedent("""
-		set -euo pipefail
-		issue_num=2870
-		phase=ai:review-blocked
-		last=failure
-		k1=$(printf '%s|%s|%s|%s' "$issue_num" "abc" "$phase" "$last" | sha256sum | awk '{print $1}')
-		k2=$(printf '%s|%s|%s|%s' "$issue_num" "def" "$phase" "$last" | sha256sum | awk '{print $1}')
-		echo "$k1"
-		echo "$k2"
-		[ "$k1" != "$k2" ] && echo distinct || echo equal
+		set -uo pipefail
+		filter='.recent_tracking_comments = ((.recent_tracking_comments // []) | map(select((.body // "") | contains("Stall Judge — Issue #") | not)))'
+		for f in base head_ref_advanced mergeable_flipped recovery_count_bumped workflow_outcome_changed; do
+			echo "${f}=$(jq -c "$filter" "${f}.json" | sha256sum | awk '{print $1}')"
+		done
 	""")
 	r = _run_bash(script, cwd=tmp_path)
-	assert r.returncode == 0, f"bash failed: {r.stderr}"
-	lines = r.stdout.strip().splitlines()
-	assert lines[-1] == "distinct"
-	# Both keys must be 64-char hex.
-	assert all(len(line) == 64 and all(c in "0123456789abcdef" for c in line) for line in lines[:2])
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	keys = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# All five variant keys must be distinct (every meaningful change
+	# invalidates the cache).
+	distinct = set(keys.values())
+	assert len(distinct) == len(keys), f"keys should all be distinct: {keys}"
+	# And each must be a 64-char hex sha256.
+	for name, k in keys.items():
+		assert len(k) == 64 and all(c in "0123456789abcdef" for c in k), f"{name}: malformed key {k!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -601,24 +631,30 @@ def _extract_function_body(name: str) -> str:
 
 
 def test_list_integration_conflict_files_rc_handling(tmp_path):
-	"""Validate the four documented exit-code branches:
-	  rc==0 (clean merge)              → return 1, no stdout
-	  rc==1 with paths                 → return 0, paths echoed
-	  rc==1 with only the tree SHA     → return 1 (probe anomaly, fail-open)
-	  rc>=128 (fatal probe error)      → return 1 (fail-open)
+	"""Validate the documented exit-code branches and the SHA-strip
+	multi-line gate:
+	  rc==0 (clean merge)                       → return 1, no stdout
+	  rc==1 with OID + paths                    → return 0, paths echoed
+	  rc==1 with a single SHA-shaped path       → return 0, path preserved
+	    (the multi-line gate keeps the strip from dropping a real
+	    conflict file whose name happens to be 40/64 hex chars)
+	  rc==1 with empty output                   → return 1 (fail-open)
+	  rc>=128 (fatal probe error)               → return 1 (fail-open)
 
 	Also exercises the pipefail-safe version probe — the shim simulates
 	real git's `git merge-tree -h` behaviour (help to stderr, exit 129).
 	"""
 	func_src = _extract_function_body("_list_integration_conflict_files")
-	# Each scenario: (label, mock_rc, mock_stdout, expected_rc, expects_paths).
+	# Each scenario: (label, mock_rc, mock_stdout, expected_rc, expected_paths).
 	scenarios = [
-		("clean_merge",         0,   "",                                                  1, False),
-		("conflict_with_paths", 1,   ("d" * 40) + "\nsrc/foo.txt\nsrc/bar.txt",           0, True),
-		("conflict_sha_only",   1,   "d" * 40,                                            1, False),
-		("fatal_error_128",     128, "",                                                  1, False),
+		("clean_merge",                  0,   "",                                                  1, []),
+		("conflict_oid_plus_paths",      1,   ("d" * 40) + "\nsrc/foo.txt\nsrc/bar.txt",           0, ["src/foo.txt", "src/bar.txt"]),
+		("conflict_sha_shaped_filename", 1,   "d" * 40,                                            0, ["d" * 40]),
+		("conflict_empty_output",        1,   "",                                                  1, []),
+		("fatal_error_128",              128, "",                                                  1, []),
 	]
-	for label, mock_rc, mock_stdout, expected_rc, expects_paths in scenarios:
+	for label, mock_rc, mock_stdout, expected_rc, expected_paths in scenarios:
+		expects_paths = bool(expected_paths)
 		# Use a tempfile for the mock stdout so embedded newlines round-trip
 		# cleanly — bash env vars do not interpret `\n` escapes inside
 		# double quotes, so passing multi-line content via `export VAR=...`
@@ -667,8 +703,9 @@ def test_list_integration_conflict_files_rc_handling(tmp_path):
 		)
 		path_lines = [l for l in lines[:-1] if l]
 		if expects_paths:
-			assert "src/foo.txt" in path_lines, f"[{label}] missing src/foo.txt; got: {path_lines}"
-			assert "src/bar.txt" in path_lines, f"[{label}] missing src/bar.txt; got: {path_lines}"
+			assert sorted(path_lines) == sorted(expected_paths), (
+				f"[{label}] path mismatch: expected {expected_paths}, got {path_lines}"
+			)
 		else:
 			assert path_lines == [], f"[{label}] expected no stdout paths; got: {path_lines}"
 
