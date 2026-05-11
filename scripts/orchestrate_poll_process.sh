@@ -6724,8 +6724,12 @@ ${diagnostics}
   #   * Cache-replay count bump (Codex P2 line 6550): skip on
   #     dedupe so the cache does not age while an existing
   #     resolver is still working.
+  # IMPORTANT: do NOT clear STALL_RECOVERY_SHOULD_INCREMENT here.
+  # The outer stall-recovery loop reads it to decide whether to
+  # bump stall_recovery_count after invoke_stall_judge returns;
+  # clobbering it to "false" would silently lose every budget-
+  # consuming action this function dispatched.
   local _judge_dispatch_was_fresh="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
-  STALL_RECOVERY_SHOULD_INCREMENT="false"
 
   # Persist the cache decision now that we know whether the
   # dispatch actually ran fresh work.  Only writes happen when
