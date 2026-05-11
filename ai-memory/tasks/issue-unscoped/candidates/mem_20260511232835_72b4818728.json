@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/internal-review.yml:46-52 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Shared concurrency group key lets push-triggered `claude/**` runs and PR-backed runs on the same branch share one group, so an `[ai-autofix]` push can cancel the active PR autofix run and a PR-open can queue behind a stale push run.\n  WHY: Reviewers agreed that gating `cancel-in-progress` on push is insufficient because the group expression still resolves to the same `internal-review-claude/*` value for both event types, so GitHub Actions applies concurrency across runs that should be independent.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/internal-review.yml:47-49 | confidence=5\n  PROBLEM: Shared concurrency group key lets push-triggered `claude/**` runs cancel in-progress PR autofix runs in the same group, and also lets PR opens queue behind stale no-PR push runs.\n  WHY: `cancel-in-progress` is only gated on push, but both push and pull_request resolve to the same `internal-review-claude/*` group before job-level checks can run.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/internal-review.yml:46-52 | confidence=5\n  PROBLEM: The concurrency group key does not differentiate between `push` and `pull_request` events, allowing push-triggered runs to cancel in-progress PR runs and preserve the self-cancel race the PR claims to eliminate.\n  WHY: Both event types resolve to the same `internal-review-claude/*` group, so a push with `cancel-in-progress: true` can cancel the active PR autofix run before it dispatches the next iteration.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/internal-review.yml:48-49 | confidence=5\n  PROBLEM: Shared concurrency group key allows push runs to cancel PR runs on the same `claude/**` branch, and PR opens can also queue behind stale no-PR push runs.\n  WHY: The group key is shared between `push` and `pull_request` events, so GitHub Actions treats them as one concurrency group even though only push events have `cancel-in-progress: true`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/internal-review.yml:46-52 | confidence=5\n  PROBLEM: Shared concurrency group key `internal-review-{head_ref||ref_name}` between `push` and `pull_request` events on the same branch causes push runs to cancel running PR autofix runs and can also make PR opens queue behind stale push runs.\n  WHY: GitHub concurrency enforces one active run per group, and gating `cancel-in-progress` on `event_name == 'push'` does not segregate groups.\n- .github/workflows/review_autofix.yml:279\n  PROBLEM: None \u2014 minor log observability tweak `${PR_NUMBER:-none}` is correct and harmless; no regression or new issues.\n  WHY: N/A\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/internal-review.yml:48-49 | severity=critical | confidence=5\n  PROBLEM: Push and pull_request events on the same claude/** branch resolve to the same concurrency group key, so an `[ai-autofix]` push can cancel the in-progress PR autofix run before it completes.\n  WHY: The `cancel-in-progress` expression only gates cancellation on push events, but the shared group key still creates a collision between workflow runs that should be independent.\n- .github/workflows/review_autofix.yml:279\n  PROBLEM: None \u2014 minor log observability tweak `${PR_NUMBER:-none}` is correct and harmless; no regression or new issues.\n  WHY: N/A\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "745537d9c43842a04137b16860913b26e8e0431b876cb27f65f219f11d279b2c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2529,
+    "run_id": "25702169761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25702169761",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511232835_72b4818728",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2529,
+    "run_id": "25702169761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T23:28:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
