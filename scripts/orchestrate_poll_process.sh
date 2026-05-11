@@ -3393,7 +3393,13 @@ _list_integration_conflict_files() {
       # short-circuit cannot fire on imaginary conflicts.
       local cleaned line_count first_line stripped
       cleaned="$(printf '%s\n' "${out}" | sed '/^$/d')"
-      line_count="$(printf '%s\n' "${cleaned}" | grep -c . 2>/dev/null || echo 0)"
+      # `grep -c .` on empty stdin prints "0" but exits 1, so `|| echo 0`
+      # would APPEND a second "0" and yield the 3-char string "0\n0",
+      # breaking the numeric `-ge` test below.  Use `|| true` so grep's
+      # own count output is the only thing in line_count (Copilot
+      # review, PR #2522 line 3396).
+      line_count="$(printf '%s\n' "${cleaned}" | grep -c . 2>/dev/null || true)"
+      [[ "${line_count}" =~ ^[0-9]+$ ]] || line_count="0"
       first_line="$(printf '%s\n' "${cleaned}" | head -n 1)"
       if [ "${line_count}" -ge 2 ] \
          && printf '%s' "${first_line}" | awk '/^[0-9a-fA-F]+$/ && (length($0)==40 || length($0)==64) {exit 0} {exit 1}'; then

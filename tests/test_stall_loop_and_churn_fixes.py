@@ -1244,6 +1244,16 @@ def test_list_integration_conflict_files_rc_handling(tmp_path):
 		""")
 		r = _run_bash(script, cwd=tmp_path)
 		assert r.returncode == 0, f"[{label}] shell error: {r.stderr}\nstdout: {r.stdout}"
+		# Stderr must be free of bash arithmetic / integer-parse errors
+		# — those indicate a regression like the `grep -c . || echo 0`
+		# count-duplication bug (Copilot PR #2522 line 3396) where the
+		# function still returns the right rc but emits spurious
+		# stderr noise that would mask real failures in production
+		# logs.
+		assert "integer expression expected" not in r.stderr, (
+			f"[{label}] bash integer-parse error leaked to stderr "
+			f"(likely line_count computation regressed):\n{r.stderr}"
+		)
 		lines = r.stdout.strip().splitlines()
 		assert lines, f"[{label}] no output: stderr={r.stderr}"
 		rc_line = lines[-1]
