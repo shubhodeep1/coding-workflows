@@ -633,7 +633,11 @@ case "${RB_ACTION}" in
       # concatenated with the `|| echo '{}'` fallback, which would
       # yield invalid JSON and break the downstream `jq` parses below.
       _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-      PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
+      # GitHub's REST /pulls/{N} returns .state as one of `open` or
+      # `closed` (never `merged` — merged PRs are state=closed +
+      # merged=true). Drop the unreachable `merged` alt for clarity;
+      # this branch only acts when state=open anyway.
+      PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
       PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
       # Stop polling as soon as state is terminal or mergeability is known.
       if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
@@ -680,7 +684,9 @@ case "${RB_ACTION}" in
         _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
       done <<< "${ISSUE_NUMBERS}"
 
-      PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+      # GitHub's REST /pulls/{N} returns .state as one of `open` or
+      # `closed`; drop the unreachable `merged` alt.
+      PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
         gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
@@ -830,6 +836,19 @@ ${RB_FIX_DESC}"
       # `false` so the workflow's review-blocked fallback still fires.
       echo "judge_action=skip" >> "$GITHUB_OUTPUT"
       echo "judge_skip_reason=missing_followup_details" >> "$GITHUB_OUTPUT"
+      # Post a refusal comment so the PR audit trail explains why no
+      # action was taken. The "Decision: merge_with_followup" comment
+      # was already posted earlier in the script (before the case
+      # dispatch), and a reader scrolling through PR comments would
+      # otherwise see that decision with no follow-up explaining why
+      # nothing happened.
+      MWF_REFUSAL_COMMENT="## Review-Blocked Judge — Action Refused
+
+The judge selected **merge_with_followup** but did not provide \`followup_issue.title\` and/or \`followup_issue.body\`. Refusing the action — the whole point of \`merge_with_followup\` is to track the deferred gap, and silently downgrading to a plain merge would lose it.
+
+Leaving PR #${PR_NUMBER} in ai:review-blocked. The workflow's review-blocked fallback will fire and stall recovery / a subsequent judge run can retry."
+      gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+        -f body="${MWF_REFUSAL_COMMENT}" >/dev/null 2>&1 || true
     else
       # Poll mergeability BEFORE the label swap / follow-up creation so
       # MERGE_CONFIRMED gates every observable side effect. Unlike the
@@ -1014,6 +1033,14 @@ ${RB_FIX_DESC}"
         else
           _create_rc=$?
           echo "::error::Failed to create follow-up issue for merge_with_followup (rc=${_create_rc}; PR #${PR_NUMBER} merge confirmed but deferred gap is NOT tracked). Leaving linked issues in ai:review-blocked so stall recovery / a subsequent judge run can retry follow-up creation. Manual fallback: open an issue describing the gap and reference PR #${PR_NUMBER}."
+          # Emit structured outputs so downstream log analysis can
+          # classify this failure mode explicitly (parity with the
+          # other refusal paths). judge_handled stays at its initial
+          # `false` so the workflow's review-blocked fallback fires
+          # and the linked issues stay in ai:review-blocked for
+          # retry.
+          echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+          echo "judge_skip_reason=followup_issue_create_failed" >> "$GITHUB_OUTPUT"
           FOLLOWUP_URL=""
         fi
 
