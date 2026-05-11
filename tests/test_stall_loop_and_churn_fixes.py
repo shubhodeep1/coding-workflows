@@ -2,12 +2,36 @@
 """Function-level tests for the stall-loop, integration-churn, and
 narration-noise fixes shipped together in this PR.
 
-Each test extracts the relevant bash function(s) from
-``scripts/orchestrate_poll_process.sh`` into a temp file, sources them
-into a controlled bash subprocess with a stub state file, and asserts
-on the resulting state JSON or stdout.  This mirrors the extraction
-pattern used by ``tests/test_merge_probe.py`` so we get byte-level
-coverage of the new fixes without wiring into the full poller harness.
+Each test runs a small bash subprocess via ``_run_bash`` and asserts
+on the resulting state JSON or stdout.  Three patterns are in use,
+depending on what each test needs:
+
+  * Whole-function extraction via ``_extract_function_body`` — string-
+    slices the function definition out of
+    ``scripts/orchestrate_poll_process.sh`` (relying on the project
+    convention that bash function bodies close with ``\\n}\\n`` at
+    column 0) and embeds the source directly into a heredoc-built
+    bash script.  Used when a test needs the production function's
+    full body (e.g. ``_list_integration_conflict_files``,
+    ``normalize_stall_recovery_action``).  This differs from
+    ``tests/test_merge_probe.py`` which uses an awk-based extraction
+    that writes the function into a temp file and sources it; the
+    string-slice approach here keeps the extracted body inline so
+    bash-shim functions defined alongside it in the same heredoc
+    can stub git/jq/python3 calls.
+
+  * Inline reproduction of a small jq pipeline or shell block — used
+    when the production code path is too entangled for whole-function
+    extraction (e.g. the diagnostics-build jq, the cache-key filter,
+    the override-cap counter bump).  The test rewrites the production
+    pipeline verbatim in the heredoc and asserts on its output,
+    keeping the bash bytes in sync with the production block.
+
+  * Marker-only static assertion — used when a fix is a single line
+    or comment that's hard to behaviourally exercise without spinning
+    up the full poller harness.  ``test_production_script_contains_expected_fix_markers``
+    holds the list of stable anchors so a refactor that drops a fix
+    fails fast even when the behavioural tests above might not.
 
 Covers:
   * 1b — conflict-override cap is keyed on head_sha and flips to
