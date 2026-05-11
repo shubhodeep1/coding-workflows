@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 
 
@@ -320,6 +321,44 @@ def test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree() -> None:
 		)
 
 
+def test_clear_stale_serena_codex_config_removes_only_serena_block() -> None:
+	text = _validate_process_text()
+	cleanup_helper = "clear_stale_serena_codex_config()\n{" + text.split("clear_stale_serena_codex_config()\n{", 1)[1].split('\n\nif [ -z "${SERENA_PROJECT_PREEXISTED}" ]; then', 1)[0]
+
+	with tempfile.TemporaryDirectory(prefix="validate-serena-config-") as td:
+		root = Path(td)
+		home = root / "home"
+		config_path = home / ".codex" / "config.toml"
+		config_path.parent.mkdir(parents=True, exist_ok=True)
+		config_path.write_text(
+			'model_reasoning_effort = "xhigh"\n\n'
+			'[mcp_servers.serena]\n'
+			'command = "/stale/serena"\n'
+			'args = ["start-mcp-server"]\n\n'
+			'[existing]\n'
+			'value = "keep"\n',
+			encoding="utf-8",
+		)
+
+		result = subprocess.run(
+			["bash", "-s"],
+			cwd=str(root),
+			env={**os.environ, "HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1"},
+			input="set -euo pipefail\n" + cleanup_helper + "\nclear_stale_serena_codex_config\n",
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+		assert result.returncode == 0, result.stderr
+		body = config_path.read_text(encoding="utf-8")
+		assert "[mcp_servers.serena]" not in body
+		assert tomllib.loads(body) == {
+			"model_reasoning_effort": "xhigh",
+			"existing": {"value": "keep"},
+		}
+
+
 def main() -> int:
 	test_template_mode_selection_contract_present()
 	test_render_recovery_contract_and_prompt_only_self_heal_scope()
@@ -327,6 +366,7 @@ def main() -> int:
 	test_template_mode_harness_contract_accepts_missing_validate_env()
 	test_render_recovery_lint_gate_contract_present()
 	test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree()
+	test_clear_stale_serena_codex_config_removes_only_serena_block()
 	return 0
 
 

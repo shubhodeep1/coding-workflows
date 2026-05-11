@@ -258,7 +258,7 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 		if [ -f "prompts/${_target}" ]; then
 			echo "--- prompts/${_target} ---"
 			if ! SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh "prompts/${_target}"; then
-				cat "prompts/${_target}"
+				grep -vE '^[[:space:]]*\{\{SERENA_TOOL_HINTS\}\}[[:space:]]*$' "prompts/${_target}" || true
 			fi
 			echo
 			echo "--- end prompts/${_target} ---"

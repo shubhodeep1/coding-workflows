@@ -112,8 +112,11 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 	assert 'write_github_env_value()' in text
 	assert 'env_is_truthy()' in text
 	assert 'detect_serena_project_preexisting()' in text
+	assert 'clear_stale_serena_codex_config()' in text
 	assert 'build_validate_serena_tool_hints()' in text
 	assert 'ensure_serena_bootstrap()' in text
+	assert 'if ! env_is_truthy "${SERENA_ENABLED:-false}"; then\n    clear_stale_serena_codex_config' in text
+	assert 'echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."\n    clear_stale_serena_codex_config' in text
 	assert 'DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"' in text
 	assert 'SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-discover.txt' in text
 	assert 'DIAGNOSE_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "diagnose" || true)"' in text
@@ -149,6 +152,7 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	assert 'self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"' in text
 	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt' in text
 	assert 'if ! SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh "prompts/${_target}"; then' in text
+	assert "grep -vE '^[[:space:]]*\\{\\{SERENA_TOOL_HINTS\\}\\}[[:space:]]*$' \"prompts/${_target}\" || true" in text
 	assert 'append_self_heal_semble_context "${self_heal_semble_query}"' in text
 
 

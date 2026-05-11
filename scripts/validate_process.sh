@@ -282,6 +282,58 @@ detect_serena_project_preexisting()
   fi
 }
 
+clear_stale_serena_codex_config()
+{
+  local codex_config_path=""
+
+  if [ -z "${HOME:-}" ]; then
+    return 0
+  fi
+  codex_config_path="${HOME}/.codex/config.toml"
+  if [ ! -f "${codex_config_path}" ]; then
+    return 0
+  fi
+
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${codex_config_path}" <<'PY'
+from pathlib import Path
+import sys
+
+config_path = Path(sys.argv[1])
+existing = config_path.read_text(encoding="utf-8")
+lines = existing.splitlines(keepends=True)
+out = []
+i = 0
+
+def is_serena_header(line: str) -> bool:
+    stripped = line.strip()
+    return stripped == "[mcp_servers.serena]" or stripped.startswith("[mcp_servers.serena.")
+
+def is_table_header(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("[") and stripped.endswith("]")
+
+while i < len(lines):
+    if is_serena_header(lines[i]):
+        i += 1
+        while i < len(lines) and (not is_table_header(lines[i]) or is_serena_header(lines[i])):
+            i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+
+rendered = "".join(out).rstrip("\n")
+if rendered == existing.rstrip("\n"):
+    raise SystemExit(0)
+if rendered:
+    config_path.write_text(rendered + "\n", encoding="utf-8")
+else:
+    config_path.unlink()
+PY
+  then
+    echo "::warning::Failed to clear stale Serena MCP configuration from ${codex_config_path}; continuing." >&2
+  fi
+}
+
 if [ -z "${SERENA_PROJECT_PREEXISTED}" ]; then
   SERENA_PROJECT_PREEXISTED="$(detect_serena_project_preexisting)"
 fi
@@ -491,6 +543,10 @@ ensure_serena_bootstrap()
   local serena_project_hash=""
 
   if ! env_is_truthy "${SERENA_ENABLED:-false}"; then
+    clear_stale_serena_codex_config
+    SERENA_AVAILABLE="false"
+    export SERENA_AVAILABLE
+    write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
     return 0
   fi
   if env_is_truthy "${SERENA_AVAILABLE:-false}"; then
@@ -511,6 +567,7 @@ ensure_serena_bootstrap()
 
   if [ ! -f "scripts/setup_serena.sh" ]; then
     echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."
+    clear_stale_serena_codex_config
     SERENA_AVAILABLE="false"
     export SERENA_AVAILABLE
     write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
