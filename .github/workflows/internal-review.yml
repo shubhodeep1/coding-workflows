@@ -33,13 +33,12 @@ permissions:
   issues: write
 
 # De-duplicate review runs on the same branch. A push to claude/** and
-# a pull_request:opened/synchronize event for the same head ref would
-# otherwise both spawn a `codex-agent (claude-branch-review)` run on
-# the same commit (the `resolve-claude-branch-pr` PR-existence check
-# is evaluated at push time, so it can't see a PR opened a few seconds
-# later — see the open-then-push race documented in PR #1729). Group
-# by head branch (head_ref on PR events, ref_name on push) and cancel
-# the older run; the latest event wins, which is what reviewers want.
+# a pull_request:opened/synchronize event for the same head ref can both
+# arrive around PR creation time. PR-backed claude/** branches now use the
+# same full autofix loop as every other PR, so do not cancel in-progress PR
+# runs on autofix pushes; otherwise the [ai-autofix] synchronize event can
+# kill the run before its continuation dispatch. Only the no-PR push route
+# cancels stale in-flight reviewer-comment runs.
 #
 # workflow_dispatch is keyed separately on inputs.pr_number, because on
 # manual dispatch head_ref is empty and ref_name is the workflow's ref
@@ -47,7 +46,7 @@ permissions:
 # re-triggers for different PRs would cancel each other.
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('internal-review-dispatch-pr-{0}', github.event.inputs.pr_number) || format('internal-review-{0}', github.head_ref || github.ref_name) }}
-  cancel-in-progress: ${{ startsWith(github.head_ref || github.ref_name, 'claude/') }}
+  cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'claude/') }}
 
 jobs:
   review:
