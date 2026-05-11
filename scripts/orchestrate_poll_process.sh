@@ -3331,15 +3331,25 @@ _refresh_integration_resolver_tooling() {
 # Returns 0 if healing progressed (dispatch queued, cooldown active,
 # or judge invoked), 1 if the circuit breaker has tripped and the
 # state was marked failed.
-# _list_integration_conflict_files — enumerate the filenames that would
-# conflict if <default_branch> were merged into <integration_branch>.
-# Uses ``git merge-tree --write-tree --name-only`` for a stateless
-# three-way merge probe (same technique as probe_sibling_merge_conflicts
-# at line 304+).  Echoes one file path per line on stdout; returns 0
-# when conflicts were detected, 1 otherwise (including unavailable git
-# version, missing refs, or a clean merge).  Used by
-# heal_integration_branch_conflict (Q2c) to short-circuit the first-line
-# resolver on hot-file collisions.
+# _list_integration_conflict_files — enumerate the filenames that
+# would conflict when reconciling <integration_branch> with
+# <default_branch>.  The git invocation is
+# `git merge-tree --write-tree --name-only <default_branch> <integration_branch>`,
+# which technically computes "merge integration_branch INTO
+# default_branch", but the conflict-FILES set is symmetric (the
+# same paths conflict regardless of which side is the "target"),
+# so the function's contract — "would these branches reconcile
+# cleanly?" — applies in either direction.  Used by
+# heal_integration_branch_conflict (Q2c) where the goal is to
+# bring default_branch's history into integration_branch; the
+# function tells us which files block that merge.  Echoes one file
+# path per line on stdout; returns 0 when conflicts were detected,
+# 1 otherwise (including unavailable git version, missing refs, a
+# clean merge, or a probe failure — fail-open).  The technique
+# mirrors probe_sibling_merge_conflicts (~line 304); both invoke
+# the same stateless three-way `git merge-tree` probe.  Used by
+# heal_integration_branch_conflict (Q2c) to short-circuit the
+# first-line resolver on hot-file collisions.
 _list_integration_conflict_files() {
   local integration_branch="$1"
   local default_branch="$2"
