@@ -55,6 +55,7 @@ def _step_run_text(step_name: str) -> str:
 def test_semble_repo_var_defaults_true() -> None:
 	workflow = _workflow_text()
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
+	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
 
 
 def test_runtime_workspace_exports_fail_open_semble_defaults() -> None:
@@ -62,6 +63,22 @@ def test_runtime_workspace_exports_fail_open_semble_defaults() -> None:
 	assert 'echo "SEMBLE_AVAILABLE=false"' in workspace_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block
 	assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workspace_block
+	assert 'echo "SERENA_AVAILABLE=false"' in workspace_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false"' in workspace_block
+	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH="' in workspace_block
+
+
+def test_stage_workflow_support_files_bootstraps_serena_assets() -> None:
+	stage_block = _step_run_text("Stage workflow support files")
+	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_block
+	assert 'mkdir -p scripts/templates' in stage_block
+	assert 'scripts/templates/serena_project.yml.j2' in stage_block
+	assert 'echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"' in stage_block
+	assert "Optional Serena support asset ${f} is unavailable" in stage_block
+	assert "Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable" in stage_block
+	assert 'git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2"' in stage_block
+	assert "preserving caller-owned Serena template" in stage_block
+	assert "Serena bootstrap remains disabled" in stage_block
 
 
 def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> None:
@@ -79,14 +96,15 @@ def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> Non
 
 def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 	setup_step = _step("setup-uv")
-	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'"
+	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')"
 	assert setup_step.get("continue-on-error") is True
 	assert setup_step.get("uses") == "astral-sh/setup-uv@v3"
 
 	install_step = _step("Install semble")
 	install_block = _step_run_text("Install semble")
-	assert install_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'"
+	assert install_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')"
 	assert install_step.get("continue-on-error") is True
+	assert 'if [ "${SEMBLE_ENABLED:-false}" != "true" ]; then' in install_block
 	assert "scripts/install_semble.sh" in install_block
 	assert 'if ! bash scripts/install_semble.sh; then' in install_block
 	assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block
@@ -121,6 +139,9 @@ def test_repair_prompt_appends_bounded_semble_context() -> None:
 	assert 'REPAIR_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/post_codex_repair_semble_query.txt"' in repair_block
 	assert 'build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"' in repair_block
 	assert 'semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true' in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
+	assert 'Keep apply_patch as the primary write path' in repair_block
 
 
 def test_diagnose_prompt_appends_bounded_semble_context() -> None:
@@ -131,6 +152,42 @@ def test_diagnose_prompt_appends_bounded_semble_context() -> None:
 	assert 'DIAGNOSE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/implement_diagnose_semble_query.txt"' in diagnose
 	assert 'build_diagnose_semble_query "${DIAGNOSE_SEMBLE_QUERY_FILE}"' in diagnose
 	assert 'semble_query_block "$(cat "${DIAGNOSE_SEMBLE_QUERY_FILE}")" 6 "Implement Diagnose Context" || true' in diagnose
+	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}"' in diagnose
+
+
+def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() -> None:
+	workflow = _workflow_text()
+	setup_step = _step("Setup Serena")
+	setup_block = _step_run_text("Setup Serena")
+	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SERENA_ENABLED == 'true'"
+	assert setup_step.get("continue-on-error") is True
+	assert 'bash scripts/setup_serena.sh' in setup_block
+	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in setup_block
+	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block
+	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena")
+	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena")
+
+
+def test_detect_preexisting_serena_project_config_runs_after_checkout() -> None:
+	workflow = _workflow_text()
+	detect_step = _step("Detect preexisting Serena project config")
+	detect_block = _step_run_text("Detect preexisting Serena project config")
+	assert detect_step.get("if") == "env.SKIP_IMPLEMENT != 'true'"
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"' in detect_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"' in detect_block
+	assert workflow.find("- name: Checkout repository") < workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Log checkout ref")
+
+
+def test_emit_serena_stats_runs_before_cleanup_and_scans_implement_logs() -> None:
+	workflow = _workflow_text()
+	stats_step = _step("Emit Serena stats")
+	stats_block = _step_run_text("Emit Serena stats")
+	assert stats_step.get("if") == "always() && env.SKIP_IMPLEMENT != 'true'"
+	assert stats_step.get("continue-on-error") is True
+	assert 'python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"' in stats_block
+	assert "post_codex_repair_log_attempt_*.txt" in stats_block
+	assert workflow.find("- name: Emit Serena stats") < workflow.find("- name: Cleanup temporary artifacts")
 
 
 def main() -> int:

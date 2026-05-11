@@ -39,6 +39,7 @@ def _render_prompt(
     semble_prefetch: str | None,
     *,
     allow_workflow_edits: str | None = None,
+    serena_tool_hints: str | None = None,
     extra_env: dict[str, str | None] | None = None,
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="judge_semble_render_") as td:
@@ -59,6 +60,10 @@ def _render_prompt(
             env.pop("SEMBLE_PREFETCH", None)
         else:
             env["SEMBLE_PREFETCH"] = semble_prefetch
+        if serena_tool_hints is None:
+            env.pop("SERENA_TOOL_HINTS", None)
+        else:
+            env["SERENA_TOOL_HINTS"] = serena_tool_hints
 
         proc = subprocess.run(
             ["bash", str(RENDER_PROMPT), str(prompt_file)],
@@ -80,8 +85,10 @@ def test_render_prompt_replaces_semble_prefetch_and_existing_placeholder() -> No
     render_prompt = _read(RENDER_PROMPT)
     assert '"{{WORKFLOW_EDIT_RESTRICTION}}")' in render_prompt
     assert '"{{SEMBLE_PREFETCH}}")' in render_prompt
+    assert '"{{SERENA_TOOL_HINTS}}")' in render_prompt
     assert "Unresolved WORKFLOW_EDIT_RESTRICTION placeholder" in render_prompt
     assert "Unresolved SEMBLE_PREFETCH placeholder" in render_prompt
+    assert "Unresolved SERENA_TOOL_HINTS placeholder" in render_prompt
 
     rendered = _render_prompt(
         "Header\n{{SEMBLE_PREFETCH}}\n{{WORKFLOW_EDIT_RESTRICTION}}\nFooter\n",
@@ -153,6 +160,40 @@ def test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string() -> 
 
     assert "{{SEMBLE_PREFETCH}}" not in rendered
     assert rendered == "Before\n\nAfter\n"
+
+
+def test_render_prompt_replaces_serena_tool_hints_placeholder_verbatim() -> None:
+    rendered = _render_prompt(
+        "Before\n{{SERENA_TOOL_HINTS}}\nAfter\n",
+        "",
+        serena_tool_hints="Serena hints:\n- use find_symbol\n- keep apply_patch primary",
+    )
+
+    assert rendered == (
+        "Before\n"
+        "Serena hints:\n"
+        "- use find_symbol\n"
+        "- keep apply_patch primary\n"
+        "After\n"
+    )
+
+
+def test_render_prompt_drops_serena_tool_hints_placeholder_when_empty_or_unset() -> None:
+    rendered_unset = _render_prompt("Before\n{{SERENA_TOOL_HINTS}}\nAfter\n", "", serena_tool_hints=None)
+    rendered_empty = _render_prompt("Before\n{{SERENA_TOOL_HINTS}}\nAfter\n", "", serena_tool_hints="")
+
+    assert rendered_unset == "Before\n\nAfter\n"
+    assert rendered_empty == "Before\n\nAfter\n"
+
+
+def test_render_prompt_leaves_nonstandalone_serena_marker_text_unchanged() -> None:
+    rendered = _render_prompt(
+        "Before {{SERENA_TOOL_HINTS}} After\n",
+        "",
+        serena_tool_hints="Serena hints:\n- use find_symbol",
+    )
+
+    assert rendered == "Before {{SERENA_TOOL_HINTS}} After\n"
 
 
 def test_render_prompt_extra_env_none_unsets_inherited_workflow_flag() -> None:
@@ -312,8 +353,11 @@ def main() -> int:
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty()
     test_render_prompt_resolves_workflow_and_semble_placeholders_together()
     test_render_prompt_drops_semble_prefetch_placeholder_when_empty_string()
+    test_render_prompt_replaces_serena_tool_hints_placeholder_verbatim()
+    test_render_prompt_drops_serena_tool_hints_placeholder_when_empty_or_unset()
     test_render_prompt_extra_env_none_unsets_inherited_workflow_flag()
     test_render_prompt_leaves_nonstandalone_semble_marker_text_unchanged()
+    test_render_prompt_leaves_nonstandalone_serena_marker_text_unchanged()
     test_render_prompt_preserves_workflow_edit_restriction_contract()
     test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges()
     test_live_judge_templates_expose_semble_placeholder()
