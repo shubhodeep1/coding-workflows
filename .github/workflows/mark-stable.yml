@@ -225,6 +225,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
       - name: Prompt files integrity
         run: |

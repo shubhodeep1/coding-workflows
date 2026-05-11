@@ -194,6 +194,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
 
+      - name: Review autofix EDITOR_CHANGES_LOST shim regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
+
       - name: Review autofix failure-log upload contract test
         run: |
           set -euo pipefail
@@ -218,6 +223,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
+
+      - name: Review conflict-resolve reasoning step-down contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
       - name: Review apply-fixes smoke deterministic contract test
         run: |

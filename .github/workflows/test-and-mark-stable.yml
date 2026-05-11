@@ -3214,6 +3214,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
       - name: Prompt files integrity
         run: |
@@ -4404,8 +4405,11 @@ jobs:
             # Success: the implement phase produced a PR and either is
             # mid-review or done. The alt-model gate doesn't need to wait
             # for review_autofix — that's already covered by the main e2e.
-            if echo "${LABELS}" | grep -qE 'ai:in-review|ai:ready-to-merge|ai:merged'; then
-              echo "✓ Alt-model run reached review/merge stage"
+            # `ai:done` is the canonical "implement PR created" terminal for
+            # this gate (set in implement.yml after create_pr); `ai:in-review`
+            # is retained for forward-compat but is not currently emitted.
+            if echo "${LABELS}" | grep -qE 'ai:done|ai:in-review|ai:ready-to-merge|ai:merged'; then
+              echo "✓ Alt-model run reached implement-done/review/merge stage"
               exit 0
             fi
             if echo "${LABELS}" | grep -qE 'ai:clarify-failed|ai:plan-failed|ai:implement-failed'; then
