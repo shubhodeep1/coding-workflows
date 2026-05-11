@@ -371,12 +371,10 @@ probe_sibling_merge_conflicts()
 	if ! command -v git >/dev/null 2>&1; then
 		return 0
 	fi
-	# Availability check: modern git (>= 2.38) prints a usage line
-	# containing "--write-tree" on stderr when invoked with no args.
-	# We deliberately avoid `git merge-tree --help` because the help
-	# pager requires man pages which are absent on minimized images
-	# (including the standard ubuntu-latest runner when trimmed).
-	if ! git merge-tree 2>&1 | grep -q -- '--write-tree'; then
+	# Availability check: run the modern merge-tree mode directly instead
+	# of grepping help text, which exits non-zero under `set -o pipefail`
+	# on many git builds when invoked without refs.
+	if ! git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
 		echo "  [merge-probe] git merge-tree --write-tree unavailable; skipping probe for PR #${candidate_pr}."
 		return 0
 	fi
@@ -3318,7 +3316,7 @@ _list_integration_conflict_files() {
 
   [ -n "${integration_branch}" ] && [ -n "${default_branch}" ] || return 1
   command -v git >/dev/null 2>&1 || return 1
-  if ! git merge-tree 2>&1 | grep -q -- '--write-tree'; then
+  if ! git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
     return 1
   fi
 
@@ -5168,15 +5166,19 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
 recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
+  local effective_max_recoveries="${MAX_STALL_RECOVERIES_PER_ISSUE}"
 
   [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
-  if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
+  if [ "${phase}" = "ai:done" ]; then
+    effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
+  fi
+  if [ "${recovery_count}" -ge "${effective_max_recoveries}" ]; then
     echo "skip"
     return
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_stall_recovery_action
@@ -5468,8 +5470,9 @@ STALL_EOF
           # MAX_BUDGET_NEUTRAL_OVERRIDES so the stall ladder can advance.
           # head_sha changes on every new commit, so once the resolver
           # pushes a fix, the counter restarts for the new sha.
+          local _rtr_dispatched="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
           STALL_RECOVERY_SHOULD_INCREMENT="false"
-          if [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+          if [ "${_rtr_dispatched}" = "true" ] && [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
             local _rtr_override_count
             _rtr_override_count="$(jq -r --arg sha "${_rtr_head_sha}" '.conflict_override_count[$sha] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
             [[ "${_rtr_override_count}" =~ ^[0-9]+$ ]] || _rtr_override_count="0"
@@ -5909,13 +5912,15 @@ invoke_stall_judge() {
 
   # Judge decision cache (Q1d): memoise judge output by
   # sha256({issue_num, head_sha, phase, last_conclusion,
-  # recent_comments_hash}). When the same inputs reproduce, replay the
+  # recent_comments_hash_excluding_prior_stall_judge_comments}). When the same
+  # inputs reproduce, replay the
   # cached action instead of burning a fresh LLM call.  After
   # MAX_JUDGE_REPLAY consecutive replays without
   # progress, bypass the cache and escalate so the issue isn't stuck on a
   # bad decision forever. The cache is only consulted when STATE_FILE
   # exists; missing-state cycles fall through to the LLM path.
   local _judge_last_conclusion=""
+  local _judge_cacheable_comments='[]'
   local _judge_recent_comments_hash=""
   local _judge_cache_key=""
   local _judge_cache_hit_action=""
@@ -5923,7 +5928,8 @@ invoke_stall_judge() {
   local _judge_force_escalate="false"
   if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
     _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
-    _judge_recent_comments_hash="$(printf '%s' "${recent_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    _judge_cacheable_comments="$(printf '%s' "${recent_comments}" | jq -c '[.[] | select(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge")) | not)]' 2>/dev/null || echo '[]')"
+    _judge_recent_comments_hash="$(printf '%s' "${_judge_cacheable_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
     _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
     if [ -n "${_judge_cache_key}" ]; then
       _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
@@ -6114,7 +6120,11 @@ invoke_stall_judge() {
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
   local effective_action
-  effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+  if [ "${_judge_force_escalate}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
+    effective_action="escalate_human"
+  else
+    effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+  fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -7128,6 +7138,7 @@ PY
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
         local _std_conflict_head_sha=""
         local _std_override_count="0"
+        local _std_next_count="0"
         local _std_consume_budget="false"
         _std_conflict_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // .headRefOid // empty)' 2>/dev/null || echo "")"
         if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
@@ -7137,23 +7148,24 @@ PY
             echo "  [standalone-stall] Issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} head_sha ${_std_conflict_head_sha} has hit budget-neutral override cap (${_std_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
             _std_consume_budget="true"
           fi
-          local _std_next_count=$(( _std_override_count + 1 ))
-          updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_next_count}" '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || echo "${updated_state}")"
+          _std_next_count=$(( _std_override_count + 1 ))
         fi
-		if [ "${_std_consume_budget}" = "true" ]; then
-		  updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
-			.stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
-			| .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
-			| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
-			| .status_since_ts = $now
-			| .updated_ts = $now
-		  ')
-		  "
-		fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
           0)
+            if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
+              updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_next_count}" '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || echo "${updated_state}")"
+            fi
+			if [ "${_std_consume_budget}" = "true" ]; then
+			  updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
+				.stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+				| .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+				| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+				| .status_since_ts = $now
+				| .updated_ts = $now
+			  ' 2>/dev/null || echo "${updated_state}")"
+			fi
             echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver instead of '${action}'."
             echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=dispatch_conflict_resolver override_from=${action}"
             tg_notify_issue "${issue_num}" "Standalone stall recovery: PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver (phase=${phase}, stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
@@ -7421,8 +7433,7 @@ REISSUE_EOF
 			| .stall_recovery_count = 0
 			| .phase_attempts = {}
 			| .updated_ts = $now
-		  ')
-		  "
+		  ' 2>/dev/null || echo "${updated_state}")"
 		  write_standalone_state_json "${new_num}" "${new_state}" ""
 		  tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
 		else
@@ -7434,8 +7445,7 @@ REISSUE_EOF
 				| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
 				| .status_since_ts = $now
 				| .updated_ts = $now
-			  ')
-			  "
+			  ' 2>/dev/null || echo "${updated_state}")"
 		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
 		fi
 		took_action="true"
@@ -7512,8 +7522,7 @@ REISSUE_EOF
 			 else . end)
 			| .status_since_ts = $now
 			| .updated_ts = $now
-	      ')
-	      "
+	      ' 2>/dev/null || echo "${updated_state}")"
       write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
     fi
   done
