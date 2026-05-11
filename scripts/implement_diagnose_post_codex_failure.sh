@@ -118,7 +118,7 @@ lines = text.splitlines(keepends=True)
 first_table_idx = len(lines)
 for idx, line in enumerate(lines):
     stripped = line.lstrip()
-    if stripped.startswith("[") and stripped.rstrip().endswith("]"):
+    if re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped):
         first_table_idx = idx
         break
 

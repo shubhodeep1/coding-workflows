@@ -1126,6 +1126,7 @@ def test_diagnose_reasoning_patch_preserves_serena_mcp_block() -> None:
 	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
 	assert "top_level_lines = lines[:first_table_idx]" in diagnose
 	assert "rest_lines = lines[first_table_idx:]" in diagnose
+	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in diagnose
 	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in diagnose
 	assert "[mcp_servers.serena]" not in diagnose.split("patch_diagnose_reasoning_into_config()", 1)[1].split("patch_diagnose_reasoning_into_config", 1)[0], (
 		"Diagnose reasoning patch must update only the top-level model_reasoning_effort key without inlining Serena table rewrites"
@@ -1138,8 +1139,28 @@ def test_repair_reasoning_patch_preserves_serena_mcp_block() -> None:
 	assert "\nfrom pathlib import Path\n" in repair_patcher
 	assert "top_level_lines = lines[:first_table_idx]" in repair_patcher
 	assert "rest_lines = lines[first_table_idx:]" in repair_patcher
+	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in repair_patcher
 	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in repair_patcher
 	assert "[mcp_servers.serena]" not in repair_patcher
+
+
+def test_repair_reasoning_heredoc_is_column_zero_after_yaml_strip() -> None:
+	block = _step_block("Attempt post-Codex syntax repair")
+	run_idx = next(i for i, line in enumerate(block) if line.strip() == "run: |")
+	run_indent = len(block[run_idx]) - len(block[run_idx].lstrip(" "))
+	opener_idx = next(
+		i for i, line in enumerate(block)
+		if 'PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<\'PY\'' in line
+	)
+	body_line = block[opener_idx + 1]
+	terminator_idx = next(i for i in range(opener_idx + 1, len(block)) if block[i].strip() == "PY")
+	terminator_line = block[terminator_idx]
+	assert len(body_line) - len(body_line.lstrip(" ")) == run_indent + 2, (
+		"Repair heredoc Python must be flush with the run-block base indent so YAML stripping leaves Python at column 0"
+	)
+	assert len(terminator_line) - len(terminator_line.lstrip(" ")) == run_indent + 2, (
+		"Repair heredoc terminator must share the run-block base indent so bash terminates <<'PY' correctly"
+	)
 
 
 def test_codex_pre_baseline_captured_before_retry_loop() -> None:
@@ -1230,6 +1251,12 @@ def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_i
 	assert 'SERENA_PROJECT_BOOTSTRAP_HASH' in _workflow_text(), (
 		"Workflow must export a Serena bootstrap hash for runtime-noise filtering"
 	)
+	assert "bootstrap-owned .serena/ state" in codex_block, (
+		"Runtime-noise filter should document that bootstrap-owned .serena state is filtered together"
+	)
+	assert "*' .serena/'*|*' .serena')" in codex_block, (
+		"Run Codex implementation must filter bootstrap-owned .serena directory entries, not only project.yml"
+	)
 	assert 'current_hash="$(sha256sum .serena/project.yml' in codex_block, (
 		"Run Codex implementation must hash .serena/project.yml when deciding whether it is only runtime noise"
 	)
@@ -1243,6 +1270,33 @@ def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_i
 	)
 	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_block, (
 		"Commit cleanup must preserve .serena/project.yml when Codex changed it"
+	)
+	assert 'rm -rf .serena' in commit_block, (
+		"Commit cleanup must remove the full bootstrap-owned .serena directory once the project hash still matches"
+	)
+
+
+def test_serena_preexistence_detection_runs_after_checkout() -> None:
+	workflow = _workflow_text()
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false"' in _step_block_text("Create runtime workspace"), (
+		"Runtime workspace should default Serena preexistence to false until checkout makes the repo visible"
+	)
+	detect_block = _step_block_text("Detect preexisting Serena project config")
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_block, (
+		"Serena preexistence detection must query the checked-out repo, not the pre-checkout workspace"
+	)
+	assert workflow.find("- name: Checkout repository") < workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena"), (
+		"Serena preexistence detection must run after checkout and before Setup Serena records bootstrap hashes"
+	)
+
+
+def test_stage_support_files_preserves_consumer_owned_serena_template() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	assert 'elif [ "${is_self_repo}" = "false" ] && git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2" >/dev/null 2>&1; then' in stage_block, (
+		"Stage workflow support files must preserve a consumer-owned Serena template instead of overwriting it"
+	)
+	assert "preserving caller-owned Serena template" in stage_block, (
+		"Preserved consumer Serena templates should emit an audit notice"
 	)
 
 

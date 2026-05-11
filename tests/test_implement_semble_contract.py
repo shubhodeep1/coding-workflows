@@ -64,7 +64,7 @@ def test_runtime_workspace_exports_fail_open_semble_defaults() -> None:
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block
 	assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workspace_block
 	assert 'echo "SERENA_AVAILABLE=false"' in workspace_block
-	assert 'echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"' in workspace_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false"' in workspace_block
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH="' in workspace_block
 
 
@@ -76,6 +76,8 @@ def test_stage_workflow_support_files_bootstraps_serena_assets() -> None:
 	assert 'echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"' in stage_block
 	assert "Optional Serena support asset ${f} is unavailable" in stage_block
 	assert "Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable" in stage_block
+	assert 'git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2"' in stage_block
+	assert "preserving caller-owned Serena template" in stage_block
 	assert "Serena bootstrap remains disabled" in stage_block
 
 
@@ -163,6 +165,18 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in setup_block
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block
 	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena")
+	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena")
+
+
+def test_detect_preexisting_serena_project_config_runs_after_checkout() -> None:
+	workflow = _workflow_text()
+	detect_step = _step("Detect preexisting Serena project config")
+	detect_block = _step_run_text("Detect preexisting Serena project config")
+	assert detect_step.get("if") == "env.SKIP_IMPLEMENT != 'true'"
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"' in detect_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"' in detect_block
+	assert workflow.find("- name: Checkout repository") < workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Log checkout ref")
 
 
 def test_emit_serena_stats_runs_before_cleanup_and_scans_implement_logs() -> None:

@@ -102,12 +102,6 @@ jobs:
           RUNTIME_DIR="/tmp/codex-implement-${GITHUB_RUN_ID}"
           mkdir -p "${RUNTIME_DIR}"
 
-          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
-            serena_project_preexisted="true"
-          else
-            serena_project_preexisted="false"
-          fi
-
           {
             echo "JOB_START_EPOCH=$(date +%s)"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
@@ -115,7 +109,7 @@ jobs:
             echo "SEMBLE_INDEX_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
             echo "SERENA_AVAILABLE=false"
-            echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"
+            echo "SERENA_PROJECT_PREEXISTED=false"
             echo "SERENA_PROJECT_BOOTSTRAP_HASH="
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"
@@ -349,6 +343,16 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+      - name: Detect preexisting Serena project config
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
+            echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"
+          else
+            echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Log checkout ref
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -478,6 +482,8 @@ jobs:
           fi
           if [ ! -f "${serena_template_src}" ]; then
             echo "::notice::Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable on ${SCRIPT_REF}; Serena bootstrap remains disabled."
+          elif [ "${is_self_repo}" = "false" ] && git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2" >/dev/null 2>&1; then
+            echo "::notice::Consumer repo already tracks scripts/templates/serena_project.yml.j2; preserving caller-owned Serena template."
           else
             install -m 0644 "${serena_template_src}" "scripts/templates/serena_project.yml.j2"
             if [ "${is_self_repo}" = "false" ]; then
@@ -1205,13 +1211,14 @@ jobs:
 
           # Filter workflow-generated Serena runtime artifacts from the
           # baseline/no-op detector only when the repo did not already own the
-          # file before bootstrap. That keeps .serena/project.yml from looking
+          # Serena project config before bootstrap and that config stayed
+          # unchanged. That keeps bootstrap-owned .serena/ state from looking
           # like a Codex edit while still preserving repo-owned .serena files.
           filter_runtime_status_noise() {
             local line current_hash
             while IFS= read -r line; do
               case "${line}" in
-                *' .serena/project.yml')
+                *' .serena/'*|*' .serena')
                   if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
                      [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
                      [ -f .serena/project.yml ]; then
@@ -2022,7 +2029,7 @@ jobs:
           first_table_idx = len(lines)
           for idx, line in enumerate(lines):
               stripped = line.lstrip()
-              if stripped.startswith("[") and stripped.rstrip().endswith("]"):
+              if re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped):
                   first_table_idx = idx
                   break
 
@@ -2488,8 +2495,7 @@ jobs:
           if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
             current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
             if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
-              rm -f .serena/project.yml
-              rmdir .serena 2>/dev/null || true
+              rm -rf .serena
             fi
           fi
 
