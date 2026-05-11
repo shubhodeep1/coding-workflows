@@ -279,7 +279,7 @@ jobs:
             case "${pr_head_ref}" in
               claude/*)
                 CLAUDE_BRANCH_REVIEW="true"
-                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW_NO_PR head_ref=${pr_head_ref} — running reviewer panel + commit-comment path because no PR exists."
+                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW_NO_PR pr=${PR_NUMBER:-none} head_ref=${pr_head_ref} — running reviewer panel + commit-comment path because no PR exists."
                 ;;
             esac
           fi
