@@ -215,7 +215,10 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block
     assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in workspace_block
 
-    assert "for f in install_semble.sh semble_helpers.sh; do" in stage_block
+    # build_semble_wrapper.sh added once the BM25 wrapper was extracted to a
+    # shared script (semble 0.1.3 lacks index/query CLI). Same optional-asset
+    # loop so consumer wrappers without it still fail-soft.
+    assert "for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do" in stage_block
     assert '_fetched_scripts+=("${f}")' in stage_block
     assert "Optional Semble support script ${f} is unavailable" in stage_block
     assert "legacy path remains active" in stage_block
@@ -233,11 +236,14 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
 
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in index_block
     assert 'semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"' in index_block
-    assert 'echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"' in index_block
-    assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
-    assert 'if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then' in index_block
-    assert 'if "${semble_bin}" index . --out "${semble_index_path}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then' in index_block
-    assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in index_block
+    # Inline `semble index . --out` was unreachable on pinned semble 0.1.3;
+    # the shared BM25 wrapper builder owns the index build now and writes
+    # SEMBLE_INDEX_AVAILABLE=true itself. Workflow stays fail-soft via its
+    # outer `if [ -f scripts/build_semble_wrapper.sh ]` guard.
+    assert 'if [ -f scripts/build_semble_wrapper.sh ]; then' in index_block
+    assert 'SEMBLE_INDEX_PATH="${semble_index_path}" \\' in index_block
+    assert 'bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1' in index_block
+    assert '"${semble_bin}" index . --out "${semble_index_path}"' not in index_block
 
     assert workflow.find("- name: setup-uv") < workflow.find("- name: Process each tracking issue")
     assert workflow.find("- name: Install semble") < workflow.find("- name: Process each tracking issue")

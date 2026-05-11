@@ -19,20 +19,26 @@ TARGET_WORKFLOWS = {
 REQUIRED_SNIPPETS = (
 	"SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}",
 	"install_semble.sh",
+	"build_semble_wrapper.sh",
 	"uses: astral-sh/setup-uv@v3",
 	"- name: Install semble",
 	"bash scripts/install_semble.sh",
 	"- name: Build semble index",
 	"SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index",
 	"SEMBLE_INDEX_AVAILABLE=false",
-	"SEMBLE_INDEX_AVAILABLE=true",
-	"semble index . --out \"${SEMBLE_INDEX_PATH}\"",
+	# Inline `semble index . --out` was unreachable on pinned semble 0.1.3
+	# (no index/query CLI surface); the BM25 wrapper builder owns the index
+	# build now and writes SEMBLE_INDEX_AVAILABLE=true on success itself.
+	"bash scripts/build_semble_wrapper.sh",
 	"env.SEMBLE_ENABLED == 'true'",
 )
 
 DISALLOWED_SNIPPETS = (
 	"semble query",
 	"source scripts/semble_helpers.sh",
+	# `semble index . --out ...` was the broken pre-extraction call; never
+	# add it back without also reverting the build_semble_wrapper.sh swap.
+	"semble index . --out",
 )
 
 

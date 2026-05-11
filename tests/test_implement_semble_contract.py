@@ -66,7 +66,11 @@ def test_runtime_workspace_exports_fail_open_semble_defaults() -> None:
 
 def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> None:
 	stage_block = _step_run_text("Stage workflow support files")
-	assert "for f in install_semble.sh semble_helpers.sh; do" in stage_block
+	# build_semble_wrapper.sh added once the validate.yml BM25 wrapper was
+	# extracted into a shared script — kept in the same optional-assets loop
+	# so callers without it (consumer wrappers tracking older @stable) still
+	# fail-soft to the legacy index path.
+	assert "for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do" in stage_block
 	assert "Optional Semble support script ${f} is unavailable" in stage_block
 	assert "legacy path remains active" in stage_block
 	assert "Optional Semble support script ${f} is not tracked in this checkout" in stage_block
@@ -74,6 +78,7 @@ def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> Non
 		line for line in stage_block.splitlines() if "for f in gh_helpers.sh" in line
 	)
 	assert "install_semble.sh" not in required_loop_line
+	assert "build_semble_wrapper.sh" not in required_loop_line
 	assert "semble_helpers.sh" not in required_loop_line
 
 
@@ -97,11 +102,19 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 	index_block = _step_run_text("Build semble index")
 	assert index_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true'"
 	assert index_step.get("continue-on-error") is True
+	# Shared BM25 wrapper builder extracted to scripts/build_semble_wrapper.sh
+	# (semble 0.1.3 lacks the index/query CLI, so the per-workflow inline
+	# wrapper was unified once and re-used here). Inline `semble index . --out`
+	# was unreachable code — delegate fully to the shared script.
+	assert 'semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"' in index_block
+	assert 'if [ -f scripts/build_semble_wrapper.sh ]; then' in index_block
+	assert 'SEMBLE_INDEX_PATH="${semble_index_path}"' in index_block
+	assert 'bash scripts/build_semble_wrapper.sh' in index_block
 	assert 'echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"' in index_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
-	assert 'if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then' in index_block
-	assert 'if "${semble_bin}" index . --out "${semble_index_path}"; then' in index_block
-	assert 'echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"' in index_block
+	# These are now responsibilities of the shared script (delegated):
+	assert '"${semble_bin}" index . --out "${semble_index_path}"' not in index_block
+	assert 'if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then' not in index_block
 
 
 def test_targeted_file_context_receives_semble_inputs() -> None:

@@ -259,7 +259,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh write_codex_config.sh; do
+          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -519,22 +519,15 @@ jobs:
         run: |
           set -euo pipefail
           : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"
-          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
-          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
-            echo "Semble unavailable; skipping index build."
-            exit 0
-          fi
-          if ! command -v semble >/dev/null 2>&1; then
-            echo "::warning::Semble binary not found on PATH after install; continuing without index."
-            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          rm -rf "${SEMBLE_INDEX_PATH}"
-          if semble index . --out "${SEMBLE_INDEX_PATH}"; then
-            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 lacks the index/query CLI).
+          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
+          # exits 0; missing-script case is handled the same way.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
           else
-            echo "::warning::Semble index build failed; continuing without index."
-            rm -rf "${SEMBLE_INDEX_PATH}"
+            echo "::notice::scripts/build_semble_wrapper.sh not staged; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
 
       - name: Create Codex config
