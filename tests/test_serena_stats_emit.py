@@ -23,6 +23,7 @@ def test_parse_serena_log_aggregates_json_and_plaintext_calls() -> None:
 {"event":"tool_call","server":"serena","tool":"find_symbol","duration_ms":12,"response_bytes":30}
 mcp tool_result server=serena tool=find_symbol ms=5 response_bytes=7
 serena.activate_project(path=/tmp/project) ms=3
+serena.tools.find_symbol(path=/tmp/project) ms=6 response_bytes=4
 ignored line
 """
 
@@ -31,6 +32,7 @@ ignored line
 	assert parsed == {
 		"activate_project": {"calls": 1, "ms": 3, "response_bytes": 0},
 		"find_symbol": {"calls": 2, "ms": 17, "response_bytes": 37},
+		"tools.find_symbol": {"calls": 1, "ms": 6, "response_bytes": 4},
 	}
 
 
@@ -45,7 +47,7 @@ def test_serena_stats_emit_cli_writes_rollups_to_stderr_only() -> None:
 			encoding="utf-8",
 		)
 		log_b.write_text(
-			'{"server":"serena","tool":"search_for_pattern","duration_ms":4,"response_bytes":11}\n',
+			'{"server":"serena","tool":"search.for=pattern","duration_ms":4,"response_bytes":11}\n',
 			encoding="utf-8",
 		)
 
@@ -62,7 +64,7 @@ def test_serena_stats_emit_cli_writes_rollups_to_stderr_only() -> None:
 		stderr_lines = [line for line in result.stderr.splitlines() if line]
 		assert stderr_lines == [
 			"SERENA_QUERY target=implement tool=find_symbol calls=2 response_bytes=12 ms=10",
-			"SERENA_QUERY target=implement tool=search_for_pattern calls=1 response_bytes=11 ms=4",
+			"SERENA_QUERY target=implement tool=search.for_pattern calls=1 response_bytes=11 ms=4",
 		]
 
 

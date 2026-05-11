@@ -7,7 +7,7 @@ SERENA_VERSION="1.2.0"
 SERENA_SPEC="serena-agent==${SERENA_VERSION}"
 SERENA_BIN_NAME="serena"
 SERENA_UV_PYTHON_BIN="${SERENA_UV_PYTHON_BIN:-python3}"
-SERENA_STARTUP_TIMEOUT_SEC="30"
+SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC:-30}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 SERENA_TEMPLATE_PATH="${SCRIPT_DIR}/templates/serena_project.yml.j2"
@@ -43,8 +43,10 @@ append_github_path()
 		*) PATH="${dir}:${PATH}" ;;
 	esac
 	if [ -n "${GITHUB_PATH:-}" ]; then
-		if ! printf '%s\n' "${dir}" >> "${GITHUB_PATH}" 2>/dev/null; then
-			log "unable to append ${dir} to GITHUB_PATH=${GITHUB_PATH}; continuing."
+		if ! grep -Fqx "${dir}" "${GITHUB_PATH}" 2>/dev/null; then
+			if ! printf '%s\n' "${dir}" >> "${GITHUB_PATH}" 2>/dev/null; then
+				log "unable to append ${dir} to GITHUB_PATH=${GITHUB_PATH}; continuing."
+			fi
 		fi
 	fi
 }
@@ -101,7 +103,6 @@ binary_matches_pin()
 	local version_pattern=""
 
 	version_text="$(current_serena_version)" || return 1
-	version_text="${version_text%%$'\n'*}"
 	version_pattern="${SERENA_VERSION//./\\.}"
 	if printf '%s\n' "${version_text}" | grep -Eq "(^|[^0-9.])${version_pattern}([^0-9.]|$)"; then
 		return 0
@@ -118,6 +119,7 @@ clear_serena_codex_config()
 
 	SERENA_CONFIG_PATH="${HOME}/.codex/config.toml" \
 	SERENA_BLOCK_COMMAND="" \
+	SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC}" \
 	PYTHONDONTWRITEBYTECODE=1 \
 	"${SERENA_UV_PYTHON_BIN}" - <<'PY'
 from __future__ import annotations
@@ -162,15 +164,23 @@ def strip_serena_block(text: str) -> str:
 
 config_path = Path(os.environ["SERENA_CONFIG_PATH"])
 command_path = os.environ.get("SERENA_BLOCK_COMMAND", "")
+raw_timeout = os.environ.get("SERENA_STARTUP_TIMEOUT_SEC", "").strip()
 existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
 rendered = strip_serena_block(existing)
+
+try:
+	startup_timeout = int(raw_timeout)
+except ValueError:
+	startup_timeout = 30
+if startup_timeout <= 0:
+	startup_timeout = 30
 
 if command_path:
 	block_lines = [
 		"[mcp_servers.serena]",
 		f"command = {json.dumps(command_path)}",
 		'args = ["start-mcp-server", "--context=codex", "--project-from-cwd", "--transport", "stdio"]',
-		"startup_timeout_sec = 30",
+		f"startup_timeout_sec = {startup_timeout}",
 	]
 	block = "\n".join(block_lines)
 	if rendered:
@@ -202,6 +212,7 @@ write_serena_codex_config()
 
 	SERENA_CONFIG_PATH="${HOME}/.codex/config.toml" \
 	SERENA_BLOCK_COMMAND="${serena_bin}" \
+	SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC}" \
 	PYTHONDONTWRITEBYTECODE=1 \
 	"${SERENA_UV_PYTHON_BIN}" - <<'PY'
 from __future__ import annotations
@@ -246,13 +257,22 @@ def strip_serena_block(text: str) -> str:
 
 config_path = Path(os.environ["SERENA_CONFIG_PATH"])
 command_path = os.environ["SERENA_BLOCK_COMMAND"]
+raw_timeout = os.environ.get("SERENA_STARTUP_TIMEOUT_SEC", "").strip()
 existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
 rendered = strip_serena_block(existing)
+
+try:
+	startup_timeout = int(raw_timeout)
+except ValueError:
+	startup_timeout = 30
+if startup_timeout <= 0:
+	startup_timeout = 30
+
 block_lines = [
 	"[mcp_servers.serena]",
 	f"command = {json.dumps(command_path)}",
 	'args = ["start-mcp-server", "--context=codex", "--project-from-cwd", "--transport", "stdio"]',
-	"startup_timeout_sec = 30",
+	f"startup_timeout_sec = {startup_timeout}",
 ]
 block = "\n".join(block_lines)
 

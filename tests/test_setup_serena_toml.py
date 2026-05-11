@@ -105,7 +105,10 @@ def test_setup_serena_emits_parser_valid_toml_and_quotes_command_path() -> None:
 			home=home,
 			path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
 			github_env=github_env,
-			extra_env={"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_happy.py")},
+			extra_env={
+				"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_happy.py"),
+				"SERENA_STARTUP_TIMEOUT_SEC": "45",
+			},
 		)
 
 		assert result.returncode == 0, result.stderr
@@ -120,7 +123,7 @@ def test_setup_serena_emits_parser_valid_toml_and_quotes_command_path() -> None:
 			"--transport",
 			"stdio",
 		]
-		assert parsed["mcp_servers"]["serena"]["startup_timeout_sec"] == 30
+		assert parsed["mcp_servers"]["serena"]["startup_timeout_sec"] == 45
 		assert f"command = {json.dumps(str(fake_serena))}" in body
 		assert body.count("[mcp_servers.serena]") == 1
 

@@ -59,7 +59,7 @@ def _sanitize_log_value(value: Any) -> str:
 	parts = text.split()
 	if not parts:
 		return "unknown"
-	return "_".join(parts)
+	return "_".join(parts).replace("=", "_")
 
 
 def _emit_probe_line(target: str, result: str, *, reason: str | None = None, detail: str | None = None, server_info: dict[str, Any] | None = None) -> None:
@@ -167,7 +167,7 @@ def validate_initialize_response(message: Any, expected_id: Any) -> dict[str, An
 			"id-mismatch",
 			f"initialize response id mismatch: expected {expected_id!r}, got {message.get('id')!r}",
 		)
-	if message.get("error") is not None:
+	if "error" in message:
 		raise ProbeError("error-response", f"initialize response contained error: {message['error']!r}")
 	result = message.get("result")
 	if not isinstance(result, dict):
@@ -226,8 +226,14 @@ def probe_initialize(command: Sequence[str], *, server_name: str = "mcp", timeou
 	except OSError as exc:
 		raise ProbeError("spawn-failed", f"unable to spawn MCP server: {exc}") from exc
 
-	assert proc.stdin is not None
-	assert proc.stdout is not None
+	stdin = proc.stdin
+	stdout = proc.stdout
+	if stdin is None or stdout is None:
+		stderr_tail = _cleanup_process(proc)
+		probe_error = ProbeError("spawn-failed", "mcp server did not provide stdio pipes")
+		if stderr_tail:
+			probe_error.stderr_tail = stderr_tail  # type: ignore[attr-defined]
+		raise probe_error
 
 	request = {
 		"jsonrpc": "2.0",
@@ -244,14 +250,18 @@ def probe_initialize(command: Sequence[str], *, server_name: str = "mcp", timeou
 	}
 
 	message_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue()
-	reader = threading.Thread(target=_reader_loop, args=(proc.stdout, message_queue), daemon=True)
+	reader = threading.Thread(target=_reader_loop, args=(stdout, message_queue), daemon=True)
 	reader.start()
 
 	try:
-		proc.stdin.write(_encode_message(request))
-		proc.stdin.flush()
+		stdin.write(_encode_message(request))
+		stdin.flush()
 	except BrokenPipeError as exc:
-		raise ProbeError("eof", f"mcp server closed stdin before initialize completed: {exc}") from exc
+		stderr_tail = _cleanup_process(proc)
+		probe_error = ProbeError("eof", f"mcp server closed stdin before initialize completed: {exc}")
+		if stderr_tail:
+			probe_error.stderr_tail = stderr_tail  # type: ignore[attr-defined]
+		raise probe_error from exc
 
 	try:
 		deadline = time.monotonic() + timeout_seconds

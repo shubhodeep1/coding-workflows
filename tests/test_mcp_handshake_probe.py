@@ -18,7 +18,7 @@ BASH_BIN = shutil.which("bash") or "bash"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from mcp_handshake_probe import ProbeError, validate_initialize_response  # noqa: E402
+from mcp_handshake_probe import ProbeError, _sanitize_log_value, validate_initialize_response  # noqa: E402
 
 
 def _run_probe(command: list[str], *, timeout: float = 1.0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -137,6 +137,32 @@ def test_validate_initialize_response_rejects_id_mismatch() -> None:
 		assert exc.reason == "id-mismatch"
 	else:
 		raise AssertionError("expected ProbeError for mismatched initialize response id")
+
+
+def test_validate_initialize_response_rejects_null_error_field() -> None:
+	try:
+		validate_initialize_response(
+			{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"error": None,
+				"result": {
+					"serverInfo": {
+						"name": "mock-serena",
+						"version": "0.0.1",
+					},
+				},
+			},
+			1,
+		)
+	except ProbeError as exc:
+		assert exc.reason == "error-response"
+	else:
+		raise AssertionError("expected ProbeError for initialize responses carrying an error field")
+
+
+def test_sanitize_log_value_replaces_equals_and_whitespace() -> None:
+	assert _sanitize_log_value("mock=serena 1") == "mock_serena_1"
 
 
 def test_probe_cli_happy_path() -> None:

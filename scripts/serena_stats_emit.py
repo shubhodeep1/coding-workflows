@@ -18,11 +18,19 @@ BYTES_KEYS = ("response_bytes", "bytes", "size_bytes")
 
 SERVER_LINE_RE = re.compile(r"(?:^|\s)(?:server|mcp_server)=serena(?:\s|$)", re.IGNORECASE)
 TOOL_LINE_RE = re.compile(r"(?:^|\s)(?:tool|tool_name)=(?P<tool>[A-Za-z0-9_./-]+)(?:\s|$)")
-SERENA_CALL_RE = re.compile(r"\bserena\.(?P<tool>[A-Za-z_][A-Za-z0-9_]*)\(")
+SERENA_CALL_RE = re.compile(r"\bserena\.(?P<tool>[A-Za-z_][A-Za-z0-9_.]*)\(")
 INT_FIELDS_RE = {
 	"ms": re.compile(r"(?:^|\s)(?:ms|duration_ms|elapsed_ms)=(?P<value>\d+)(?:\s|$)"),
 	"response_bytes": re.compile(r"(?:^|\s)(?:response_bytes|bytes|size_bytes)=(?P<value>\d+)(?:\s|$)"),
 }
+
+
+def _sanitize_log_value(value: Any) -> str:
+	text = str(value)
+	parts = text.split()
+	if not parts:
+		return "unknown"
+	return "_".join(parts).replace("=", "_")
 
 
 def _extract_nested_value(payload: Any, keys: tuple[str, ...]) -> Any | None:
@@ -112,13 +120,14 @@ def parse_serena_log(text: str) -> dict[str, dict[str, int]]:
 
 
 def emit_rollups(target: str, rollups: dict[str, dict[str, int]]) -> None:
+	safe_target = _sanitize_log_value(target)
 	for tool in sorted(
 		rollups,
 		key=lambda name: (-rollups[name]["calls"], -rollups[name]["response_bytes"], name),
 	):
 		entry = rollups[tool]
 		sys.stderr.write(
-			f"SERENA_QUERY target={target} tool={tool} calls={entry['calls']} response_bytes={entry['response_bytes']} ms={entry['ms']}\n"
+			f"SERENA_QUERY target={safe_target} tool={_sanitize_log_value(tool)} calls={entry['calls']} response_bytes={entry['response_bytes']} ms={entry['ms']}\n"
 		)
 
 
