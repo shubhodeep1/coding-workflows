@@ -319,6 +319,7 @@ def test_wave_narration_posted_when_at_least_one_actual_creation(tmp_path):
 def test_production_script_contains_expected_fix_markers():
 	"""Smoke check that the live orchestrate_poll_process.sh still has
 	the per-fix anchors so future refactors that drop them are caught."""
+	assert POLLER_SCRIPT.exists(), f"Script not found: {POLLER_SCRIPT}"
 	body = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "MAX_BUDGET_NEUTRAL_OVERRIDES" in body
 	assert "MAX_JUDGE_REPLAY" in body

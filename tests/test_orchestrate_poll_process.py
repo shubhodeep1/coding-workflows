@@ -3094,8 +3094,66 @@ def test_standalone_conflict_sweep_consumes_budget_after_override_cap():
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
 	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 1
 	assert standalone_state["conflict_override_count"]["sha416"] == 3
 	assert len([d for d in result["review_dispatches"] if str(d.get("pr_number")) == "416"]) == 1
+
+
+def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:review-blocked",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:review-blocked": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert standalone_state["phase_attempts"]["ai:review-blocked"] == 5
+	assert "ai:closed" in result["issues"]["501"]["labels"]
+	assert result["review_dispatches"] == []
+
+
+def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:done": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 6
+	assert "ai:closed" not in result["issues"]["501"]["labels"]
 
 
 

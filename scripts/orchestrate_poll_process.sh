@@ -1083,12 +1083,12 @@ fi
 # MAX_JUDGE_REPLAY caps how many consecutive cached judge decisions the
 # orchestrator will replay before forcing escalate_human. The judge
 # decision cache (see invoke_stall_judge) keyed on
-# sha256({issue_num, head_sha, phase, last_conclusion}) skips the LLM
-# call when the same inputs reproduce — but if the cached decision is
-# wrong (the judge picked resolve_merge_conflict on a hot-file collision
-# the resolver can't fix), replaying it forever wastes budget. After
-# this many replays, the judge cache is bypassed and the issue is
-# escalated.
+# sha256({issue_num, head_sha, phase, last_conclusion,
+# recent_comments_hash}) skips the LLM call when the same inputs
+# reproduce — but if the cached decision is wrong (the judge picked
+# resolve_merge_conflict on a hot-file collision the resolver can't
+# fix), replaying it forever wastes budget. After this many replays,
+# the judge cache is bypassed and the issue is escalated.
 MAX_JUDGE_REPLAY="${MAX_JUDGE_REPLAY:-2}"
 if ! [[ "${MAX_JUDGE_REPLAY}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_JUDGE_REPLAY must be a non-negative integer; defaulting to 2"
@@ -5085,19 +5085,19 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
     return
   fi
 
@@ -5107,10 +5107,11 @@ _extract_standalone_state_json_from_comments() {
       last_seen_phase: (.last_seen_phase // ""),
       status_since_ts: ((.status_since_ts // 0) | tonumber),
       stall_recovery_count: ((.stall_recovery_count // 0) | tonumber),
+      phase_attempts: (if (.phase_attempts | type) == "object" then .phase_attempts else {} end),
       conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -6820,6 +6821,8 @@ run_standalone_stall_recovery() {
   local updated_state
   local status_since
   local recovery_count
+  local phase_attempts_count
+  local effective_max_recoveries
   local threshold_minutes
   local elapsed_minutes
   local action
@@ -6893,6 +6896,12 @@ PY
 
     status_since="$(echo "${updated_state}" | jq -r '.status_since_ts // 0')"
     recovery_count="$(echo "${updated_state}" | jq -r '.stall_recovery_count | tonumber? // 0')"
+    phase_attempts_count="$(printf '%s' "${updated_state}" | jq -r --arg phase "${phase}" '.phase_attempts[$phase] | tonumber? // 0' 2>/dev/null || echo "0")"
+    [[ "${phase_attempts_count}" =~ ^[0-9]+$ ]] || phase_attempts_count="0"
+    effective_max_recoveries="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+    if [ "${phase}" = "ai:done" ]; then
+      effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
+    fi
     threshold_minutes="$(python3 - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
 import json, sys
 sys.path.insert(0, 'scripts')
@@ -6918,7 +6927,7 @@ PY
       continue
     fi
 
-    if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
+    if [ "${recovery_count}" -ge "${effective_max_recoveries}" ] || [ "${phase_attempts_count}" -ge "${effective_max_recoveries}" ]; then
       action="skip"
     elif [ "${ENABLE_STALL_JUDGE}" = "true" ] && [ "${recovery_count}" -ge "${STALL_JUDGE_TRIGGER_COUNT}" ]; then
       action="run_stall_judge"
@@ -7132,20 +7141,26 @@ PY
           updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_next_count}" '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || echo "${updated_state}")"
         fi
         if [ "${_std_consume_budget}" = "true" ]; then
-          updated_state="$(python3 - "${updated_state}" <<'PY'
+          updated_state="$(python3 - "${updated_state}" "${phase}" <<'PY'
 import json, sys, time
 state = json.loads(sys.argv[1])
+phase = sys.argv[2]
 now = int(time.time())
 try:
 	current = int(state.get("stall_recovery_count", 0) or 0)
 except (TypeError, ValueError):
 	current = 0
 state["stall_recovery_count"] = current + 1
+phase_attempts = state.get("phase_attempts")
+if not isinstance(phase_attempts, dict):
+	phase_attempts = {}
+state["phase_attempts"] = phase_attempts
+phase_attempts[phase] = max(0, int(phase_attempts.get(phase, 0) or 0)) + 1
 state["status_since_ts"] = now
 state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
-)"
+          )"
         fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
@@ -7419,29 +7434,36 @@ now = int(time.time())
 state["last_seen_phase"] = ""
 state["status_since_ts"] = now
 state["stall_recovery_count"] = 0
+state["phase_attempts"] = {}
 state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
-)"
+          )"
           write_standalone_state_json "${new_num}" "${new_state}" ""
           tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
 		else
 		  echo "::warning::Standalone close_and_reissue failed to create replacement issue for #${issue_num}."
 		  tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
-		  failed_reissue_state="$(python3 - "$updated_state" <<'PY'
+			  failed_reissue_state="$(python3 - "$updated_state" "${phase}" <<'PY'
 import json, sys, time
 state = json.loads(sys.argv[1])
+phase = sys.argv[2]
 now = int(time.time())
 try:
     current = int(state.get("stall_recovery_count", 0) or 0)
 except (TypeError, ValueError):
     current = 0
 state["stall_recovery_count"] = current + 1
+phase_attempts = state.get("phase_attempts")
+if not isinstance(phase_attempts, dict):
+    phase_attempts = {}
+state["phase_attempts"] = phase_attempts
+phase_attempts[phase] = max(0, int(phase_attempts.get(phase, 0) or 0)) + 1
 state["status_since_ts"] = now
 state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
-)"
+			  )"
 		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
 		fi
 		took_action="true"
@@ -7509,11 +7531,12 @@ PY
         ;;
     esac
 
-    if [ "${took_action}" = "true" ] && [ "${action}" != "close_and_reissue" ]; then
-      updated_state="$(python3 - "$updated_state" "$STALL_RECOVERY_SHOULD_INCREMENT" <<'PY'
+	    if [ "${took_action}" = "true" ] && [ "${action}" != "close_and_reissue" ]; then
+	      updated_state="$(python3 - "$updated_state" "$STALL_RECOVERY_SHOULD_INCREMENT" "$phase" <<'PY'
 import json, sys, time
 state = json.loads(sys.argv[1])
 should_increment = sys.argv[2].lower() == "true"
+phase = sys.argv[3]
 now = int(time.time())
 if should_increment:
     try:
@@ -7521,11 +7544,16 @@ if should_increment:
     except (TypeError, ValueError):
         current = 0
     state["stall_recovery_count"] = current + 1
+    phase_attempts = state.get("phase_attempts")
+    if not isinstance(phase_attempts, dict):
+        phase_attempts = {}
+    state["phase_attempts"] = phase_attempts
+    phase_attempts[phase] = max(0, int(phase_attempts.get(phase, 0) or 0)) + 1
 state["status_since_ts"] = now
 state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
-)"
+	      )"
       write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
     fi
   done
