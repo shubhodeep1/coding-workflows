@@ -250,8 +250,8 @@ _pr_checks_completed()
 	# pending/failing runs on later pages and the gate would
 	# incorrectly report success. Matches the canonical pattern used
 	# elsewhere in the repo (e.g. .github/workflows/review_autofix.yml's
-	# "Collect PR check-run failures" step). Fallback to '[]' on API
-	# failure keeps the jq filter below safe under set -euo pipefail.
+	# "Collect PR check-run failures" step).
+	#
 	# Fallback to '{}' (NOT '[]') on API failure. The jq filter
 	# below has two matching branches: `type == "array"` (production
 	# --paginate --slurp shape) and the elif `type == "object" and
@@ -10229,9 +10229,12 @@ ${RB_FIX_DESC}
                 # enrollment; the trade-off is that protected-branch
                 # repos need one extra poll cycle to materialize the
                 # follow-up. Matches scripts/review_rb_judge.sh's
-                # merge_with_followup ladder so the two judge
-                # implementations stay behaviourally consistent on
-                # the same shared prompt.
+                # merge_with_followup ladder behaviourally — both
+                # paths gate on check-runs (this branch via the
+                # shared `_pr_checks_completed` helper above; the
+                # standalone via its own inline check-runs query
+                # using the same fail-closed jq filter), and both
+                # bind the merge via --match-head-commit.
                 #
                 # NOTE: gh pr merge is intentionally NOT wrapped with
                 # gh_retry — sync merge failures here are typically
