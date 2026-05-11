@@ -620,6 +620,13 @@ jobs:
 
       - name: Install semble
         if: steps.semble_gate.outputs.enabled == 'true'
+        # Defense-in-depth: install_semble.sh + the file-existence guard
+        # below are both fail-soft already (script writes
+        # SEMBLE_AVAILABLE=false on any error; missing-script branch
+        # exits 0), but the step-level guard makes the contract explicit
+        # at the step boundary — matches the pattern in
+        # implement.yml / orchestrate_poll.yml / workflow-log-analysis.yml.
+        continue-on-error: true
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |

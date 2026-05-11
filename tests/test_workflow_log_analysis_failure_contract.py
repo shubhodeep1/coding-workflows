@@ -36,9 +36,62 @@ def test_issue_context_failure_marker_and_label_contract_present() -> None:
 	assert "without tracking issue context" in wf
 
 
+def test_semble_wiring_is_consistent_across_three_codex_jobs() -> None:
+	# workflow-log-analysis.yml uses a deliberately different Semble
+	# integration pattern from the parity workflows (RUNNER_TEMP instead of
+	# RUNTIME_DIR, no shared SUPPORT_SCRIPTS_DIR, embedded prefetch via
+	# `head -c 6000 | semble_query_block` rather than a query-helper file).
+	# tests/test_semble_workflow_parity_contract.py's TARGET_WORKFLOWS
+	# list intentionally omits this workflow because its REQUIRED_SNIPPETS
+	# wouldn't fit. This test is the dedicated coverage that catches
+	# regressions in the workflow-log-analysis-style Semble wiring.
+	wf = _workflow_text()
+
+	# Workflow-level enablement: defaults to true via repo var.
+	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in wf
+
+	# Each of the 3 Codex jobs runs Install semble + Build semble index
+	# (parity tests confirm the steps' name uniqueness, so a simple count
+	# is a valid contract check).
+	assert wf.count("- name: Install semble") == 3, \
+		"workflow-log-analysis must keep an Install semble step in each of its 3 Codex jobs"
+	assert wf.count("- name: Build semble index") == 3, \
+		"workflow-log-analysis must keep a Build semble index step in each of its 3 Codex jobs"
+
+	# Defense-in-depth: both step types use the shared-script call AND
+	# continue-on-error: true (added per branch-review consensus).
+	assert wf.count("bash scripts/install_semble.sh") == 3
+	assert wf.count("bash scripts/build_semble_wrapper.sh") == 3
+	# `continue-on-error: true` appears on more than just the Semble steps,
+	# so check the script-call neighborhood is gated by it. Build semble
+	# index pins SEMBLE_INDEX_PATH explicitly to runner.temp so self-hosted
+	# runners without RUNNER_TEMP don't fall back to ${PWD}/.semble-index.
+	assert wf.count("SEMBLE_INDEX_PATH: ${{ runner.temp }}/.semble-index") == 3
+
+	# Fail-soft script-presence guard around the wrapper call (callers
+	# pinned to an older reusable workflow ref may not yet have the script).
+	assert wf.count("if [ -f scripts/build_semble_wrapper.sh ]; then") == 3
+	assert wf.count("scripts/build_semble_wrapper.sh not present") == 3
+
+	# Prefetch wiring: each job sources semble_helpers.sh, builds a query
+	# from the analysis/report file, calls semble_query_block, and pipes
+	# query bytes through iconv -c so a multi-byte split at byte 6000
+	# doesn't garble the BM25 query. Each job has TWO references to
+	# semble_query_block (one `type ...` gate plus one invocation).
+	assert wf.count("source scripts/semble_helpers.sh || true") == 3
+	assert wf.count("if type semble_query_block >/dev/null 2>&1; then") == 3
+	assert wf.count("SEMBLE_PREFETCH=\"$(semble_query_block") == 3
+	assert wf.count("iconv -f UTF-8 -t UTF-8 -c") == 3
+	# {{SEMBLE_PREFETCH}} placeholder is substituted via sed/shell-var
+	# before invoking Codex; it should never appear literally in the
+	# workflow (it lives in prompts/mode-workflow-*.txt instead).
+	assert wf.count("{{SEMBLE_PREFETCH}}") == 0
+
+
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
+	test_semble_wiring_is_consistent_across_three_codex_jobs()
 	return 0
 
 

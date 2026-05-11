@@ -432,15 +432,17 @@ jobs:
           if [ -f scripts/build_semble_wrapper.sh ]; then
             # The wrapper is documented "always exit 0" (every failure path
             # routes through mark_unavailable() which exits 0), so the prior
-            # `if !` check was dead code. Gate the diagnostic tail on a real
-            # failure signal instead: the pickle at ${semble_index_path}
-            # exists if and only if both build_index() AND write_wrapper()
-            # succeeded — mark_unavailable() now `rm -rf`s both the pickle
-            # and the wrapper binary on every failure path (so late failures
-            # like wrapper-write-failed don't suppress the tail).
+            # `if !` check was dead code. Gate the diagnostic tail on the
+            # wrapper's own failure marker in the captured log instead of on
+            # pickle absence: a cleanup-of-cleanup failure (rm -rf fails to
+            # remove the pickle inside mark_unavailable) would leave the
+            # pickle on disk and falsely suppress the tail. The "Semble
+            # wrapper unavailable: <reason>" line is written via log() to
+            # stderr before any cleanup runs, so it's always present in the
+            # captured log on failure.
             SEMBLE_INDEX_PATH="${semble_index_path}" \
               bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
-            if [ ! -f "${semble_index_path}" ]; then
+            if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
               tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
             fi
           else
