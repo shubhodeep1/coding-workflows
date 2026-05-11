@@ -32,6 +32,25 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
   }
 fi
 
+# Filter workflow-generated Serena runtime artifacts from the editor
+# no-op detector only when the repo did not already own the Serena
+# project config before bootstrap and that config stayed unchanged.
+# That keeps bootstrap-owned .serena/ state from looking like a real
+# autofix edit while still preserving repo-owned or editor-mutated
+# Serena files.
+serena_runtime_noise_should_be_ignored() {
+  local current_hash=""
+
+  if [ "${SERENA_PROJECT_PREEXISTED:-false}" = "true" ] || \
+     [ -z "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] || \
+     [ ! -f .serena/project.yml ]; then
+    return 1
+  fi
+
+  current_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+  [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]
+}
+
 # Returns 0 iff the worktree carries a non-whitespace change vs HEAD —
 # either a tracked file whose `git diff --ignore-space-at-eol
 # --ignore-blank-lines HEAD` shows a hunk, or an untracked file
@@ -48,13 +67,27 @@ fi
 # --ignore-blank-lines` is deliberate: `-w` would also drop leading-
 # whitespace changes, which are semantic in Python/YAML/Makefiles, so
 # an editor that fixes a real bug via indentation-only edits would be
-# misclassified as trivial and the fix would be discarded. Fail-open:
-# if a stat or grep probe fails for any reason other than "no match",
-# assume substantive so a flaky read can't discard real work.
+# misclassified as trivial and the fix would be discarded. The same
+# detector also filters unchanged bootstrap-owned `.serena/` state so
+# editor-only Serena bootstrap noise cannot masquerade as a real fix.
+# Fail-open: if a stat or grep probe fails for any reason other than
+# "no match", assume substantive so a flaky read can't discard real
+# work.
 worktree_has_substantive_diff() {
+  local -a pathspec=()
   if ! git diff --quiet --ignore-space-at-eol --ignore-blank-lines HEAD 2>/dev/null; then
-    return 0
+    if ! serena_runtime_noise_should_be_ignored; then
+      return 0
+    fi
   fi
+
+  if serena_runtime_noise_should_be_ignored; then
+    pathspec=(-- . ':(exclude).serena' ':(exclude).serena/**')
+    if ! git diff --quiet --ignore-space-at-eol --ignore-blank-lines HEAD "${pathspec[@]}" 2>/dev/null; then
+      return 0
+    fi
+  fi
+
   local f grep_rc
   while IFS= read -r f; do
     [ -z "${f}" ] && continue
@@ -66,7 +99,7 @@ worktree_has_substantive_diff() {
     if [ "${grep_rc}" != 1 ]; then
       return 0
     fi
-  done < <(git ls-files --others --exclude-standard 2>/dev/null)
+  done < <(git ls-files --others --exclude-standard "${pathspec[@]}" 2>/dev/null)
   return 1
 }
 
@@ -432,6 +465,8 @@ is phrased:
 This guard precedes every input artifact below because the workflow puts
 context inline (no read step required) — which is faster but means the
 guard MUST be parsed before the model encounters any untrusted content.
+
+{{SERENA_TOOL_HINTS}}
 
 INPUT FILE CONTENTS
 
@@ -844,6 +879,14 @@ __EDITOR_PROMPT__
 # finished embedding all input artifacts.  Idempotent.
 _cleanup_prompt_budget
 
+EDITOR_SERENA_TOOL_HINTS=""
+if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+  EDITOR_SERENA_TOOL_HINTS="$(printf '%s\n' \
+    'Serena hints:' \
+    '- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).' \
+    '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
+fi
+
 editor_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
@@ -852,7 +895,10 @@ editor_prompt_rendered="$(mktemp)"
   # into the editor prompt body. Set SEMBLE_PREFETCH="" so any inlined
   # placeholder lines are treated as resolved by render_prompt versions
   # that support the placeholder, instead of tripping a strict guard.
-  SEMBLE_PREFETCH="" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
+  # Pass SERENA_TOOL_HINTS through the same shared renderer so the
+  # editor-only Serena guidance is injected without a second template
+  # substitution path.
+  SEMBLE_PREFETCH="" SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
 ) > "${editor_prompt_rendered}"
 mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 
