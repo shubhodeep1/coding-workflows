@@ -3385,7 +3385,7 @@ _list_integration_conflict_files() {
       line_count="$(printf '%s\n' "${cleaned}" | grep -c . 2>/dev/null || echo 0)"
       first_line="$(printf '%s\n' "${cleaned}" | head -n 1)"
       if [ "${line_count}" -ge 2 ] \
-         && printf '%s' "${first_line}" | awk '/^[0-9a-fA-F]+$/ && (length==40 || length==64) {exit 0} {exit 1}'; then
+         && printf '%s' "${first_line}" | awk '/^[0-9a-fA-F]+$/ && (length($0)==40 || length($0)==64) {exit 0} {exit 1}'; then
         stripped="$(printf '%s\n' "${cleaned}" | tail -n +2)"
       else
         stripped="${cleaned}"
