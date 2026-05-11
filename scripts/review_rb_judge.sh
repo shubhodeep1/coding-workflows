@@ -829,7 +829,7 @@ ${RB_FIX_DESC}"
     FOLLOWUP_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
     FOLLOWUP_BODY="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
     if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
-      echo "::error::Judge chose merge_with_followup but provided no follow-up issue details (followup_issue.title or .body empty). Refusing the action — leaving PR in ai:review-blocked state for retry/fallback so the deferred gap is not lost."
+      echo "::error::Judge chose merge_with_followup but provided no follow-up issue details (followup_issue.title or .body empty). Refusing the action — leaving linked issues in ai:review-blocked for retry/fallback so the deferred gap is not lost."
       # Emit structured outputs so downstream log analysis can
       # classify this refusal explicitly (parity with the merged-PR
       # action guard above). judge_handled stays at its initial
@@ -846,7 +846,7 @@ ${RB_FIX_DESC}"
 
 The judge selected **merge_with_followup** but did not provide \`followup_issue.title\` and/or \`followup_issue.body\`. Refusing the action — the whole point of \`merge_with_followup\` is to track the deferred gap, and silently downgrading to a plain merge would lose it.
 
-Leaving PR #${PR_NUMBER} in ai:review-blocked. The workflow's review-blocked fallback will fire and stall recovery / a subsequent judge run can retry."
+Leaving the PR's linked issues in ai:review-blocked. The workflow's review-blocked fallback will fire and stall recovery / a subsequent judge run can retry."
       gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
         -f body="${MWF_REFUSAL_COMMENT}" >/dev/null 2>&1 || true
     else
@@ -914,8 +914,9 @@ Leaving PR #${PR_NUMBER} in ai:review-blocked. The workflow's review-blocked fal
       #     atomically merged.
       # Set to "false" otherwise — including the protected-branch case
       # where required checks are still pending (sync merge fails-fast
-      # in that state). The PR stays in ai:review-blocked so stall
-      # recovery re-dispatches the judge later, after checks complete;
+      # in that state). The linked issues stay ai:review-blocked so
+      # stall recovery re-dispatches the judge later, after checks
+      # complete;
       # the next run hits the PR_MERGED=true short path and creates
       # the follow-up against the now-real base ref. This eliminates
       # the orphan-follow-up risk of --auto enrollment entirely; the
@@ -946,7 +947,7 @@ Leaving PR #${PR_NUMBER} in ai:review-blocked. The workflow's review-blocked fal
         # orchestrator's existing gate (see _pr_checks_completed at
         # scripts/orchestrate_poll_process.sh:232).
         if [ -z "${PR_HEAD_SHA}" ]; then
-          echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving PR in ai:review-blocked."
+          echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
         else
           _check_runs_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '')"
           _incomplete_checks="$(printf '%s' "${_check_runs_json}" | jq -r '
@@ -957,9 +958,9 @@ Leaving PR #${PR_NUMBER} in ai:review-blocked. The workflow's review-blocked fal
             end
           ' 2>/dev/null | tail -n1)"
           if ! [[ "${_incomplete_checks}" =~ ^[0-9]+$ ]]; then
-            echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving PR in ai:review-blocked."
+            echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
           elif [ "${_incomplete_checks}" -gt 0 ]; then
-            echo "::warning::PR #${PR_NUMBER} has ${_incomplete_checks} blocking check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until all checks complete with success/neutral/skipped/cancelled. Leaving PR in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+            echo "::warning::PR #${PR_NUMBER} has ${_incomplete_checks} blocking check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until all checks complete with success/neutral/skipped/cancelled. Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation
@@ -986,16 +987,16 @@ Leaving PR #${PR_NUMBER} in ai:review-blocked. The workflow's review-blocked fal
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
             else
-              echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving PR in ai:review-blocked state — stall recovery will re-fire the judge."
+              echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
             fi
           else
-            echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
+            echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving linked issues in ai:review-blocked so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
           fi
         fi
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
-        echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving PR in ai:review-blocked state so the follow-up is not opened against unmerged code."
+        echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving linked issues in ai:review-blocked so the follow-up is not opened against unmerged code."
       else
-        echo "::warning::PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null} merged=${PR_MERGED:-false}, cannot confirm merge (mergeability still computing or PR not open). Leaving PR in ai:review-blocked state."
+        echo "::warning::PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null} merged=${PR_MERGED:-false}, cannot confirm merge (mergeability still computing or PR not open). Leaving linked issues in ai:review-blocked."
       fi
 
       if [ "${MERGE_CONFIRMED}" = "true" ]; then
