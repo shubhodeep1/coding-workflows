@@ -5,13 +5,32 @@
   "entry_id": "processed_command_2525_4423715386_approved",
   "issue_number": 2525,
   "metadata": {
+    "branch": "ai/issue-2525",
+    "changed_files": [
+      ".github/workflows/validate.yml",
+      "prompts/mode-validate-diagnose.txt",
+      "prompts/mode-validate-discover.txt",
+      "prompts/mode-validate-fix-harness.txt",
+      "prompts/mode-validate-self-heal.txt",
+      "scripts/implement_diagnose_post_codex_failure.sh",
+      "scripts/render_prompt.sh",
+      "scripts/self_heal_validation.sh",
+      "scripts/validate_process.sh",
+      "tests/test_validate_process_template_mode.py",
+      "tests/test_validate_semble_contract.py"
+    ],
+    "issue_number": 2525,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2525",
+    "pr_number": 2527,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2527",
+    "run_attempt": "1",
+    "run_id": "25689923452",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25689923452"
   },
   "run_attempt": 1,
   "run_id": "25689923452",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-11T18:41:41Z",
+  "status": "completed",
+  "timestamp": "2026-05-11T19:05:06Z",
   "workflow": "implement"
 }
