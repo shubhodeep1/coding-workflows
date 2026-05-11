@@ -782,6 +782,64 @@ def test_mark_integration_sync_clean_resets_stale_counters_even_when_already_cle
 	assert got["integration_conflict_total_dispatches"] == 7, got
 
 
+def test_normalize_stall_recovery_action_threads_phase_attempts_count_to_fallback(tmp_path):
+	"""normalize_stall_recovery_action's fallback path (when the
+	Python helper returns empty/invalid output) must forward the
+	phase_attempts_count it already received as its 4th parameter
+	to recovery_action_for_phase.  Without this threading, an
+	empty Python return left the fallback to default
+	phase_attempts_count=0 and silently bypass the phase-lifetime
+	cap (claude-branch-review, PR #2522 line 5524).
+
+	Drive normalize_stall_recovery_action through a Python helper
+	that's stubbed to return "" so the fallback path fires.
+	Confirm that with phase_attempts_count=5 (at the cap) the
+	fallback emits "skip", not the ladder action.
+	"""
+	func_src = _extract_function_body("normalize_stall_recovery_action")
+	script = textwrap.dedent(f"""
+		set -uo pipefail
+		export MAX_STALL_RECOVERIES_PER_ISSUE=5
+		export MAX_STALL_RECOVERIES_DONE=99
+		export ENABLE_STALL_HUMAN_TERMINALIZATION=false
+
+		# Stub python3 to return empty output so the Python helper
+		# inside normalize_stall_recovery_action emits "" and the
+		# fallback path is exercised.
+		python3() {{
+			# Drain stdin (the heredoc Python script) without running it.
+			cat >/dev/null
+			# Emit empty stdout to force the bash fallback below.
+			printf ''
+		}}
+		export -f python3
+
+		{func_src}
+		# Re-define recovery_action_for_phase so we can also see what
+		# the fallback receives.  Echo the args; assert downstream.
+		recovery_action_for_phase() {{
+			echo "FALLBACK_CALLED phase=$1 recovery=$2 phase_attempts=${{3:-MISSING}}"
+		}}
+		export -f recovery_action_for_phase
+
+		# 4th arg = phase_attempts_count = 5 (at cap).
+		normalize_stall_recovery_action ai:review-blocked 1 retrigger 5
+	""")
+	r = _run_bash(script, cwd=REPO_ROOT)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	output = r.stdout.strip()
+	# The fallback must have been called WITH the threaded counter,
+	# not the default 0.
+	assert "FALLBACK_CALLED" in output, f"fallback was not invoked: {output!r}"
+	assert "phase_attempts=5" in output, (
+		f"fallback must receive the threaded phase_attempts_count=5 "
+		f"(not 0): got {output!r}"
+	)
+	assert "phase_attempts=MISSING" not in output, (
+		f"fallback must NOT call recovery_action_for_phase with only 2 args: got {output!r}"
+	)
+
+
 def test_recovery_action_for_phase_threads_phase_attempts_count_to_python(tmp_path):
 	"""recovery_action_for_phase accepts an optional 3rd argument —
 	phase_attempts_count — and forwards it to

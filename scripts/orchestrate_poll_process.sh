@@ -5521,7 +5521,11 @@ PY
 )" || true
 
   if [ -z "${action}" ]; then
-    action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+    # Forward the phase-lifetime counter to the fallback helper so
+    # the phase-attempt cap fires there too — without this, an
+    # empty/invalid Python return would silently bypass the cap
+    # (claude-branch-review, PR #2522 line 5524).
+    action="$(recovery_action_for_phase "${phase}" "${recovery_count}" "${phase_attempts_count}")"
     if [ -z "${action}" ]; then
       action="retrigger_pipeline"
     fi
@@ -6139,19 +6143,21 @@ invoke_stall_judge() {
   local stall_minutes="$4"
   local local_id="${5:-}"
 
-  local fallback_action
-  fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
-
   # Look up the phase-lifetime counter for this issue (managed runs
   # only; standalone state does not carry phase_attempts).  This is
-  # used twice below: by the judge-failure / parse-error fallback
-  # branches (so a flaky judge cannot bypass an exhausted phase cap
-  # — Codex P2, PR #2522, line 1720) and by the
-  # normalize_stall_recovery_action call after a successful judge
-  # response (Copilot review, line 1527).  When phase_attempts is
-  # already at the cap, downgrade the failure-path fallback to
-  # "skip" so a transient judge crash cannot run another non-
-  # terminal recovery the cap was specifically supposed to prevent.
+  # used by:
+  #   * The fallback_action computation just below (so the initial
+  #     ladder pick respects the phase cap — claude-branch-review,
+  #     PR #2522 line 6143).
+  #   * The judge-failure / parse-error fallback branches (so a
+  #     flaky judge cannot bypass an exhausted phase cap — Codex
+  #     P2, PR #2522, line 1720).
+  #   * The normalize_stall_recovery_action call after a successful
+  #     judge response (Copilot review, line 1527).
+  # When phase_attempts is already at the cap, downgrade the
+  # failure-path fallback to "skip" so a transient judge crash
+  # cannot run another non-terminal recovery the cap was
+  # specifically supposed to prevent.
   local _judge_phase_attempts_count=0
   local _judge_phase_effective_max="${MAX_STALL_RECOVERIES_PER_ISSUE}"
   if [ "${phase}" = "ai:done" ] \
@@ -6166,6 +6172,17 @@ invoke_stall_judge() {
       "${STATE_FILE}" 2>/dev/null || echo "0")"
     [[ "${_judge_phase_attempts_count}" =~ ^[0-9]+$ ]] || _judge_phase_attempts_count=0
   fi
+
+  local fallback_action
+  # Thread the phase-lifetime counter into the fallback ladder pick
+  # so the cap fires consistently with detect_stalls' decision
+  # (claude-branch-review, PR #2522 line 6143).  This is largely
+  # belt-and-braces: the post-lookup override below explicitly
+  # forces fallback_action="skip" when the counter is at the cap,
+  # so the threaded value mostly matters when the counter is
+  # below the cap but still high enough that the Python ladder
+  # would otherwise advance one rung past it.
+  fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}" "${_judge_phase_attempts_count}")"
   # Derive a STABLE exhausted/not-exhausted boolean for the cache
   # key.  Hashing the raw _judge_phase_attempts_count would otherwise
   # invalidate the cache after every budget-consuming recovery
