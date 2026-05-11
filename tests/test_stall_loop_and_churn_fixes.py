@@ -568,6 +568,83 @@ def test_standalone_state_parser_preserves_conflict_override_count(tmp_path):
 	assert got["conflict_override_count"] == {"deadbeef0": 3, "cafebabe1": 1}, got
 
 
+def test_real_git_merge_tree_help_contains_write_tree():
+	"""Pin the real-git contract that the shim in
+	test_list_integration_conflict_files_rc_handling emulates.  The
+	production version probe runs `git merge-tree -h` and greps for
+	`--write-tree`; if a future git version drops or renames that
+	switch in its help text, the probe silently fails and the
+	hot-file short-circuit never fires.  A mock-only test would not
+	catch that, so this assertion runs against the actual git on the
+	test host and fails fast on contract drift (claude-branch-review
+	PR #2522)."""
+	r = subprocess.run(
+		["git", "merge-tree", "-h"],
+		capture_output=True,
+		text=True,
+	)
+	# Real git exits non-zero on `-h`; combine stdout+stderr because
+	# different git versions split the help text across streams.
+	combined = (r.stdout or "") + (r.stderr or "")
+	assert "--write-tree" in combined, (
+		"git merge-tree -h no longer documents --write-tree; the production "
+		"version probe in scripts/orchestrate_poll_process.sh:_list_integration_conflict_files "
+		"will silently disable the hot-file short-circuit. Update the probe "
+		"(and this contract test) for the new help format.\n\n"
+		f"got: {combined!r}"
+	)
+
+
+def test_standalone_state_parser_drops_malformed_conflict_override_count(tmp_path):
+	"""When a state comment contains a non-object
+	`conflict_override_count` (e.g. legacy bug, manual edit, or a
+	malformed write), the parser must default it to {} rather than
+	carrying the malformed value forward — otherwise the downstream
+	`.conflict_override_count[$sha]` jq lookup errors out and the
+	cap silently fails open (claude-branch-review PR #2522)."""
+	for label, malformed_value in [
+		("string", "not_an_object"),
+		("number", 42),
+		("array", ["a", "b"]),
+		("null", None),
+	]:
+		state_payload = {
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1700000000,
+			"stall_recovery_count": 1,
+			"updated_ts": 1700000100,
+			"conflict_override_count": malformed_value,
+		}
+		body = (
+			"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+			+ json.dumps(state_payload)
+			+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+		)
+		comments_json = json.dumps([{
+			"id": 1,
+			"user": {"login": "github-actions[bot]"},
+			"created_at": "2026-01-01T00:00:00Z",
+			"body": body,
+		}])
+		(tmp_path / f"comments_{label}.json").write_text(comments_json)
+
+		func_src = _extract_function_body("_extract_standalone_state_json_from_comments")
+		script = textwrap.dedent(f"""
+			set -uo pipefail
+			export STANDALONE_STATE_MARKER_OPEN='<!-- AI_STANDALONE_STALL_STATE_V1'
+			export STANDALONE_STATE_MARKER_CLOSE='AI_STANDALONE_STALL_STATE_V1 -->'
+			{func_src}
+			_extract_standalone_state_json_from_comments "$(cat comments_{label}.json)"
+		""")
+		r = _run_bash(script, cwd=tmp_path)
+		assert r.returncode == 0, f"[{label}] shell error: {r.stderr}"
+		got = json.loads(r.stdout.strip().splitlines()[-1])
+		assert got["conflict_override_count"] == {}, (
+			f"[{label}] expected malformed value to be defaulted to {{}}; got {got['conflict_override_count']!r}"
+		)
+
+
 def test_standalone_state_parser_defaults_conflict_override_count(tmp_path):
 	"""When the source state comment has no conflict_override_count
 	(legacy V1 payload), the parser must default it to {} so
@@ -1235,8 +1312,8 @@ def test_production_script_contains_expected_fix_markers():
 		"impl-failed reissue reset comment marker is missing"
 	)
 	# Codex P2 7339: standalone state parser carries conflict_override_count forward.
-	assert "conflict_override_count: (.conflict_override_count // {})" in body, (
-		"standalone state parser must preserve conflict_override_count"
+	assert "conflict_override_count" in body and '.conflict_override_count // null) | type) == "object"' in body, (
+		"standalone state parser must preserve conflict_override_count with a type check"
 	)
 	# Codex P2 7335: standalone cap consumption refreshes status_since_ts/updated_ts.
 	assert "status_since_ts = $now" in body and "updated_ts = $now" in body, (

@@ -5200,8 +5200,17 @@ _extract_standalone_state_json_from_comments() {
       # 7339) runs again, so MAX_BUDGET_NEUTRAL_OVERRIDES never trips
       # for a PR that stays conflicted at the same head_sha.  The
       # cap write keys this object by head_sha, so carrying it
-      # forward as-is preserves the cycle history.
-      conflict_override_count: (.conflict_override_count // {})
+      # forward as-is preserves the cycle history.  Defensive
+      # type-check: only carry forward when the value is actually an
+      # object — malformed state comments otherwise inject arbitrary
+      # types that the cap-read jq would error on and silently
+      # fail-open (claude-branch-review PR #2522).
+      conflict_override_count: (
+        if ((.conflict_override_count // null) | type) == "object"
+        then .conflict_override_count
+        else {}
+        end
+      )
     }
   ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"conflict_override_count":{}}'
 }
