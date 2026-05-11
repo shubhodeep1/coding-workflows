@@ -1122,9 +1122,14 @@ def test_list_integration_conflict_files_rc_handling(tmp_path):
 		mock_out_file = tmp_path / f"mock_out_{label}.txt"
 		mock_out_file.write_text(mock_stdout)
 		script = textwrap.dedent(f"""
-			# Mirror the production script's strict mode so the pipefail
-			# probe path is exercised the same way it runs in prod.
-			set -uo pipefail
+			# Mirror the production script's strict mode exactly so
+			# this test catches errexit-related regressions — without
+			# `-e`, a future caller pattern like
+			# `out=$(git merge-tree ...); rc=$?` outside an `if VAR=$(...)`
+			# wrapper would silently exit the script on rc==1 instead
+			# of falling through to the case handler.  Copilot
+			# review, PR #2522 line 1128.
+			set -euo pipefail
 			export MOCK_MERGE_TREE_RC={mock_rc}
 			export MOCK_MERGE_TREE_OUT_FILE='{mock_out_file}'
 			git() {{
@@ -1149,8 +1154,15 @@ def test_list_integration_conflict_files_rc_handling(tmp_path):
 				esac
 			}}
 			{func_src}
-			_list_integration_conflict_files int-branch main
-			rc=$?
+			# Capture rc with `|| rc=$?` so this test exercises
+			# `set -euo pipefail` end-to-end without prematurely
+			# exiting when the function returns 1 (clean-merge / probe
+			# failure / fail-open).  Production callers use
+			# `if VAR=$(...)` which has the same errexit-suppressing
+			# effect; we use the explicit-capture form here so we can
+			# also assert on the function's stdout.
+			rc=0
+			_list_integration_conflict_files int-branch main || rc=$?
 			echo "RC=${{rc}}"
 		""")
 		r = _run_bash(script, cwd=tmp_path)

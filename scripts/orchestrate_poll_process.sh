@@ -3354,9 +3354,20 @@ _list_integration_conflict_files() {
   git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
   git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
 
+  # The orchestrator runs under `set -euo pipefail`, and we need
+  # `git merge-tree` to return exit 1 (conflicts detected) WITHOUT
+  # killing the script before `rc=$?` runs.  Today's only caller wraps
+  # this in `if VAR=$(_list_integration_conflict_files ...)` which
+  # already disables errexit inside the function body, but defensive
+  # coding — disable errexit just for this call so the function is
+  # safe to call from any context (Copilot review, PR #2522
+  # line 3359).  Matches the toggle pattern used elsewhere in this
+  # script (e.g. post_state_chunk_comment around line 1231).
   local out rc
+  set +e
   out="$(git merge-tree --write-tree --name-only --no-messages "${db_ref}" "${ib_ref}" 2>/dev/null)"
   rc=$?
+  set -e
   case "${rc}" in
     0)
       # Clean merge — no conflicts.
