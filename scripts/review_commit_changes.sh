@@ -22,8 +22,23 @@
 #   GITHUB_REPOSITORY                 owner/repo slug (auto-set by GitHub Actions).
 #
 # Outputs:
-#   $GITHUB_ENV:     DID_COMMIT, LEDGER_ONLY_COMMIT.
-#   $GITHUB_OUTPUT:  did_commit, ledger_only_commit.
+#   $GITHUB_ENV:     DID_COMMIT, LEDGER_ONLY_COMMIT, LEDGER_ONLY_COMMIT_STRICT.
+#   $GITHUB_OUTPUT:  did_commit, ledger_only_commit, ledger_only_commit_strict.
+#
+#   LEDGER_ONLY_COMMIT signals "this commit should NOT trigger an rb_judge
+#   rerun" and is `true` for BOTH (a) the commit's only tracked path is the
+#   review-issue ledger, AND (b) the editor's per-file audit reports the
+#   autofix loop has converged (applied=0, already_applied≥1).  Existing
+#   consumers (auto-merge, retrigger-guard, continuation-dispatch skip) read
+#   this flag.
+#
+#   LEDGER_ONLY_COMMIT_STRICT signals ONLY (a) — the commit's tracked paths
+#   equal the ledger path.  Callers that need to know "did the editor's
+#   productive edits actually land?" (the EDITOR_CHANGES_LOST detector in
+#   review_autofix.yml) MUST read this strict flag; reading
+#   LEDGER_ONLY_COMMIT causes a false positive when the audit-convergence
+#   branch fires on a commit that DID land real source-file edits
+#   (bitsafe.io PR #177 / run 25653654000).
 #   ${COMMITTED_FILES_FILE}:  one "- <path>" line per committed file, or a single marker line.
 #
 # Failure modes:
@@ -71,6 +86,8 @@ echo "DID_COMMIT=false" >> "$GITHUB_ENV"
 echo "did_commit=false" >> "$GITHUB_OUTPUT"
 echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
 echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
+echo "LEDGER_ONLY_COMMIT_STRICT=false" >> "$GITHUB_ENV"
+echo "ledger_only_commit_strict=false" >> "$GITHUB_OUTPUT"
 
 if [ "${CAN_PUSH:-false}" != "true" ]; then
   echo "Skipping commit/push: branch is not writable from this workflow."
@@ -502,6 +519,8 @@ PY
     echo "Commit contains only the review-issue ledger (${LEDGER_PATH_FOR_DETECTOR}); marking as editor no-op for downstream clean-review gates."
     echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
     echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
+    echo "LEDGER_ONLY_COMMIT_STRICT=true" >> "$GITHUB_ENV"
+    echo "ledger_only_commit_strict=true" >> "$GITHUB_OUTPUT"
   else
     # Audit-driven convergence detector.  When every per-file audit entry
     # in the editor summary reports `issues applied: 0` AND the cumulative
@@ -548,9 +567,20 @@ PY
     if [ "${_audit_convergence_applies}" = "true" ]; then
       echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
       echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
+      # Strict flag stays false: audit convergence is NOT the same as
+      # "only the ledger was committed".  Callers that gate on whether
+      # the editor's productive edits actually landed (the
+      # EDITOR_CHANGES_LOST detector in review_autofix.yml) MUST read
+      # the strict flag to avoid a false positive on commits that
+      # contain real source-file diffs alongside a converged audit
+      # (bitsafe.io PR #177 / run 25653654000).
+      echo "LEDGER_ONLY_COMMIT_STRICT=false" >> "$GITHUB_ENV"
+      echo "ledger_only_commit_strict=false" >> "$GITHUB_OUTPUT"
     else
       echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
       echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
+      echo "LEDGER_ONLY_COMMIT_STRICT=false" >> "$GITHUB_ENV"
+      echo "ledger_only_commit_strict=false" >> "$GITHUB_OUTPUT"
     fi
   fi
 fi
