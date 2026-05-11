@@ -274,7 +274,6 @@ def test_reference_clause_all_caps_verb_is_stripped(tmp_path: Path) -> None:
 	)
 
 
-
 def test_committed_files_file_unset_preserves_legacy_behaviour(tmp_path: Path) -> None:
 	"""When COMMITTED_FILES_FILE is unset the shim must behave exactly as
 	before — the new subset check is purely additive. narrative_real_edit
