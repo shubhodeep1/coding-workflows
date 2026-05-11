@@ -643,6 +643,89 @@ def test_standalone_state_parser_early_returns_include_conflict_override_count(t
 		)
 
 
+def test_judge_cache_write_gated_on_dispatch_rc_and_fresh_dispatch(tmp_path):
+	"""Reproduces the production cache-write gate to confirm:
+	  * dispatch_rc != 0 → no cache write (Codex P2 line 6705)
+	  * dispatch was a dedupe / no-op (was_fresh=false) → no
+	    cache write or replay_count bump (Codex P2 line 6550)
+	  * dispatch_rc == 0 AND was_fresh=true → write fresh-LLM
+	    OR bump replay_count, depending on cache-hit state.
+	"""
+	state_file = tmp_path / "state.json"
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export STATE_FILE='""" + str(state_file) + """'
+		# Reproduce the production cache-write block verbatim.
+		try_cache_write() {
+			local _judge_dispatch_rc="$1"
+			local _judge_dispatch_was_fresh="$2"
+			local _judge_from_cache="$3"
+			local _judge_cache_key="$4"
+			local _judge_cache_eligible="$5"
+			local _judge_executed_action="$6"
+			local _judge_replay_next_pending="$7"
+			if [ "${_judge_dispatch_rc}" -eq 0 ] \
+			   && [ "${_judge_dispatch_was_fresh}" = "true" ] \
+			   && [ -n "${_judge_cache_key}" ] \
+			   && [ "${_judge_cache_eligible:-false}" = "true" ]; then
+				if [ "${_judge_from_cache}" = "true" ] && [ -n "${_judge_replay_next_pending:-}" ]; then
+					jq --arg k "${_judge_cache_key}" --argjson n "${_judge_replay_next_pending}" \
+						'.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
+						"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+					echo "did=bump"
+				elif [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_executed_action}" ]; then
+					jq --arg k "${_judge_cache_key}" --arg action "${_judge_executed_action}" \
+						'.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
+						"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+					echo "did=fresh_write"
+				else
+					echo "did=noop"
+				fi
+			else
+				echo "did=skipped"
+			fi
+		}
+
+		# Scenario A: dispatch_rc=1 (failure) → no cache write.
+		echo '{}' > "$STATE_FILE"
+		echo "A_$(try_cache_write 1 true false k1 true retrigger_pipeline '')"
+		# Scenario B: dispatch_rc=0 but dedupe (was_fresh=false) → no write/bump.
+		echo "B_$(try_cache_write 0 false true k1 true '' 5)"
+		# Scenario C: fresh-LLM, rc=0, fresh dispatch → cache write.
+		echo "C_$(try_cache_write 0 true false k1 true retrigger_pipeline '')"
+		echo "C_state=$(jq -r '.judge_decision_cache.k1.action // \"none\"' "$STATE_FILE")"
+		# Scenario D: cache-replay, rc=0, fresh dispatch → bump replay_count.
+		# Seed the cache first.
+		echo '{"judge_decision_cache":{"k2":{"action":"retrigger_pipeline","replay_count":0}}}' > "$STATE_FILE"
+		echo "D_$(try_cache_write 0 true true k2 true retrigger_pipeline 1)"
+		echo "D_state=$(jq -r '.judge_decision_cache.k2.replay_count' "$STATE_FILE")"
+		# Scenario E: cache-replay, rc=0, but dedupe → no bump (cache stays at 0).
+		echo '{"judge_decision_cache":{"k3":{"action":"resolve_merge_conflict","replay_count":0}}}' > "$STATE_FILE"
+		echo "E_$(try_cache_write 0 false true k3 true resolve_merge_conflict 1)"
+		echo "E_state=$(jq -r '.judge_decision_cache.k3.replay_count' "$STATE_FILE")"
+		# Scenario F: cache ineligible → no write.
+		echo "F_$(try_cache_write 0 true false k4 false retrigger_pipeline '')"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if "=" in line)
+	# Codex 6705: dispatch failed → no cache write.
+	assert out["A_did"] == "skipped", out
+	# Codex 6550 (fresh-LLM dedupe variant): no fresh-LLM write either.
+	assert out["B_did"] == "skipped", out
+	# Fresh-LLM happy path: write the executed action.
+	assert out["C_did"] == "fresh_write", out
+	assert out["C_state"] == "retrigger_pipeline", out
+	# Cache-replay happy path: bump replay_count.
+	assert out["D_did"] == "bump", out
+	assert out["D_state"] == "1", out
+	# Codex 6550 (cache-replay dedupe): replay_count stays at 0.
+	assert out["E_did"] == "skipped", out
+	assert out["E_state"] == "0", out
+	# Cache ineligible (e.g. standalone path): no write either way.
+	assert out["F_did"] == "skipped", out
+
+
 def test_max_budget_neutral_overrides_and_judge_replay_canonicalisation(tmp_path):
 	"""MAX_BUDGET_NEUTRAL_OVERRIDES and MAX_JUDGE_REPLAY are validated
 	with `^[0-9]+$` which permits leading-zero values like "08" /

@@ -6248,6 +6248,11 @@ invoke_stall_judge() {
   local _judge_cache_replay_count=0
   local _judge_force_escalate="false"
   local _judge_cache_force_escalate="false"
+  # Staged replay-count value when the cache-hit branch runs; the
+  # post-dispatch cache-write block decides whether to commit it
+  # based on whether a fresh budget-consuming action actually ran
+  # (Codex P2, PR #2522 line 6550).
+  local _judge_replay_next_pending=""
 
   local prior_actions='[]'
   if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
@@ -6544,10 +6549,18 @@ invoke_stall_judge() {
     jq -cn --arg a "${_judge_cache_hit_action}" --arg j "${_judge_replay_justification}" '{action:$a, justification:$j}' > "${stall_judge_output_file}"
     judge_success="true"
     _judge_from_cache="true"
-    local _judge_replay_next=$(( _judge_cache_replay_count + 1 ))
-    jq --arg k "${_judge_cache_key}" --argjson n "${_judge_replay_next}" \
-      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    # Defer the replay_count bump until AFTER the dispatch resolves
+    # below: if `execute_stall_recovery_action` reports rc=2
+    # (resolver/autofix already in flight — a dedupe path) it does
+    # no new work, so bumping replay_count here would silently age
+    # the cache against an in-flight resolver and eventually trip
+    # MAX_JUDGE_REPLAY into a forced human escalation while the
+    # original work is still running (Codex P2, PR #2522, line
+    # 6550).  Just stage the next count and let the post-dispatch
+    # cache-write block at the end of the function decide whether
+    # to commit it based on whether the dispatch was a fresh,
+    # budget-consuming action.
+    _judge_replay_next_pending=$(( _judge_cache_replay_count + 1 ))
   else
     for attempt in 1 2; do
       if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
@@ -6660,8 +6673,18 @@ ${diagnostics}
   # ONE bad dispatch (Codex P2, PR #2522, line 6625).  Capture the
   # rc from each dispatch path and the action we actually executed;
   # cache that combination at the end.
+  #
+  # Reset STALL_RECOVERY_SHOULD_INCREMENT to "false" before the
+  # dispatch so the captured value below reflects ONLY this
+  # tick's work.  execute_stall_recovery_action sets it to "true"
+  # when a fresh budget-consuming action ran, and leaves it
+  # "false" for dedupe/no-op paths (rc=2 active-resolver, already-
+  # dispatched-this-cycle).  We use that signal below to decide
+  # whether the cache-replay path should age its replay_count
+  # (Codex P2, PR #2522, line 6550).
   local _judge_dispatch_rc=0
   local _judge_executed_action="${effective_action}"
+  STALL_RECOVERY_SHOULD_INCREMENT="false"
   case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human|skip)
       execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
@@ -6688,24 +6711,55 @@ ${diagnostics}
       ;;
   esac
 
-  # Cache the judge decision so future identical inputs replay it
-  # rather than burning another LLM call.  Skip when this run was
-  # itself served from the cache (replay count was already bumped
-  # in the cache-hit branch above).  Cache `_judge_executed_action`
-  # rather than `effective_action`: if the judge's effective action
-  # was resolve_merge_conflict but the dispatch fell through to the
-  # ladder fallback (missing metadata OR dispatch failure), the
-  # cache stores the action we actually ran — so the next identical
-  # stall replays a known-executable decision instead of looping
-  # forever on the dead-end resolve_merge_conflict (Codex P2,
-  # PR #2522, lines 6359 + 6625).
-  if [ "${_judge_from_cache}" = "false" ] \
+  # Capture whether the dispatch was a FRESH budget-consuming
+  # action (as opposed to a dedupe / no-op).
+  # execute_stall_recovery_action sets STALL_RECOVERY_SHOULD_INCREMENT
+  # to "true" only on its rc=0 fresh-dispatch path; rc=2 dedupe
+  # (active autofix / resolver already in flight) leaves it
+  # "false".  Two cache decisions below depend on this:
+  #   * Fresh-LLM cache write (Codex P2 line 6625 + 6705):
+  #     skip when dispatch failed OR was a dedupe — caching a
+  #     replay that did no new work would burn MAX_JUDGE_REPLAY
+  #     on a single bad dispatch.
+  #   * Cache-replay count bump (Codex P2 line 6550): skip on
+  #     dedupe so the cache does not age while an existing
+  #     resolver is still working.
+  local _judge_dispatch_was_fresh="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
+  STALL_RECOVERY_SHOULD_INCREMENT="false"
+
+  # Persist the cache decision now that we know whether the
+  # dispatch actually ran fresh work.  Only writes happen when
+  # the dispatch succeeded (rc=0) AND a budget-consuming action
+  # actually ran (was_fresh=true).  Both gates together prevent:
+  #   * caching a dead-end action after a transient dispatch
+  #     failure (would replay the failure forever)
+  #   * aging the cache while a resolver is still in flight
+  #     (would trip MAX_JUDGE_REPLAY into a forced escalation
+  #     against still-active work)
+  # Cache `_judge_executed_action` rather than `effective_action`:
+  # if the judge's effective action was resolve_merge_conflict
+  # but the dispatch fell through to the ladder fallback (missing
+  # metadata OR dispatch failure), the fresh-LLM cache writes
+  # the action we actually ran — so the next identical stall
+  # replays a known-executable decision (Codex P2, PR #2522,
+  # lines 6359, 6625, 6705, 6550).
+  if [ "${_judge_dispatch_rc}" -eq 0 ] \
+     && [ "${_judge_dispatch_was_fresh}" = "true" ] \
      && [ -n "${_judge_cache_key}" ] \
-     && [ -n "${_judge_executed_action}" ] \
      && [ "${_judge_cache_eligible:-false}" = "true" ]; then
-    jq --arg k "${_judge_cache_key}" --arg action "${_judge_executed_action}" \
-      '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    if [ "${_judge_from_cache}" = "true" ] \
+       && [ -n "${_judge_replay_next_pending:-}" ]; then
+      # Cache-replay path: bump replay_count toward MAX_JUDGE_REPLAY.
+      jq --arg k "${_judge_cache_key}" --argjson n "${_judge_replay_next_pending}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    elif [ "${_judge_from_cache}" = "false" ] \
+         && [ -n "${_judge_executed_action}" ]; then
+      # Fresh-LLM cache write.
+      jq --arg k "${_judge_cache_key}" --arg action "${_judge_executed_action}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    fi
   fi
   return "${_judge_dispatch_rc}"
 }
