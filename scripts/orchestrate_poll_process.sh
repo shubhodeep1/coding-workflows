@@ -3636,9 +3636,19 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
   # gate is 15m on the first dispatch, climbing to 4h after four
   # retries. This stops the multi-hour fixed-interval loop where main
   # keeps moving and each dispatch fires on the same 15-minute beat.
+  # `dispatch_count` is incremented IMMEDIATELY after the first
+  # successful dispatch (line ~3687 below), so the SECOND attempt
+  # already sees `dispatch_count=1` here.  Subtract one before
+  # shifting — clamped to 0 — so the first retry waits the
+  # documented 1× interval rather than 2× (Codex P2, PR #2522,
+  # line 3640).
   local elapsed=$((now_ts - last_ts))
-  local _backoff_shift="${dispatch_count}"
-  [[ "${_backoff_shift}" =~ ^[0-9]+$ ]] || _backoff_shift=0
+  local _backoff_shift_raw="${dispatch_count}"
+  [[ "${_backoff_shift_raw}" =~ ^[0-9]+$ ]] || _backoff_shift_raw=0
+  local _backoff_shift=0
+  if [ "${_backoff_shift_raw}" -gt 1 ]; then
+    _backoff_shift=$(( _backoff_shift_raw - 1 ))
+  fi
   if [ "${_backoff_shift}" -gt 4 ]; then
     _backoff_shift=4
   fi
@@ -6093,9 +6103,20 @@ invoke_stall_judge() {
       "${STATE_FILE}" 2>/dev/null || echo "0")"
     [[ "${_judge_phase_attempts_count}" =~ ^[0-9]+$ ]] || _judge_phase_attempts_count=0
   fi
+  # Derive a STABLE exhausted/not-exhausted boolean for the cache
+  # key.  Hashing the raw _judge_phase_attempts_count would otherwise
+  # invalidate the cache after every budget-consuming recovery
+  # (phase_attempts increments alongside stall_recovery_count), so a
+  # repeated bad-judge loop below the cap could never accumulate
+  # toward MAX_JUDGE_REPLAY (Codex P2, PR #2522, line 6383).  The raw
+  # count still ships in the LLM-facing diagnostics for prompt
+  # context; only the cache-key view strips it (see filter at
+  # line ~6330).
+  local _judge_phase_attempts_exhausted="false"
   if [ "${_judge_phase_attempts_count}" -ge "${_judge_phase_effective_max}" ]; then
     echo "  [stall-judge] phase_attempts_count=${_judge_phase_attempts_count} >= effective_max=${_judge_phase_effective_max} for phase ${phase}; the judge-failure fallback will be forced to skip so a transient judge crash cannot bypass the phase-lifetime cap."
     fallback_action="skip"
+    _judge_phase_attempts_exhausted="true"
   fi
 
   local comments_issue_num="${issue_num}"
@@ -6220,6 +6241,7 @@ invoke_stall_judge() {
     --argjson stall_minutes "${stall_minutes}" \
     --argjson recovery_count "${recovery_count}" \
     --argjson phase_attempts_count "${_judge_phase_attempts_count:-0}" \
+    --argjson phase_attempts_exhausted "${_judge_phase_attempts_exhausted:-false}" \
     --argjson recent_comments "${recent_comments}" \
     --arg target_pr "${target_pr}" \
     --arg pr_state "${pr_state}" \
@@ -6237,6 +6259,7 @@ invoke_stall_judge() {
       stall_minutes: $stall_minutes,
       recovery_count: $recovery_count,
       phase_attempts_count: $phase_attempts_count,
+      phase_attempts_exhausted: $phase_attempts_exhausted,
       recent_tracking_comments: $recent_comments,
       linked_pr: {
         number: (if $target_pr == "" then null else ($target_pr | tonumber) end),
@@ -6265,6 +6288,7 @@ invoke_stall_judge() {
       --argjson stall_minutes "${stall_minutes:-0}" \
       --argjson recovery_count "${recovery_count:-0}" \
       --argjson phase_attempts_count "${_judge_phase_attempts_count:-0}" \
+      --argjson phase_attempts_exhausted "${_judge_phase_attempts_exhausted:-false}" \
       --arg target_pr "${target_pr}" \
       --arg pr_state "${pr_state}" \
       --arg pr_mergeable "${pr_mergeable}" \
@@ -6278,6 +6302,7 @@ invoke_stall_judge() {
         stall_minutes: $stall_minutes,
         recovery_count: $recovery_count,
         phase_attempts_count: $phase_attempts_count,
+        phase_attempts_exhausted: $phase_attempts_exhausted,
         linked_pr: {
           number: (if $target_pr == "" then null else ($target_pr | tonumber? // null) end),
           state: (if $pr_state == "" then null else $pr_state end),
@@ -6377,6 +6402,7 @@ invoke_stall_judge() {
       )
       | del(.stall_minutes)
       | del(.recovery_count)
+      | del(.phase_attempts_count)
       | .prior_recovery_actions = (
           (.prior_recovery_actions // [])
           | map(select(.key != "stall_recovery_count"))
@@ -6590,16 +6616,18 @@ invoke_stall_judge() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
   fi
 
-  # The hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` marker on the
-  # last line is the unambiguous self-authored-by-the-orchestrator
-  # signal used by the cache-key filter at line ~6258+.  Matching on
-  # this marker is robust against deployments where the gh CLI
-  # authenticates as a PAT user (not `*[bot]`), where the previous
-  # `endswith("[bot]")` author check failed (Codex P2, PR #2522,
-  # line 6255).  A human reply that quotes the heading does not
-  # carry this hidden comment, so it stays in the cache-key hash.
+  # The hidden `<!-- ORCHESTRATOR_STALL_JUDGE -->` marker is placed
+  # IMMEDIATELY after the heading (not at the bottom of the comment)
+  # so the cache-key filter at line ~6330 can find it even when the
+  # diagnostics-build truncator at line ~6017+ slices the body at
+  # 2000 chars.  A typical judge comment is 3-4 KB once the
+  # diagnostics snapshot is embedded, and an end-of-body marker
+  # would be truncated out — leaving the orchestrator's own
+  # narration in recent_tracking_comments and silently churning the
+  # cache key on every cycle (Codex P2, PR #2522, line 6614).
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
+<!-- ORCHESTRATOR_STALL_JUDGE -->
 
 **Decision (judge):** ${judge_action}
 **Decision (effective):** ${effective_action}
@@ -6610,8 +6638,6 @@ invoke_stall_judge() {
 \`\`\`json
 ${diagnostics}
 \`\`\`
-
-<!-- ORCHESTRATOR_STALL_JUDGE -->
 "
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
     post_tracking_comment "${judge_comment}"

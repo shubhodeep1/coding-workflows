@@ -384,6 +384,99 @@ def test_hot_file_registry_normalisation_matches_python_loader(tmp_path):
 	)
 
 
+def test_judge_marker_survives_2000_char_truncation():
+	"""The hidden ORCHESTRATOR_STALL_JUDGE marker must appear BEFORE
+	the diagnostics snapshot so it survives the 2000-char body
+	truncation that recent_comments applies before the cache-key
+	filter inspects it (Codex P2, PR #2522 line 6614).  Production
+	judge bodies are 3-4 KB once the diagnostics JSON is embedded;
+	an end-of-body marker would otherwise be sliced out and the
+	filter would miss the bot's own comments — leaving them in the
+	hash and churning the cache key.
+
+	This test verifies the marker is positioned correctly by
+	checking the bot's comment-construction site: the marker line
+	must appear before the `**Diagnostics snapshot:**` heading.
+	"""
+	body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Find the judge_comment heredoc.
+	heredoc_start = body.find('judge_comment="## 🧑‍⚖️ Stall Judge — Issue #')
+	assert heredoc_start >= 0, "judge_comment heredoc not found"
+	# Slice forward to the closing quote (skipping the body).
+	heredoc_end = body.find('"\n  if [ -n "${local_id}"', heredoc_start)
+	assert heredoc_end > heredoc_start, "judge_comment heredoc close not found"
+	heredoc = body[heredoc_start:heredoc_end]
+	marker_pos = heredoc.find("<!-- ORCHESTRATOR_STALL_JUDGE -->")
+	diagnostics_pos = heredoc.find("**Diagnostics snapshot:**")
+	assert marker_pos >= 0, "marker missing from judge_comment heredoc"
+	assert diagnostics_pos >= 0, "diagnostics snapshot heading missing"
+	assert marker_pos < diagnostics_pos, (
+		f"marker must come BEFORE the diagnostics snapshot so it "
+		f"survives 2000-char truncation (marker_pos={marker_pos}, "
+		f"diagnostics_pos={diagnostics_pos}, heredoc_start_in_file={heredoc_start})"
+	)
+	# Belt-and-braces: simulate the recent_comments truncation on a
+	# typical judge body and confirm the marker is preserved.  The
+	# diagnostics JSON in production is ~2-3 KB on a real stall.
+	import re as _re
+	fake_diag_blob = '{"recent_tracking_comments":[' + (',"x"' * 800) + ']}'
+	# 800*4 = 3200-char diagnostics JSON.
+	sample_body = (
+		"## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n"
+		"<!-- ORCHESTRATOR_STALL_JUDGE -->\n\n"
+		"**Decision (judge):** retrigger\n"
+		"**Decision (effective):** retrigger\n"
+		"**Justification:** stale check, retry\n\n"
+		"**Diagnostics snapshot:**\n\n"
+		"```json\n" + fake_diag_blob + "\n```\n"
+	)
+	assert len(sample_body) > 2000, "sample body must exceed truncation threshold"
+	# Apply the same truncation the diagnostics builder uses.
+	truncated = sample_body[:1988] + "…[truncated]" if len(sample_body) > 2000 else sample_body
+	assert "<!-- ORCHESTRATOR_STALL_JUDGE -->" in truncated, (
+		"marker must survive recent_comments 2000-char truncation"
+	)
+
+
+def test_judge_backoff_shift_uses_dispatch_count_minus_one(tmp_path):
+	"""The cooldown backoff shift must subtract 1 from dispatch_count
+	before shifting, clamped to 0, so the first retry waits the
+	documented 1× interval rather than 2× (Codex P2, PR #2522,
+	line 3640).  Reproduces the production shift computation."""
+	script = textwrap.dedent("""
+		set -euo pipefail
+		for dc in 0 1 2 3 4 5 6; do
+			shift_raw=$dc
+			shift=0
+			if [ "$shift_raw" -gt 1 ]; then
+				shift=$(( shift_raw - 1 ))
+			fi
+			if [ "$shift" -gt 4 ]; then
+				shift=4
+			fi
+			echo "dc=${dc} shift=${shift}"
+		done
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split() for line in r.stdout.strip().splitlines())
+	# Parse "dc=N shift=M" rows.
+	parsed = {kv.split("=")[1]: vv.split("=")[1] for kv, vv in (line.split() for line in r.stdout.strip().splitlines())}
+	# Never dispatched (dc=0) → shift=0 (multiplier 1×; cooldown gate
+	# does not fire because last_ts=0 anyway).
+	assert parsed["0"] == "0", parsed
+	# First dispatch happened (dc=1) → NEXT retry shift=0 (1×).  This
+	# is the bug Codex flagged: the old code shifted by 1 (2×).
+	assert parsed["1"] == "0", parsed
+	# Subsequent retries: shift = dc - 1.
+	assert parsed["2"] == "1", parsed
+	assert parsed["3"] == "2", parsed
+	assert parsed["4"] == "3", parsed
+	# Capped at 4 (16× multiplier).
+	assert parsed["5"] == "4", parsed
+	assert parsed["6"] == "4", parsed
+
+
 def test_judge_diagnostics_includes_phase_attempts_count(tmp_path):
 	"""When detect_stalls routes to the judge because phase_attempts
 	hit the cap (while recovery_count is still low), the diagnostics
@@ -426,27 +519,46 @@ def test_judge_diagnostics_includes_phase_attempts_count(tmp_path):
 	assert diag["phase_attempts_count"] == 5, diag
 
 
-def test_judge_cache_key_changes_with_phase_attempts_count(tmp_path):
-	"""Once phase_attempts_count participates in the diagnostics
-	JSON, the production cache-key filter MUST hash differently
-	when the count crosses the cap.  Without this, an exhausted-
-	phase escalation could replay a cached non-terminal decision
-	(Codex P2, PR #2522 line 6050)."""
+def test_judge_cache_key_stable_under_phase_attempts_count_churn(tmp_path):
+	"""Codex P2 6050 added phase_attempts_count to the diagnostics
+	JSON for the LLM, but the raw counter advances every recovery
+	(same as stall_recovery_count).  Codex P2 6383 followed up:
+	hash a stable `phase_attempts_exhausted` boolean instead, so
+	the cache key only crosses when the cap is actually reached —
+	otherwise a repeated bad-judge loop below the cap never
+	accumulates toward MAX_JUDGE_REPLAY.
+
+	This test covers both halves:
+	  - Changing raw phase_attempts_count (with the same exhausted
+	    flag) MUST NOT change the cache key.
+	  - Changing phase_attempts_exhausted from false → true MUST
+	    change the cache key.
+	"""
 	base_diag = {
 		"issue_number": 2870,
 		"phase": "ai:review-blocked",
 		"stall_minutes": 45,
 		"recovery_count": 1,
-		"phase_attempts_count": 4,
+		"phase_attempts_count": 2,
+		"phase_attempts_exhausted": False,
 		"recent_tracking_comments": [],
 		"recent_review_workflow_outcomes": [],
 		"prior_recovery_actions": [{"key": "last_seen_phase", "value": "ai:review-blocked"}],
 	}
 	low = dict(base_diag)
-	high = {**base_diag, "phase_attempts_count": 5}
-	keys = _hash_variants(tmp_path, {"low": low, "high": high})
-	assert keys["low"] != keys["high"], (
-		f"cache key must differ when phase_attempts_count differs: {keys}"
+	# Raw count changes within the not-exhausted band — cache must hold.
+	mid = {**base_diag, "phase_attempts_count": 4}
+	# Exhausted flips true — cache must change.
+	exhausted = {**base_diag, "phase_attempts_count": 5, "phase_attempts_exhausted": True}
+	keys = _hash_variants(tmp_path, {"low": low, "mid": mid, "exhausted": exhausted})
+	assert keys["low"] == keys["mid"], (
+		f"raw phase_attempts_count churn must NOT change the cache key "
+		f"while exhausted=false (else repeated bad-judge loops never "
+		f"accumulate toward MAX_JUDGE_REPLAY): {keys}"
+	)
+	assert keys["low"] != keys["exhausted"], (
+		f"phase_attempts_exhausted flipping true MUST change the cache key "
+		f"(else cap-exhausted escalation replays prior non-exhausted decision): {keys}"
 	)
 
 
@@ -695,6 +807,7 @@ PRODUCTION_CACHE_KEY_FILTER = (
 	'| map(select(((.body // "") | contains("<!-- ORCHESTRATOR_STALL_JUDGE -->")) | not))) '
 	'| del(.stall_minutes) '
 	'| del(.recovery_count) '
+	'| del(.phase_attempts_count) '
 	'| .prior_recovery_actions = '
 	'((.prior_recovery_actions // []) '
 	'| map(select(.key != "stall_recovery_count")))'
@@ -814,12 +927,25 @@ def test_judge_cache_key_stable_across_volatile_counters(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_cooldown_doubles_with_dispatch_count_capped_at_16x(tmp_path):
-	"""The effective cooldown is base × 2^min(dispatch_count, 4)."""
+	"""The effective cooldown is base × 2^min(max(dispatch_count - 1, 0), 4).
+
+	`dispatch_count` is incremented IMMEDIATELY after the first
+	successful resolver dispatch (line ~3687 in
+	heal_integration_branch_conflict), so the SECOND attempt
+	already sees `dispatch_count=1` at the cooldown gate.
+	Subtracting one before shifting makes the first retry wait the
+	documented 1× interval (Codex P2, PR #2522, line 3640).  The
+	count gets capped at 4 shift-positions (16× multiplier max).
+	"""
 	script = textwrap.dedent("""
 		set -euo pipefail
 		base=900
-		for n in 0 1 2 3 4 5 8; do
-			shift=$n
+		for n in 0 1 2 3 4 5 6 8; do
+			shift_raw=$n
+			shift=0
+			if [ "$shift_raw" -gt 1 ]; then
+				shift=$(( shift_raw - 1 ))
+			fi
 			if [ "$shift" -gt 4 ]; then
 				shift=4
 			fi
@@ -831,12 +957,13 @@ def test_cooldown_doubles_with_dispatch_count_capped_at_16x(tmp_path):
 	r = _run_bash(script, cwd=tmp_path)
 	assert r.returncode == 0, f"bash failed: {r.stderr}"
 	expected = {
-		"0": 900,        # 1×
-		"1": 1800,       # 2×
-		"2": 3600,       # 4×
-		"3": 7200,       # 8×
-		"4": 14400,      # 16×
-		"5": 14400,      # capped
+		"0": 900,        # never dispatched: 1×
+		"1": 900,        # first dispatch happened: NEXT retry waits 1×
+		"2": 1800,       # second dispatch happened: 2×
+		"3": 3600,       # 4×
+		"4": 7200,       # 8×
+		"5": 14400,      # 16× (max)
+		"6": 14400,      # capped
 		"8": 14400,      # capped
 	}
 	got = dict(l.split("=") for l in r.stdout.strip().splitlines())
