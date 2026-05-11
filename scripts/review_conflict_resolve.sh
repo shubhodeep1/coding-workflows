@@ -238,7 +238,9 @@ _codex_config="${HOME}/.codex/config.toml"
 # if either expected line is missing.
 _apply_resolver_reasoning_effort()
 {
-  _arr_level="${1:?reasoning level required}"
+  local _arr_level="${1:?reasoning level required}"
+  local _arr_rewrite_ok
+  local _arr_verify_ok
   case "${_arr_level}" in
     xhigh|high|medium|none) ;;
     *)

@@ -243,3 +243,27 @@ def test_next_lower_ladder_returns_expected_levels() -> None:
 			"to itself (floor) and unknown inputs falling back "
 			"to `high` (the resolver's repo-wide default)."
 		)
+
+
+def main() -> int:
+	"""Allow this file to run via `python3 tests/<file>` (the
+	CI/release allowlist invocation pattern in .github/workflows/
+	ci.yml, mark-stable.yml, and test-and-mark-stable.yml) without
+	requiring pytest on the runner. Mirrors the sibling
+	test_review_conflict_resolve_retry_prelude_render.py shape."""
+	test_apply_helper_defined_and_uses_codex_config()
+	test_next_lower_helper_defined()
+	test_initial_apply_call_uses_current_effort_tracker()
+	test_loop_step_down_is_gated_on_timeout_failure_kind()
+	test_next_lower_ladder_returns_expected_levels()
+	print(
+		"OK: review_conflict_resolve reasoning-effort step-down "
+		"contract holds (helper definitions, _current_reasoning_effort "
+		"tracker, timeout-gated step-down, xhigh→high→medium→none "
+		"ladder)"
+	)
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
