@@ -276,6 +276,12 @@ jobs:
 
       - name: Build semble index
         if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shell script and the file-existence guard
+        # below are both already fail-soft, but `continue-on-error: true`
+        # makes the contract explicit at the step boundary so an unexpected
+        # non-zero exit (syntax regression, future refactor) still degrades
+        # to SEMBLE_INDEX_AVAILABLE=false rather than hard-failing the job.
+        continue-on-error: true
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -512,7 +518,10 @@ jobs:
             # shellcheck disable=SC1091
             source scripts/semble_helpers.sh || true
             if type semble_query_block >/dev/null 2>&1; then
-              wla_query_text="$(head -c 6000 "${ANALYSIS_CONTEXT_FILE}" 2>/dev/null || true)"
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              wla_query_text="$(head -c 6000 "${ANALYSIS_CONTEXT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
               if [ -n "${wla_query_text}" ]; then
                 WLA_SEMBLE_PREFETCH="$(semble_query_block "${wla_query_text}" 6 "Workflow Log Analysis Context" 2>/dev/null || true)"
               fi
@@ -883,6 +892,12 @@ jobs:
 
       - name: Build semble index
         if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shell script and the file-existence guard
+        # below are both already fail-soft, but `continue-on-error: true`
+        # makes the contract explicit at the step boundary so an unexpected
+        # non-zero exit (syntax regression, future refactor) still degrades
+        # to SEMBLE_INDEX_AVAILABLE=false rather than hard-failing the job.
+        continue-on-error: true
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -984,7 +999,10 @@ jobs:
             # shellcheck disable=SC1091
             source scripts/semble_helpers.sh || true
             if type semble_query_block >/dev/null 2>&1; then
-              audit_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null || true)"
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              audit_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
               if [ -n "${audit_query_text}" ]; then
                 AUDIT_SEMBLE_PREFETCH="$(semble_query_block "${audit_query_text}" 6 "Workflow Deep Audit Context" 2>/dev/null || true)"
               fi
@@ -1302,6 +1320,12 @@ jobs:
 
       - name: Build semble index
         if: env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shell script and the file-existence guard
+        # below are both already fail-soft, but `continue-on-error: true`
+        # makes the contract explicit at the step boundary so an unexpected
+        # non-zero exit (syntax regression, future refactor) still degrades
+        # to SEMBLE_INDEX_AVAILABLE=false rather than hard-failing the job.
+        continue-on-error: true
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -1403,7 +1427,10 @@ jobs:
             # shellcheck disable=SC1091
             source scripts/semble_helpers.sh || true
             if type semble_query_block >/dev/null 2>&1; then
-              api_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null || true)"
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              api_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
               if [ -n "${api_query_text}" ]; then
                 API_SEMBLE_PREFETCH="$(semble_query_block "${api_query_text}" 6 "Workflow API Redundancy Context" 2>/dev/null || true)"
               fi
