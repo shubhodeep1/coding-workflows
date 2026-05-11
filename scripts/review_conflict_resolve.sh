@@ -485,10 +485,13 @@ _build_retry_prompt() {
   # — that way a future template that adds a new placeholder
   # (e.g. `{{INTEGRATION_BRANCH_NAME}}`) does not silently render
   # the literal `{{...}}` text into the prelude on a stable
-  # script_ref pin.  Keys are matched against `[A-Z_][A-Z0-9_]*`
-  # (the convention used by every existing placeholder); any key
-  # whose corresponding env var is unset is replaced with the
-  # empty string, matching the existing hardcoded-list behaviour.
+  # script_ref pin.  Keys are matched against `[A-Za-z_][A-Za-z0-9_]*`
+  # with optional interior whitespace (`{{ KEY }}` / `{{key}}` /
+  # `{{ key }}` all match), so future templates authored with a
+  # different convention still substitute cleanly.  Env-var lookup
+  # uses the uppercased key, matching the convention every existing
+  # caller binds against; any key whose corresponding env var is
+  # unset is replaced with the empty string.
   PRELUDE_TPL="${_prelude_tpl}" \
     ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
     PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
@@ -498,7 +501,7 @@ _build_retry_prompt() {
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
     PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
-    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); keys=sorted(set(re.findall(r'\{\{([A-Z_][A-Z0-9_]*)\}\}', tpl))); [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
   if [ "${_failure_kind}" = "timeout" ]; then
     _retry_prompt_outcome="timeout-prelude"

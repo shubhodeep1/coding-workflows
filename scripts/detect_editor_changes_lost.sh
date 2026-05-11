@@ -86,7 +86,7 @@ if [ -n "${changes_section}" ]; then
 	# shim behaves the same on GNU and BSD sed (Linux CI and macOS
 	# local development both pass).
 	narrative_claims="$(printf '%s\n' "${changes_section}" \
-		| sed -E 's/\.[[:space:]]+(([Tt]his|[Tt]hat|[Ww]hich|[Tt]he (caller|reference))[[:space:]]+(matches|mirrors|references|aligns with|maps to|tracks|points to|comes from)[^A-Za-z0-9_].*)$/./' \
+		| sed -E 's/\.[[:space:]]+(([Tt]his|[Tt]hat|[Ww]hich|[Tt]he (caller|reference))[[:space:]]+([Mm]atches|[Mm]irrors|[Rr]eferences|[Aa]ligns with|[Mm]aps to|[Tt]racks|[Pp]oints to|[Cc]omes from)[^A-Za-z0-9_].*)$/./' \
 		| grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|No modifications)' || true)"
 fi
 

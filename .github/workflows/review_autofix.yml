@@ -3872,14 +3872,18 @@ jobs:
           # is a no-op.
           RESOLVER_SCRIPT="${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
           # Capture bash -n stderr (instead of redirecting to /dev/null)
-          # and surface a sanitized single-line copy in every fallback
-          # annotation so operators debugging a workflow run can tell
-          # an unresolved-merge-marker failure apart from a truncated
-          # file, a missing dependency reference, or any other
-          # parse-time issue without having to re-run the job locally.
-          # The same sanitisation pattern (%/\r escaping, whitespace
-          # collapse) the "Detect merge conflicts" step uses for its
-          # `git merge` stderr annotation applies here.
+          # and surface a sanitized copy in every fallback annotation so
+          # operators debugging a workflow run can tell an unresolved-
+          # merge-marker failure apart from a truncated file, a missing
+          # dependency reference, or any other parse-time issue without
+          # having to re-run the job locally.  Multi-line stderr is
+          # preserved by URL-encoding newlines as `%0A` (the workflow-
+          # command-encoding spec for annotation messages) instead of
+          # collapsing to a single line, so a multi-line `bash -n`
+          # diagnostic — e.g. several syntax errors on different lines
+          # of the same script — renders with its original line breaks
+          # in the annotation body.  `%` and `\r` are still escaped to
+          # match the "Detect merge conflicts" step's sanitisation.
           #
           # Probe a candidate resolver path and echo one of:
           #   ok | missing | parse_fail:<sanitized one-line stderr>
@@ -3900,7 +3904,7 @@ jobs:
             if err="$(bash -n "${path}" 2>&1 >/dev/null)"; then
               printf '%s\n' "ok"
             else
-              err="$(printf '%s' "${err}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//; s/%/%25/g; s/\r/%0D/g')"
+              err="$(printf '%s' "${err}" | sed 's/%/%25/g; s/\r/%0D/g' | awk 'BEGIN{ORS=""} NR>1{print "%0A"} {print}')"
               printf 'parse_fail:%s\n' "${err:-<no stderr captured>}"
             fi
           }

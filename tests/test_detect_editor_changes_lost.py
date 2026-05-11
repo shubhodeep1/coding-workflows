@@ -216,6 +216,35 @@ def test_reference_clause_path_not_treated_as_edit_target(tmp_path: Path) -> Non
 	)
 
 
+def test_reference_clause_capitalised_verb_is_stripped(tmp_path: Path) -> None:
+	"""Same shape as the bitsafe.io reproducer above, but with a
+	title-cased verb ('This Matches `Y`'). The strip regex must
+	tolerate capitalised verbs so a stylistic choice in the editor's
+	narrative cannot resurrect the EDITOR_CHANGES_LOST false-positive
+	the original fix was designed to eliminate."""
+	_init_clean_repo(tmp_path)
+	external_dir = tmp_path.parent / f"{tmp_path.name}-fixtures"
+	external_dir.mkdir(parents=True, exist_ok=True)
+	fixture = FIXTURES / "narrative_reference_clause_status_edited.txt"
+	mutated = external_dir / "narrative_reference_clause_capitalised.txt"
+	mutated.write_text(
+		fixture.read_text(encoding="utf-8").replace(
+			"This matches", "This Matches"
+		),
+		encoding="utf-8",
+	)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- apps/api/test/auth-service-verification.test.mjs\n",
+	)
+	result = _run_shim(tmp_path, mutated, committed_files=committed)
+	assert result == "false", (
+		"Expected shim to strip the trailing 'This Matches `Y`' reference "
+		f"clause even when the verb is capitalised; got {result!r}."
+	)
+
+
 def test_committed_files_file_unset_preserves_legacy_behaviour(tmp_path: Path) -> None:
 	"""When COMMITTED_FILES_FILE is unset the shim must behave exactly as
 	before — the new subset check is purely additive. narrative_real_edit

@@ -537,6 +537,9 @@ if args and args[0] == "api":
 		if a == "--jq" and i + 1 < len(args):
 			jq_filter = args[i + 1]
 			break
+		if a.startswith("--jq="):
+			jq_filter = a[len("--jq="):]
+			break
 	canned = os.environ.get("MOCK_GH_TIMELINE_JSON", "[]")
 	if jq_filter is None:
 		sys.stdout.write(canned)
