@@ -240,12 +240,14 @@ fi
 # fall back to PR_CHANGED_FILES_FILE on the first iteration. Files
 # are processed in source order until the cumulative byte budget
 # (TARGETED_FILE_CONTEXT_MAX_BYTES) is exhausted; a file that would
-# overflow the remaining budget gets a "read with read tool" marker
-# rather than a misleading head-truncated copy. Fail-open: any
-# script error falls through to an empty output, the rest of the
-# prompt build still works, and the editor falls back to read-then-
-# write behavior.
+# overflow the remaining budget can use Semble-backed chunk retrieval
+# when a shared index is available; otherwise it keeps the existing
+# marker fallback rather than a misleading head-truncated copy. Fail-
+# open: any script error falls through to an empty output, the rest of
+# the prompt build still works, and the editor falls back to read-
+# then-write behavior.
 TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+EDITOR_SEMBLE_QUERY_FILE="${EDITOR_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/editor_semble_query.txt}"
 : > "${TARGETED_FILES_CONTEXT_FILE}"
 _targeted_paths_source=""
 if [ -s "${LAST_RUN_CHANGED_FILES_FILE:-}" ]; then
@@ -253,13 +255,47 @@ if [ -s "${LAST_RUN_CHANGED_FILES_FILE:-}" ]; then
 elif [ -s "${PR_CHANGED_FILES_FILE:-}" ]; then
   _targeted_paths_source="${PR_CHANGED_FILES_FILE}"
 fi
+append_semble_query_section() {
+  local label="$1"
+  local path="$2"
+  local max_bytes="${3:-4096}"
+
+  [ -s "${path}" ] || return 0
+  printf '%s\n' "${label}"
+  head -c "${max_bytes}" "${path}"
+  printf '\n'
+}
+
+{
+  printf '%s\n' 'Review autofix editor context.'
+  printf '%s\n' 'Use reviewer findings, floor tags, and changed-file summaries for overflow retrieval.'
+  append_semble_query_section 'Parsed review issues:' "${REVIEW_ISSUES_FILE}" 6000
+  append_semble_query_section 'Floor tags:' "${FLOOR_TAGS_FILE}" 4000
+  append_semble_query_section 'Symbol diff summary:' "${SYMBOL_DIFF_SUMMARY_FILE}" 4000
+  if [ -n "${_targeted_paths_source}" ]; then
+    append_semble_query_section 'Targeted changed files:' "${_targeted_paths_source}" 2000
+  fi
+} > "${EDITOR_SEMBLE_QUERY_FILE}"
+
 if [ -n "${_targeted_paths_source}" ]; then
-  python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py" \
-    --paths-file "${_targeted_paths_source}" \
-    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
-    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
-    --header-text "These files were modified by the previous autofix iteration (or by this PR overall, on the first iteration). Their current contents are inlined so you can apply reviewer findings without re-reading them. If a file is included verbatim below, prefer editing it directly over wide exploration. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block." \
-    --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+  targeted_file_context_args=(
+    python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
+    --paths-file "${_targeted_paths_source}"
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
+    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
+    --header-text "These files were modified by the previous autofix iteration (or by this PR overall, on the first iteration). Their current contents are inlined so you can apply reviewer findings without re-reading them. If a file is included verbatim below, prefer editing it directly over wide exploration. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
+    --output "${TARGETED_FILES_CONTEXT_FILE}"
+  )
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${EDITOR_SEMBLE_QUERY_FILE}" ]; then
+    targeted_file_context_args+=(
+      --semble-bin "${SEMBLE_BIN:-}"
+      --semble-index "${SEMBLE_INDEX_PATH:-}"
+      --semble-query-from "${EDITOR_SEMBLE_QUERY_FILE}"
+      --semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"
+      --semble-fallback marker
+    )
+  fi
+  "${targeted_file_context_args[@]}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
 

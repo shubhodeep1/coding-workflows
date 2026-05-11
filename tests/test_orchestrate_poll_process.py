@@ -503,6 +503,7 @@ def _run_poller(
 	actions_runs_status_sequence: list[int] | None = None,
 	actions_runs_etag: str = '"etag-initial"',
 	codex_touch_file: str | None = None,
+	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
@@ -1753,6 +1754,42 @@ if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "actions-
 		print(json.dumps(payload))
 		sys.exit(0)
 
+if len(args) >= 2 and args[0] == "scripts/orchestrate_state_v2.py" and args[1] == "pack":
+	mode = os.environ.get("MOCK_ORCH_STATE_V2_PACK_MODE", "")
+	if mode == "count_mismatch":
+		out_dir = ""
+		state_file = ""
+		i = 2
+		while i < len(args):
+			if args[i] == "--out-dir" and i + 1 < len(args):
+				out_dir = args[i + 1]
+				i += 2
+				continue
+			if args[i] == "--state-file" and i + 1 < len(args):
+				state_file = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		raw_bytes = 0
+		if state_file:
+			try:
+				raw_bytes = len(Path(state_file).read_bytes())
+			except Exception:
+				raw_bytes = 0
+		out_path = Path(out_dir)
+		out_path.mkdir(parents=True, exist_ok=True)
+		chunk_path = out_path / "chunk-0001.txt"
+		chunk_path.write_text("mock chunk payload\n", encoding="utf-8")
+		print(json.dumps({
+			"manifest": "0" * 64,
+			"total": 2,
+			"files": [str(chunk_path)],
+			"raw_bytes": raw_bytes,
+			"encoded_bytes": len("mock chunk payload\n"),
+			"chunk_size": 65280,
+		}))
+		sys.exit(0)
+
 proc = subprocess.run([real_python, *args])
 sys.exit(proc.returncode)
 ''',
@@ -1799,6 +1836,8 @@ sys.exit(proc.returncode)
 			if not touch_path.is_absolute():
 				touch_path = runtime_dir / touch_path
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
+		if mock_orch_state_v2_pack_mode:
+			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -5604,6 +5643,26 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		except json.JSONDecodeError:
 			continue
 	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in following_valid_payloads)
+
+
+def test_state_comment_pack_manifest_count_mismatch_skips_partial_v2_write():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		mock_orch_state_v2_pack_mode="count_mismatch",
+	)
+	state_comment_bodies = [
+		c.get("body", "")
+		for c in result["issues"]["192"]["comments"]
+		if _is_state_comment(c.get("body", ""))
+	]
+	assert not any("ORCHESTRATOR_STATE_V2" in body for body in state_comment_bodies), (
+		"a pack manifest whose files count does not match its declared total must not post a partial "
+		f"V2 state chain. Saw state comments={state_comment_bodies!r}"
+	)
+	assert "pack returned 1 chunk file(s) but declared total=2" in result["stderr"]
 
 
 def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():

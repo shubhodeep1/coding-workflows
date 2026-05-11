@@ -151,6 +151,7 @@ env:
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
   CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
 
 jobs:
   gate:
@@ -920,7 +921,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -935,6 +936,7 @@ jobs:
           # gated on the script's existence and falls open with a
           # warning when missing.
           OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
+          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh semble_helpers.sh"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -1183,13 +1185,72 @@ jobs:
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
             echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
+            echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
+            echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
+            echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"
             echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
             echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
             echo "COMMITTED_FILES_FILE=${RUNTIME_DIR}/committed_files.txt"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_BIN="
+            echo "SEMBLE_INDEX_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
             echo "HAS_PR_DIFF=false"
             echo "PR_DIFF_SOURCE=uninitialized"
             echo "PR_DIFF_ATTEMPTED_PATHS=gh_pr_diff:${RUNTIME_DIR}/pr_diff.patch"
           } >> "$GITHUB_ENV"
+
+      - name: Setup uv for Semble
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/install_semble.sh" ]; then
+            echo "::warning::install_semble.sh missing from support bootstrap at ${SUPPORT_SCRIPTS_DIR}/install_semble.sh; continuing without Semble."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # shellcheck source=/dev/null
+          source "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
+
+          SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"
+          if [ -n "${SEMBLE_BIN_PATH}" ]; then
+            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build semble index
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+
+          echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+
+          if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
+            echo "Semble unavailable; skipping index build."
+            exit 0
+          fi
+
+          SEMBLE_BIN_PATH="${SEMBLE_BIN:-$(command -v semble 2>/dev/null || true)}"
+          if [ -z "${SEMBLE_BIN_PATH}" ]; then
+            echo "::warning::Semble binary unavailable after install step; skipping index build."
+            exit 0
+          fi
+
+          rm -rf "${SEMBLE_INDEX_PATH}"
+          mkdir -p "$(dirname "${SEMBLE_INDEX_PATH}")"
+          if "${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}" > "${RUNTIME_DIR}/semble_index.log" 2>&1; then
+            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "Built Semble index at ${SEMBLE_INDEX_PATH}"
+          else
+            echo "::warning::Semble index build failed; continuing without Semble-backed prompt context."
+            tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+          fi
 
       - name: Record review run start in memory (fail-open)
         env:
@@ -2610,6 +2671,8 @@ jobs:
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
           check_soft_file "${LAST_RUN_DIFF_FILE}"
           check_soft_file "${LAST_RUN_CHANGED_FILES_FILE}"
           check_soft_file "${LAST_RUN_DIFF_STAT_FILE}"
@@ -3132,11 +3195,18 @@ jobs:
         # NOT a "clean review" signal and must block auto-merge.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
-        # LEDGER_ONLY_COMMIT=true: the commit contains only the autofix
-        # ledger, which is a bookkeeping write — not a productive edit — so
-        # this safety check must still run to validate the editor's no-op
-        # claim before downstream clean-review gates fire. See PR #1472.
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        # LEDGER_ONLY_COMMIT_STRICT=true: the commit's only tracked path is
+        # the autofix ledger, which is a bookkeeping write — not a
+        # productive edit — so this safety check must still run to validate
+        # the editor's no-op claim before downstream clean-review gates
+        # fire.  See PR #1472.  We deliberately read the STRICT flag here
+        # (not LEDGER_ONLY_COMMIT) because the non-strict flag is also set
+        # by the audit-convergence branch in
+        # scripts/review_commit_changes.sh, which can fire on commits that
+        # DID land real source-file edits.  Running this detector against
+        # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
+        # (bitsafe.io PR #177 / run 25653654000).
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         run: |
           set -euo pipefail
 
@@ -3303,7 +3373,14 @@ jobs:
               # informational log line and do not block auto-merge.
               # Keeps the hard failure only when there is real evidence
               # of lost edits. See: fun-token-multi-chain PR #117.
-              recheck_script="${GITHUB_WORKSPACE}/scripts/detect_editor_changes_lost.sh"
+              #
+              # The script is bootstrapped to ${SUPPORT_SCRIPTS_DIR} by the
+              # bootstrap step (REQUIRED_BOOTSTRAP_SCRIPTS).  Reading from
+              # ${GITHUB_WORKSPACE}/scripts/ would silently skip the recheck
+              # in every consumer repo (only the workflow-source repo
+              # vendors this path), which is how the bitsafe.io PR #177 /
+              # run 25653654000 false positive escaped this safety net.
+              recheck_script="${SUPPORT_SCRIPTS_DIR}/detect_editor_changes_lost.sh"
               if [ -x "${recheck_script}" ]; then
                 recheck_result="$(bash "${recheck_script}" "${EDITOR_SUMMARY_FILE}" 2>/dev/null || echo "true")"
                 if [ "${recheck_result}" = "false" ]; then
@@ -3809,14 +3886,18 @@ jobs:
           # is a no-op.
           RESOLVER_SCRIPT="${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
           # Capture bash -n stderr (instead of redirecting to /dev/null)
-          # and surface a sanitized single-line copy in every fallback
-          # annotation so operators debugging a workflow run can tell
-          # an unresolved-merge-marker failure apart from a truncated
-          # file, a missing dependency reference, or any other
-          # parse-time issue without having to re-run the job locally.
-          # The same sanitisation pattern (%/\r escaping, whitespace
-          # collapse) the "Detect merge conflicts" step uses for its
-          # `git merge` stderr annotation applies here.
+          # and surface a sanitized copy in every fallback annotation so
+          # operators debugging a workflow run can tell an unresolved-
+          # merge-marker failure apart from a truncated file, a missing
+          # dependency reference, or any other parse-time issue without
+          # having to re-run the job locally.  Multi-line stderr is
+          # preserved by URL-encoding newlines as `%0A` (the workflow-
+          # command-encoding spec for annotation messages) instead of
+          # collapsing to a single line, so a multi-line `bash -n`
+          # diagnostic — e.g. several syntax errors on different lines
+          # of the same script — renders with its original line breaks
+          # in the annotation body.  `%` and `\r` are still escaped to
+          # match the "Detect merge conflicts" step's sanitisation.
           #
           # Probe a candidate resolver path and echo one of:
           #   ok | missing | parse_fail:<sanitized one-line stderr>
@@ -3834,10 +3915,15 @@ jobs:
               printf '%s\n' "missing"
               return
             fi
-            if err="$(bash -n "${path}" 2>&1 >/dev/null)"; then
+            # `bash -n` writes diagnostics to stderr only; merge them
+            # into the command substitution with `2>&1` so the err= capture
+            # actually receives them.  An earlier shape used `2>&1
+            # >/dev/null` which is order-dependent and leaks stderr to the
+            # job log instead of capturing it — see PR #2481 review.
+            if err="$(bash -n "${path}" 2>&1)"; then
               printf '%s\n' "ok"
             else
-              err="$(printf '%s' "${err}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//; s/%/%25/g; s/\r/%0D/g')"
+              err="$(printf '%s' "${err}" | sed 's/%/%25/g; s/\r/%0D/g' | awk 'BEGIN{ORS=""} NR>1{print "%0A"} {print}')"
               printf 'parse_fail:%s\n' "${err:-<no stderr captured>}"
             fi
           }

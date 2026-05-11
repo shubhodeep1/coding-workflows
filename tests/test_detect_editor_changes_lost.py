@@ -216,6 +216,64 @@ def test_reference_clause_path_not_treated_as_edit_target(tmp_path: Path) -> Non
 	)
 
 
+def test_reference_clause_capitalised_verb_is_stripped(tmp_path: Path) -> None:
+	"""Same shape as the bitsafe.io reproducer above, but with a
+	title-cased verb ('This Matches `Y`'). The strip regex must
+	tolerate capitalised verbs so a stylistic choice in the editor's
+	narrative cannot resurrect the EDITOR_CHANGES_LOST false-positive
+	the original fix was designed to eliminate."""
+	_init_clean_repo(tmp_path)
+	external_dir = tmp_path.parent / f"{tmp_path.name}-fixtures"
+	external_dir.mkdir(parents=True, exist_ok=True)
+	fixture = FIXTURES / "narrative_reference_clause_status_edited.txt"
+	mutated = external_dir / "narrative_reference_clause_capitalised.txt"
+	mutated.write_text(
+		fixture.read_text(encoding="utf-8").replace(
+			"This matches", "This Matches"
+		),
+		encoding="utf-8",
+	)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- apps/api/test/auth-service-verification.test.mjs\n",
+	)
+	result = _run_shim(tmp_path, mutated, committed_files=committed)
+	assert result == "false", (
+		"Expected shim to strip the trailing 'This Matches `Y`' reference "
+		f"clause even when the verb is capitalised; got {result!r}."
+	)
+
+
+def test_reference_clause_all_caps_verb_is_stripped(tmp_path: Path) -> None:
+	"""Same reproducer, but with the verb in ALL CAPS
+	('This MATCHES `Y`'). The strip regex is full-word case-
+	insensitive (per-letter `[Aa]`-style alternation), so all-caps
+	and mixed-case spellings ('mIrRoRs', 'REFERENCES') must also be
+	stripped — not just title case."""
+	_init_clean_repo(tmp_path)
+	external_dir = tmp_path.parent / f"{tmp_path.name}-fixtures"
+	external_dir.mkdir(parents=True, exist_ok=True)
+	fixture = FIXTURES / "narrative_reference_clause_status_edited.txt"
+	mutated = external_dir / "narrative_reference_clause_all_caps.txt"
+	mutated.write_text(
+		fixture.read_text(encoding="utf-8").replace(
+			"This matches", "This MATCHES"
+		),
+		encoding="utf-8",
+	)
+	committed = _write_external(
+		tmp_path,
+		"committed_files.txt",
+		"- apps/api/test/auth-service-verification.test.mjs\n",
+	)
+	result = _run_shim(tmp_path, mutated, committed_files=committed)
+	assert result == "false", (
+		"Expected shim to strip the trailing 'This MATCHES `Y`' reference "
+		f"clause even when the verb is all-caps; got {result!r}."
+	)
+
+
 def test_committed_files_file_unset_preserves_legacy_behaviour(tmp_path: Path) -> None:
 	"""When COMMITTED_FILES_FILE is unset the shim must behave exactly as
 	before — the new subset check is purely additive. narrative_real_edit
@@ -325,8 +383,23 @@ def test_apply_fixes_contains_editor_input_authority_contract() -> None:
 
 def test_workflow_uses_defense_in_depth_shim() -> None:
 	wf = REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
-	assert "scripts/detect_editor_changes_lost.sh" in wf, (
-		"Expected review_autofix.yml to invoke the defense-in-depth shim"
+	# The shim must be installed by the bootstrap step so consumer
+	# repos — not just the workflow-source repo — actually have the
+	# script on disk at runtime.  Reading it from a non-bootstrapped
+	# path silently no-ops the recheck in every consumer (bitsafe.io
+	# PR #177 / run 25653654000 escape).
+	bootstrap_line = next(
+		(line for line in wf.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	assert "detect_editor_changes_lost.sh" in bootstrap_line, (
+		"Expected detect_editor_changes_lost.sh in REQUIRED_BOOTSTRAP_SCRIPTS so the shim is reachable in consumer repos"
+	)
+	# The recheck must read from the bootstrapped directory; the
+	# previous `${GITHUB_WORKSPACE}/scripts/` path only exists in the
+	# workflow-source repo and silently failed in every consumer.
+	assert '${SUPPORT_SCRIPTS_DIR}/detect_editor_changes_lost.sh' in wf, (
+		"Expected review_autofix.yml to invoke the defense-in-depth shim from SUPPORT_SCRIPTS_DIR"
 	)
 	assert "treating as false positive (no warning, auto-merge not blocked)" in wf
 
