@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4398-4416 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The CI lint check-run failed on PR head SHA ee8e363722b6aa3919365f39b60ea066b4de7605.\n  WHY: The failed lint gate blocks merge/release execution until it passes.\n- .github/workflows/test-and-mark-stable.yml:4409\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: grep -qE uses bare substring matching without word boundaries.\n  WHY: A future label like ai:done-pending could false-positive match.\n- .github/workflows/test-and-mark-stable.yml:4406-4408\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The inline comment documents old incorrect labels (ai:in-review, ai:implement-failed) and may become stale/confusing.\n  WHY: The comment still contains the replaced strings and could confuse future grep-based audits.\n- .codex-workflow-src-main/ and .codex-workflow-src/:N/A\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Stale copies still contain the old incorrect label patterns.\n  WHY: These directories are not checked by CI and are out of scope for this PR, but they represent a consistency gap that could cause confusion if those copies are ever used as reference.\n- .github/workflows/test-and-mark-stable.yml:4419\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The timeout message still references \"review stage\".\n  WHY: It is slightly inconsistent with the new success condition that accepts ai:done, which is pre-review.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:4398-4416 | confidence=2\n  PROBLEM: The CI lint check-run failed on PR head SHA ee8e363722b6aa3919365f39b60ea066b4de7605.\n  WHY: I could not reproduce the failure locally, and it may be transient or pre-existing, but it blocks the gate.\n- .github/workflows/test-and-mark-stable.yml:4409\n  PROBLEM: grep -qE regex uses bare substring matching without word boundaries.\n  WHY: A future label like ai:done-pending could cause a false-positive match, even though the current contract is safe.\n- .github/workflows/test-and-mark-stable.yml:4406-4408\n  PROBLEM: The comment documents old incorrect labels (ai:in-review, ai:implement-failed) inline in the code.\n  WHY: The comments may become stale/confusing once the fix has been in place for a while and could confuse future grep-based audits.\n- .codex-workflow-src-main/ and .codex-workflow-src/:N/A\n  PROBLEM: Stale copies still contain the old incorrect label patterns.\n  WHY: These directories are not checked by CI and are out of scope for this PR, but they represent a consistency gap that could cause confusion if those copies are ever used as reference.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:4398-4416 | confidence=5\n  PROBLEM: The lint check-run failed on the PR head.\n  WHY: The failed CI check blocks merge until lint passes, and the failure is external to the label-string changes in this PR.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:4398-4416\n  PROBLEM: The lint check-run failure shown in PR_CHECK_RUNS_CONTEXT appears unrelated to these specific changes.\n  WHY: YAML syntax and label-contract validation pass locally, so the CI gate failure blocks merge for a reason outside the current fix.\n- .github/workflows/test-and-mark-stable.yml:4419\n  PROBLEM: The timeout message still references \"review stage\".\n  WHY: It is slightly inconsistent with the new success condition that accepts ai:done, which is pre-review.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:4398-4416\n  PROBLEM: The lint CI failure on the PR head SHA appears unrelated to the diff.\n  WHY: The YAML validates cleanly and the label-contract changes are correct, so the failing lint gate blocks merge for an external reason.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:4398-4416 | confidence=5\n  PROBLEM: Lint check-run failed on PR head SHA ee8e363722b6aa3919365f39b60ea066b4de7605 (run 25645600187/job 75273791298).\n  WHY: GitHub branch protection requires passing check-runs for merge; the lint failure blocks release gate execution and PR merge.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/test-and-mark-stable.yml:N/A | confidence=5\n  PROBLEM: The lint job in the CI workflow failed on the PR head SHA (ee8e363722b6aa3919365f39b60ea066b4de7605).\n  WHY: The CI gate blocks merge until lint passes, even though the exact failed step is not identified here.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1ccc4c57994fafd5a6bb724749d81342d3eb0875f4caa86e0b51a2412de942af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2483,
+    "run_id": "25645600252",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25645600252",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511015544_9f8f8a047f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2483,
+    "run_id": "25645600252"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T01:55:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
