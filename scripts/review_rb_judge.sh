@@ -514,7 +514,49 @@ RB_REMAINING="$(echo "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
 echo "Judge decision: ${RB_ACTION}"
 echo "Justification: ${RB_JUSTIFICATION}"
 
+# -----------------------------------------------------------
+# Merged-PR action guard (runs BEFORE judge comment post so a
+# refused action does not leave a misleading audit trail on the PR)
+# -----------------------------------------------------------
+# The early-guard at script start (above) allows merged PRs through
+# so the judge can pick merge_with_followup for the post-merge
+# recovery flow (operator merges PR manually, expects judge to
+# create the follow-up issue against the merged base). That
+# permissiveness opens a footgun: a merged PR can still reach this
+# dispatch with a `fix` or `close_and_reissue` action — both of
+# which are structurally unsafe for merged PRs (fix would push to
+# a merged branch; close_and_reissue would close an already-closed
+# PR and reissue work that already landed). Refuse those actions
+# here so the merged-PR pass-through stays narrowly scoped.
+#
+# Refusal emits structured outputs (judge_skip_reason=
+# merged_pr_unsafe_action plus judge_action=skip) so downstream log
+# analysis can classify the refusal explicitly — claude-branch-review
+# consensus Findings #2 (missing judge_skip_reason) and #3 (comment-
+# before-guard misleading audit trail). judge_handled stays unset so
+# the workflow's review-blocked fallback fires and the linked issue
+# stays ai:review-blocked for operator review.
+if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] && [ "${RB_ACTION}" != "merge_with_followup" ]; then
+  echo "::error::Judge chose '${RB_ACTION}' for PR #${PR_NUMBER} which is already merged. Only 'merge' (no-op label swap) and 'merge_with_followup' (create tracking issue against merged base) are safe for merged PRs. Refusing — leaving issue in ai:review-blocked for operator review (or rerun the judge with revised context expecting it to pick merge / merge_with_followup)."
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=merged_pr_unsafe_action" >> "$GITHUB_OUTPUT"
+  # Post a brief comment so the operator can see WHY the judge run
+  # exited without action — but only after the guard decision is
+  # final so we never leave a comment claiming an action that will
+  # then be refused.
+  REFUSAL_COMMENT="## Review-Blocked Judge — Action Refused
+
+The judge selected **${RB_ACTION}** but PR #${PR_NUMBER} is already merged. \`${RB_ACTION}\` is unsafe for merged PRs (fix would push to a merged branch; close_and_reissue would reissue work that already landed). Only \`merge\` and \`merge_with_followup\` are safe at this point.
+
+Leaving the linked issue in ai:review-blocked for operator review. Rerun the judge with revised context if you want it to choose merge / merge_with_followup."
+  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+    -f body="${REFUSAL_COMMENT}" >/dev/null 2>&1 || true
+  exit 0
+fi
+
+# -----------------------------------------------------------
 # Post judge assessment to PR
+# -----------------------------------------------------------
 JUDGE_COMMENT="## Review-Blocked Judge Decision
 
 **Decision:** ${RB_ACTION}
@@ -525,24 +567,6 @@ JUDGE_COMMENT="## Review-Blocked Judge Decision
 
 gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
   -f body="${JUDGE_COMMENT}" >/dev/null 2>&1 || true
-
-# -----------------------------------------------------------
-# Merged-PR action guard
-# -----------------------------------------------------------
-# The early-guard at script start (above) allows merged PRs through so
-# the judge can pick merge_with_followup for the post-merge recovery
-# flow (operator merges PR manually, expects judge to create the
-# follow-up issue against the merged base). That permissiveness opens
-# a footgun: a merged PR can still reach the case dispatch with a
-# `fix` or `close_and_reissue` action — both of which are structurally
-# unsafe for merged PRs (fix would push to a merged branch;
-# close_and_reissue would close an already-closed PR and reissue work
-# that already landed). Refuse those actions here so the merged-PR
-# pass-through stays narrowly scoped to its intended use case.
-if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] && [ "${RB_ACTION}" != "merge_with_followup" ]; then
-  echo "::error::Judge chose '${RB_ACTION}' for PR #${PR_NUMBER} which is already merged. Only 'merge' (no-op label swap) and 'merge_with_followup' (create tracking issue against merged base) are safe for merged PRs. Refusing — leaving issue in ai:review-blocked for operator review (or rerun the judge with revised context expecting it to pick merge / merge_with_followup)."
-  exit 0
-fi
 
 # -----------------------------------------------------------
 # Execute judge action
@@ -796,7 +820,12 @@ ${RB_FIX_DESC}"
       _attempt=0
       while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
         _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-        PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
+        # GitHub's REST /pulls/{N} returns .state as one of `open` or
+        # `closed` (never `merged` — merged PRs are state=closed +
+        # merged=true). Constrain the validator to the actual API
+        # vocabulary; the .merged boolean below disambiguates closed-
+        # without-merge from merged.
+        PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
         PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
         PR_MERGED="$(echo "${_pr_json}" | jq -r '.merged // false' | grep -xE 'true|false' || echo "false")"
         if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
@@ -889,13 +918,22 @@ ${RB_FIX_DESC}"
 - Parent issue: ${FIRST_ISSUE:+#${FIRST_ISSUE}}
 - Type: review-blocked-followup"
 
+        # Apply ai:clarification immediately at creation time so the
+        # follow-up enters the pipeline without waiting for the
+        # clarify.yml `issues.opened` event to add it (which would
+        # leave a brief window where the issue has no pipeline label
+        # at all). Matches the orchestrator's close_and_reissue +
+        # merge_with_followup paths which both create issues with
+        # ai:clarification already attached.
+        ensure_label_exists "ai:clarification" "${REPOSITORY}"
+        RB_FOLLOWUP_LABELS=("--label" "ai:clarification")
+
         # Propagate ai:orchestrator-managed from the parent issue when
         # it carries that label — same rationale as the close_and_reissue
         # branch: without propagation an orchestrator-managed parent's
-        # follow-up lands with only ai:clarification (added later by
-        # clarify.yml on issues.opened) and the orchestrator-managed
-        # auto-answer fast path in clarify.yml never fires.
-        RB_FOLLOWUP_LABELS=()
+        # follow-up lands with only ai:clarification and the
+        # orchestrator-managed auto-answer fast path in clarify.yml
+        # never fires.
         if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
           ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
           RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")

@@ -819,15 +819,32 @@ def test_merge_with_followup_orchestrator_managed_parent_propagates_label() -> N
 		f"follow-up issue must carry --label when parent is orchestrator-managed; "
 		f"got args: {args}"
 	)
-	idx = args.index("--label")
-	assert args[idx + 1] == "ai:orchestrator-managed", (
-		f"follow-up --label must be exactly 'ai:orchestrator-managed'; "
-		f"got: {args[idx + 1]!r}"
+	# Collect all (flag, value) label pairs — the script attaches both
+	# `ai:clarification` (always, so the issue enters the pipeline
+	# without waiting for clarify.yml's issues.opened handler) and
+	# `ai:orchestrator-managed` (only when parent has it).
+	label_values = [
+		args[i + 1] for i, arg in enumerate(args)
+		if arg == "--label" and i + 1 < len(args)
+	]
+	assert "ai:orchestrator-managed" in label_values, (
+		f"follow-up must carry --label ai:orchestrator-managed when parent "
+		f"is orchestrator-managed; got label values: {label_values}"
+	)
+	assert "ai:clarification" in label_values, (
+		f"follow-up must carry --label ai:clarification so the issue enters "
+		f"the pipeline immediately (matches the orchestrator path's pattern); "
+		f"got label values: {label_values}"
 	)
 	assert "ai:orchestrator-managed" in state["_ensure_labels"], (
 		"ensure_label_exists must be invoked for ai:orchestrator-managed "
 		"before the gh issue create call; otherwise a fresh consumer repo "
 		"could 422 on an unknown label."
+	)
+	assert "ai:clarification" in state["_ensure_labels"], (
+		"ensure_label_exists must also be invoked for ai:clarification "
+		"so a fresh consumer repo has the label defined before issue "
+		"creation references it."
 	)
 	# Confirm the metadata footer landed in the issue body.
 	idx = args.index("--body")
@@ -1016,6 +1033,104 @@ def test_merge_with_followup_does_not_advance_when_issue_create_fails() -> None:
 	assert "ai:ready-to-merge" not in ensure_labels, (
 		f"ai:ready-to-merge must NOT be ensured when issue create failed "
 		f"(label swap is gated on issue-create success). Got: {ensure_labels}"
+	)
+
+
+# =============================================================================
+# Merged-PR action guard coverage
+# =============================================================================
+#
+# The early guard at script start allows merged PRs (state=closed +
+# merged=true) through so the judge can pick merge_with_followup for
+# the post-merge recovery flow. A merged-PR action guard later in the
+# script refuses `fix` and `close_and_reissue` for merged PRs because
+# those actions are structurally unsafe (fix would push to a merged
+# branch; close_and_reissue would reissue work that already landed).
+#
+# Static checks because the guard sits between the JSON parse and the
+# case statement, and exercising it end-to-end through the harness
+# would require mocking the full script entry (including the early
+# guard's gh api call) — significantly heavier than the
+# close_and_reissue branch tests. The pattern checks below pin the
+# guard's existence + structure so a future refactor cannot silently
+# remove it.
+
+
+def test_merged_pr_action_guard_refuses_fix_and_close_and_reissue() -> None:
+	"""The guard must refuse fix and close_and_reissue for merged PRs.
+	claude-branch-review Finding (round 4 Copilot): the early-guard
+	permissiveness for merged PRs opens a footgun if the judge picks
+	fix / close_and_reissue — both unsafe for code that has already
+	landed. The guard pattern is asserted statically so a future
+	refactor cannot silently drop it."""
+	src = _rb_judge_text()
+
+	# The guard must check PR_ALREADY_MERGED against the two safe actions.
+	assert 'PR_ALREADY_MERGED' in src, (
+		"review_rb_judge.sh must define PR_ALREADY_MERGED so the merged-PR "
+		"action guard can refuse fix/close_and_reissue."
+	)
+	# Match the literal guard line (or fragments thereof) so widening
+	# the safe-action set (e.g. accidentally allowing fix) is caught.
+	assert '"${PR_ALREADY_MERGED:-false}" = "true"' in src, (
+		"merged-PR action guard must use the canonical "
+		'`[ \"${PR_ALREADY_MERGED:-false}\" = \"true\" ]` test.'
+	)
+	assert '[ "${RB_ACTION}" != "merge" ]' in src and '[ "${RB_ACTION}" != "merge_with_followup" ]' in src, (
+		"merged-PR action guard must whitelist exactly 'merge' and "
+		"'merge_with_followup' — widening the set would re-introduce "
+		"the footgun the guard exists to prevent."
+	)
+
+
+def test_merged_pr_action_guard_emits_skip_reason() -> None:
+	"""Refusal must emit `judge_skip_reason=merged_pr_unsafe_action` so
+	downstream log analysis can classify the refusal. Without this,
+	the workflow sees `judge_handled` unset with no explicit reason —
+	indistinguishable from an unknown failure (claude-branch-review
+	consensus Finding #2)."""
+	src = _rb_judge_text()
+
+	assert 'judge_skip_reason=merged_pr_unsafe_action' in src, (
+		"merged-PR action guard must emit "
+		"judge_skip_reason=merged_pr_unsafe_action so log analysis "
+		"can classify the refusal explicitly."
+	)
+	# Pin the exit code so a refactor doesn't accidentally let the
+	# script continue into the case dispatch after refusal.
+	# The refusal block ends with `exit 0`.
+	guard_match = re.search(
+		r'judge_skip_reason=merged_pr_unsafe_action.*?exit 0',
+		src,
+		re.DOTALL,
+	)
+	assert guard_match is not None, (
+		"merged-PR action guard must end with `exit 0` so the refused "
+		"action does not continue into the case dispatch below."
+	)
+
+
+def test_merged_pr_action_guard_runs_before_judge_comment() -> None:
+	"""The guard must run BEFORE the JUDGE_COMMENT post so a refused
+	action does not leave a misleading audit trail on the PR
+	(claude-branch-review consensus Finding #3 — comment claiming a
+	`fix` or `close_and_reissue` action that the guard then silently
+	refuses)."""
+	src = _rb_judge_text()
+
+	guard_pos = src.find('judge_skip_reason=merged_pr_unsafe_action')
+	# JUDGE_COMMENT is the heredoc declaration; find its first
+	# occurrence and ensure it sits AFTER the guard.
+	comment_pos = src.find('JUDGE_COMMENT="## Review-Blocked Judge Decision')
+
+	assert guard_pos > 0 and comment_pos > 0, (
+		"failed to locate guard and JUDGE_COMMENT markers in "
+		"review_rb_judge.sh — has the structure changed?"
+	)
+	assert guard_pos < comment_pos, (
+		f"merged-PR action guard (pos={guard_pos}) must run BEFORE "
+		f"the JUDGE_COMMENT post (pos={comment_pos}) so a refused "
+		f"action does not leave a misleading audit trail on the PR."
 	)
 
 

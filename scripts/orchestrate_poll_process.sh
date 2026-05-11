@@ -10132,7 +10132,11 @@ ${RB_FIX_DESC}
             # standalone review_rb_judge.sh script's merge_with_followup
             # branch — see that file for the rationale on each gate.
             _rb_mwf_json="$(_fetch_pr_json "${RB_PR}")"
-            PR_STATE="$(_jq_field "${_rb_mwf_json}" '.state' 'open|closed|merged')"
+            # GitHub's REST /pulls/{N} returns .state as one of `open`
+            # or `closed` (never `merged` — merged PRs are state=closed
+            # + merged=true). Constrain the validator to the actual API
+            # vocabulary; .merged below disambiguates the two.
+            PR_STATE="$(_jq_field "${_rb_mwf_json}" '.state' 'open|closed')"
             PR_MERGEABLE="$(_jq_field "${_rb_mwf_json}" '.mergeable' 'true|false')"
             PR_MERGED_NOW="$(_jq_field "${_rb_mwf_json}" '.merged' 'true|false')"
             [ -n "${PR_MERGED_NOW}" ] || PR_MERGED_NOW="false"
@@ -10169,7 +10173,15 @@ ${RB_FIX_DESC}
                 # merge_with_followup ladder so the two judge
                 # implementations stay behaviourally consistent on
                 # the same shared prompt.
-                if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+                #
+                # NOTE: gh pr merge is intentionally NOT wrapped with
+                # gh_retry — sync merge failures here are typically
+                # non-transient (pending required checks, branch
+                # protection rules, merge-queue mode) and retrying
+                # them only adds backoff cost before falling through
+                # to the same warning path. Matches the standalone
+                # review_rb_judge.sh's pattern.
+                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                   RB_MERGED="true"
