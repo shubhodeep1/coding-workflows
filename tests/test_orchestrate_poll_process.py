@@ -6810,6 +6810,82 @@ def test_actions_runs_cached_loader_uses_if_none_match_when_stale() -> None:
 	assert result["actions_runs_if_none_match_count"] >= 1
 
 
+def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
+	# scripts/orchestrate_poll_process.sh has a resolver-tooling refresh
+	# allowlist (the `refresh_files=( ... )` array) that controls which
+	# files are re-pulled from default_branch onto the orchestrator's
+	# integration-sync working copy.  Both the standard reflexion prelude
+	# and the timeout-aware reflexion prelude must be in this list — if
+	# either is missing, consumer repos pinning to @stable would not pick
+	# up the prelude after a release and the resolver retry loop would
+	# silently fall back to "retry with original prompt verbatim" on the
+	# specific failure class that the missing prelude was supposed to
+	# handle.  Added after PR #2453's claude-branch-review flagged that
+	# the new timeout prelude needed an explicit pin against future
+	# refactors silently dropping it.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Narrow the assertion to the substring between `refresh_files=(`
+	# and its matching closing `)` so the test actually enforces array
+	# membership — not "path appears anywhere in the file" (which would
+	# false-positive if a future refactor moved the path to a comment
+	# or echo while dropping it from the allowlist).  There is only one
+	# `refresh_files=(` declaration in the file, so a simple
+	# split-from-the-marker / slice-to-next-`)` works without a full
+	# bash parser.
+	open_marker = "refresh_files=("
+	open_idx = poller_body.find(open_marker)
+	assert open_idx != -1, (
+		f"{open_marker} ... ) array missing from "
+		"scripts/orchestrate_poll_process.sh; the resolver-tooling "
+		"refresh path has been removed or renamed."
+	)
+	# Closing `)` of the array is the first `)` that appears on its
+	# own line (possibly indented).  This matches the existing array
+	# style and avoids matching `)` characters that occur inside
+	# comments or quoted paths within the array body.
+	close_re = re.compile(r"^\s*\)\s*$", re.MULTILINE)
+	close_match = close_re.search(poller_body, pos=open_idx + len(open_marker))
+	assert close_match is not None, (
+		f"could not find closing `)` for the {open_marker} array in "
+		"scripts/orchestrate_poll_process.sh; the array literal is "
+		"either malformed or its closing brace style changed."
+	)
+	array_body = poller_body[open_idx + len(open_marker): close_match.start()]
+	for tpl in (
+		"prompts/integration-sync-conflict-resolver-retry-prelude.txt",
+		"prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt",
+	):
+		assert tpl in array_body, (
+			f"{tpl} missing from the refresh_files=( ... ) allowlist "
+			"body in scripts/orchestrate_poll_process.sh (not just "
+			"absent from the file as a whole — the path must be a "
+			"member of the array). Consumer repos pinning @stable "
+			"would not pick up this prelude after a release, "
+			"silently disabling the corresponding retry-reflexion path."
+		)
+	# Defence-in-depth: the matching workflow-side bootstrap in
+	# review_autofix.yml must also stage the timeout-prelude file so the
+	# script_ref pin path mirrors the orchestrator refresh path.  Anchor
+	# the assertion on the actual `install -m 0644` staging line —
+	# matching the bare filename anywhere in the YAML would false-positive
+	# if the string remained only in an `echo "::warning::..."` line while
+	# the `install` line was removed or altered.  The signature
+	# `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/<file>` is the exact
+	# shape used by every prompt-staging block in this workflow.
+	wf_body = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	timeout_prelude_install_re = re.compile(
+		r"install -m 0644 [^\n]*\$\{SUPPORT_PROMPTS_DIR\}/integration-sync-conflict-resolver-retry-timeout-prelude\.txt",
+	)
+	assert timeout_prelude_install_re.search(wf_body) is not None, (
+		"review_autofix.yml does not stage the timeout-prelude template "
+		"via the expected `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/"
+		"integration-sync-conflict-resolver-retry-timeout-prelude.txt` "
+		"signature; consumer-repo runs whose pinned script_ref includes "
+		"the new prelude file would still hit a missing-template "
+		"::warning:: at runtime."
+	)
+
+
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# The resolver run: blocks were extracted into
 	# scripts/review_conflict_prepare.sh and

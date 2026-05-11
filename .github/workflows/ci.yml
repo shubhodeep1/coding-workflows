@@ -111,12 +111,12 @@ jobs:
       - name: Orchestrate lib unit tests
         run: |
           set -euo pipefail
-          python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
 
       - name: Orchestrate poll process unit tests
         run: |
           set -euo pipefail
-          python3 tests/test_orchestrate_poll_process.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
 
       - name: Merge probe unit tests
         run: |
@@ -126,12 +126,12 @@ jobs:
       - name: Overlap validation fallback unit tests
         run: |
           set -euo pipefail
-          python3 tests/test_overlap_validation_fallback.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_overlap_validation_fallback.py
 
       - name: Validate harness RPC health-check unit tests
         run: |
           set -euo pipefail
-          python3 tests/test_validate_harness_rpc.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_harness_rpc.py
 
       - name: Validation self-test unit tests
         run: |
@@ -160,6 +160,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
+      - name: Stall-recovery PR-lookup unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
+
       - name: Codex config writer contract tests
         run: |
           set -euo pipefail
@@ -184,6 +189,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
 
+      - name: Review autofix EDITOR_CHANGES_LOST shim regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
+
       - name: Review autofix failure-log upload contract test
         run: |
           set -euo pipefail
@@ -203,6 +213,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py
+
+      - name: Review conflict-resolve retry-prelude rendering contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
 
       - name: Review apply-fixes smoke deterministic contract test
         run: |

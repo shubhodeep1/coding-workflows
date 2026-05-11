@@ -701,7 +701,20 @@ jobs:
     # break.
     name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Sized to accommodate the resolver step's 170-min cap plus the
+    # pre-resolver work (~24 min observed on run 25629086684: disk
+    # cleanup, checkout, codex install, runtime workspace setup,
+    # reviewer fan-out, editor, prompt prep) and post-resolver work
+    # (validation, push, comments, telegram, EXIT-trap dispatch).
+    # The previous 180-min cap left only ~10 min of job-level
+    # headroom over the new 170-min step cap, which a flagged
+    # review comment correctly identified as risk: a long resolver
+    # run could be killed by the job timer before the EXIT trap
+    # dispatches the orchestrator poll.  240 min gives ~46 min of
+    # cushion (24 pre + 170 step + 46 post = 240) so the EXIT trap
+    # is reachable even when every retry uses its full per-attempt
+    # budget.
+    timeout-minutes: 240
     concurrency:
       # Two cancellation regimes, keyed off needs.gate.outputs.claude_branch_review:
       #
@@ -1076,6 +1089,18 @@ jobs:
             else
               echo "::warning::integration-sync-conflict-resolver-retry-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver retries on integration-sync runs will use the original prompt verbatim (no reflexion guidance)."
               rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver-retry-timeout-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver timeout-induced retries on integration-sync runs will fall back to the original prompt verbatim (no timeout-aware reflexion guidance)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             fi
           fi
 
@@ -3764,14 +3789,25 @@ jobs:
         # timeout-minutes is the safety net for a hung codex exec call.  The
         # script-internal retry loop does up to INTEGRATION_SYNC_RESOLVER_MAX_
         # ATTEMPTS=3 attempts, with the no-progress check biting after attempt
-        # 2 when fingerprint violations are stable; one observed worst-case
-        # attempt was ~58 min, so 60 min caps a single hung attempt without
-        # killing well-behaved 3-attempt runs.  On hit, the EXIT trap in
+        # 2 when fingerprint violations are stable.  Per-attempt cap is
+        # CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=3000 (50 min, raised from
+        # 18 min after run 25629086684 / PR #2865 on tele-funtoken-msg-scoring
+        # where every attempt hit the previous 18-min ceiling without ever
+        # producing apply_patch on a 7-file mixed-implementation merge).
+        # 3 × 50 min = 150 min fits inside the 170-min step cap with ~20 min
+        # for soft validation, commit, and the EXIT-trap dispatch.  The
+        # surrounding job's timeout-minutes (240 — see the `timeout-minutes:`
+        # setting on the codex-agent job earlier in this workflow) was sized
+        # to fit ~24 min of pre-resolver work (disk cleanup, checkout, codex
+        # install, runtime workspace, prompt prep, reviewers, editor) plus
+        # this 170-min step cap plus ~46 min of post-resolver work, so the
+        # EXIT trap is reachable even when every retry uses its full
+        # per-attempt budget.  On hit, the EXIT trap in
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
-        timeout-minutes: 60
+        timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
@@ -3789,10 +3825,105 @@ jobs:
           # [ai-merge-resolve] commit was aborted. Pin the resolver to a
           # workflow-controlled effort so the smoke override never starves
           # it.
-          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'xhigh' }}
+          #
+          # Default lowered from 'xhigh' to 'high' after runs 25627236793
+          # (PR shubhodeep1/tele-funtoken-msg-scoring#2874) and
+          # 25627316961 (PR #2867) on the orchestrator/project-2840
+          # stack hit a hung-thinking failure mode at 'xhigh': Codex
+          # consumed the full 1080s per-attempt budget enumerating
+          # duplicate helper definitions outside the conflict markers
+          # and was SIGTERMed by `timeout` before invoking apply_patch
+          # on all three retry attempts (markers=0,
+          # fingerprint_violations=0 on every retry — the unambiguous
+          # signature of `timeout` firing pre-patch). 'high' trades some
+          # merge depth for finishing inside the per-attempt budget on
+          # degenerate orchestrator-stack integrations. The smoke-test
+          # starvation rationale above still holds at 'high'; the only
+          # level that triggered it was 'none'. Consumers can override
+          # per-repo via vars.THINKING_LEVEL_CONFLICT_RESOLVER; valid
+          # levels (review_conflict_resolve.sh) are
+          # xhigh, high, medium, none.
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
+          # Bootstrap guard for the workflow-source-repo case
+          # (IS_WORKFLOW_SOURCE_REPO=true): SUPPORT_SCRIPTS_DIR resolves
+          # to the in-tree "scripts" dir, so when the prior
+          # review_conflict_prepare.sh merge replay lists
+          # scripts/review_conflict_resolve.sh among its unmerged paths
+          # (forward-merge stable→main PRs that touch the resolver
+          # itself), the on-disk copy at SUPPORT_SCRIPTS_DIR contains
+          # raw `<<<<<<< HEAD` / `=======` / `>>>>>>>` markers and bash
+          # aborts with "syntax error near unexpected token '<<<'"
+          # before the resolver can even start — observed on PR #2451
+          # run 25637785576 (job 63633abc-d9f8-54e0-a184-111777ae010a)
+          # where line 625's `else` clause was misparsed as a here-string.
+          # The .codex-workflow-src/ checkout (pinned to SCRIPT_REF) is
+          # untouched by the merge replay because review_conflict_prepare.sh
+          # explicitly stashes and restores it around the merge, so it
+          # holds a clean, parseable copy of the resolver script. Fall
+          # back to that copy when the in-tree script fails `bash -n`.
+          # The Codex resolver invoked below still reads the conflicted
+          # in-tree path to see the markers it needs to resolve — only
+          # the bash interpreter loading the resolver script switches
+          # source. Consumer repos (SUPPORT_SCRIPTS_DIR points outside
+          # the working tree) are unaffected: their in-tree script is
+          # never overwritten, `bash -n` always passes, and this block
+          # is a no-op.
+          RESOLVER_SCRIPT="${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
+          # Capture bash -n stderr (instead of redirecting to /dev/null)
+          # and surface a sanitized single-line copy in every fallback
+          # annotation so operators debugging a workflow run can tell
+          # an unresolved-merge-marker failure apart from a truncated
+          # file, a missing dependency reference, or any other
+          # parse-time issue without having to re-run the job locally.
+          # The same sanitisation pattern (%/\r escaping, whitespace
+          # collapse) the "Detect merge conflicts" step uses for its
+          # `git merge` stderr annotation applies here.
+          #
+          # Probe a candidate resolver path and echo one of:
+          #   ok | missing | parse_fail:<sanitized one-line stderr>
+          # The state string is embedded verbatim in the
+          # warning/error annotation below so the triple-failure path
+          # (in-tree corrupted AND both fallbacks unavailable or
+          # unparseable) reports each fallback's distinct state +
+          # captured stderr — addresses #2466 review feedback that
+          # the prior implementation suppressed fallback stderr and
+          # conflated missing-file with parse-failure under a single
+          # "unavailable/unparseable" label.
+          _probe_resolver() {
+            local path="$1" err
+            if [ ! -f "${path}" ]; then
+              printf '%s\n' "missing"
+              return
+            fi
+            if err="$(bash -n "${path}" 2>&1 >/dev/null)"; then
+              printf '%s\n' "ok"
+            else
+              err="$(printf '%s' "${err}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//; s/%/%25/g; s/\r/%0D/g')"
+              printf 'parse_fail:%s\n' "${err:-<no stderr captured>}"
+            fi
+          }
+          _primary_state="$(_probe_resolver "${RESOLVER_SCRIPT}")"
+          if [ "${_primary_state}" != "ok" ]; then
+            _fb1=".codex-workflow-src/scripts/review_conflict_resolve.sh"
+            _fb2=".codex-workflow-src-main/scripts/review_conflict_resolve.sh"
+            _fb1_state="$(_probe_resolver "${_fb1}")"
+            if [ "${_fb1_state}" = "ok" ]; then
+              echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state} (likely unresolved conflict markers from the merge replay); falling back to ${_fb1} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
+              RESOLVER_SCRIPT="${_fb1}"
+            else
+              _fb2_state="$(_probe_resolver "${_fb2}")"
+              if [ "${_fb2_state}" = "ok" ]; then
+                echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; falling back to ${_fb2}."
+                RESOLVER_SCRIPT="${_fb2}"
+              else
+                echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; ${_fb2}=${_fb2_state}. No clean resolver entry-point available."
+                exit 2
+              fi
+            fi
+          fi
+          bash "${RESOLVER_SCRIPT}"
 
       - name: Cache linked issues references
         # Claude-branch-review mode skips all the downstream label-mutating
