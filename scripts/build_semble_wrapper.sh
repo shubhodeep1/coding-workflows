@@ -92,8 +92,14 @@ mark_unavailable()
 
 build_index()
 {
-	rm -f "${index_path}"
-	mkdir -p "${wrapper_dir}"
+	# Defensive cleanup. `rm -f` aborts on a directory (e.g., a stale run
+	# left ${index_path} as a directory tree); under `set -euo pipefail`
+	# that would abort before mark_unavailable() can write SEMBLE_* state,
+	# breaking the "always exit 0" contract documented at the top of this
+	# file. `rm -rf ... 2>/dev/null || true` handles both file and directory
+	# leftovers and never aborts.
+	rm -rf "${index_path}" 2>/dev/null || true
+	mkdir -p "${wrapper_dir}" 2>/dev/null || true
 
 	if ! "${semble_python_path}" - "${repo_root}" "${index_path}" <<'PY'
 import pickle
@@ -146,20 +152,25 @@ with index_path.open("wb") as handle:
     )
 PY
 	then
-		rm -f "${index_path}"
+		rm -rf "${index_path}" 2>/dev/null || true
 		mark_unavailable "index-build-failed"
 	fi
 }
 
 write_wrapper()
 {
+	# Same defensive cleanup as build_index(): a previous run could have
+	# left a directory at wrapper_path, and the redirect `> "${wrapper_path}"`
+	# would then abort the script under `set -e` before mark_unavailable
+	# could honor the fail-soft contract. rm -rf + || true covers both.
+	rm -rf "${wrapper_path}" 2>/dev/null || true
 	# Shebang must match the interpreter that has semble + bm25s installed.
 	# install_semble.sh honors SEMBLE_PYTHON_BIN (default: python3); using
 	# `#!/usr/bin/env python3` here would silently pick the wrong python on
 	# runners where install ran under a non-default interpreter (e.g.
 	# python3.11), so `import semble` would fail at query time. Resolve the
 	# absolute path now and bake it into the shebang.
-	{
+	if ! {
 		printf '#!%s\n' "${semble_python_path}"
 		cat <<'PY'
 import argparse
@@ -226,8 +237,11 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 PY
-	} > "${wrapper_path}"
-	chmod +x "${wrapper_path}"
+	} > "${wrapper_path}" 2>/dev/null
+	then
+		mark_unavailable "wrapper-write-failed"
+	fi
+	chmod +x "${wrapper_path}" 2>/dev/null || mark_unavailable "wrapper-chmod-failed"
 }
 
 main()
