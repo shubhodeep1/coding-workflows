@@ -3344,12 +3344,23 @@ _list_integration_conflict_files() {
   # base, and a shallow fetch can strand the lookup so the probe falls back
   # to a tree-vs-tree diff and over-reports conflicts — defeating the
   # ≤3-conflicts hot-file short-circuit in heal_integration_branch_conflict
-  # below.  Fail-open: if the partial-clone option is unsupported by the
-  # remote (very rare on GitHub), the `|| true` swallows the error and the
-  # subsequent rev-parse checks return 1, matching the existing
+  # below.
+  # Use explicit refspecs `refs/heads/<b>:refs/remotes/origin/<b>` rather
+  # than bare branch names: `git fetch origin <b1> <b2>` without
+  # refspecs only updates FETCH_HEAD and may leave
+  # refs/remotes/origin/<b> missing or stale in single-branch /
+  # shallow clones (the orchestrator's CI checkout context), so the
+  # subsequent rev-parse checks would fail-open and the hot-file
+  # short-circuit could never fire even on a live conflict (Codex P2,
+  # PR #2522, line 3352).
+  # Fail-open: if the partial-clone option is unsupported by the
+  # remote (very rare on GitHub), the `|| true` swallows the error and
+  # the subsequent rev-parse checks return 1, matching the existing
   # missing-refs fail-open contract.
-  git fetch --no-tags --filter=blob:none --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null \
-    || git fetch --no-tags --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null \
+  local _ib_refspec="refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}"
+  local _db_refspec="refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
+  git fetch --no-tags --filter=blob:none --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null \
+    || git fetch --no-tags --quiet origin "${_ib_refspec}" "${_db_refspec}" 2>/dev/null \
     || true
   git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
   git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
@@ -3594,11 +3605,20 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
   _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || dispatch_rc=$?
 
   if [ "${dispatch_rc}" -eq 2 ]; then
-    jq --argjson ts "${now_ts}" \
-      '.integration_sync_status = "healing" |
-       .integration_conflict_dispatch_ts = $ts' \
+    # Only update the sync status here — DO NOT refresh
+    # integration_conflict_dispatch_ts.  An in-flight resolver fires
+    # the rc=2 dedupe path on every poll tick while it runs; if we
+    # advanced the timestamp here, the exponential backoff computed
+    # against (now - dispatch_ts) at line 3578+ would keep resetting
+    # to ~0 elapsed for the lifetime of the resolver run.  After a
+    # resolver that runs for an hour, the next real retry would then
+    # wait the FULL exponential cooldown (up to ~4h at
+    # dispatch_count>=4) measured from the moment it finished rather
+    # than from the original dispatch — almost doubling the gap
+    # between real attempts (Codex P2, PR #2522, line 3575).
+    jq '.integration_sync_status = "healing"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick."
+    echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick (cooldown timer unchanged)."
     return 0
   fi
 
@@ -6069,6 +6089,7 @@ invoke_stall_judge() {
   local _judge_cache_hit_action=""
   local _judge_cache_replay_count=0
   local _judge_force_escalate="false"
+  local _judge_cache_force_escalate="false"
 
   local prior_actions='[]'
   if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
@@ -6196,7 +6217,7 @@ invoke_stall_judge() {
     _cache_diagnostics="$(printf '%s' "${diagnostics}" | jq -c '
       .recent_tracking_comments = (
         (.recent_tracking_comments // [])
-        | map(select((.body // "") | contains("Stall Judge — Issue #") | not))
+        | map(select((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #") | not))
       )
       | del(.stall_minutes)
       | del(.recovery_count)
@@ -6210,7 +6231,18 @@ invoke_stall_judge() {
       _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
       _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
       [[ "${_judge_cache_replay_count}" =~ ^[0-9]+$ ]] || _judge_cache_replay_count=0
-      if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ]; then
+      # Read the sticky synthetic-escalation marker that the
+      # force-escalate cache write below stamps onto entries derived
+      # from MAX_JUDGE_REPLAY.  Without this, the very next tick after
+      # the cap fires would replay the cached "escalate_human" but
+      # with _judge_force_escalate=false, so normalize would downgrade
+      # it back to the ladder and the terminal decision would be
+      # silently lost (Codex P2, PR #2522, line 6279).
+      _judge_cache_force_escalate="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].force_escalate // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+      if [ -n "${_judge_cache_hit_action}" ] && {
+           [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ] \
+           || [ "${_judge_cache_force_escalate}" = "true" ];
+         }; then
         _judge_force_escalate="true"
       fi
     fi
@@ -6260,22 +6292,29 @@ invoke_stall_judge() {
   local attempt
   local _judge_from_cache="false"
   if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_force_escalate}" = "true" ]; then
-    echo "  [stall-judge] Cache replay cap reached for issue #${issue_num} (key=${_judge_cache_key}, replays=${_judge_cache_replay_count} >= ${MAX_JUDGE_REPLAY}); forcing escalate_human."
+    if [ "${_judge_cache_force_escalate:-false}" = "true" ]; then
+      echo "  [stall-judge] Replaying sticky synthetic escalate_human for issue #${issue_num} (key=${_judge_cache_key}, cache marker force_escalate=true)."
+    else
+      echo "  [stall-judge] Cache replay cap reached for issue #${issue_num} (key=${_judge_cache_key}, replays=${_judge_cache_replay_count} >= ${MAX_JUDGE_REPLAY}); forcing escalate_human."
+    fi
     local _judge_escalate_justification
     _judge_escalate_justification="Cached judge decision '${_judge_cache_hit_action}' replayed ${_judge_cache_replay_count} times without progress; bypassing cache and escalating."
     jq -cn --arg a "escalate_human" --arg j "${_judge_escalate_justification}" '{action:$a, justification:$j}' > "${stall_judge_output_file}"
     judge_success="true"
     _judge_from_cache="true"
-    # Record the forced decision in the cache and reset the replay counter
-    # so a next-tick cache hit on the same diagnostics serves "escalate_human"
-    # directly instead of running through the force-escalate ladder again
-    # (and accidentally credit-burning another replay on the previous
-    # action).  The cache write itself is best-effort: a jq failure is
-    # logged via the jq error stream and silently swallowed, matching the
-    # existing replay / write callsites below.
+    # Record the forced decision in the cache with the force_escalate
+    # marker so the bypass at line ~6339 (which gates on
+    # _judge_force_escalate) re-fires on the very next tick that hits
+    # this same key — without the marker, replay_count would reset to
+    # 0 here and the next cycle's normalize call would silently
+    # downgrade the synthetic escalate_human back to the ladder
+    # action, defeating MAX_JUDGE_REPLAY entirely (Codex P2,
+    # PR #2522, line 6279).  Best-effort: a jq failure is silently
+    # swallowed, matching the existing replay / write callsites
+    # below.
     if [ -n "${_judge_cache_key}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
       jq --arg k "${_judge_cache_key}" \
-        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": "escalate_human", "replay_count": 0})' \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": "escalate_human", "replay_count": 0, "force_escalate": true})' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
     fi
   elif [ -n "${_judge_cache_hit_action}" ]; then
@@ -6354,8 +6393,20 @@ invoke_stall_judge() {
   # Cache the fresh judge decision so future identical inputs replay it
   # rather than burning another LLM call. Skip when this run was itself
   # served from the cache (replay count was already bumped above).
-  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${judge_action}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
-    jq --arg k "${_judge_cache_key}" --arg action "${judge_action}" \
+  # Cache the EFFECTIVE action (post-normalize) rather than the raw
+  # judge_action: if the judge returns an unrecognized action like
+  # `rerun_review`, normalize_stall_recovery_action safely falls back
+  # to the ladder for this tick, but caching the raw invalid string
+  # would replay the same bogus action on every future identical
+  # stall — repeatedly burning fallbacks until MAX_JUDGE_REPLAY fires
+  # human escalation on the back of one bad model response.  Caching
+  # the executable action breaks that loop and matches the action
+  # we actually executed (Codex P2, PR #2522, line 6359).  Skip the
+  # cache write when effective_action ended up empty (defensive
+  # belt-and-braces, though normalize never returns empty in
+  # practice).
+  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${effective_action}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    jq --arg k "${_judge_cache_key}" --arg action "${effective_action}" \
       '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
   fi

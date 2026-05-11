@@ -174,6 +174,154 @@ def test_judge_cache_replay_path_bumps_counter_then_escalates(tmp_path):
 	], lines
 
 
+def test_judge_cache_force_escalate_marker_survives_replay(tmp_path):
+	"""When MAX_JUDGE_REPLAY synthesises an escalate_human and stamps
+	force_escalate=true on the cache entry, every subsequent identical
+	stall must continue to read force_escalate=true and re-fire the
+	bypass — otherwise the very next tick (replay_count=0,
+	_judge_force_escalate=false) would normalize escalate_human back
+	to the ladder action and the terminal decision would be silently
+	lost (Codex P2, PR #2522, line 6279)."""
+	state_file = tmp_path / "state.json"
+	# Seed: forced-escalation cache entry from a prior cap-fire.
+	state_file.write_text(json.dumps({
+		"judge_decision_cache": {
+			"abc": {"action": "escalate_human", "replay_count": 0, "force_escalate": True},
+		},
+	}))
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export STATE_FILE='""" + str(state_file) + """'
+		export MAX_JUDGE_REPLAY=2
+		key=abc
+		# Reproduce the production read at line ~6220+.
+		hit_action="$(jq -r --arg k "$key" '.judge_decision_cache[$k].action // ""' "$STATE_FILE")"
+		replay_count="$(jq -r --arg k "$key" '.judge_decision_cache[$k].replay_count // 0' "$STATE_FILE")"
+		[[ "$replay_count" =~ ^[0-9]+$ ]] || replay_count=0
+		cache_force_escalate="$(jq -r --arg k "$key" '.judge_decision_cache[$k].force_escalate // false' "$STATE_FILE")"
+		force_escalate="false"
+		if [ -n "$hit_action" ] && {
+			[ "$replay_count" -ge "$MAX_JUDGE_REPLAY" ] \
+			|| [ "$cache_force_escalate" = "true" ];
+		}; then
+			force_escalate="true"
+		fi
+		echo "force_escalate=$force_escalate"
+		echo "hit_action=$hit_action"
+		echo "replay_count=$replay_count"
+		echo "cache_force_escalate=$cache_force_escalate"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# Even with replay_count=0 (well below MAX_JUDGE_REPLAY=2), the
+	# cache marker re-triggers force_escalate=true on EVERY replay.
+	assert out["force_escalate"] == "true", out
+	assert out["hit_action"] == "escalate_human", out
+	assert out["cache_force_escalate"] == "true", out
+	assert out["replay_count"] == "0", out
+
+
+def test_judge_cache_force_escalate_marker_stops_when_diagnostics_change(tmp_path):
+	"""The sticky escalation should ONLY fire while the stall is
+	identical (same cache key).  When diagnostics change — e.g. a
+	new commit advances head_sha — the cache key differs and the
+	old force_escalate entry no longer applies."""
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps({
+		"judge_decision_cache": {
+			"abc": {"action": "escalate_human", "replay_count": 0, "force_escalate": True},
+		},
+	}))
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export STATE_FILE='""" + str(state_file) + """'
+		export MAX_JUDGE_REPLAY=2
+		# New key (e.g. head_sha advanced) — no cache entry.
+		key=xyz
+		hit_action="$(jq -r --arg k "$key" '.judge_decision_cache[$k].action // ""' "$STATE_FILE")"
+		cache_force_escalate="$(jq -r --arg k "$key" '.judge_decision_cache[$k].force_escalate // false' "$STATE_FILE")"
+		echo "hit_action=$hit_action"
+		echo "cache_force_escalate=$cache_force_escalate"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# New diagnostics → no cache hit → no sticky escalation.
+	assert out["hit_action"] == "", out
+	assert out["cache_force_escalate"] == "false", out
+
+
+def test_judge_cache_stores_effective_action_not_raw_judge_action(tmp_path):
+	"""When the judge returns an unrecognized action, the cache must
+	store the effective (post-normalize) action, not the raw invalid
+	string — otherwise every future identical stall replays the
+	invalid action, burns the normalize fallback again, and
+	eventually trips MAX_JUDGE_REPLAY based on one bad model
+	response (Codex P2, PR #2522, line 6359)."""
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps({}))
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export STATE_FILE='""" + str(state_file) + """'
+		key=cache_key_abc
+		# Simulate the judge returning a bogus action, normalize
+		# falling back to a safe ladder action.
+		judge_action="rerun_review"        # raw LLM output (invalid)
+		effective_action="retrigger_pipeline"  # post-normalize fallback
+		# Production now caches effective_action.
+		jq --arg k "$key" --arg action "$effective_action" \
+			'.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
+			"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+		echo "cached_action=$(jq -r --arg k "$key" '.judge_decision_cache[$k].action' "$STATE_FILE")"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	out = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if line)
+	# The cache MUST store the safe ladder action, not the raw invalid
+	# one — preventing the invalid-action replay loop.
+	assert out["cached_action"] == "retrigger_pipeline", out
+
+
+def test_heal_integration_conflict_rc2_does_not_refresh_dispatch_ts(tmp_path):
+	"""On an in-flight resolver (rc=2 from
+	_dispatch_review_for_conflicts), heal_integration_branch_conflict
+	must NOT advance integration_conflict_dispatch_ts.  If it did,
+	the exponential backoff calculated against (now - dispatch_ts)
+	would keep resetting to ~0 elapsed on every poll tick the
+	resolver was running, so after a long-running resolver the next
+	real retry would wait the full exponential cooldown from the
+	moment it finished — almost doubling the gap between real
+	attempts (Codex P2, PR #2522, line 3575)."""
+	state_file = tmp_path / "state.json"
+	# Seed: a real dispatch was made 10 minutes ago.
+	original_ts = 1700000000
+	state_file.write_text(json.dumps({
+		"integration_sync_status": "healing",
+		"integration_conflict_dispatch_ts": original_ts,
+		"integration_conflict_dispatch_count": 4,
+	}))
+	# Reproduce the production rc=2 branch's jq update verbatim.
+	script = textwrap.dedent("""
+		set -uo pipefail
+		export STATE_FILE='""" + str(state_file) + """'
+		# rc=2 branch (active resolver dedupe).
+		jq '.integration_sync_status = "healing"' \
+			"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"shell error: {r.stderr}"
+	state = json.loads(state_file.read_text())
+	# dispatch_ts MUST be unchanged from the original real dispatch.
+	assert state["integration_conflict_dispatch_ts"] == original_ts, (
+		f"rc=2 must not refresh dispatch_ts; was {original_ts}, now {state['integration_conflict_dispatch_ts']}"
+	)
+	# Status reflects healing (the only legitimate update).
+	assert state["integration_sync_status"] == "healing", state
+	# dispatch_count unchanged.
+	assert state["integration_conflict_dispatch_count"] == 4, state
+
+
 # The production cache-key filter mirrors the jq pipeline in
 # scripts/orchestrate_poll_process.sh's invoke_stall_judge (~line 6087).
 # Tests share it through this constant so the test-side filter cannot
@@ -181,7 +329,7 @@ def test_judge_cache_replay_path_bumps_counter_then_escalates(tmp_path):
 PRODUCTION_CACHE_KEY_FILTER = (
 	'.recent_tracking_comments = '
 	'((.recent_tracking_comments // []) '
-	'| map(select((.body // "") | contains("Stall Judge — Issue #") | not))) '
+	'| map(select((.body // "") | startswith("## 🧑‍⚖️ Stall Judge — Issue #") | not))) '
 	'| del(.stall_minutes) '
 	'| del(.recovery_count) '
 	'| .prior_recovery_actions = '
@@ -1141,6 +1289,57 @@ def test_judge_cache_key_stable_across_self_judge_narration(tmp_path):
 	assert keys["unfiltered_t2"] != keys["unfiltered_t3"], "unfiltered control diverges"
 
 
+def test_judge_cache_filter_preserves_human_comments_referencing_judge_heading(tmp_path):
+	"""The cache-key filter must NOT drop a HUMAN reply that mentions
+	"Stall Judge — Issue #N" in the body (e.g. quoting the bot's
+	heading while giving guidance).  The original filter used
+	`contains(...)`, which over-matched; the tightened filter uses
+	`startswith("## 🧑‍⚖️ Stall Judge — Issue #")` so only the bot's
+	exact heading is stripped (Codex P2, PR #2522 line 6200)."""
+	base = _diag_base()
+	# t1: only a human reference, no bot heading.
+	diag_human_ref = {**base, "recent_tracking_comments": [
+		{"author": "alice", "body": "Regarding Stall Judge — Issue #2870, please choose close_and_reissue.", "created_at": "2026-01-01T00:00:00Z"},
+	]}
+	# t2: SAME human reference but a different judge heading present.
+	diag_human_ref_with_judge = {**base, "recent_tracking_comments": [
+		{"author": "alice", "body": "Regarding Stall Judge — Issue #2870, please choose close_and_reissue.", "created_at": "2026-01-01T00:00:00Z"},
+		{"author": "github-actions[bot]",
+		 "body": "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n**Decision:** retrigger",
+		 "created_at": "2026-01-01T01:00:00Z"},
+	]}
+	# t3: only the bot heading (human reference absent).
+	diag_only_judge = {**base, "recent_tracking_comments": [
+		{"author": "github-actions[bot]",
+		 "body": "## 🧑‍⚖️ Stall Judge — Issue #2870 attempt 3\n\n**Decision:** retrigger",
+		 "created_at": "2026-01-01T01:00:00Z"},
+	]}
+	# t4: no comments at all.
+	diag_no_comments = {**base, "recent_tracking_comments": []}
+	keys = _hash_variants(tmp_path, {
+		"human_ref": diag_human_ref,
+		"human_ref_with_judge": diag_human_ref_with_judge,
+		"only_judge": diag_only_judge,
+		"no_comments": diag_no_comments,
+	})
+	# A human reference to the judge heading is NOT filtered, so
+	# human_ref and no_comments have DIFFERENT keys (the human
+	# comment IS in the hash).
+	assert keys["human_ref"] != keys["no_comments"], (
+		f"human reference must remain in the hash (was over-filtered): {keys}"
+	)
+	# Adding the bot's own judge heading on top of the human reference
+	# must NOT change the key (only the heading is filtered).
+	assert keys["human_ref"] == keys["human_ref_with_judge"], (
+		f"bot heading filtering must leave the human reference alone: {keys}"
+	)
+	# The bot-only variant equals no_comments (heading filtered out,
+	# nothing else remains).
+	assert keys["only_judge"] == keys["no_comments"], (
+		f"bot heading + no other comments must filter down to empty: {keys}"
+	)
+
+
 # ---------------------------------------------------------------------------
 # 2c: _list_integration_conflict_files exit-code handling.
 #
@@ -1336,6 +1535,30 @@ def test_production_script_contains_expected_fix_markers():
 	# Codex P2 6147: recent_comments filter strips V2 chunks too.
 	assert 'startswith("<!-- ORCHESTRATOR_STATE_V2")) | not' in body, (
 		"recent_comments filter must strip ORCHESTRATOR_STATE_V2 chunks"
+	)
+	# Codex P2 6200: cache-key filter uses startswith (not contains) for the bot heading.
+	assert 'startswith("## 🧑‍⚖️ Stall Judge — Issue #") | not' in body, (
+		"cache-key filter must use startswith for the bot judge heading "
+		"(avoid over-matching human references)"
+	)
+	# Codex P2 3352: conflict-probe fetch uses explicit refspecs.
+	assert "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" in body, (
+		"conflict probe must use explicit refspecs so remote-tracking refs update"
+	)
+	# Codex P2 6279: synthetic forced escalations stamp force_escalate=true in cache.
+	assert '"force_escalate": true' in body, (
+		"force-escalate cache write must stamp the marker so the bypass survives replay"
+	)
+	assert "_judge_cache_force_escalate" in body, (
+		"cache read must propagate force_escalate to _judge_force_escalate"
+	)
+	# Codex P2 6359: cache effective_action (post-normalize), not raw judge_action.
+	assert '--arg action "${effective_action}"' in body, (
+		"fresh-LLM cache write must store effective_action so invalid LLM actions don't loop"
+	)
+	# Codex P2 3575: rc=2 active-resolver dedupe does NOT refresh dispatch_ts.
+	assert "cooldown timer unchanged" in body, (
+		"heal_integration_branch_conflict rc=2 path must not refresh dispatch_ts"
 	)
 
 
