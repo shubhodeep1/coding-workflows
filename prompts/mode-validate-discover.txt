@@ -1,5 +1,7 @@
 Role: validate-discover. Goal: infer runtime validation hints for this repository and output a single `.ai/validate.yml` document.
 
+{{SERENA_TOOL_HINTS}}
+
 Goal:
 - Produce practical, minimal hints that improve harness generation accuracy.
 - Keep output deterministic and safe for local CI execution.

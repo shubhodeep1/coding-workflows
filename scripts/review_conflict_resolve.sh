@@ -255,7 +255,7 @@ _apply_resolver_reasoning_effort()
       ;;
   esac
   if [ ! -f "${_codex_config}" ]; then
-    echo "::warning::Codex config ${_codex_config} not found; reasoning effort override (${_arr_level}) skipped."
+    echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override (${_arr_level}) skipped."
     return 0
   fi
   _arr_rewrite_ok=1
@@ -273,7 +273,7 @@ _apply_resolver_reasoning_effort()
   } || _arr_rewrite_ok=0
 
   if [ "${_arr_rewrite_ok}" -eq 0 ]; then
-    echo "::warning::Codex config rewrite failed for ${_codex_config}; resolver will run with the existing config value."
+    echo "::warning::Codex config rewrite failed for ${_codex_config}; resolver will run with whatever reasoning the editor step left in place."
     return 0
   fi
   # Independent checks (not elif) so both mismatches surface together
