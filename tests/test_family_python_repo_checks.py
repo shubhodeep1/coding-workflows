@@ -116,6 +116,7 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "condition: service_healthy" not in compose_text
 
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
+		assert "apt-get install -y --no-install-recommends bash jq coreutils git" in dockerfile_text
 		assert "pip install --no-cache-dir pyyaml jsonschema jinja2" in dockerfile_text
 		assert "flask" not in dockerfile_text
 
