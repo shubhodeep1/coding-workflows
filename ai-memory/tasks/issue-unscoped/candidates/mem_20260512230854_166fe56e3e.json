@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:118-128 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The new `REVIEWER_CACHE_PROBE_ENABLED` case block is indented differently from the surrounding `run_cache_probe()` body.\n  WHY: This is a maintainability/style inconsistency; reviewers agreed it does not affect bash runtime behavior, though some called it only cosmetic.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode-only | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: Unrelated Serena support scripts still have mode-only drift in the working tree.\n  WHY: This is outside the targeted cache-probe change set and was described as scope creep / working-tree artifact, though some reviewers said it was already reverted or pre-existing.\n- scripts/review_run_reviewers.sh:119-125\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `case` pattern only accepts an enumerated truthy set for `REVIEWER_CACHE_PROBE_ENABLED`.\n  WHY: The reviewer said this is intentional default-off behavior and matches the existing truthy check, so values outside the list correctly skip the probe.\n- scripts/review_run_reviewers.sh:127-128 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: `probe_model` parsing assumes newline-separated input.\n  WHY: The pipeline can collapse a space-separated `REVIEWER_MODELS` list into one invalid model name; one reviewer said this code is pre-existing and out of scope.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_run_reviewers.sh:118-128\n  PROBLEM: The new `REVIEWER_CACHE_PROBE_ENABLED` case block uses pure tabs while the rest of `run_cache_probe()` uses a different indentation style.\n  WHY: Bash parsing is unaffected, so this was assessed as cosmetic / not actionable.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode-only\n  PROBLEM: The working tree shows these files at mode 755 while git HEAD stores them at 644.\n  WHY: This was assessed as a cosmetic mode drift / working-tree artifact with no runtime effect.\n- scripts/review_run_reviewers.sh:119-125\n  PROBLEM: The `case` pattern only matches an explicit truthy set for `REVIEWER_CACHE_PROBE_ENABLED`.\n  WHY: The reviewer said this is the intended default-off behavior, and values outside the set correctly fall through to skip the probe.\n- scripts/review_run_reviewers.sh:127-128\n  PROBLEM: `probe_model` parsing assumes newline-separated input.\n  WHY: The reviewer said this is pre-existing code and not modified by the last run diff.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_run_reviewers.sh:119-128 | confidence=4\n  PROBLEM: Mixed indentation within `run_cache_probe()` introduced by the autofix run.\n  WHY: The new case block uses TABs while the surrounding code uses spaces, creating a style inconsistency.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:119-127 | confidence=4\n  PROBLEM: Mixed indentation in the newly added `REVIEWER_CACHE_PROBE_ENABLED` case block.\n  WHY: The block uses TAB characters while the rest of the function uses 2-space indentation, creating inconsistent style.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_run_reviewers.sh:118-125 | confidence=4\n  PROBLEM: Mixed indentation in `run_cache_probe()` introduced by the last run.\n  WHY: The new case block uses TAB indentation while the surrounding function body uses spaces.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode-only | confidence=4\n  PROBLEM: Unrelated mode-only changes exist in the working tree.\n  WHY: These files are outside the PR scope and touch permissions only, which should be cleaned up to match HEAD.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_run_reviewers.sh:128 | confidence=5\n  PROBLEM: `probe_model` parsing assumes newline-separated `REVIEWER_MODELS` input.\n  WHY: Space-separated model slugs would be treated as one invalid name, causing `codex exec --model` to fail.\n- scripts/review_run_reviewers.sh:119-125 | confidence=3\n  PROBLEM: Mixed indentation in the new `case` block.\n  WHY: The block is indented with spaces while the surrounding function body mixes tabs/spaces, which is visually inconsistent.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_run_reviewers.sh:119-128 | confidence=4\n  PROBLEM: The newly added `case` statement uses TAB characters for indentation while the existing code in the same function uses spaces.\n  WHY: This creates mixed indentation within a single function block and is a maintainability issue.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode-only | confidence=4\n  PROBLEM: Unrelated mode-only changes exist in the working tree.\n  WHY: These files are outside the PR diff and should match HEAD.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b6a9aa785504c31fff23f7c1e21c2652b55b716b40662ddf9e75d69c12f73373",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2553,
+    "run_id": "25766885597",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25766885597",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512230854_166fe56e3e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2553,
+    "run_id": "25766885597"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T23:08:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
