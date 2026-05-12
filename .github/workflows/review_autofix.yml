@@ -4386,9 +4386,9 @@ jobs:
         # reached the remote. With STRICT, an audit-converged commit that
         # contains real edits blocks auto-merge here; the synchronize event
         # from the deferred push then triggers a fresh review_autofix
-        # iteration on the new tip (the gate-job AUTOFIX_SKIP_SELF_TRIGGERED
-        # default is `false`, so the [ai-autofix] synchronize is NOT
-        # skipped — see :327). The autofix loop now actually "keeps going
+        # iteration on the new tip (the gate job checks
+        # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
+        # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
         # until there are no edits" instead of converging on a stale head.
         if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
