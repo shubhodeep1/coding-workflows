@@ -213,7 +213,7 @@ jobs:
           LOCAL_CLAUDE_MD="CLAUDE.md"
 
           echo "claude_md_changed=false" >> "$GITHUB_OUTPUT"
-          : > /tmp/claude_md_changed_file.txt
+          rm -f /tmp/claude_md_changed_file.txt
 
           if [ ! -e "${UPSTREAM_CLAUDE_MD}" ] && [ ! -L "${UPSTREAM_CLAUDE_MD}" ]; then
             echo "Upstream has no workflow-templates/CLAUDE.md at this ref — nothing to sync."
