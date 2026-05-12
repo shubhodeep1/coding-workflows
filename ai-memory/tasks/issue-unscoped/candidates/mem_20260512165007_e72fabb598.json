@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate.yml:618-662 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_MAX_SECS=3000` is hardcoded without being linked to the job timeout or attempt-budget math.\n  WHY: The reviewer said future reductions to the job timeout could leave the clamp oversized relative to the available budget.\n- .github/workflows/orchestrate.yml:636-645 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The integer validation regex rejects `0` but still allows some zero-padded forms, and it does not log zero rejection explicitly.\n  WHY: The reviewer said invalid input falls back to 3000 with only a generic warning, so the operator does not see a specific zero-rejection message.\n- .github/workflows/orchestrate.yml:749-784 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `CODEX_PROMPT_FILE` is not rebuilt from `BASE_PROMPT_FILE` on the timeout path, so stale retry feedback can carry into the next attempt.\n  WHY: The reviewer said this is pre-existing and not harmful because the feedback is still relevant context, but it means the PR description overstates the rebuild behavior.\n- .github/workflows/orchestrate.yml:766-787 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: Exit code 137 is classified as timeout even though it can also mean OOM killer or external `kill -9`.\n  WHY: deepseek treats this as diagnostic-only, while qwen/x-ai say it can waste retries and mislead operators on genuine OOM/external kills; severity is set to the higher-impact reports.\n- .github/workflows/orchestrate.yml:777-785 | severity=medium | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The retry loop does not restore the working tree after a timeout, so a killed codex run can leave partial edits for the next attempt.\n  WHY: Because codex runs with `--sandbox danger-full-access`, attempt N+1 can start from a dirty tree rather than the baseline, which can corrupt subsequent patching or analysis.\n- README.md:919-925 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new environment-variable documentation repeats implementation details instead of staying at the usage level.\n  WHY: The reviewer said readers may have to cross-reference the workflow file to understand the override and clamp semantics.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/orchestrate.yml:778 | confidence=3\n  PROBLEM: Exit code 137 lacks elapsed-time disambiguation, so every 137 is logged as `codex timeout` even though the same code can mean an OOM kill or external SIGKILL.\n  WHY: The conflict resolver compares elapsed time to the configured budget, but this step does not, so the log can be misleading even though retry behavior is unchanged.\n- .github/workflows/orchestrate.yml:749, 778-784 | confidence=2\n  PROBLEM: `CODEX_PROMPT_FILE` is not rebuilt from `BASE_PROMPT_FILE` on the timeout path, so stale retry feedback can carry into the next attempt.\n  WHY: The reviewer said this is pre-existing and not harmful because the feedback is still relevant context, but it means the PR description overstates the rebuild behavior.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/orchestrate.yml:777-785 | confidence=4\n  PROBLEM: The retry loop does not restore the working tree after a timeout, so a killed codex run can leave partial edits for the next attempt.\n  WHY: Because codex runs with `--sandbox danger-full-access`, attempt N+1 can start from a dirty tree rather than the baseline, which can corrupt subsequent patching or analysis.\n- .github/workflows/orchestrate.yml:777-782 | confidence=4\n  PROBLEM: Exit 124 and 137 are both labeled `codex timeout`, even when 137 may actually be an OOM kill or external `kill -9`.\n  WHY: The reviewer said that wastes retry budget on failures that are unlikely to succeed and sends operators toward the wrong root cause in `last_status`.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/orchestrate.yml:618-662 | confidence=4\n  PROBLEM: `ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_MAX_SECS=3000` is hardcoded without being linked to the job timeout or attempt budget math.\n  WHY: The reviewer said future reductions to the job timeout could leave the clamp oversized relative to the available budget.\n- .github/workflows/orchestrate.yml:766-787 | confidence=5\n  PROBLEM: Exit code 137 is classified as timeout even though it can also mean OOM killer or external `kill -9`.\n  WHY: The reviewer said this misattributes the root cause, retries the same prompt, and obscures the failure in `last_status`.\n- .github/workflows/orchestrate.yml:636-645 | confidence=3\n  PROBLEM: The integer validation regex rejects `0` but still allows some zero-padded forms, and it does not log zero rejection explicitly.\n  WHY: The reviewer said invalid input falls back to 3000 with only a generic warning, so the operator does not see a specific zero-rejection message.\n- README.md:919-925 | confidence=2\n  PROBLEM: The new environment-variable documentation repeats implementation details instead of staying at the usage level.\n  WHY: The reviewer said readers may have to cross-reference the workflow file to understand the override and clamp semantics.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "714b593cfc2c151ed513e221be5661178b03b182e3916875ffda1178f0886d6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2547,
+    "run_id": "25746873538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25746873538",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512165007_e72fabb598",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2547,
+    "run_id": "25746873538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T16:50:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
