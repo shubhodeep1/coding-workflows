@@ -116,13 +116,21 @@ PY
 }
 
 run_cache_probe() {
-  local probe_model
-  probe_model="$(printf '%s\n' "${REVIEWER_MODELS}" | sed '/^$/d' | head -n1)"
+	case "${REVIEWER_CACHE_PROBE_ENABLED:-false}" in
+	  1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+	    ;;
+	  *)
+	    return 0
+	    ;;
+	esac
+
+	local probe_model
+	probe_model="$(printf '%s\n' "${REVIEWER_MODELS}" | sed '/^$/d' | head -n1)"
   if [ -z "${probe_model}" ]; then
     return 0
   fi
   case "${OPENROUTER_PROMPT_CACHE_DISABLED:-false}" in
-    1|true|TRUE|yes|YES|on|ON|y|Y)
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
       echo "INFO: cache probe skipped because OPENROUTER_PROMPT_CACHE_DISABLED=${OPENROUTER_PROMPT_CACHE_DISABLED}."
       return 0
       ;;
