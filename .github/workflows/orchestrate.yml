@@ -32,11 +32,21 @@ env:
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_ORCHESTRATE || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS: ${{ vars.ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS || '' }}
 
 jobs:
   orchestrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Raised from 60 → 240 min after run 25742821278 was SIGKILLed at
+    # the 60-min cap while still inside attempt 1/3 of the decomposer
+    # codex call, making the 3-attempt retry loop structurally
+    # meaningless. The new ceiling pairs with the per-attempt timeout
+    # wrapper added to the decomposer step below
+    # (ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS, default 3000s
+    # = 50 min): 3 × 50 min = 150 min for codex attempts, plus
+    # ~90 min headroom for prompt assembly, JSON validation,
+    # tracking-issue / branch / Wave-1 setup, and post steps.
+    timeout-minutes: 240
     concurrency:
       group: ai-orchestrate-${{ github.repository }}-${{ github.run_id }}
       cancel-in-progress: false
@@ -609,10 +619,47 @@ jobs:
           max_attempts=3
           last_status="no attempts ran"
           last_emitted=0
+
+          # Per-attempt cap so a runaway first attempt can't burn the
+          # full 240-min job budget before retries get a turn. Default
+          # 3000s (50 min) × 3 attempts = 150 min, leaving ~90 min for
+          # prompt assembly, JSON validation, tracking-issue / branch /
+          # Wave-1 setup, and post steps. Mirrors the conflict-resolver
+          # pattern (scripts/review_conflict_resolve.sh —
+          # CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS) that closed the
+          # same failure mode there. Default + validation + clamp run
+          # ONCE before the retry loop so the value enforced by the
+          # `timeout` wrapper is constant across iterations.
+          : "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS:=3000}"
+          if ! [[ "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS=${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 3000."
+            ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS=3000
+          fi
+          # Upper bound: 3 × 3000s = 150 min inside the 240-min job
+          # cap leaves ~90 min for non-codex work. Overrides above the
+          # default would consume that headroom; clamp with a warning.
+          # To genuinely enlarge the budget, raise BOTH the job cap
+          # above AND this max, then redo the 3 × per_attempt math.
+          ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_MAX_SECS=3000
+          if [ "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
+            echo "::warning::ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS=${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would eat the post-codex setup headroom under the 240-min job cap); clamping to ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
+            ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS="${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
+          fi
+          echo "Decomposer per-attempt timeout: ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s."
+
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
             attempt_ok=0
-            if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+            attempt_started_at="$(date +%s)"
+            attempt_worktree_before="$(git status --porcelain=v1 --untracked-files=all)"
+            # `--` terminates `timeout`'s option parsing so a leading
+            # '-' in DURATION cannot be mistaken for an option (defence
+            # in depth on top of the regex check above). stdin
+            # redirection replaces the prior `cat ... | codex` so the
+            # `timeout` wrapper governs codex directly — wrapping a
+            # pipeline would only time out `cat`, not the model call.
+            if timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \
+                 codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
                 last_status="empty output"
@@ -722,8 +769,38 @@ jobs:
               fi
             else
               rc=$?
-              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
-              last_status="codex exit ${rc}"
+              attempt_elapsed=$(( $(date +%s) - attempt_started_at ))
+              # `timeout` documents two exit codes for timer expiry:
+              #   - 124: child sent SIGTERM after DURATION expired.
+              #   - 137: the child received SIGKILL (128 + 9). `timeout
+              #     --kill-after=30s` produces this when the child
+              #     ignored SIGTERM long enough for the kill-after
+              #     backstop to fire, BUT 137 is also produced by OOM
+              #     kill / external `kill -9`. Mirror the conflict-
+              #     resolver pattern and disambiguate via elapsed wall
+              #     clock: a timer-driven 137 should arrive only after
+              #     the configured budget has elapsed.
+              if [ "$rc" = "124" ]; then
+                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
+                last_status="codex timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+              elif [ "$rc" = "137" ] && [ "${attempt_elapsed}" -ge "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
+                last_status="codex timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+              else
+                if [ "$rc" = "137" ]; then
+                  echo "::warning::Codex exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
+                  last_status="codex exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
+                else
+                  echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+                  last_status="codex exit ${rc}"
+                fi
+              fi
+            fi
+            attempt_worktree_after="$(git status --porcelain=v1 --untracked-files=all)"
+            if [ "${attempt_worktree_after}" != "${attempt_worktree_before}" ]; then
+              echo "::error::Codex decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
+              git status --short
+              exit 1
             fi
             if [ "${attempt_ok}" = "1" ]; then
               break
