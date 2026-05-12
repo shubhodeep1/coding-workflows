@@ -10,4 +10,6 @@ slots:
     - python3
     - jq
     - git
+  # tap_plan drives the stable summary emitted by 90_tap_report.sh.
+  # 00_canary.sh declares its own TAP plan from canary_tools.
   tap_plan: 3
