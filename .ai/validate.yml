@@ -9,4 +9,5 @@ slots:
     - bash
     - python3
     - jq
+    - git
   tap_plan: 3
