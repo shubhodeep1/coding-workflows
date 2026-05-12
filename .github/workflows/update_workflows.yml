@@ -76,7 +76,6 @@ jobs:
           git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}" "CLAUDE.md"
           cd -
 
-          echo "upstream_root=${TMPDIR}/upstream" >> "$GITHUB_OUTPUT"
           echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
 
       - name: Apply canonical audit-gate assets
@@ -215,7 +214,7 @@ jobs:
           echo "claude_md_changed=false" >> "$GITHUB_OUTPUT"
           : > /tmp/claude_md_changed_file.txt
 
-          if [ ! -e "${UPSTREAM_CLAUDE_MD}" ]; then
+          if [ ! -e "${UPSTREAM_CLAUDE_MD}" ] && [ ! -L "${UPSTREAM_CLAUDE_MD}" ]; then
             echo "Upstream has no workflow-templates/CLAUDE.md at this ref — nothing to sync."
             exit 0
           fi
