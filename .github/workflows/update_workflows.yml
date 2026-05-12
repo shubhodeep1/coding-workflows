@@ -70,10 +70,11 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
             "${TMPDIR}/upstream"
           cd "${TMPDIR}/upstream"
-          # CLAUDE.md is included so the workflow-templates/CLAUDE.md
-          # symlink (→ ../CLAUDE.md) resolves under sparse-checkout when
-          # the claude_md_sync step copies it via cp -L.
-          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}" "CLAUDE.md"
+          # In cone mode, repo-root files remain present alongside these
+          # directory patterns, which keeps workflow-templates/CLAUDE.md
+          # (a symlink to ../CLAUDE.md) readable without passing a bare
+          # root-file argument here; modern git rejects that form.
+          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
           cd -
 
           echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
@@ -223,7 +224,7 @@ jobs:
           # sparse-checkout this will fail loudly rather than silently
           # writing a broken file.
           if ! cat -- "${UPSTREAM_CLAUDE_MD}" >/dev/null 2>&1; then
-            echo "::error::workflow-templates/CLAUDE.md is unreadable (dangling symlink or missing target)."
+            echo "::error::Root CLAUDE.md is unreadable via workflow-templates/CLAUDE.md (dangling symlink or missing sparse-checkout target)."
             exit 1
           fi
 
