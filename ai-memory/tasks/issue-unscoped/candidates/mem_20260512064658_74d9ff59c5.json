@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/validate.yml:9-13 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: canary_tools now has 4 entries but tap_plan remains 3.\n  WHY: most reviewers described this as a TAP plan validation failure; one reviewer called it only a metadata inconsistency because the canary plan is computed independently.\n- workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2:6-9 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: the python-mongo-repo-checks container does not install git.\n  WHY: reviewers disagreed on scope, but the sibling container still lacks the git binary needed for the Serena template-mode git bootstrap path.\n- scripts/setup_serena.sh:175-182; scripts/validate_process.sh:307-317 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: the same TOML header regex logic is duplicated in two scripts.\n  WHY: both copies are currently identical, but future parsing changes would need to be applied in both places.\n- scripts/implement_diagnose_post_codex_failure.sh:362-372 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: switching from printf to a heredoc changes the command text but not the subshell-expanded output.\n  WHY: the reviewer noted command substitution strips the trailing newline, so there is no runtime failure.\n- scripts/setup_serena.sh:165-182, 258-275 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: identical embedded Python TOML-stripping code is duplicated across two functions.\n  WHY: this is a maintainability risk only; future regex changes could diverge between the two copies.\n- tests/test_validate_process_template_mode.py:334-343 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: the test does not cover trailing-comment headers or [[table]]-style headers.\n  WHY: the reviewer noted this leaves a robustness gap for clear_stale_serena_codex_config, but no direct failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .ai/validate.yml:13 | confidence=2\n  PROBLEM: tap_plan stays at 3 while canary_tools now has 4 entries.\n  WHY: validate_driver counts ok/not ok lines independently and the canary computes its own plan, so this is only a TAP/reporting inconsistency.\n- scripts/setup_serena.sh:175-182; scripts/validate_process.sh:307-317 | confidence=2\n  PROBLEM: the TOML header regex logic is duplicated across two scripts.\n  WHY: both copies are identical today, but any future parsing change would have to be applied in both places.\n- scripts/implement_diagnose_post_codex_failure.sh:362-370 (old), 362-372 (new) | confidence=1\n  PROBLEM: replacing printf with a heredoc changes the command text but not the expanded value.\n  WHY: command substitution strips the trailing newline, so the reviewer noted no runtime failure.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .ai/validate.yml:9-13 | severity=critical | confidence=5\n  PROBLEM: canary_tools has 4 entries but tap_plan remains at 3.\n  WHY: the canary emits 4 TAP results while the manifest still declares 3 planned tests, which the reviewer says will fail validation.\n- workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2 | severity=medium | confidence=4\n  PROBLEM: the python-mongo-repo-checks container was not updated with git.\n  WHY: this creates a sibling-template inconsistency that would block Serena-related git bootstrap if that validation family ran the same tests.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .ai/validate.yml:12-13 | severity=critical | confidence=5\n  PROBLEM: canary_tools contains 4 tools but tap_plan is still 3.\n  WHY: the reviewer says the canary emits 1..4 while the contract still declares 3, so TAP validation fails.\n- workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2:9 | severity=critical | confidence=4\n  PROBLEM: the sibling python-mongo-repo-checks container template does not include git.\n  WHY: the reviewer says Serena template-mode git bootstrap would fail in that environment just as it does in the python-repo-checks path.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .ai/validate.yml:13 | severity=critical | confidence=5\n  PROBLEM: canary_tools now has 4 entries but tap_plan remains at 3.\n  WHY: the reviewer says TAP consumers reject the plan violation when the canary emits 4 results against a 3-test plan.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .ai/validate.yml:9-13 | severity=critical | confidence=5\n  PROBLEM: canary_tools now lists 4 tools but tap_plan remains 3.\n  WHY: the reviewer says the canary runs one test per tool and the plan must match the observed count.\n- workflow-templates/validation-harness/python-mongo-repo-checks/Dockerfile.app.j2:6-7 | severity=critical | confidence=5\n  PROBLEM: the sibling python-mongo-repo-checks container template lacks git.\n  WHY: the reviewer says the same Serena template-mode repo checks would fail there because _bootstrap_git_repo shells out to git init.\n- scripts/setup_serena.sh:165-182 and 258-275 | confidence=3\n  PROBLEM: identical embedded Python TOML-stripping code is duplicated across two functions.\n  WHY: future regex changes could diverge between the two copies.\n- tests/test_validate_process_template_mode.py:334-343 | confidence=3\n  PROBLEM: the test does not cover trailing-comment headers or [[table]]-style headers.\n  WHY: the reviewer says this leaves a robustness gap for clear_stale_serena_codex_config, though there is no direct failure today.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "52ce374948844c95609c17c8255fd947da104c335694e3fc9a51415f32eccceb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2541,
+    "run_id": "25717298913",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25717298913",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512064658_74d9ff59c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2541,
+    "run_id": "25717298913"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T06:46:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
