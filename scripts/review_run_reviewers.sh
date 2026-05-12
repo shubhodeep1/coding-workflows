@@ -117,7 +117,7 @@ PY
 
 run_cache_probe() {
 	case "${REVIEWER_CACHE_PROBE_ENABLED:-false}" in
-	  1|true|TRUE|yes|YES|on|ON|y|Y)
+	  1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
 	    ;;
 	  *)
 	    return 0
