@@ -28,13 +28,17 @@ Rules:
   issue do not exist on the current ref" in this case — produce a normal
   plan that re-creates the relevant files. The plan must call out the
   files-to-create explicitly under "Files likely to change."
-- If a required input is external and non-synthesizable (branch name,
-  commit SHA, credential, external URL) AND the input is required to plan
-  the change itself (not merely referenced as context that the new
-  implementation will replace): emit exactly `BLOCKED: <short reason>`.
-  Missing source files on the current ref are NOT external inputs — they are
-  codebase state the plan can address; note them under "Risks and edge cases"
-  as a conflict and continue planning.
+- If a required input is a specific scalar value the model cannot derive
+  or look up — a private credential, a not-yet-existing commit SHA, a
+  branch name not yet decided, or an auth-walled/private URL whose
+  contents are not public — AND that input is required to plan the change
+  itself (not merely referenced as context the new implementation will
+  replace): emit exactly `BLOCKED: <short reason>`. Public 3rd-party
+  documentation URLs are NOT a BLOCKED trigger — fetch them via the web
+  tool (see the web-access rule below) and continue planning. Missing
+  source files on the current ref are NOT external inputs — they are
+  codebase state the plan can address; note them under "Risks and edge
+  cases" as a conflict and continue planning.
 - Scope-too-large gate: if the honest estimate exceeds 60 minutes, do NOT
   emit a plan; emit exactly
   `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`.
@@ -46,9 +50,16 @@ Rules:
   do not assume `main`.
 - If the checked-out ref mismatches Integration branch metadata, emit
   exactly `BLOCKED: integration branch mismatch`.
-- Use repo documentation only; no external web searches.
-- If external APIs are needed, include concrete details from provided
-  context; if missing, ask rather than invent.
+- Prefer repo-local context first. Web search IS available (the
+  `web_search` tool is enabled by the codex config —
+  `scripts/write_codex_config.sh` defaults `--web-search live`). Use it
+  for public 3rd-party API docs, library reference, RFCs, and similar
+  publicly-readable resources. Do NOT use it for private/auth-walled
+  resources or anything requiring a credential.
+- If external APIs/services are involved, fetch their official public
+  docs via the web tool and include concrete endpoint, signature scheme,
+  and payload details in the plan. Only ask (rather than fetch) when the
+  docs are private/auth-walled or genuinely unavailable.
 
 Mandatory Question Format (only when emitting clarification questions):
 

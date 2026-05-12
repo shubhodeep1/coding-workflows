@@ -873,14 +873,17 @@ jobs:
             issue do not exist on the current ref" in this case — produce a normal
             plan that re-creates the relevant files. The plan must call out the
             files-to-create explicitly under "Files likely to change."
-          - If required input is external and non-synthesizable by the auto-answerer
-            (for example branch name, commit SHA, credential, or external URL) AND the
-            input is required to plan the change itself (not merely referenced as
-            context that the new implementation will replace), do not emit Q/Choices;
-            emit exactly `BLOCKED: <short reason>`. Missing source files on the current
-            ref are NOT external inputs — they are codebase state the plan can address;
-            note them under "Risks and edge cases" as a conflict (per the CONFLICT
-            DETECTION rule above) and continue planning.
+          - If a required input is a specific scalar value the model cannot derive or
+            look up — a private credential, a not-yet-existing commit SHA, a branch
+            name not yet decided, or an auth-walled/private URL whose contents are not
+            public — AND that input is required to plan the change itself (not merely
+            referenced as context the new implementation will replace), do not emit
+            Q/Choices; emit exactly `BLOCKED: <short reason>`. Public 3rd-party
+            documentation URLs are NOT a BLOCKED trigger: fetch them via the web tool
+            (see the web-access rule below) and continue planning. Missing source files
+            on the current ref are NOT external inputs — they are codebase state the
+            plan can address; note them under "Risks and edge cases" as a conflict (per
+            the CONFLICT DETECTION rule above) and continue planning.
           - Surface the planning ref context (`git rev-parse HEAD` and symbolic branch)
             from the planning context and do not assume `main`.
           - If checked-out ref mismatches Integration branch metadata, emit exactly
@@ -889,10 +892,16 @@ jobs:
             do NOT guess: return clarification questions in the Q<ID>/Choices format defined in
             prompts/mode-plan.txt ("Mandatory Question Format" section) and state that
             clarification is required before planning.
-          - Use repo documentation only; no external web searches.
-          - If implementation requires calling external APIs/services, read their official API
-            docs and include concrete endpoint/method/parameter details in the plan so the
-            implementation editor can execute without web access.
+          - Prefer repo-local context first, but web search IS available (the
+            `web_search` tool is enabled by the codex config — see
+            `scripts/write_codex_config.sh`'s `--web-search live` default). Use it for
+            public 3rd-party API docs, library reference, RFCs, and similar publicly-
+            readable resources. Do NOT use it for private/auth-walled resources or
+            anything that requires a credential.
+          - If implementation requires calling external APIs/services, fetch their
+            official public docs via the web tool and include concrete endpoint/method/
+            parameter details in the plan so the implementation editor has the contract
+            inlined.
           - Do NOT write code.
           - Do NOT modify repository files.
           - Only generate the implementation plan when answers are interpretable and sufficient.
