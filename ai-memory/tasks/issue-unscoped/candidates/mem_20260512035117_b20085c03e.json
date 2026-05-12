@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:397-467 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `_extract_state_payloads` walks comments oldest-first with ascending part tracking, unlike production `cmd_extract` which walks newest-first with descending part tracking.\n  WHY: The test helper can validate different interleaving/retry behavior than production and miss V2 chain-reconstruction bugs.\n- scripts/orchestrate_poll_process.sh:5879-5896 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The stall-judge `recent_comments` filter can fail to recognize V2 state comments when the opener is not an exact `startswith(\"<!-- ORCHESTRATOR_STATE_V2\")` match.\n  WHY: That would let V2 chunk bodies leak into the judge input, bloating argv and adding irrelevant state-dump noise.\n- scripts/orchestrate_poll_process.sh:5893 (stall-judge filter) vs 8603/8651 (command cutoffs) | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The stall-judge V2 exclusion uses a different predicate from the `/revalidate` and `/judge_resume` cutoff predicates.\n  WHY: The inconsistency could lead to different behavior if V2 comment formatting changes.\n- scripts/orchestrate_poll_process.sh:8603/8651\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The anchored V2 regex requires the exact trailing ` -->` sequence, so formatting changes or trailing whitespace could prevent cutoff detection.\n  WHY: Legitimate V2 state markers would then no longer be recognized when computing `$last_state_idx`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_process.py:424-467 | confidence=4\n  PROBLEM: The test helper walks comments oldest-first with ascending part tracking (`part==1` starts chain), while production `cmd_extract` walks newest-first with descending part tracking (`part==total` anchors).\n  WHY: This mismatch can mask retry/interleaving bugs because the helper is validating a different reconstruction order than production.\n- scripts/orchestrate_poll_process.sh:5893 (stall-judge filter) vs 8603/8651 (command cutoffs) | confidence=2\n  PROBLEM: The stall-judge V2 exclusion uses a different predicate from the `/revalidate` and `/judge_resume` cutoff predicates.\n  WHY: The inconsistency could lead to different behavior if V2 comment formatting changes.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:8603/8651\n  PROBLEM: The anchored V2 regex requires the exact trailing ` -->` sequence, so formatting changes or trailing whitespace could prevent cutoff detection.\n  WHY: Legitimate V2 state markers would then no longer be recognized when computing `$last_state_idx`.\n- tests/test_orchestrate_poll_process.py:424-467\n  PROBLEM: The test helper walks comments oldest-first with ascending part tracking, while production `cmd_extract` walks newest-first with descending part tracking.\n  WHY: That difference can mask chain-reconstruction bugs in retry and interleaving scenarios.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_orchestrate_poll_process.py:424-467 | confidence=4\n  PROBLEM: Walks comments in oldest-first order and tracks ascending chains initialized at part==1, while production `cmd_extract` walks newest-first and tracks descending chains initialized at part==total.\n  WHY: Retry posting after partial failure can be reconstructed differently in tests than in production, masking retry fidelity bugs.\n- scripts/orchestrate_poll_process.sh:5888-5896 (recent_comments jq filter in invoke_stall_judge) | confidence=3\n  PROBLEM: Excludes V2 state chunks via `((.body // \"\") | (startswith(\"<!-- ORCHESTRATOR_STATE_V1\") or startswith(\"<!-- ORCHESTRATOR_STATE_V2\")) | not)`, but the V2 opener may have leading whitespace inserted by GitHub comment renderer/roundtrip if not posted in code block.\n  WHY: That would make `startswith` false-negative and let V2 chunk bodies bloat the judge input.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:5879-5896 | confidence=2\n  PROBLEM: The cross-pollination finding states that `startswith(\"<!-- ORCHESTRATOR_STATE_V2\")` could false-negative if whitespace is inserted before the opener.\n  WHY: This is speculative; the V2 format is machine-generated with strict framing, so the concern is not backed by a concrete failure.\n- tests/test_orchestrate_poll_process.py:397-419, 424-467 | confidence=3\n  PROBLEM: The cross-pollination finding states that test helper `_extract_state_payloads` walks oldest-first with ascending tracking, while production `cmd_extract` walks newest-first with descending tracking.\n  WHY: Both implementations are logically correct for their traversal direction and the test helper still validates the same contract.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3a7d4d3e8e1fb8bea7dc5ae07e6874c71f0f8b78c571b569f4e015cff539258a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2532,
+    "run_id": "25711163339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25711163339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512035117_b20085c03e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2532,
+    "run_id": "25711163339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T03:51:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
