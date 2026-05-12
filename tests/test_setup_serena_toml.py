@@ -169,6 +169,46 @@ def test_setup_serena_replaces_existing_block_without_duplication() -> None:
 		assert body.count("[mcp_servers.serena]") == 1
 
 
+def test_setup_serena_replaces_existing_block_when_adjacent_tables_have_trailing_comments() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		setup_script = _stage_setup_serena(root)
+		home = root / "home"
+		home.mkdir()
+		github_env = root / "github.env"
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fake_serena = bin_dir / "serena"
+		_write_fake_serena(fake_serena)
+
+		config_path = home / ".codex" / "config.toml"
+		config_path.parent.mkdir(parents=True, exist_ok=True)
+		config_path.write_text(
+			'[existing] # keep-me\nvalue = "keep"\n\n'
+			'[mcp_servers.serena] # stale\n'
+			'command = "/old/path"\n'
+			'args = ["old"]\n\n'
+			'[after] # trailing comment\nvalue = "after"\n',
+			encoding="utf-8",
+		)
+
+		result = _run_setup(
+			setup_script,
+			home=home,
+			path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
+			github_env=github_env,
+			extra_env={"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_happy.py")},
+		)
+
+		assert result.returncode == 0, result.stderr
+		body = config_path.read_text(encoding="utf-8")
+		parsed = tomllib.loads(body)
+		assert parsed["existing"]["value"] == "keep"
+		assert parsed["after"]["value"] == "after"
+		assert parsed["mcp_servers"]["serena"]["command"] == str(fake_serena)
+		assert body.count("[mcp_servers.serena]") == 1
+
+
 def test_setup_serena_clears_stale_block_fail_soft_when_binary_unavailable() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)

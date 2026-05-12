@@ -2487,7 +2487,9 @@ jobs:
           if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
             current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
             if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
-              rm -rf .serena
+              if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then
+                rm -rf .serena
+              fi
             fi
           fi
 

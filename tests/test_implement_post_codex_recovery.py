@@ -1129,6 +1129,8 @@ def test_diagnose_reasoning_patch_preserves_serena_mcp_block() -> None:
 	assert "rest_lines = lines[first_table_idx:]" in diagnose
 	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in diagnose
 	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in diagnose
+	assert 'if ! patch_diagnose_reasoning_into_config; then' in diagnose
+	assert 'Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged.' in diagnose
 	assert "[mcp_servers.serena]" not in diagnose.split("patch_diagnose_reasoning_into_config()", 1)[1].split("patch_diagnose_reasoning_into_config", 1)[0], (
 		"Diagnose reasoning patch must update only the top-level model_reasoning_effort key without inlining Serena table rewrites"
 	)
@@ -1272,6 +1274,9 @@ def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_i
 	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_block, (
 		"Commit cleanup must preserve .serena/project.yml when Codex changed it"
 	)
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_block, (
+		"Commit cleanup must never remove a git-tracked .serena tree"
+	)
 	assert 'rm -rf .serena' in commit_block, (
 		"Commit cleanup must remove the full bootstrap-owned .serena directory once the project hash still matches"
 	)
@@ -1372,6 +1377,21 @@ def test_serena_runtime_filter_and_cleanup_preserve_mutated_tree_and_drop_unchan
 		)
 		assert (repo_dir / ".serena" / "cache" / "state.json").is_file(), (
 			"Commit cleanup must preserve sibling .serena files once project.yml diverges from the bootstrap hash"
+		)
+
+		shutil.rmtree(repo_dir / ".serena")
+		bootstrap_hash = _write_serena_tree("project_name: tracked-bootstrap\n")
+		_git(["git", "add", ".serena/cache/state.json"], cwd=repo_dir)
+		tracked_cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert tracked_cleanup_result.returncode == 0, tracked_cleanup_result.stderr
+		assert (repo_dir / ".serena").is_dir(), (
+			"Commit cleanup must preserve git-tracked .serena content even when the bootstrap hash still matches"
 		)
 
 

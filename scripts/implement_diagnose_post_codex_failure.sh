@@ -144,7 +144,9 @@ if not replaced:
 config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
 PY
 }
-patch_diagnose_reasoning_into_config
+if ! patch_diagnose_reasoning_into_config; then
+  echo "::warning::Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged."
+fi
 
 echo "handled=false" >> "$GITHUB_OUTPUT"
 

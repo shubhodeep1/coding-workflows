@@ -296,6 +296,7 @@ clear_stale_serena_codex_config()
 
   if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${codex_config_path}" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 config_path = Path(sys.argv[1])
@@ -306,11 +307,11 @@ i = 0
 
 def is_serena_header(line: str) -> bool:
     stripped = line.strip()
-    return stripped == "[mcp_servers.serena]" or stripped.startswith("[mcp_servers.serena.")
+    return bool(re.match(r"^\[mcp_servers\.serena(?:\.[^\]]+)?\](?:[ \t]+#.*)?$", stripped))
 
 def is_table_header(line: str) -> bool:
     stripped = line.strip()
-    return stripped.startswith("[") and stripped.endswith("]")
+    return bool(re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped))
 
 while i < len(lines):
     if is_serena_header(lines[i]):

@@ -180,6 +180,7 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block
 	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena")
 	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena")
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in _step_run_text("Commit changes")
 
 
 def test_detect_preexisting_serena_project_config_runs_after_checkout() -> None:

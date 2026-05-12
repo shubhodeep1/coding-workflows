@@ -334,10 +334,10 @@ def test_clear_stale_serena_codex_config_removes_only_serena_block() -> None:
 		config_path.parent.mkdir(parents=True, exist_ok=True)
 		config_path.write_text(
 			'model_reasoning_effort = "xhigh"\n\n'
-			'[mcp_servers.serena]\n'
+			'[mcp_servers.serena] # stale\n'
 			'command = "/stale/serena"\n'
 			'args = ["start-mcp-server"]\n\n'
-			'[existing]\n'
+			'[existing] # keep\n'
 			'value = "keep"\n',
 			encoding="utf-8",
 		)

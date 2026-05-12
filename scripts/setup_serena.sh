@@ -165,6 +165,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 
 try:
 	import tomllib
@@ -174,12 +175,12 @@ except ModuleNotFoundError:  # pragma: no cover
 
 def is_serena_header(line: str) -> bool:
 	stripped = line.strip()
-	return stripped == "[mcp_servers.serena]" or stripped.startswith("[mcp_servers.serena.")
+	return bool(re.match(r"^\[mcp_servers\.serena(?:\.[^\]]+)?\](?:[ \t]+#.*)?$", stripped))
 
 
 def is_table_header(line: str) -> bool:
 	stripped = line.strip()
-	return stripped.startswith("[") and stripped.endswith("]")
+	return bool(re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped))
 
 
 def strip_serena_block(text: str) -> str:
@@ -258,6 +259,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 
 try:
 	import tomllib
@@ -267,12 +269,12 @@ except ModuleNotFoundError:  # pragma: no cover
 
 def is_serena_header(line: str) -> bool:
 	stripped = line.strip()
-	return stripped == "[mcp_servers.serena]" or stripped.startswith("[mcp_servers.serena.")
+	return bool(re.match(r"^\[mcp_servers\.serena(?:\.[^\]]+)?\](?:[ \t]+#.*)?$", stripped))
 
 
 def is_table_header(line: str) -> bool:
 	stripped = line.strip()
-	return stripped.startswith("[") and stripped.endswith("]")
+	return bool(re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped))
 
 
 def strip_serena_block(text: str) -> str:
