@@ -322,6 +322,18 @@ def _state_comment(state: dict) -> str:
 	return "<!-- ORCHESTRATOR_STATE_V1\n" + json.dumps(state) + "\nORCHESTRATOR_STATE_V1 -->"
 
 
+def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
+	for comment in reversed(comments):
+		body = str((comment or {}).get("body", ""))
+		open_marker = "<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		close_marker = "\nAI_STANDALONE_STALL_STATE_V1 -->"
+		if not body.startswith(open_marker) or not body.endswith(close_marker):
+			continue
+		payload = body[len(open_marker):-len(close_marker)]
+		return json.loads(payload)
+	return None
+
+
 def _write_exec(path: Path, body: str) -> None:
 	path.write_text(body, encoding="utf-8")
 	path.chmod(0o755)
@@ -500,6 +512,7 @@ def _run_poller(
 	actions_runs_status_sequence: list[int] | None = None,
 	actions_runs_etag: str = '"etag-initial"',
 	codex_touch_file: str | None = None,
+	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
@@ -1163,6 +1176,7 @@ if args[0] == 'api':
 							'state': pr_state,
 							'merged': bool(pr.get('merged', False)),
 							'headRefName': pr.get('headRefName', ''),
+							'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
 							'mergeable': pr.get('mergeable', None),
 							'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 							'commits': {
@@ -1215,6 +1229,36 @@ if args[0] == 'api':
 		issue['comments'].append({'id': cid, 'body': body})
 		save()
 		print(json.dumps({'id': cid}))
+		sys.exit(0)
+
+	m = re.search(r'/issues/comments/(\d+)$', path)
+	if m and method == 'PATCH' and (fields or input_file):
+		comment_id = int(m.group(1))
+		body = ''
+		for f in fields:
+			if f.startswith('body='):
+				body = f.split('=', 1)[1]
+		if input_file:
+			if input_file == '-':
+				payload_raw = sys.stdin.read()
+			else:
+				payload_raw = Path(input_file).read_text(encoding='utf-8')
+			try:
+				payload_obj = json.loads(payload_raw)
+			except Exception:
+				payload_obj = {}
+			body = payload_obj.get('body', body)
+		updated = False
+		for issue in store['issues'].values():
+			for comment in issue.get('comments', []):
+				if int(comment.get('id', 0) or 0) == comment_id:
+					comment['body'] = body
+					updated = True
+					break
+			if updated:
+				break
+		save()
+		print(json.dumps({'id': comment_id, 'updated': updated}))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/labels$', path)
@@ -1355,6 +1399,7 @@ if args[0] == 'api':
 			print(pr.get('headRefFromApi', pr.get('headRefName', '')))
 		else:
 			print(json.dumps({
+				'number': pr_num,
 				'state': pr_state,
 				'mergeable': pr.get('mergeable', True),
 				'mergeable_state': pr.get('mergeable_state', ''),
@@ -1718,6 +1763,42 @@ if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "actions-
 		print(json.dumps(payload))
 		sys.exit(0)
 
+if len(args) >= 2 and args[0] == "scripts/orchestrate_state_v2.py" and args[1] == "pack":
+	mode = os.environ.get("MOCK_ORCH_STATE_V2_PACK_MODE", "")
+	if mode == "count_mismatch":
+		out_dir = ""
+		state_file = ""
+		i = 2
+		while i < len(args):
+			if args[i] == "--out-dir" and i + 1 < len(args):
+				out_dir = args[i + 1]
+				i += 2
+				continue
+			if args[i] == "--state-file" and i + 1 < len(args):
+				state_file = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		raw_bytes = 0
+		if state_file:
+			try:
+				raw_bytes = len(Path(state_file).read_bytes())
+			except Exception:
+				raw_bytes = 0
+		out_path = Path(out_dir)
+		out_path.mkdir(parents=True, exist_ok=True)
+		chunk_path = out_path / "chunk-0001.txt"
+		chunk_path.write_text("mock chunk payload\n", encoding="utf-8")
+		print(json.dumps({
+			"manifest": "0" * 64,
+			"total": 2,
+			"files": [str(chunk_path)],
+			"raw_bytes": raw_bytes,
+			"encoded_bytes": len("mock chunk payload\n"),
+			"chunk_size": 65280,
+		}))
+		sys.exit(0)
+
 proc = subprocess.run([real_python, *args])
 sys.exit(proc.returncode)
 ''',
@@ -1764,6 +1845,8 @@ sys.exit(proc.returncode)
 			if not touch_path.is_absolute():
 				touch_path = runtime_dir / touch_path
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
+		if mock_orch_state_v2_pack_mode:
+			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -2981,6 +3064,105 @@ def test_standalone_conflict_sweep_missing_head_ref_logs_warning_and_continues()
 	assert result["update_branch_calls"] == []
 	assert result["review_dispatches"] == []
 	assert "unavailable head ref" in (result["stdout"] + result["stderr"])
+
+
+def test_standalone_conflict_sweep_consumes_budget_after_override_cap():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"conflict_override_count": {"sha416": 2},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/issue-501",
+				"headRefFromApi": "claude/issue-501",
+				"headSha": "sha416",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 1
+	assert standalone_state["conflict_override_count"]["sha416"] == 3
+	assert len([d for d in result["review_dispatches"] if str(d.get("pr_number")) == "416"]) == 1
+
+
+def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:review-blocked",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:review-blocked": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert standalone_state["phase_attempts"]["ai:review-blocked"] == 5
+	assert "ai:closed" in result["issues"]["501"]["labels"]
+	assert result["review_dispatches"] == []
+
+
+def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:done": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 6
+	assert "ai:closed" not in result["issues"]["501"]["labels"]
 
 
 
@@ -5560,6 +5742,26 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		except json.JSONDecodeError:
 			continue
 	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in following_valid_payloads)
+
+
+def test_state_comment_pack_manifest_count_mismatch_skips_partial_v2_write():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		mock_orch_state_v2_pack_mode="count_mismatch",
+	)
+	state_comment_bodies = [
+		c.get("body", "")
+		for c in result["issues"]["192"]["comments"]
+		if _is_state_comment(c.get("body", ""))
+	]
+	assert not any("ORCHESTRATOR_STATE_V2" in body for body in state_comment_bodies), (
+		"a pack manifest whose files count does not match its declared total must not post a partial "
+		f"V2 state chain. Saw state comments={state_comment_bodies!r}"
+	)
+	assert "pack returned 1 chunk file(s) but declared total=2" in result["stderr"]
 
 
 def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():

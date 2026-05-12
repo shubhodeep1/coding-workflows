@@ -37,15 +37,18 @@ on:
         required: false
         default: false
         type: boolean
-      # Claude-branch-review mode no-PR inputs (push-without-PR path).
+      # No-PR claude-branch review inputs (push-without-PR path).
       # When the caller fires for a push to a claude/** branch that has no
       # open PR, set force_claude_branch_review=true and pass head/base
       # overrides so the gate can bypass its PR-API fetch and synthesize
       # PR_META_FILE without calling /repos/{owner}/{repo}/pulls/{n}.
-      # post_review_comment.sh routes to a commit comment when PR_NUMBER
-      # is empty (see scripts/post_review_comment.sh §"Routing decision").
+      # PR-backed claude/** branches intentionally do NOT use this mode;
+      # they run the same review -> editor -> commit -> re-review loop as
+      # every other PR branch. post_review_comment.sh routes to a commit
+      # comment when PR_NUMBER is empty (see scripts/post_review_comment.sh
+      # §"Routing decision").
       force_claude_branch_review:
-        description: "No-PR claude-branch-review path: bypass gate's PR-number requirement and run review-only mode against the head_ref_override / head_sha_override / base_ref_override inputs."
+        description: "No-PR claude-branch review path: bypass gate's PR-number requirement and run reviewer-comment mode against the head_ref_override / head_sha_override / base_ref_override inputs. PR-backed claude/** branches run normal autofix."
         required: false
         default: false
         type: boolean
@@ -151,6 +154,7 @@ env:
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
   CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
 
 jobs:
   gate:
@@ -215,14 +219,12 @@ jobs:
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             : # fall through to existing PR-API fetch below
           elif [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] && [ -n "${HEAD_REF_OVERRIDE:-}" ]; then
-            # No-PR claude-branch-review path: caller (push to claude/** with
+            # No-PR claude-branch review path: caller (push to claude/** with
             # no open PR — see internal-review.yml resolve job) supplied the
-            # head ref directly.  Treat as an open "PR" for gating purposes;
-            # the claude-branch-review block below picks up pr_head_ref and
-            # flips claude_branch_review=true.  Skip the PR-API fetch — there
-            # is no PR.  PR-numeric-shaped fields (labels/size/state) are
-            # left empty; downstream consumers gated on
-            # CLAUDE_BRANCH_REVIEW_MODE != 'true' never read them.
+            # head ref directly. Treat as an open synthetic PR for gating
+            # purposes and leave PR-shaped fields empty; downstream editor /
+            # commit / auto-merge steps still require a real PR number and are
+            # skipped by the no-PR review-only mode below.
             pr_head_ref="${HEAD_REF_OVERRIDE}"
             pr_state="open"
             echo "AUTOFIX_GATE_NO_PR_FALLBACK head_ref=${pr_head_ref} reason=force_claude_branch_review_push"
@@ -261,28 +263,23 @@ jobs:
             SKIP_REASON="skip_ai_marker"
           fi
 
-          # Claude-branch review-only mode:
-          # PRs whose head branch starts with "claude/" (e.g.
-          # claude/investigate-poller-stalled-prs-STfJ5) are ad-hoc Claude
-          # sessions outside the orchestrator / issue-driven autofix loop.
-          # Running the full editor + commit + auto-merge pipeline on them
-          # would push autofix commits onto a branch the operator is
-          # actively working on. Instead, the gate flags claude-branch-review
-          # mode so codex-agent runs the reviewer panel + summariser, posts
-          # the consensus ledger as a PR comment via post_review_comment.sh,
-          # and then exits without invoking the editor / commit / push /
-          # rb_judge / auto-merge / validate-dispatch tail. The
-          # deterministic-skip-merge and post-merge-validate-dispatch jobs
-          # are also gated off in this mode (those would auto-mark the PR
-          # ai:ready-to-merge / dispatch validate, which is wrong for
-          # human-driven claude/* branches). See PR #1688 for the
-          # post_review_comment.sh helper that this path consumes.
+          # No-PR claude-branch reviewer-comment mode:
+          # Pushes to claude/** with no open PR have no PR thread to update
+          # and no PR number for the editor / commit / auto-merge loop. Keep
+          # that synthetic no-PR route as reviewer-comment-only, but do NOT
+          # special-case PR-backed claude/** branches. Once a claude/** branch
+          # has a PR, it should run the standard review -> editor -> commit ->
+          # re-review loop until reviewers stop generating new findings, just
+          # like any other branch.
           CLAUDE_BRANCH_REVIEW="false"
-          if [ "${SHOULD_RUN}" = "true" ] && [ -n "${pr_head_ref}" ]; then
+          if [ "${SHOULD_RUN}" = "true" ] \
+            && [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] \
+            && [ -z "${PR_NUMBER:-}" ] \
+            && [ -n "${pr_head_ref}" ]; then
             case "${pr_head_ref}" in
               claude/*)
                 CLAUDE_BRANCH_REVIEW="true"
-                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW pr=${PR_NUMBER} head_ref=${pr_head_ref} — running reviewer panel + comment-only path; editor/commit/judge/auto-merge skipped."
+                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW_NO_PR pr=${PR_NUMBER:-none} head_ref=${pr_head_ref} — running reviewer panel + commit-comment path because no PR exists."
                 ;;
             esac
           fi
@@ -465,13 +462,11 @@ jobs:
             fi
           fi
 
-          # Claude-branch-review and the deterministic doc-only / small-diff
-          # skip path are mutually exclusive: doc-only / tiny PRs on a
-          # claude/* branch should NOT auto-mark ai:ready-to-merge or enable
-          # auto-merge (those are operator-driven branches). Suppress the
-          # deterministic-skip-merge dispatch when the claude-branch-review
-          # flag is on so the reviewer-comment path is the sole automated
-          # output.
+          # The no-PR claude-branch reviewer-comment route and the deterministic
+          # doc-only / small-diff skip path are mutually exclusive: without a
+          # PR, there is nowhere to apply deterministic skip labeling /
+          # auto-merge. PR-backed claude/** branches are not in this mode and
+          # follow the same deterministic-skip behavior as other PRs.
           if [ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then
             echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_branch_review pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
             DETERMINISTIC_SKIP="false"
@@ -690,14 +685,12 @@ jobs:
 
   codex-agent:
     needs: gate
-    # Display name surfaces the gate's claude_branch_review decision in the
-    # GitHub Checks UI. When the head ref is claude/**, the gate flips into
-    # review-only mode (reviewer panel + summariser + PR comment; no
-    # editor/commit/push/judge/auto-merge tail) — the suffix below makes
-    # that mode obvious from the check name without having to open the gate
-    # job logs. Job ID stays "codex-agent" so cross-references in
-    # internal-review.yml / status checks / required-checks rules don't
-    # break.
+    # Display name surfaces the gate's no-PR claude_branch_review decision in
+    # the GitHub Checks UI. Only claude/** pushes without an open PR use the
+    # reviewer-comment path; PR-backed claude/** branches keep the normal
+    # codex-agent name and run the full autofix loop. Job ID stays
+    # "codex-agent" so cross-references in internal-review.yml / status
+    # checks / required-checks rules don't break.
     name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
     runs-on: ubuntu-latest
     # Sized to accommodate the resolver step's 170-min cap plus the
@@ -717,7 +710,7 @@ jobs:
     concurrency:
       # Two cancellation regimes, keyed off needs.gate.outputs.claude_branch_review:
       #
-      #   * Non-claude branches (regular PR autofix): cancel-in-progress=false.
+      #   * PR-backed branches, including claude/** PR branches (regular PR autofix): cancel-in-progress=false.
       #     New runs queue behind the running peer instead of cancelling it.
       #     If another run is already pending in this group, GitHub replaces
       #     that older pending run with the newest one. This keeps bursts
@@ -725,13 +718,10 @@ jobs:
       #     trail of cancelled in-progress runs that cancel-in-progress=true
       #     used to cause. Hung runs are bounded by the timeout-minutes above.
       #
-      #   * claude/** branches (claude_branch_review mode): cancel-in-progress=true.
-      #     A claude/** branch is being actively edited by an operator, so a
-      #     new commit means the in-flight reviewer panel is reviewing stale
-      #     code and its consensus comment will land on a superseded SHA.
-      #     Cancel the prior run on every new push so the latest commit gets
-      #     a fresh review instead of waiting through a queued run that's
-      #     about to be redone anyway.
+      #   * No-PR claude/** reviewer-comment mode: cancel-in-progress=true.
+      #     With no PR/autofix loop to preserve, a new push makes the in-flight
+      #     reviewer panel stale; cancel it so only the latest SHA gets a
+      #     commit comment.
       #
       # Group key fallback to inputs.head_ref_override covers the no-PR
       # claude-branch push path (review-claude-branch-push in
@@ -751,9 +741,10 @@ jobs:
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
-      # comment via scripts/post_review_comment.sh, and exits without
+      # commit comment via scripts/post_review_comment.sh, and exits without
       # invoking the editor / commit / push / rb_judge / auto-merge tail.
-      # Sourced from the gate's claude_branch_review output. See gate.
+      # This is only for claude/** pushes with no open PR; PR-backed claude/**
+      # branches run normal autofix. Sourced from the gate output. See gate.
       CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
       # No-PR claude-branch-review path overrides (push events on claude/**
       # without an open PR).  Read by "Collect PR metadata" and
@@ -920,7 +911,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -935,6 +926,7 @@ jobs:
           # gated on the script's existence and falls open with a
           # warning when missing.
           OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
+          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -1183,13 +1175,89 @@ jobs:
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
             echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
+            echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"
+            echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"
+            echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"
             echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
             echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
             echo "COMMITTED_FILES_FILE=${RUNTIME_DIR}/committed_files.txt"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_BIN="
+            echo "SEMBLE_INDEX_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
             echo "HAS_PR_DIFF=false"
             echo "PR_DIFF_SOURCE=uninitialized"
             echo "PR_DIFF_ATTEMPTED_PATHS=gh_pr_diff:${RUNTIME_DIR}/pr_diff.patch"
           } >> "$GITHUB_ENV"
+
+      - name: Setup uv for Semble
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: install_semble.sh is fail-soft already (writes
+        # SEMBLE_AVAILABLE=false on any error), but `source` under
+        # set -euo pipefail can still hard-fail on a syntax regression
+        # before the script's internal fail-soft logic runs.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/install_semble.sh" ]; then
+            echo "::warning::install_semble.sh missing from support bootstrap at ${SUPPORT_SCRIPTS_DIR}/install_semble.sh; continuing without Semble."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # shellcheck source=/dev/null
+          source "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
+
+          SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"
+          if [ -n "${SEMBLE_BIN_PATH}" ]; then
+            echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build semble index
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        # Defense-in-depth: the shared script is fail-soft already, but the
+        # step-level guard ensures a future wrapper regression still
+        # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 lacks the index/query CLI).
+          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
+          # exits 0, continuing without Semble-backed prompt context.
+          # Honors SUPPORT_SCRIPTS_DIR (the staged-bootstrap dir) ahead of
+          # local scripts/ so review_autofix's @stable-pinned support root
+          # wins when it's populated.
+          wrapper_script=""
+          if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh" ]; then
+            wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"
+          elif [ -f scripts/build_semble_wrapper.sh ]; then
+            wrapper_script="scripts/build_semble_wrapper.sh"
+          fi
+          if [ -n "${wrapper_script}" ]; then
+            # The wrapper is documented "always exit 0" (every failure path
+            # routes through mark_unavailable() which exits 0), so the prior
+            # `if !` check was dead code. Gate the diagnostic tail on the
+            # wrapper's own failure marker in the captured log instead of on
+            # pickle absence: a cleanup-of-cleanup failure (rm -rf fails to
+            # remove the pickle inside mark_unavailable) would leave the
+            # pickle on disk and falsely suppress the tail. The "Semble
+            # wrapper unavailable: <reason>" line is written via log() to
+            # stderr before any cleanup runs, so it's always present in the
+            # captured log on failure.
+            bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+            fi
+          else
+            echo "::notice::build_semble_wrapper.sh not staged; continuing without Semble-backed prompt context."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Record review run start in memory (fail-open)
         env:
@@ -2610,6 +2678,8 @@ jobs:
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
           check_soft_file "${LAST_RUN_DIFF_FILE}"
           check_soft_file "${LAST_RUN_CHANGED_FILES_FILE}"
           check_soft_file "${LAST_RUN_DIFF_STAT_FILE}"
@@ -2708,14 +2778,10 @@ jobs:
 
           true
 
-      # Claude-branch-review mode terminal step: post the reviewer-consensus
-      # ledger as a PR comment (or commit comment when no PR exists for the
-      # head SHA) via scripts/post_review_comment.sh. The script handles
-      # routing (PR comment vs commit comment), chunking on safe finding
-      # boundaries, and the empty-ledger sentinel. Subsequent editor /
-      # commit / push / rb_judge / auto-merge / telegram-success steps are
-      # all gated on CLAUDE_BRANCH_REVIEW_MODE != 'true', so this is the
-      # last codex-agent action in claude-branch-review mode.
+      # No-PR claude-branch-review terminal step: post the reviewer-consensus
+      # ledger as a commit comment for the head SHA via
+      # scripts/post_review_comment.sh. PR-backed claude/** branches are not in
+      # this mode and continue into the editor / commit / push / re-review tail.
       - name: Post claude-branch-review consensus comment
         if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         env:
@@ -3132,11 +3198,18 @@ jobs:
         # NOT a "clean review" signal and must block auto-merge.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
-        # LEDGER_ONLY_COMMIT=true: the commit contains only the autofix
-        # ledger, which is a bookkeeping write — not a productive edit — so
-        # this safety check must still run to validate the editor's no-op
-        # claim before downstream clean-review gates fire. See PR #1472.
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        # LEDGER_ONLY_COMMIT_STRICT=true: the commit's only tracked path is
+        # the autofix ledger, which is a bookkeeping write — not a
+        # productive edit — so this safety check must still run to validate
+        # the editor's no-op claim before downstream clean-review gates
+        # fire.  See PR #1472.  We deliberately read the STRICT flag here
+        # (not LEDGER_ONLY_COMMIT) because the non-strict flag is also set
+        # by the audit-convergence branch in
+        # scripts/review_commit_changes.sh, which can fire on commits that
+        # DID land real source-file edits.  Running this detector against
+        # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
+        # (bitsafe.io PR #177 / run 25653654000).
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         run: |
           set -euo pipefail
 
@@ -3303,7 +3376,14 @@ jobs:
               # informational log line and do not block auto-merge.
               # Keeps the hard failure only when there is real evidence
               # of lost edits. See: fun-token-multi-chain PR #117.
-              recheck_script="${GITHUB_WORKSPACE}/scripts/detect_editor_changes_lost.sh"
+              #
+              # The script is bootstrapped to ${SUPPORT_SCRIPTS_DIR} by the
+              # bootstrap step (REQUIRED_BOOTSTRAP_SCRIPTS).  Reading from
+              # ${GITHUB_WORKSPACE}/scripts/ would silently skip the recheck
+              # in every consumer repo (only the workflow-source repo
+              # vendors this path), which is how the bitsafe.io PR #177 /
+              # run 25653654000 false positive escaped this safety net.
+              recheck_script="${SUPPORT_SCRIPTS_DIR}/detect_editor_changes_lost.sh"
               if [ -x "${recheck_script}" ]; then
                 recheck_result="$(bash "${recheck_script}" "${EDITOR_SUMMARY_FILE}" 2>/dev/null || echo "true")"
                 if [ "${recheck_result}" = "false" ]; then
@@ -3809,14 +3889,18 @@ jobs:
           # is a no-op.
           RESOLVER_SCRIPT="${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
           # Capture bash -n stderr (instead of redirecting to /dev/null)
-          # and surface a sanitized single-line copy in every fallback
-          # annotation so operators debugging a workflow run can tell
-          # an unresolved-merge-marker failure apart from a truncated
-          # file, a missing dependency reference, or any other
-          # parse-time issue without having to re-run the job locally.
-          # The same sanitisation pattern (%/\r escaping, whitespace
-          # collapse) the "Detect merge conflicts" step uses for its
-          # `git merge` stderr annotation applies here.
+          # and surface a sanitized copy in every fallback annotation so
+          # operators debugging a workflow run can tell an unresolved-
+          # merge-marker failure apart from a truncated file, a missing
+          # dependency reference, or any other parse-time issue without
+          # having to re-run the job locally.  Multi-line stderr is
+          # preserved by URL-encoding newlines as `%0A` (the workflow-
+          # command-encoding spec for annotation messages) instead of
+          # collapsing to a single line, so a multi-line `bash -n`
+          # diagnostic — e.g. several syntax errors on different lines
+          # of the same script — renders with its original line breaks
+          # in the annotation body.  `%` and `\r` are still escaped to
+          # match the "Detect merge conflicts" step's sanitisation.
           #
           # Probe a candidate resolver path and echo one of:
           #   ok | missing | parse_fail:<sanitized one-line stderr>
@@ -3834,10 +3918,15 @@ jobs:
               printf '%s\n' "missing"
               return
             fi
-            if err="$(bash -n "${path}" 2>&1 >/dev/null)"; then
+            # `bash -n` writes diagnostics to stderr only; merge them
+            # into the command substitution with `2>&1` so the err= capture
+            # actually receives them.  An earlier shape used `2>&1
+            # >/dev/null` which is order-dependent and leaks stderr to the
+            # job log instead of capturing it — see PR #2481 review.
+            if err="$(bash -n "${path}" 2>&1)"; then
               printf '%s\n' "ok"
             else
-              err="$(printf '%s' "${err}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//; s/%/%25/g; s/\r/%0D/g')"
+              err="$(printf '%s' "${err}" | sed 's/%/%25/g; s/\r/%0D/g' | awk 'BEGIN{ORS=""} NR>1{print "%0A"} {print}')"
               printf 'parse_fail:%s\n' "${err:-<no stderr captured>}"
             fi
           }
