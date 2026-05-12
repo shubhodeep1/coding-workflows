@@ -4978,6 +4978,43 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 	assert len(result["validation_dispatches"]) == 1
 
 
+def test_revalidate_not_blocked_by_prose_marker_comment_after_command():
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[
+			"/revalidate",
+			"Operator note: I reviewed the ORCHESTRATOR_STATE_V2 framing above.",
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_revalidate_not_blocked_by_torn_v2_chunk_after_command():
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	partial_chain = _build_v2_state_comment_chain(payload, chunk_size=max(1, encoded_len // 2))
+	assert len(partial_chain) > 1
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["/revalidate", partial_chain[0]["body"]],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert len(result["validation_dispatches"]) == 1
+
+
 def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_different_total():
 	state = _base_state(status="in_progress")
 	payload = json.dumps(state)
@@ -5120,6 +5157,26 @@ def test_judge_resume_plain_preserves_counters():
 		"Counter handling: judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in body
 		for body in tracking_comments
 	)
+
+
+def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 9
+	state["recovery_count"] = 6
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=[
+			"/judge_resume --force",
+			"FYI: the ORCHESTRATOR_STATE_V1 marker above came from the previous run.",
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 0
+	assert ls["recovery_count"] == 0
 
 
 def test_judge_resume_reset_recovery_only():

@@ -8600,7 +8600,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && (has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"); then
     REVALIDATE_REQUESTED="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select((.value.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2")))) | last | .key // -1) as $last_state_idx |
+      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
       [to_entries[] | select(.key > $last_state_idx and (.value.body | test("^\\s*/revalidate(\\s|$)"; "m")))] | length > 0
     ')"
 
@@ -8648,7 +8648,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
     && ! has_label "${TRACKING_LABELS}" "ai:validation-failed" \
     && ! has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
     JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select((.value.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2")))) | last | .key // -1) as $last_state_idx |
+      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
       [to_entries[]
         | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))
       ]
