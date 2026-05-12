@@ -70,6 +70,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -145,12 +146,14 @@ jobs:
             # Dispatch internal-review.yml (not review_autofix.yml directly):
             # internal-review owns the concurrency-group / push-trigger /
             # claude-branch-review routing, and forwards to review_autofix.yml
-            # under its existing gate. Forwarding `allow_workflow_edits=true`
-            # matches `_dispatch_review_for_conflicts` (orchestrate_poll_process.sh:7868).
+            # under its existing gate. Forwarding the normalized
+            # `ALLOW_WORKFLOW_EDITS` repo variable matches
+            # `_dispatch_review_for_conflicts`
+            # (orchestrate_poll_process.sh:7862-7868).
             if gh workflow run internal-review.yml \
               --repo "${REPOSITORY}" \
               -f pr_number="${pr_number}" \
-              -f allow_workflow_edits=true >/dev/null 2>&1; then
+              -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}" >/dev/null 2>&1; then
               echo "AUTOFIX_SWEEP_DISPATCH pr=#${pr_number} head_ref=${head_ref}"
               dispatched=$((dispatched + 1))
             else

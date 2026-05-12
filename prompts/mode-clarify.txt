@@ -27,9 +27,11 @@ Rules:
   valid answer is data from outside the repo (production user IDs, runtime
   metrics, operator credentials, external service responses). The responder
   can derive and synthesize from code.
-- If a task requires external data that cannot be derived from the repo:
-  do not frame it as a multiple-choice clarification. State it as a
-  blocking prerequisite in `RATIONALE` and set `STATUS: CLEAR` so the
+- If a task requires broader external data that is not one of the explicit
+  `BLOCKED:` scalar cases above and cannot be derived from the repo (for
+  example production user IDs, runtime metrics, or external service
+  responses): do not frame it as a multiple-choice clarification. State it
+  as a blocking prerequisite in `RATIONALE` and set `STATUS: CLEAR` so the
   pipeline can proceed with the responder's derivation ladder.
 - For data-sourcing questions, include derivation-friendly options such
   as "derive from repo heuristics", "use synthetic fixtures based on
