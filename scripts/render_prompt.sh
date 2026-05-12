@@ -35,6 +35,14 @@ fi
 # across different prompt builds in the same shell process.
 SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
 
+# {{SERENA_TOOL_HINTS}} resolves from the optional ${SERENA_TOOL_HINTS}
+# environment variable. Prompt consumers set it per render invocation so the
+# Serena tool-usage guidance stays prompt-local and renders to an empty block
+# when Serena is unavailable.
+# Editor-only Serena guidance can be injected through the shared renderer
+# without touching reviewer or judge prompt assembly.
+SERENA_TOOL_HINTS_BLOCK="${SERENA_TOOL_HINTS:-}"
+
 line=""
 while IFS= read -r line || [ -n "${line}" ]; do
 	trimmed_line="${line#"${line%%[![:space:]]*}"}"
@@ -45,6 +53,9 @@ while IFS= read -r line || [ -n "${line}" ]; do
 			;;
 		"{{SEMBLE_PREFETCH}}")
 			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK%$'\n'}"
+			;;
+		"{{SERENA_TOOL_HINTS}}")
+			printf '%s\n' "${SERENA_TOOL_HINTS_BLOCK%$'\n'}"
 			;;
 		*)
 			printf '%s\n' "${line}"
@@ -59,6 +70,11 @@ fi
 
 if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
 	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
+	exit 1
+fi
+
+if grep -qE '^[[:space:]]*\{\{SERENA_TOOL_HINTS\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+	echo "Unresolved SERENA_TOOL_HINTS placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi
 

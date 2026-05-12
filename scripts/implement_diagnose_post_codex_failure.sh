@@ -98,18 +98,51 @@ esac
 patch_diagnose_reasoning_into_config() {
   local cfg="${HOME:-/root}/.codex/config.toml"
   mkdir -p "$(dirname "${cfg}")"
-  if [ ! -f "${cfg}" ]; then
-    printf 'model_reasoning_effort = "%s"\n' "${DIAGNOSE_REASONING}" > "${cfg}"
-    return 0
-  fi
-  if grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
-    sed -i \
-      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${DIAGNOSE_REASONING}\"/" \
-      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${DIAGNOSE_REASONING}\"/" \
-      "${cfg}" || true
-  else
-    printf 'model_reasoning_effort = "%s"\n' "${DIAGNOSE_REASONING}" >> "${cfg}"
-  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${DIAGNOSE_REASONING}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+reasoning = sys.argv[2]
+replacement = f'model_reasoning_effort = "{reasoning}"\n'
+
+if not config_path.exists():
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(replacement, encoding="utf-8")
+    raise SystemExit(0)
+
+text = config_path.read_text(encoding="utf-8")
+lines = text.splitlines(keepends=True)
+
+first_table_idx = len(lines)
+for idx, line in enumerate(lines):
+    stripped = line.lstrip()
+    if re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped):
+        first_table_idx = idx
+        break
+
+top_level_lines = lines[:first_table_idx]
+rest_lines = lines[first_table_idx:]
+pattern = re.compile(r"^[ \t]*model_reasoning_effort[ \t]*=")
+
+updated_top = []
+replaced = False
+for line in top_level_lines:
+    if pattern.match(line):
+        if not replaced:
+            updated_top.append(replacement)
+            replaced = True
+        continue
+    updated_top.append(line)
+
+if not replaced:
+    if updated_top and not updated_top[-1].endswith("\n"):
+        updated_top[-1] += "\n"
+    updated_top.append(replacement)
+
+config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
+PY
 }
 patch_diagnose_reasoning_into_config
 
@@ -325,7 +358,16 @@ fi
 DIAGNOSE_MODE_PROMPT="${DIAGNOSE_MODE_PROMPT_TEMPLATE}"
 if ensure_diagnose_asset "scripts/render_prompt.sh" "scripts/render_prompt.sh"; then
   DIAGNOSE_RENDERED_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.rendered.txt"
-  if bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
+  DIAGNOSE_SERENA_TOOL_HINTS=""
+  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+    DIAGNOSE_SERENA_TOOL_HINTS="$(cat <<'EOF'
+Serena hints:
+- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for repository discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).
+- Keep apply_patch as the primary write path in implement-family runs; for this diagnose role, use Serena only to reason about symbols and files named in the supplied evidence.
+EOF
+    )"
+  fi
+  if SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
     DIAGNOSE_MODE_PROMPT="${DIAGNOSE_RENDERED_PROMPT}"
   else
     echo "::warning::Failed to render ${DIAGNOSE_MODE_PROMPT_TEMPLATE}; using raw prompt."
