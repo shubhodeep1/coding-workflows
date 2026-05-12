@@ -4,6 +4,8 @@ Inputs (from the prompt below): source issue title+body, failing step name,
 codex change context (`git diff HEAD` plus untracked/new-file context),
 captured post-Codex stderr.
 
+{{SERENA_TOOL_HINTS}}
+
 Hard constraints:
 - Do not edit code or output patches.
 - Return issue-ready content only.

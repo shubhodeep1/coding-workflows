@@ -61,6 +61,14 @@ def _resolve_script_text() -> str:
 	return RESOLVE_SCRIPT.read_text(encoding="utf-8")
 
 
+def _render_retry_template(template_text: str, env: dict[str, str]) -> str:
+	return re.sub(
+		r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}",
+		lambda m: env.get(m.group(1).upper(), ""),
+		template_text,
+	)
+
+
 def test_both_prelude_files_exist() -> None:
 	"""Both prelude templates must be checked in. They are referenced
 	by `_build_retry_prompt`'s `_prelude_basename` branching and
@@ -98,23 +106,56 @@ def test_validation_prelude_carries_violations_framing() -> None:
 	assert "{{MARKER_VIOLATION_FILES}}" in body
 	assert "{{FINGERPRINT_VIOLATION_COUNT}}" in body
 	assert "{{FINGERPRINT_VIOLATION_DETAILS}}" in body
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in body
+
+
+def test_validation_prelude_optional_resolver_serena_hint_renders_cleanly() -> None:
+	"""The retry-prelude path must render resolver-scoped Serena hints when
+	bound and drop the placeholder entirely when unset/empty."""
+	body = VALIDATION_PRELUDE.read_text(encoding="utf-8")
+	hint_text = "\n".join((
+		"Resolver Serena hints:",
+		"- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).",
+		"- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.",
+	))
+	rendered_with_hint = _render_retry_template(body, {
+		"SERENA_TOOL_HINTS_RESOLVER": hint_text,
+	})
+	assert hint_text in rendered_with_hint
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" not in rendered_with_hint
+	rendered_without_hint = _render_retry_template(body, {})
+	rendered_empty_hint = _render_retry_template(body, {
+		"SERENA_TOOL_HINTS_RESOLVER": "",
+	})
+	for rendered in (rendered_without_hint, rendered_empty_hint):
+		assert "Resolver Serena hints:" not in rendered
+		assert "{{SERENA_TOOL_HINTS_RESOLVER}}" not in rendered
 
 
 def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
 	"""The validation prelude must contain ONLY `{{KEY}}` placeholders
-	matching the renderer's auto-discovery regex (`[A-Z_][A-Z0-9_]*`).
+	whose identifier matches `[A-Z_][A-Z0-9_]*` — a stricter contract
+	than the renderer's runtime regex (`\\{\\{\\s*[A-Za-z_]\\w*\\s*\\}\\}`,
+	which also accepts spaced/lowercased forms like `{{ key }}` and
+	uppercases the captured key for env lookup). The renderer is
+	permissive at runtime so an in-flight template-style change
+	cannot strand the model on literal braces, but every shipped
+	template should stick to UPPER_SNAKE_CASE so reviewers have a
+	single canonical spelling to grep for; this test pins that
+	style invariant.
+
 	Mustache-style conditional markers like `{{#IF_VIOLATIONS}}` and
-	`{{/IF_VIOLATIONS}}` — or any `{{...}}` containing characters
-	outside that uppercase identifier set — would survive the
-	renderer's substitution loop and leak into the rendered prompt
-	as literal text. An earlier iteration of this PR shipped a
-	template with `{{#IF_VIOLATIONS}}` / `{{/IF_VIOLATIONS}}`
-	wrappers; the upstream renderer was switched to a placeholder-
-	auto-discovery design that does not strip mustache conditionals,
-	so leaving those wrappers in the file would render the literal
-	marker text into the model's prompt. This regression was caught
-	by all six claude-branch reviewers at confidence 5; this test
-	pins the contract so the leak cannot be re-introduced.
+	`{{/IF_VIOLATIONS}}` would survive the renderer's substitution
+	loop regardless (the runtime regex does not match `#`/`/` chars)
+	and leak into the rendered prompt as literal text. An earlier
+	iteration of this PR shipped a template with `{{#IF_VIOLATIONS}}`
+	/ `{{/IF_VIOLATIONS}}` wrappers; the upstream renderer was
+	switched to a placeholder-auto-discovery design that does not
+	strip mustache conditionals, so leaving those wrappers in the
+	file would render the literal marker text into the model's
+	prompt. This regression was caught by all six claude-branch
+	reviewers at confidence 5; this test pins the contract so the
+	leak cannot be re-introduced.
 
 	`{{PREVIOUS_OUTCOME_NOTICE}}` was a placeholder used by the
 	PR's earlier single-template design but is never populated on
@@ -132,8 +173,8 @@ def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
 	assert not leaked, (
 		"Validation prelude contains mustache-style conditional "
 		"markers that the renderer does not strip: "
-		f"{leaked!r}. The renderer's placeholder regex is "
-		"`{{[A-Z_][A-Z0-9_]*}}` (auto-discovered from the "
+		f"{leaked!r}. The renderer's runtime regex is "
+		r"`\{\{\s*[A-Za-z_]\w*\s*\}\}` (auto-discovered from the "
 		"template body) and it will not match `{{#…}}` or "
 		"`{{/…}}` markers, so they survive verbatim into the "
 		"rendered retry prompt. Remove the markers from the "
@@ -149,27 +190,33 @@ def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
 		"the empty string and the placeholder is dead template "
 		"baggage. Drop it from the validation prelude."
 	)
-	# Belt-and-suspenders: every remaining `{{...}}` token must
-	# match the renderer's auto-discovery regex so future template
-	# edits can't introduce a different unrendered token shape.
+	# Style invariant — stricter than the runtime regex.  Every
+	# `{{...}}` token shipped in this template should use
+	# UPPER_SNAKE_CASE with no interior whitespace, even though
+	# the renderer would accept `{{ key }}` at runtime.  Pinning
+	# the spelling here keeps reviewers from having to track
+	# multiple grep-able forms of the same placeholder.
 	all_tokens = re.findall(r"\{\{([^}]*)\}\}", body)
 	bad = [t for t in all_tokens if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", t)]
 	assert not bad, (
-		"Validation prelude contains `{{…}}` tokens that the "
-		"renderer's auto-discovery regex `[A-Z_][A-Z0-9_]*` does "
-		f"not match: {bad!r}. These tokens will survive verbatim "
-		"into the rendered prompt. Either rename them to match "
-		"the regex (uppercase identifiers) or remove them."
+		"Validation prelude contains `{{…}}` tokens outside the "
+		"UPPER_SNAKE_CASE style convention: "
+		f"{bad!r}. The renderer's runtime regex "
+		r"(`\{\{\s*[A-Za-z_]\w*\s*\}\}`) would accept these, but "
+		"every shipped template should use the canonical "
+		"`{{UPPER_KEY}}` spelling so reviewers have a single "
+		"grep-able form. Either rename them or remove them."
 	)
 
 
 def test_timeout_prelude_has_no_leaked_unprocessed_markers() -> None:
 	"""Same contract as the validation prelude: the timeout prelude
-	must contain ONLY `{{KEY}}` placeholders matching the
-	renderer's auto-discovery regex, with no mustache conditionals
-	or other unrendered token shapes. Pinning this contract on
-	both prelude files prevents the same regression from sneaking
-	in via either path."""
+	must contain ONLY `{{UPPER_KEY}}` placeholders (the style
+	convention enforced on every shipped template), with no mustache
+	conditionals or other unrendered token shapes. The renderer's
+	runtime regex (`\\{\\{\\s*[A-Za-z_]\\w*\\s*\\}\\}`) is more
+	permissive, but pinning the canonical spelling here keeps both
+	prelude files reviewable with a single grep."""
 	body = TIMEOUT_PRELUDE.read_text(encoding="utf-8")
 	conditional_marker_pattern = re.compile(
 		r"\{\{[ \t]*[#/][^}]*\}\}"
@@ -183,7 +230,7 @@ def test_timeout_prelude_has_no_leaked_unprocessed_markers() -> None:
 	bad = [t for t in all_tokens if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", t)]
 	assert not bad, (
 		"Timeout prelude contains `{{…}}` tokens outside the "
-		f"renderer's auto-discovery regex: {bad!r}."
+		f"UPPER_SNAKE_CASE template style convention: {bad!r}."
 	)
 
 
@@ -261,6 +308,11 @@ def test_build_retry_prompt_dispatches_on_failure_kind() -> None:
 		"Validation branch must select the standard prelude "
 		"basename so the violations-framing path is preserved."
 	)
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in src, (
+		"_build_retry_prompt should pass the resolver-scoped Serena hint env var "
+		"through the prelude renderer so integration-sync retries can render "
+		"the optional guidance when SERENA_AVAILABLE=true and omit it otherwise."
+	)
 
 
 def test_build_retry_prompt_sets_retry_prompt_outcome() -> None:
@@ -337,6 +389,7 @@ def test_reasoning_default_lowered_to_high() -> None:
 def main() -> int:
 	test_both_prelude_files_exist()
 	test_validation_prelude_carries_violations_framing()
+	test_validation_prelude_optional_resolver_serena_hint_renders_cleanly()
 	test_validation_prelude_has_no_leaked_unprocessed_markers()
 	test_timeout_prelude_has_no_leaked_unprocessed_markers()
 	test_timeout_prelude_carries_apply_patch_first_guidance()

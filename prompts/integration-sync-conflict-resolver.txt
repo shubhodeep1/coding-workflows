@@ -68,6 +68,8 @@ fingerprinting was enabled):
 Resolve the merge conflicts in a way that satisfies ALL of these
 constraints simultaneously:
 
+{{SERENA_TOOL_HINTS_RESOLVER}}
+
 1. Every file in the in-scope list above that currently has Git
    conflict markers must be free of them after your edits.  Files
    in the list that have no markers (fingerprint-violation entries)

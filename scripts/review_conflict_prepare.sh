@@ -21,7 +21,8 @@
 # Outputs:
 #   $GITHUB_ENV: MERGE_CONFLICT (cleared on clean replay),
 #                INTEGRATION_FINGERPRINTS_FILE, INTEGRATION_BRANCH_NAME,
-#                INTEGRATION_TRACKING_NUM, IS_INTEGRATION_SYNC.
+#                INTEGRATION_TRACKING_NUM, IS_INTEGRATION_SYNC,
+#                CONFLICT_RESOLVER_SEMBLE_QUERY_FILE.
 #   ${RUNTIME_DIR}/pre_resolver_state.tsv, conflicted_paths.txt,
 #                  resolver_unmerged_allowlist.txt, integration_fingerprints.json.
 #   ${CONFLICT_RESOLVER_PROMPT_FILE} rendered prompt text.
@@ -443,6 +444,48 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
   rm -f "${_fp_violated_tmp}"
 fi
 
+CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"
+append_semble_query_section() {
+  local label="$1"
+  local path="$2"
+  local max_bytes="${3:-4096}"
+
+  [ -s "${path}" ] || return 0
+  printf '%s\n' "${label}"
+  head -c "${max_bytes}" "${path}"
+  printf '\n'
+}
+
+{
+  printf '%s\n' 'Resolve merge conflicts while preserving surrounding behavior.'
+  append_semble_query_section 'Resolver allowlist:' "${RESOLVER_ALLOWLIST_FILE}" 3000
+  if [ -n "${CONFLICTED_FILES_LIST:-}" ]; then
+    printf '%s\n%s\n' 'Conflicted files reported by git:' "${CONFLICTED_FILES_LIST}"
+  fi
+  if [ -n "${FP_VIOLATED_FILES_LIST:-}" ]; then
+    printf '%s\n' 'Fingerprint-violating files in working set:'
+    printf '%s\n' "${FP_VIOLATED_FILES_LIST}" | head -n 100
+  fi
+  if [ -n "${INTEGRATION_TRACKING_TITLE:-}" ]; then
+    printf '%s\n%s\n' 'Tracking issue title:' "${INTEGRATION_TRACKING_TITLE}"
+  fi
+  if [ -n "${INTEGRATION_TRACKING_BODY:-}" ]; then
+    printf '%s\n' 'Tracking issue body:'
+    printf '%s' "${INTEGRATION_TRACKING_BODY}" | head -c 4000
+    printf '\n'
+  fi
+} > "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"
+echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}" >> "$GITHUB_ENV"
+
+RESOLVER_SERENA_TOOL_HINTS="$({
+  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+    printf '%s\n' \
+      'Resolver Serena hints:' \
+      '- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).' \
+      '- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.'
+  fi
+}; )"
+
 # Render the prompt template with substitutions. We pass placeholder
 # names + their values via env so the python one-liner stays under
 # GHA's 21,000-char per-step expression limit and avoids wrestling
@@ -456,8 +499,9 @@ PROMPT_TPL="${PROMPT_TPL}" \
   TRACKING_ISSUE_BODY="${INTEGRATION_TRACKING_BODY}" \
   MERGED_SUB_ISSUES_LIST="${INTEGRATION_MERGED_SUB_ISSUES_LIST}" \
   MERGED_SUB_ISSUE_COUNT="${INTEGRATION_MERGED_SUB_ISSUE_COUNT}" \
+  SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
   INTEGRATION_FINGERPRINTS_FILE="${INTEGRATION_FINGERPRINTS_FILE:-}" \
-  python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
+  python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT','SERENA_TOOL_HINTS_RESOLVER']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
   > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
 # ── Smoke-test override gate ──────────────────────────────────────

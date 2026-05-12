@@ -1,5 +1,7 @@
 Role: validate-diagnose. Goal: analyze runtime validation failures and emit one JSON object with structured fix-up issue proposals.
 
+{{SERENA_TOOL_HINTS}}
+
 Inputs to use:
 - Structured validation failure JSON
 - `validation/validate.sh` output

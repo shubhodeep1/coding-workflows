@@ -537,6 +537,9 @@ if args and args[0] == "api":
 		if a == "--jq" and i + 1 < len(args):
 			jq_filter = args[i + 1]
 			break
+		if a.startswith("--jq="):
+			jq_filter = a[len("--jq="):]
+			break
 	canned = os.environ.get("MOCK_GH_TIMELINE_JSON", "[]")
 	if jq_filter is None:
 		sys.stdout.write(canned)
@@ -571,8 +574,9 @@ def _install_timeline_gh_stub(bin_dir: Path) -> None:
 			"jq is required to run the Gap-3 safety-check tests "
 			"(_GH_STUB_TIMELINE applies --jq filters via the host jq). "
 			"Install jq (apt: `apt-get install jq`; brew: `brew install jq`) "
-			"and re-run. CI runners already have jq via the workflow "
-			"prerequisite check; this guard exists for local dev environments."
+			"and re-run. GitHub-hosted CI runners ship jq preinstalled "
+			"in the ubuntu-latest image; this guard exists for local "
+			"dev environments and self-hosted runners."
 		)
 	bin_dir.mkdir(parents=True, exist_ok=True)
 	gh_path = bin_dir / "gh"

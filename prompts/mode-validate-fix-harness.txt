@@ -1,5 +1,7 @@
 Role: validate-fix-harness. Goal: apply targeted fixes to the existing validation harness under `validation/`.
 
+{{SERENA_TOOL_HINTS}}
+
 Scope constraints (mandatory):
 - Modify only files under `validation/`.
 - Do not modify application source code.
