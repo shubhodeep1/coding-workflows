@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate.yml:32-33 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new env export can be silently shadowed by a conflicting local env set by the caller workflow, bypassing the documented `vars.*` path.\n  WHY: This can make consumer-repo overrides unreachable without warning, so the intended repo-variable wiring is not guaranteed.\n- .github/workflows/orchestrate.yml:769-806 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The rc=137 log message reports the pre-clamp timeout value, which can mislead operators about the actual enforced budget.\n  WHY: The classification logic may be correct, but the emitted status text can still describe the wrong timeout value after clamping.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/orchestrate.yml:32-33 | severity=low | confidence=3\n  PROBLEM: The new env export uses ${{ vars.ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS || '' }}, which correctly bridges repo vars to the shell script. However, if a caller workflow sets a conflicting local env (overriding the global), it shadows this without warning.\n  WHY: Consumer repos dispatching orchestrate.yml with local env: ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS=... bypasses the documented vars. override silently.\n- .github/workflows/orchestrate.yml:769-806 | severity=low | confidence=2\n  PROBLEM: Elapsed time check for rc=137 uses [ \"${attempt_elapsed}\" -ge \"${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}\" ], but if validation clamped a huge override down to 3000s, elapsed could exceed due to post-clamp runtime without re-clamping the comparison.\n  WHY: Correct classification (timeout vs OOM), but log message uses original (pre-clamp) value in last_status=\"codex timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)\", misleading operators on actual enforced budget.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a3297913cfeb8a41bfb78cf05a1e6d3cd1eb098ef99cdbd7ac6ba7f6041e70c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2547,
+    "run_id": "25751673720",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25751673720",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512180159_fc2a61df4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2547,
+    "run_id": "25751673720"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-12T18:01:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
