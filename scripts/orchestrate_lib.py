@@ -2476,12 +2476,6 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 			k: int(v) for k, v in json.loads(args.max_recoveries_by_phase_json).items()
 		}
 
-	max_recoveries_by_phase: dict[str, int] | None = None
-	if getattr(args, "max_recoveries_by_phase_json", None):
-		max_recoveries_by_phase = {
-			k: int(v) for k, v in json.loads(args.max_recoveries_by_phase_json).items()
-		}
-
 	stalls = detect_stalls(
 		state, issue_labels, threshold, now_ts, max_recoveries,
 		phase_thresholds=phase_thresholds,

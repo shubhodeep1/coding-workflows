@@ -424,8 +424,7 @@ def _extract_state_payloads(comments: list[dict]) -> list[str]:
 	the test contract that the latest state write is `payloads[-1]`.
 	"""
 	payloads: list[tuple[int, str]] = []
-	v2_parts: dict[tuple[str, int], dict[int, str]] = {}
-	v2_complete: set[tuple[str, int]] = set()
+	v2_candidates: dict[tuple[str, int], dict[str, object]] = {}
 	for idx, comment in enumerate(comments):
 		body = (comment or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" in body:
@@ -433,22 +432,36 @@ def _extract_state_payloads(comments: list[dict]) -> list[str]:
 			if parsed is not None:
 				part, total, manifest, chunk = parsed
 				chain_key = (manifest, total)
-				if chain_key not in v2_complete:
-					slot = v2_parts.setdefault(chain_key, {})
-					slot.setdefault(part, chunk)
-					if len(slot) == total and all(p in slot for p in range(1, total + 1)):
-						stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
+				candidate = v2_candidates.get(chain_key)
+				if part == 1:
+					candidate = {
+						"next_part": 2,
+						"parts": {part: chunk},
+					}
+					v2_candidates[chain_key] = candidate
+				elif candidate is not None and part == candidate.get("next_part"):
+					parts = candidate["parts"]
+					assert isinstance(parts, dict)
+					parts[part] = chunk
+					candidate["next_part"] = part + 1
+				else:
+					candidate = None
+				if candidate is not None:
+					parts = candidate["parts"]
+					assert isinstance(parts, dict)
+					if len(parts) == total and candidate.get("next_part") == total + 1:
+						stitched_b64 = "".join(parts[p] for p in range(1, total + 1))
 						compact = re.sub(r"\s+", "", stitched_b64)
 						try:
 							decoded = base64.b64decode(compact, validate=True)
 						except (binascii.Error, ValueError):
-							v2_parts.pop(chain_key, None)
+							v2_candidates.pop(chain_key, None)
 						else:
 							if hashlib.sha256(decoded).hexdigest() == manifest:
-								v2_complete.add(chain_key)
 								payloads.append((idx, decoded.decode("utf-8")))
+								v2_candidates.pop(chain_key, None)
 							else:
-								v2_parts.pop(chain_key, None)
+								v2_candidates.pop(chain_key, None)
 		if "ORCHESTRATOR_STATE_V1" in body:
 			match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
 			if match:
@@ -4974,6 +4987,39 @@ def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_d
 		payload,
 		chunk_size=max(1, encoded_len // 2),
 	)[:1]
+	comments = older_complete + newer_partial
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
+def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_same_total_uses_different_chunking():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	older_chunk_size = (encoded_len // 2) + 1
+	newer_chunk_size = encoded_len - 1
+	assert max(1, (encoded_len + older_chunk_size - 1) // older_chunk_size) == 2
+	assert max(1, (encoded_len + newer_chunk_size - 1) // newer_chunk_size) == 2
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=older_chunk_size)
+	newer_partial = _build_v2_state_comment_chain(payload, chunk_size=newer_chunk_size)[:1]
 	comments = older_complete + newer_partial
 
 	with tempfile.TemporaryDirectory() as td:

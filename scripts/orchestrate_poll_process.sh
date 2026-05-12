@@ -11093,7 +11093,6 @@ fi
       --labels-json "${LABELS_JSON}"
       --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
-      --max-recoveries-by-phase-json "{\"ai:done\":${MAX_STALL_RECOVERIES_DONE}}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
       --enable-stall-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
