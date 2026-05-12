@@ -362,12 +362,10 @@ if ensure_diagnose_asset "scripts/render_prompt.sh" "scripts/render_prompt.sh"; 
   DIAGNOSE_RENDERED_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.rendered.txt"
   DIAGNOSE_SERENA_TOOL_HINTS=""
   if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-    DIAGNOSE_SERENA_TOOL_HINTS="$(cat <<'EOF'
-Serena hints:
-- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for repository discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).
-- Keep apply_patch as the primary write path in implement-family runs; for this diagnose role, use Serena only to reason about symbols and files named in the supplied evidence.
-EOF
-    )"
+    DIAGNOSE_SERENA_TOOL_HINTS="$(printf '%s\n' \
+      'Serena hints:' \
+      '- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for repository discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).' \
+      '- Keep apply_patch as the primary write path in implement-family runs; use Serena only to reason about symbols and files named in the supplied evidence.')"
   fi
   if SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
     DIAGNOSE_MODE_PROMPT="${DIAGNOSE_RENDERED_PROMPT}"
