@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:119-120 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Exact-match \"1\" truthy parsing rejects padded variants like \"1 \" or \"01\", so the cache probe stays disabled despite opt-in intent.\n  WHY: Three reviewers identified the same exact-match edge case; confidence is the highest reported value.\n- scripts/review_run_reviewers.sh:128 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: run_cache_probe() blindly selects the first non-empty REVIEWER_MODELS entry, which can silently choose the wrong model if the list is malformed or reordered.\n  WHY: Two reviewers reported the same pre-existing selection logic issue; confidence is the highest reported value.\n- scripts/review_run_reviewers.sh:133 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: OPENROUTER_PROMPT_CACHE_DISABLED still uses exact-case truthy matching, so mixed-case values like \"True\" can bypass the intended disable path.\n  WHY: Single-reviewer hardening finding; confidence is taken from the reported risk score/assessment.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_run_reviewers.sh:133 | severity=low | confidence=2\n  PROBLEM: OPENROUTER_PROMPT_CACHE_DISABLED still uses exact-case truthy matching, so mixed-case values like \"True\" can bypass the intended disable path.\n  WHY: The inner check is inconsistent with the new case-insensitive gate above it, so a mixed-case disable value can fall through and still run the probe.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_run_reviewers.sh:119 | severity=low | confidence=2\n  PROBLEM: Pattern `1` matches exactly \"1\" but not \"1 \" or \"01\", so explicit opt-in values with padding fall through to default-off.\n  WHY: The gate uses exact-string matching, so common padded numeric variants are not recognized.\n- scripts/review_run_reviewers.sh:128 | severity=low | confidence=3\n  PROBLEM: `probe_model=\"$(printf '%s\\n' \"${REVIEWER_MODELS}\" | sed '/^$/d' | head -n1)\"` silently relies on the first non-empty REVIEWER_MODELS line.\n  WHY: If the list is shuffled or the first line is empty/malformed, the probe can use the wrong model without validation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_run_reviewers.sh:119 | severity=low | confidence=4\n  PROBLEM: Exact-match \"1\" pattern misses variants like \"1 \" or \"01\", so explicit enable values with padding still skip the probe.\n  WHY: The case arm only accepts the literal `1`, so padded numeric variants fall through to the disabled branch.\n- scripts/review_run_reviewers.sh:128 | severity=low | confidence=3\n  PROBLEM: `probe_model=\"$(printf '%s\\n' \"${REVIEWER_MODELS}\" | sed '/^$/d' | head -n1)\"` blindly picks the first non-empty REVIEWER_MODELS line without validation.\n  WHY: A malformed or reordered list can silently select the wrong model and misattribute cache telemetry.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_run_reviewers.sh:119 | severity=low | confidence=1\n  PROBLEM: Exact match for `1` does not handle trailing whitespace, which can occur in env var exports.\n  WHY: The current case arm only recognizes the literal `1`, so whitespace-suffixed values fall through to the disabled branch.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "792d7511c4a87397b698a73db18cfd6a5bc86b56e2e6c310c356cff8f63371f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2553,
+    "run_id": "25766875799",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25766875799",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512233511_5b390a0ced",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2553,
+    "run_id": "25766875799"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T23:35:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
