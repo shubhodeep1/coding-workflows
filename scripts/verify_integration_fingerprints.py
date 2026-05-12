@@ -193,6 +193,127 @@ def _substring_overlap_drops(
 	return drops
 
 
+def _cross_issue_exact_conflict_drops(
+	fingerprints: dict[str, Any],
+) -> tuple[dict[str, set[tuple[str, str]]], dict[str, list[str]]]:
+	"""Drop older cross-issue exact contradictions when a newer capture wins.
+
+	Historic orchestrator state can legitimately carry stale intent for the
+	same literal ``(file, regex)`` pair across different merged sub-issues:
+	an older issue captured the line under ``must_contain``, then a later
+	issue intentionally deleted or rewrote that same line and captured the
+	identical pair under ``must_not_contain`` (or vice versa).  Those state
+	entries are not both satisfiable on a single post-resolve tree.
+
+	When every conflicting occurrence has a ``captured_at`` timestamp and one
+	side is strictly newer, prefer that newer side and drop the older opposite
+	intent.  If timestamps are missing or the newest timestamp is tied across
+	both sides, leave the contradiction intact so verify mode surfaces the
+	ambiguity instead of silently guessing.
+	"""
+	entries_by_key: dict[tuple[str, str], list[tuple[str, str, str, str, str]]] = {}
+	seen_occurrences: set[tuple[str, str, tuple[str, str]]] = set()
+	for issue_key, entry in fingerprints.items():
+		if not isinstance(entry, dict):
+			continue
+		issue_num = str(entry.get("issue", issue_key))
+		pr_num = str(entry.get("pr", "?"))
+		captured_at = entry.get("captured_at", "")
+		if not isinstance(captured_at, str):
+			captured_at = ""
+		for kind in ("must_contain", "must_not_contain"):
+			for fp in entry.get(kind, []) or []:
+				key = _fp_key(fp)
+				if key is None:
+					continue
+				occurrence_key = (issue_key, kind, key)
+				if occurrence_key in seen_occurrences:
+					continue
+				seen_occurrences.add(occurrence_key)
+				entries_by_key.setdefault(key, []).append((issue_key, issue_num, pr_num, kind, captured_at))
+
+	drops_by_issue: dict[str, set[tuple[str, str]]] = {}
+	warning_counts: dict[tuple[str, str, str, str, str, str, str, tuple[tuple[str, str], ...]], int] = {}
+	for key, occurrences in entries_by_key.items():
+		if len({issue_key for issue_key, *_ in occurrences}) < 2:
+			continue
+		if {kind for _, _, _, kind, _ in occurrences} != {"must_contain", "must_not_contain"}:
+			continue
+		if any(not captured_at for _, _, _, _, captured_at in occurrences):
+			continue
+		latest_captured_at = max(captured_at for _, _, _, _, captured_at in occurrences)
+		latest_kinds = {kind for _, _, _, kind, captured_at in occurrences if captured_at == latest_captured_at}
+		if len(latest_kinds) != 1:
+			continue
+		winning_kind = next(iter(latest_kinds))
+		winning_refs = tuple(
+			sorted(
+				{
+					(issue_num, pr_num)
+					for _, issue_num, pr_num, kind, captured_at in occurrences
+					if kind == winning_kind and captured_at == latest_captured_at
+				}
+			)
+		)
+		for issue_key, issue_num, pr_num, kind, captured_at in occurrences:
+			if kind == winning_kind or captured_at >= latest_captured_at:
+				continue
+			drops_by_issue.setdefault(issue_key, set()).add(key)
+			warning_key = (
+				issue_key,
+				issue_num,
+				pr_num,
+				kind,
+				winning_kind,
+				captured_at,
+				latest_captured_at,
+				winning_refs,
+			)
+			warning_counts[warning_key] = warning_counts.get(warning_key, 0) + 1
+
+	warnings_by_issue: dict[str, list[str]] = {}
+	for warning_key, count in sorted(warning_counts.items()):
+		(
+			issue_key,
+			issue_num,
+			pr_num,
+			losing_kind,
+			winning_kind,
+			captured_at,
+			latest_captured_at,
+			winning_refs,
+		) = warning_key
+		winners_text = ", ".join(f"#{winner_issue} (PR #{winner_pr})" for winner_issue, winner_pr in winning_refs)
+		warnings_by_issue.setdefault(issue_key, []).append(
+			f"::warning::Fingerprint cross-issue exact-conflict dedup for issue #{issue_num} "
+			f"(PR #{pr_num}, captured_at {captured_at}): skipping {count} {losing_kind} pattern(s) "
+			f"whose identical (file, regex) pair now appears under {winning_kind} in newer "
+			f"capture(s) from {winners_text} at {latest_captured_at}. Keeping the newer capture."
+		)
+	return drops_by_issue, warnings_by_issue
+
+
+def _dedup_issue_patterns(
+	issue_key: str,
+	entry: dict[str, Any],
+	cross_issue_exact_drops: dict[str, set[tuple[str, str]]] | None = None,
+) -> tuple[list[Any], list[Any], set[tuple[str, str]], set[tuple[str, str]], set[tuple[str, str]]]:
+	must_contain = entry.get("must_contain", []) or []
+	must_not_contain = entry.get("must_not_contain", []) or []
+	mc_with_keys = [(fp, _fp_key(fp)) for fp in must_contain]
+	mnc_with_keys = [(fp, _fp_key(fp)) for fp in must_not_contain]
+	mc_keys = {k for _, k in mc_with_keys if k is not None}
+	mnc_keys = {k for _, k in mnc_with_keys if k is not None}
+	shared_keys = mc_keys & mnc_keys
+	substring_drops = _substring_overlap_drops(mc_with_keys, mnc_with_keys)
+	exact_conflict_drops = set((cross_issue_exact_drops or {}).get(issue_key, set()))
+	drops = shared_keys | substring_drops | exact_conflict_drops
+	if drops:
+		must_contain = [fp for fp, key in mc_with_keys if key not in drops]
+		must_not_contain = [fp for fp, key in mnc_with_keys if key not in drops]
+	return must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops
+
+
 def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 	"""Return a sorted, de-duplicated list of file paths that currently
 	fail at least one fingerprint check against the cwd tree.
@@ -204,31 +325,19 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 	"""
 	violated: set[str] = set()
 	file_cache: dict[str, str | None] = {}
+	cross_issue_exact_drops, _ = _cross_issue_exact_conflict_drops(fingerprints)
 
 	for issue_key, entry in fingerprints.items():
 		if not isinstance(entry, dict):
 			continue
-		must_contain = entry.get("must_contain", []) or []
-		must_not_contain = entry.get("must_not_contain", []) or []
-
-		# Cross-dedup: skip (file, regex) pairs recorded in both lists
-		# for this issue (historic capture false positives) and pairs
-		# where the must_not_contain regex is a literal substring of a
-		# must_contain regex on the same file (see
-		# :func:`_substring_overlap_drops`).  Stay silent in
-		# list-violated-files mode: the stdout contract is "file paths
-		# ONLY" and the verify path already emits the operator-visible
-		# warnings.
-		mc_with_keys = [(fp, _fp_key(fp)) for fp in must_contain]
-		mnc_with_keys = [(fp, _fp_key(fp)) for fp in must_not_contain]
-		mc_keys = {k for _, k in mc_with_keys if k is not None}
-		mnc_keys = {k for _, k in mnc_with_keys if k is not None}
-		shared_keys = mc_keys & mnc_keys
-		substring_drops = _substring_overlap_drops(mc_with_keys, mnc_with_keys)
-		drops = shared_keys | substring_drops
-		if drops:
-			must_contain = [fp for fp, key in mc_with_keys if key not in drops]
-			must_not_contain = [fp for fp, key in mnc_with_keys if key not in drops]
+		# Cross-dedup: stay silent in list-violated-files mode — the stdout
+		# contract is "file paths ONLY" and the verify path already emits the
+		# operator-visible warnings.
+		must_contain, must_not_contain, _shared_keys, _substring_drops, _exact_conflict_drops = _dedup_issue_patterns(
+			issue_key,
+			entry,
+			cross_issue_exact_drops,
+		)
 
 		for fp in must_contain:
 			if not isinstance(fp, dict):
@@ -275,15 +384,13 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 	mc_total_expected = 0
 	mc_total_satisfied = 0
 	file_cache: dict[str, str | None] = {}
+	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
 
 	for issue_key, entry in sorted(fingerprints.items()):
 		if not isinstance(entry, dict):
 			continue
 		issue_num = entry.get("issue", issue_key)
 		pr_num = entry.get("pr", "?")
-
-		must_contain = entry.get("must_contain", []) or []
-		must_not_contain = entry.get("must_not_contain", []) or []
 
 		# Defensive cross-dedup: the extractor in
 		# capture_intent_fingerprints_for_merged_subissue
@@ -297,12 +404,11 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 		# this issue so historic bad fingerprints don't produce
 		# perpetual false positives.
 
-		mc_with_keys = [(fp, _fp_key(fp)) for fp in must_contain]
-		mnc_with_keys = [(fp, _fp_key(fp)) for fp in must_not_contain]
-		mc_keys = {k for _, k in mc_with_keys if k is not None}
-		mnc_keys = {k for _, k in mnc_with_keys if k is not None}
-		shared_keys = mc_keys & mnc_keys
-		substring_drops = _substring_overlap_drops(mc_with_keys, mnc_with_keys)
+		must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops = _dedup_issue_patterns(
+			issue_key,
+			entry,
+			cross_issue_exact_drops,
+		)
 		if shared_keys:
 			print(
 				f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
@@ -318,10 +424,9 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 				f"by added line under re.search; the longer must_contain already enforces the stronger intent).",
 				flush=True,
 			)
-		drops = shared_keys | substring_drops
-		if drops:
-			must_contain = [fp for fp, key in mc_with_keys if key not in drops]
-			must_not_contain = [fp for fp, key in mnc_with_keys if key not in drops]
+		if exact_conflict_drops:
+			for warning in cross_issue_exact_warnings.get(issue_key, []):
+				print(warning, flush=True)
 
 		for fp in must_contain:
 			if not isinstance(fp, dict):

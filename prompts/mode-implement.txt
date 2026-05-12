@@ -5,6 +5,8 @@ persistence rule, edit-tool discipline (apply_patch first, fallbacks,
 verify-after-write), no-revert / no-destructive-git rules, and parallel-reads
 guidance. Apply them.
 
+{{SERENA_TOOL_HINTS}}
+
 Conflict detection: if the plan's facts conflict with the actual codebase
 (function name mismatch, file path absent, API signature differs), proceed
 with the codebase truth and note the conflict in your output.
