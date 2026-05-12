@@ -325,12 +325,17 @@ jobs:
           #   every 30 min) re-kicks autofix via workflow_dispatch, which
           #   bypasses this skip. Worst-case window: ~30 min.
           #
-          # Opt-out: set repository variable AUTOFIX_SKIP_SELF_TRIGGERED=false.
+          # Opt-IN to the synchronize-self-skip: set repository variable
+          # AUTOFIX_SKIP_SELF_TRIGGERED=true. Default is now `false` so that
+          # autofix runs continuously on every push (including its own
+          # [ai-autofix] verification reruns), matching the new
+          # `internal-review-autofix-sweep` cron behaviour. Flip the var to
+          # `true` to restore the prior LLM-cost-saving skip.
           # Override bot login: set repository variable AUTOFIX_BOT_LOGIN.
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${EVENT_NAME}" = "pull_request" ] \
             && [ "${EVENT_ACTION}" = "synchronize" ] \
-            && [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-true}" != "false" ] \
+            && [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-false}" = "true" ] \
             && [ -n "${PR_HEAD_SHA}" ]; then
             head_meta=""
             if ! head_meta="$(gh api "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}" \

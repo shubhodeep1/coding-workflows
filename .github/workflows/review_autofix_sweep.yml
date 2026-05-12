@@ -1,0 +1,165 @@
+name: "Internal: AI Review Autofix Sweep"
+
+# Periodic sweep that dispatches `internal-review.yml` via workflow_dispatch
+# for every open non-draft PR, regardless of whether the PR is tracked by the
+# orchestrator (`ai:*` labels). Complements the existing orchestrator-only
+# polling in `internal-orchestrate-poll.yml` / `orchestrate_poll.yml` so that
+# review autofix runs continuously on human/Claude PRs too.
+#
+# Why workflow_dispatch (and not push/synchronize):
+#   - workflow_dispatch bypasses the synchronize-only self-trigger skip in
+#     `review_autofix.yml:330-363` (the gate's `EVENT_ACTION == "synchronize"`
+#     guard at line 332 is false on dispatch), so an `[ai-autofix]`-headed PR
+#     still gets a verification rerun every cycle.
+#   - Mirrors `_dispatch_review_for_conflicts` in
+#     `scripts/orchestrate_poll_process.sh:7830` so the new sweep behaves
+#     consistently with the orchestrator's existing dispatch path.
+#
+# Concurrency safety:
+#   - Per-PR preflight reuses the `_has_active_autofix_run` pattern
+#     (orchestrate_poll_process.sh:7792-7814): if any in_progress or queued
+#     run already exists on `internal-review.yml` / `review_autofix.yml` for
+#     the PR's head ref, skip the dispatch. This collapses the
+#     dispatch-vs-synchronize parallel-write window from "indefinite" to
+#     "GitHub API visibility delay" (~few seconds).
+#   - Sweep-vs-sweep is bounded by the workflow-level concurrency group
+#     below (`review-autofix-sweep`), which serialises sweep ticks.
+#
+# Cost guard:
+#   - 30 min cadence matches the existing orchestrator poll cadence and is
+#     a conscious trade-off (CLAUDE.md §1: Speed is the lowest priority).
+#   - `[skip ai]` in PR title/body is the only opt-out honoured here; per
+#     Q2=A the sweep otherwise targets every open non-draft PR.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      head_ref_filter:
+        description: "Optional substring match against PR head ref (e.g. 'claude/'); empty = all open non-draft PRs"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Log candidates without dispatching"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write
+
+# Serialise sweep ticks so an overrun (cron firing while the previous tick is
+# still enumerating) cannot double-dispatch. Sweep ticks against orchestrator-
+# managed PRs are independently deduped by the orchestrator's own cycle-local
+# tracker and the per-PR preflight below.
+concurrency:
+  group: review-autofix-sweep-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enumerate open PRs and dispatch internal-review.yml
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+
+          # Fetch open PRs, filter to non-draft client-side. Single /pulls call
+          # batches state/draft/head/title/body, honouring CLAUDE.md §15.
+          prs_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" \
+            -f state=open -f per_page=100 \
+            --jq '[.[] | select(.draft == false) | {
+              number,
+              head_ref: .head.ref,
+              title: (.title // ""),
+              body: (.body // "")
+            }]')"
+
+          total="$(printf '%s' "${prs_json}" | jq 'length')"
+          echo "AUTOFIX_SWEEP_START repo=${REPOSITORY} candidates=${total} head_ref_filter=${HEAD_REF_FILTER:-<none>} dry_run=${DRY_RUN}"
+
+          dispatched=0
+          skipped_active=0
+          skipped_filter=0
+          skipped_skip_ai=0
+          failures=0
+
+          # Read into an array so counters survive the loop (no subshell pipe).
+          mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
+
+          for row in "${rows[@]}"; do
+            pr_number="$(printf '%s' "${row}" | jq -r '.number')"
+            head_ref="$(printf '%s' "${row}" | jq -r '.head_ref')"
+            pr_title="$(printf '%s' "${row}" | jq -r '.title')"
+            pr_body="$(printf '%s' "${row}" | jq -r '.body')"
+
+            if [ -n "${HEAD_REF_FILTER}" ] && ! printf '%s' "${head_ref}" | grep -qF "${HEAD_REF_FILTER}"; then
+              skipped_filter=$((skipped_filter + 1))
+              continue
+            fi
+
+            # Honour the existing `[skip ai]` opt-out marker (parity with
+            # review_autofix.yml gate behaviour). This is the only PR-author
+            # escape hatch on the sweep path.
+            if printf '%s %s' "${pr_title}" "${pr_body}" | grep -Fq '[skip ai]'; then
+              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=skip_ai_marker head_ref=${head_ref}"
+              skipped_skip_ai=$((skipped_skip_ai + 1))
+              continue
+            fi
+
+            # Preflight (mirrors scripts/orchestrate_poll_process.sh:7792-7814).
+            # Skip when a review run is already in_progress or queued for this
+            # branch on either workflow, so the sweep cannot stomp on a
+            # synchronize-fired run that is mid-edit.
+            active=0
+            for wf in internal-review.yml review_autofix.yml; do
+              count="$(gh api -X GET "repos/${REPOSITORY}/actions/workflows/${wf}/runs" \
+                -f branch="${head_ref}" -f per_page=10 \
+                --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' \
+                2>/dev/null || echo "0")"
+              if [ "${count:-0}" -gt 0 ]; then
+                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_run workflow=${wf} count=${count} head_ref=${head_ref}"
+                active=1
+                break
+              fi
+            done
+            if [ "${active}" -eq 1 ]; then
+              skipped_active=$((skipped_active + 1))
+              continue
+            fi
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "AUTOFIX_SWEEP_DRY_RUN pr=#${pr_number} head_ref=${head_ref}"
+              continue
+            fi
+
+            # Dispatch internal-review.yml (not review_autofix.yml directly):
+            # internal-review owns the concurrency-group / push-trigger /
+            # claude-branch-review routing, and forwards to review_autofix.yml
+            # under its existing gate. Forwarding the normalized
+            # `ALLOW_WORKFLOW_EDITS` repo variable matches
+            # `_dispatch_review_for_conflicts`
+            # (orchestrate_poll_process.sh:7862-7868).
+            if gh workflow run internal-review.yml \
+              --repo "${REPOSITORY}" \
+              -f pr_number="${pr_number}" \
+              -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}" >/dev/null 2>&1; then
+              echo "AUTOFIX_SWEEP_DISPATCH pr=#${pr_number} head_ref=${head_ref}"
+              dispatched=$((dispatched + 1))
+            else
+              echo "::warning::AUTOFIX_SWEEP_DISPATCH_FAILED pr=#${pr_number} head_ref=${head_ref}"
+              failures=$((failures + 1))
+            fi
+          done
+
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"

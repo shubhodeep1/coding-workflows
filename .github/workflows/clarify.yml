@@ -685,15 +685,29 @@ jobs:
           1. Determine if the issue is clear enough to implement.
           2. If clarification is required, ask concise clarification questions.
           3. Ask only essential questions needed for implementation.
-          4. Use repo documentation only; no external web searches.
-          5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
+          4. Prefer repo-local context first. Web search IS available (the `web_search`
+             tool is enabled in the codex config — see `scripts/write_codex_config.sh`'s
+             `--web-search live` default) — use it for public 3rd-party API docs, library
+             reference, RFCs, standards, and similar publicly-readable resources. Do NOT
+             use it for private/auth-walled resources or anything that requires a
+             credential.
+          5. If an external API/service is involved, fetch its official docs via the
+             web tool, verify the source is the official vendor/library or relevant
+             standards publisher, and identify the expected endpoints, signature
+             scheme, and payload shapes so planning can include concrete call details.
           6. Flag any factual conflicts between the issue description and the codebase
              (e.g., a name in the issue doesn't match the name in the code).
           7. Do NOT write code.
           8. Do NOT propose implementation solutions.
-          9. If a required input is external and non-synthesizable by the auto-answerer
-             (for example branch name, commit SHA, credential, or external URL), do not
-             emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
+          9. If a required input is a specific scalar value the model cannot derive or
+             look up — a private credential, a not-yet-existing commit SHA, a branch
+             name not yet decided, or an auth-walled/private URL whose contents are not
+             public — emit exactly `BLOCKED: <short reason>` instead of Q/Choices.
+             Public 3rd-party documentation is NOT a BLOCKED trigger: fetch it with the
+             web tool and proceed with `STATUS: CLEAR` (or Q-IDs if other genuine
+             ambiguities remain) only when the relevant public docs are found; if they
+             are genuinely unavailable, ask a clarification question instead of
+             inventing details.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
           - When designing multiple-choice questions, check whether any combinations of

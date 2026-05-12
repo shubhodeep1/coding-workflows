@@ -78,9 +78,18 @@ Apply, in order:
 4. Avoid speculative refactors, architectural churn, and style-only edits.
 5. If multiple valid choices remain, choose lowest operational risk and document the assumption.
 
-If a required input is external and non-synthesizable from the repo (branch
-name, commit SHA, credential, or external URL), emit exactly
-`BLOCKED: <short reason>` instead of guessing.
+If a required input is a specific scalar value the model cannot derive or
+look up — a private credential, a not-yet-existing commit SHA, a branch
+name not yet decided, or an auth-walled/private URL whose contents are not
+public — emit exactly `BLOCKED: <short reason>` instead of guessing. Public
+3rd-party documentation is NOT by itself a BLOCKED trigger. When web search
+is enabled for the current phase/workflow (clarify and plan default to
+`live`; some workflows override it to `disabled`), fetch public API docs /
+RFCs / library reference via the web tool from official vendor/library docs
+or relevant standards sources rather than emitting `BLOCKED:`. If web
+search is disabled for the current phase, or those public docs are
+genuinely unavailable, use the provided repo/context artefacts and note the
+uncertainty rather than inventing details.
 
 ---
 
