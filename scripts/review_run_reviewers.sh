@@ -116,6 +116,17 @@ PY
 }
 
 run_cache_probe() {
+  local cache_probe_enabled
+  cache_probe_enabled="$(printf '%s' "${REVIEWER_CACHE_PROBE_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+  case "${cache_probe_enabled}" in
+    1|true|yes|on|y)
+      ;;
+    *)
+      echo "INFO: cache probe skipped because REVIEWER_CACHE_PROBE_ENABLED=${REVIEWER_CACHE_PROBE_ENABLED:-false} (default off)."
+      return 0
+      ;;
+  esac
+
   local probe_model
   probe_model="$(printf '%s\n' "${REVIEWER_MODELS}" | sed '/^$/d' | head -n1)"
   if [ -z "${probe_model}" ]; then
