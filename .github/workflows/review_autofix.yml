@@ -1922,8 +1922,13 @@ jobs:
               echo "::warning::CHECK_RUNS_WAIT_TIMEOUT reached after ${_wait_timeout}s with ${_in_flight} check-run(s) still queued/in_progress; proceeding with snapshot."
               break
             fi
-            echo "Waiting for ${_in_flight} in-progress/queued check-run(s) on ${HEAD_SHA} (sleep ${_poll_interval}s, deadline in $((_deadline - _now))s)…"
-            sleep "${_poll_interval}"
+            _remaining=$((_deadline - _now))
+            _sleep="${_poll_interval}"
+            if [ "${_sleep}" -gt "${_remaining}" ]; then
+              _sleep="${_remaining}"
+            fi
+            echo "Waiting for ${_in_flight} in-progress/queued check-run(s) on ${HEAD_SHA} (sleep ${_sleep}s, deadline in ${_remaining}s)…"
+            sleep "${_sleep}"
           done
 
           # Fail-open guard: if python (or pipefail elsewhere in the writer)
