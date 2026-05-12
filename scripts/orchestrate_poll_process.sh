@@ -3233,7 +3233,9 @@ _list_integration_conflict_files() {
 
   local ib_ref="refs/remotes/origin/${integration_branch}"
   local db_ref="refs/remotes/origin/${default_branch}"
-  git fetch --no-tags --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null || true
+  git fetch --no-tags --quiet origin \
+    "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+    "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null || true
   git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
   git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
 
@@ -5756,7 +5758,7 @@ invoke_stall_judge() {
   local issue_comments_json
   issue_comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${comments_issue_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
   local recent_comments
-  # Filter out ORCHESTRATOR_STATE_V1 snapshots (they are ~57KB each and
+  # Filter out ORCHESTRATOR_STATE_V1/V2 snapshots (they are ~57KB each and
   # are noise for the judge — it wants phase-change / recovery narrative,
   # not state dumps) and cap each remaining body at 2000 characters. Without
   # these two caps, 8 state snapshots produce ~260KB of argv which trips
@@ -5765,7 +5767,7 @@ invoke_stall_judge() {
   # return E2BIG and the diagnostics blob to come out empty.
   recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '
     [.[]
-      | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
+      | select(((.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or startswith("<!-- ORCHESTRATOR_STATE_V2"))) | not)
       | {
           author: (.user.login // ""),
           created_at: (.created_at // ""),
@@ -6006,7 +6008,11 @@ invoke_stall_judge() {
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
   local effective_action
-  effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+  if [ "${_judge_force_escalate}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
+    effective_action="escalate_human"
+  else
+    effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+  fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -8434,7 +8440,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && (has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"); then
     REVALIDATE_REQUESTED="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select(.value.body | contains("ORCHESTRATOR_STATE_V1"))) | last | .key // -1) as $last_state_idx |
+      (to_entries | map(select((.value.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2")))) | last | .key // -1) as $last_state_idx |
       [to_entries[] | select(.key > $last_state_idx and (.value.body | test("^\\s*/revalidate(\\s|$)"; "m")))] | length > 0
     ')"
 
@@ -8482,7 +8488,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
     && ! has_label "${TRACKING_LABELS}" "ai:validation-failed" \
     && ! has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
     JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select(.value.body | contains("ORCHESTRATOR_STATE_V1"))) | last | .key // -1) as $last_state_idx |
+      (to_entries | map(select((.value.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2")))) | last | .key // -1) as $last_state_idx |
       [to_entries[]
         | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))
       ]
@@ -10721,6 +10727,7 @@ fi
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
+    _stall_check_args+=(--max-recoveries-by-phase-json "$(printf '{\"ai:done\":%s}' "${MAX_STALL_RECOVERIES_DONE}")")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"

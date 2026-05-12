@@ -385,6 +385,23 @@ def _parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
 	return part, total, manifest, chunk
 
 
+def _build_v2_state_comment_chain(payload: str, *, chunk_size: int) -> list[dict[str, str]]:
+	raw = payload.encode("utf-8")
+	encoded = base64.b64encode(raw).decode("ascii")
+	manifest = hashlib.sha256(raw).hexdigest()
+	total = max(1, (len(encoded) + chunk_size - 1) // chunk_size)
+	comments: list[dict[str, str]] = []
+	for idx in range(total):
+		chunk = encoded[idx * chunk_size : (idx + 1) * chunk_size]
+		comments.append({
+			"body": (
+				f"<!-- ORCHESTRATOR_STATE_V2 part={idx + 1}/{total} manifest={manifest} -->\n"
+				f"{chunk}\n{_V2_CLOSER}"
+			),
+		})
+	return comments
+
+
 def _extract_state_payloads(comments: list[dict]) -> list[str]:
 	"""All orchestrator-state JSON payloads in chronological (oldest-first) order.
 
@@ -395,39 +412,31 @@ def _extract_state_payloads(comments: list[dict]) -> list[str]:
 	the test contract that the latest state write is `payloads[-1]`.
 	"""
 	payloads: list[tuple[int, str]] = []
-	v2_parts: dict[str, dict[int, str]] = {}
-	v2_totals: dict[str, int] = {}
-	v2_complete: set[str] = set()
+	v2_parts: dict[tuple[str, int], dict[int, str]] = {}
+	v2_complete: set[tuple[str, int]] = set()
 	for idx, comment in enumerate(comments):
 		body = (comment or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" in body:
 			parsed = _parse_v2_chunk(body)
 			if parsed is not None:
 				part, total, manifest, chunk = parsed
-				if manifest not in v2_complete:
-					slot = v2_parts.setdefault(manifest, {})
+				chain_key = (manifest, total)
+				if chain_key not in v2_complete:
+					slot = v2_parts.setdefault(chain_key, {})
 					slot.setdefault(part, chunk)
-					prev_total = v2_totals.get(manifest)
-					mismatch = False
-					if prev_total is None:
-						v2_totals[manifest] = total
-					elif prev_total != total:
-						# Mismatched declared total — disqualify and skip.
-						v2_parts.pop(manifest, None)
-						mismatch = True
-					if not mismatch and len(slot) == total and all(p in slot for p in range(1, total + 1)):
+					if len(slot) == total and all(p in slot for p in range(1, total + 1)):
 						stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
 						compact = re.sub(r"\s+", "", stitched_b64)
 						try:
 							decoded = base64.b64decode(compact, validate=True)
 						except (binascii.Error, ValueError):
-							v2_parts.pop(manifest, None)
+							v2_parts.pop(chain_key, None)
 						else:
 							if hashlib.sha256(decoded).hexdigest() == manifest:
-								v2_complete.add(manifest)
+								v2_complete.add(chain_key)
 								payloads.append((idx, decoded.decode("utf-8")))
 							else:
-								v2_parts.pop(manifest, None)
+								v2_parts.pop(chain_key, None)
 		if "ORCHESTRATOR_STATE_V1" in body:
 			match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
 			if match:
@@ -4772,6 +4781,38 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 	assert "ai:validating" in result["tracking_labels"]
 	assert "ai:validation-failed" not in result["tracking_labels"]
 	assert len(result["validation_dispatches"]) == 1
+
+
+def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_different_total():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=encoded_len + 1)
+	newer_partial = _build_v2_state_comment_chain(
+		payload,
+		chunk_size=max(1, encoded_len // 2),
+	)[:1]
+	comments = older_complete + newer_partial
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
 
 
 def test_revalidate_ignored_when_no_comment():
