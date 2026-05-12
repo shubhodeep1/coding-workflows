@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/validate.yml:12-13 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: tap_plan:3 undercounts the cosmetic summary slots versus the 1..4 canary output.\n  WHY: The reviewer reported this as a display-only mismatch with no runtime failure, so the impact is low.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .ai/validate.yml:12-13 | confidence=[3]\n  PROBLEM: Comments accurately distinguish tap_plan from canary_tools, but tap_plan:3 undercounts the cosmetic summary slots versus the 1..4 canary output.\n  WHY: The reviewer noted this mismatch is display-only and does not cause runtime failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a53da9cdd8c6a7780d8d29d5e3736d65b52498bc3325e3ec8e0b7ca564c73a96",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2541,
+    "run_id": "25719362664",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25719362664",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512072302_0070e39be0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2541,
+    "run_id": "25719362664"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-12T07:23:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
