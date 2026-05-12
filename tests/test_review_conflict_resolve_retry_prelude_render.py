@@ -61,6 +61,14 @@ def _resolve_script_text() -> str:
 	return RESOLVE_SCRIPT.read_text(encoding="utf-8")
 
 
+def _render_retry_template(template_text: str, env: dict[str, str]) -> str:
+	return re.sub(
+		r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}",
+		lambda m: env.get(m.group(1).upper(), ""),
+		template_text,
+	)
+
+
 def test_both_prelude_files_exist() -> None:
 	"""Both prelude templates must be checked in. They are referenced
 	by `_build_retry_prompt`'s `_prelude_basename` branching and
@@ -98,6 +106,30 @@ def test_validation_prelude_carries_violations_framing() -> None:
 	assert "{{MARKER_VIOLATION_FILES}}" in body
 	assert "{{FINGERPRINT_VIOLATION_COUNT}}" in body
 	assert "{{FINGERPRINT_VIOLATION_DETAILS}}" in body
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in body
+
+
+def test_validation_prelude_optional_resolver_serena_hint_renders_cleanly() -> None:
+	"""The retry-prelude path must render resolver-scoped Serena hints when
+	bound and drop the placeholder entirely when unset/empty."""
+	body = VALIDATION_PRELUDE.read_text(encoding="utf-8")
+	hint_text = "\n".join((
+		"Resolver Serena hints:",
+		"- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).",
+		"- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.",
+	))
+	rendered_with_hint = _render_retry_template(body, {
+		"SERENA_TOOL_HINTS_RESOLVER": hint_text,
+	})
+	assert hint_text in rendered_with_hint
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" not in rendered_with_hint
+	rendered_without_hint = _render_retry_template(body, {})
+	rendered_empty_hint = _render_retry_template(body, {
+		"SERENA_TOOL_HINTS_RESOLVER": "",
+	})
+	for rendered in (rendered_without_hint, rendered_empty_hint):
+		assert "Resolver Serena hints:" not in rendered
+		assert "{{SERENA_TOOL_HINTS_RESOLVER}}" not in rendered
 
 
 def test_validation_prelude_has_no_leaked_unprocessed_markers() -> None:
@@ -276,6 +308,11 @@ def test_build_retry_prompt_dispatches_on_failure_kind() -> None:
 		"Validation branch must select the standard prelude "
 		"basename so the violations-framing path is preserved."
 	)
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in src, (
+		"_build_retry_prompt should pass the resolver-scoped Serena hint env var "
+		"through the prelude renderer so integration-sync retries can render "
+		"the optional guidance when SERENA_AVAILABLE=true and omit it otherwise."
+	)
 
 
 def test_build_retry_prompt_sets_retry_prompt_outcome() -> None:
@@ -352,6 +389,7 @@ def test_reasoning_default_lowered_to_high() -> None:
 def main() -> int:
 	test_both_prelude_files_exist()
 	test_validation_prelude_carries_violations_framing()
+	test_validation_prelude_optional_resolver_serena_hint_renders_cleanly()
 	test_validation_prelude_has_no_leaked_unprocessed_markers()
 	test_timeout_prelude_has_no_leaked_unprocessed_markers()
 	test_timeout_prelude_carries_apply_patch_first_guidance()

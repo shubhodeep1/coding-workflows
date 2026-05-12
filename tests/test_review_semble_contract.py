@@ -13,6 +13,9 @@ APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 COMMIT_CHANGES = REPO_ROOT / "scripts" / "review_commit_changes.sh"
 CONFLICT_PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
 CONFLICT_RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
+CONFLICT_PROMPT = REPO_ROOT / "prompts" / "conflict-resolver.txt"
+INTEGRATION_CONFLICT_PROMPT = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt"
+INTEGRATION_RETRY_PRELUDE = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver-retry-prelude.txt"
 
 
 def _read(path: Path) -> str:
@@ -159,11 +162,25 @@ def test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging
 def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> None:
 	prepare = _read(CONFLICT_PREPARE)
 	resolve = _read(CONFLICT_RESOLVE)
+	conflict_prompt = _read(CONFLICT_PROMPT)
+	integration_prompt = _read(INTEGRATION_CONFLICT_PROMPT)
+	retry_prelude = _read(INTEGRATION_RETRY_PRELUDE)
 
 	assert 'CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"' in prepare
 	assert "append_semble_query_section 'Resolver allowlist:' \"${RESOLVER_ALLOWLIST_FILE}\" 3000" in prepare
 	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}" >> "$GITHUB_ENV"' in prepare
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in conflict_prompt
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in integration_prompt
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in retry_prelude
+	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in prepare
+	assert '[ "${SERENA_AVAILABLE:-false}" = "true" ]' in prepare
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in prepare
+	assert 'Resolver Serena hints:' in prepare
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"' in resolve
+	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in resolve
+	assert '[ "${SERENA_AVAILABLE:-false}" = "true" ]' in resolve
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in resolve
+	assert 'Resolver Serena hints:' in resolve
 	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"' in resolve
 	assert '--semble-query-from "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"' in resolve
 	assert 'semble_query_block \\\n    "$(cat "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}")"' in resolve
