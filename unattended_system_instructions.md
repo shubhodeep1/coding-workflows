@@ -85,8 +85,10 @@ public — emit exactly `BLOCKED: <short reason>` instead of guessing. Public
 3rd-party documentation is NOT a BLOCKED trigger: web search is available
 (the `web_search` tool is enabled by the codex config — see
 `scripts/write_codex_config.sh`'s `--web-search live` default), so fetch
-public API docs / RFCs / library reference via the web tool rather than
-emitting `BLOCKED:`.
+public API docs / RFCs / library reference via the web tool from official
+vendor/library docs or relevant standards sources rather than emitting
+`BLOCKED:`. If those public docs are genuinely unavailable, note that
+uncertainty rather than inventing details.
 
 ---
 

@@ -17,9 +17,10 @@ Rules:
 - Web search IS available (the `web_search` tool is enabled by the codex
   config — `scripts/write_codex_config.sh` defaults `--web-search live`).
   If external APIs/services are involved, fetch their official public docs
-  via the web tool and incorporate the concrete endpoints, signature
-  scheme, and payload shapes. Only ask (rather than fetch) when the docs
-  are private/auth-walled or genuinely unavailable.
+  via the web tool, verify the source is the official vendor/library or
+  relevant standards publisher, and incorporate the concrete endpoints,
+  signature scheme, and payload shapes. Only ask (rather than fetch) when
+  the docs are private/auth-walled or genuinely unavailable.
 - Do not write code or propose solutions.
 - The responder is an autonomous LLM with repo access only — no database,
   no external APIs, no production systems. Do not ask questions whose only

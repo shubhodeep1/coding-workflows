@@ -692,8 +692,9 @@ jobs:
              use it for private/auth-walled resources or anything that requires a
              credential.
           5. If an external API/service is involved, fetch its official docs via the
-             web tool and identify the expected endpoints, signature scheme, and payload
-             shapes so planning can include concrete call details.
+             web tool, verify the source is the official vendor/library or relevant
+             standards publisher, and identify the expected endpoints, signature
+             scheme, and payload shapes so planning can include concrete call details.
           6. Flag any factual conflicts between the issue description and the codebase
              (e.g., a name in the issue doesn't match the name in the code).
           7. Do NOT write code.
@@ -704,7 +705,9 @@ jobs:
              public — emit exactly `BLOCKED: <short reason>` instead of Q/Choices.
              Public 3rd-party documentation is NOT a BLOCKED trigger: fetch it with the
              web tool and proceed with `STATUS: CLEAR` (or Q-IDs if other genuine
-             ambiguities remain).
+             ambiguities remain) only when the relevant public docs are found; if they
+             are genuinely unavailable, ask a clarification question instead of
+             inventing details.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
           - When designing multiple-choice questions, check whether any combinations of

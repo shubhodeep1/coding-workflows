@@ -57,9 +57,11 @@ Rules:
   publicly-readable resources. Do NOT use it for private/auth-walled
   resources or anything requiring a credential.
 - If external APIs/services are involved, fetch their official public
-  docs via the web tool and include concrete endpoint, signature scheme,
-  and payload details in the plan. Only ask (rather than fetch) when the
-  docs are private/auth-walled or genuinely unavailable.
+  docs via the web tool, verify the source is the official vendor/library
+  or relevant standards publisher, and include concrete endpoint,
+  signature scheme, and payload details in the plan. Only ask (rather
+  than fetch) when the docs are private/auth-walled or genuinely
+  unavailable.
 
 Mandatory Question Format (only when emitting clarification questions):
 

@@ -899,9 +899,11 @@ jobs:
             readable resources. Do NOT use it for private/auth-walled resources or
             anything that requires a credential.
           - If implementation requires calling external APIs/services, fetch their
-            official public docs via the web tool and include concrete endpoint/method/
-            parameter details in the plan so the implementation editor has the contract
-            inlined.
+            official public docs via the web tool, verify the source is the official
+            vendor/library or relevant standards publisher, and include concrete
+            endpoint/method/parameter details in the plan so the implementation editor
+            has the contract inlined. If the docs are genuinely unavailable after web
+            search, ask for clarification instead of inventing details.
           - Do NOT write code.
           - Do NOT modify repository files.
           - Only generate the implementation plan when answers are interpretable and sufficient.
