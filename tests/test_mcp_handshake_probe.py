@@ -352,7 +352,10 @@ def test_setup_serena_writes_block_only_when_probe_succeeds() -> None:
 			home=home,
 			path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
 			github_env=github_env,
-			extra_env={"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_happy.py")},
+			extra_env={
+				"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_happy.py"),
+				"SERENA_FALLBACK_TARGET": "implement",
+			},
 		)
 
 		assert result.returncode == 0, result.stderr
@@ -366,13 +369,17 @@ def test_setup_serena_writes_block_only_when_probe_succeeds() -> None:
 			home=home,
 			path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
 			github_env=github_env,
-			extra_env={"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_close_on_init.py")},
+			extra_env={
+				"FAKE_SERENA_FIXTURE": str(FIXTURES_DIR / "mock_mcp_close_on_init.py"),
+				"SERENA_FALLBACK_TARGET": "implement",
+			},
 		)
 
 		assert result.returncode == 0, result.stderr
 		config_text = config_path.read_text(encoding="utf-8")
 		assert "[existing]" in config_text
 		assert "[mcp_servers.serena]" not in config_text
+		assert "SERENA_FALLBACK target=implement reason=probe-failure" in result.stderr
 		assert github_env.read_text(encoding="utf-8").splitlines()[-1] == "SERENA_AVAILABLE=false"
 
 

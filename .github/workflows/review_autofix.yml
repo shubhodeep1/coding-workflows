@@ -2170,9 +2170,10 @@ jobs:
           echo "Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA} for stale-base detection."
 
       - name: Detect preexisting Serena project config
+        if: env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-          if git ls-files --error-unmatch -- .serena >/dev/null 2>&1 || [ -e .serena ]; then
+          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
             echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"
           else
             echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"
@@ -2972,11 +2973,13 @@ jobs:
           set -euo pipefail
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh" ]; then
             echo "::warning::Optional Serena bootstrap helper is unavailable at ${SUPPORT_SCRIPTS_DIR}/setup_serena.sh; leaving Serena disabled for this run."
+            echo "SERENA_FALLBACK target=review-autofix-editor reason=setup-failure" >&2
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
-          if ! bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"; then
+          if ! SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"; then
             echo "::warning::Serena bootstrap helper failed; leaving Serena disabled for this run."
+            echo "SERENA_FALLBACK target=review-autofix-editor reason=setup-failure" >&2
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
           if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then

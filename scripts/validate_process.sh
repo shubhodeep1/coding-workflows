@@ -535,14 +535,37 @@ build_validate_serena_tool_hints()
   esac
 }
 
+sanitize_serena_log_value()
+{
+  local value="${1:-unknown}"
+
+  value="$(printf '%s' "${value}" | tr '[:space:]=' '__')"
+  if [ -z "${value}" ]; then
+    value="unknown"
+  fi
+  printf '%s\n' "${value}"
+}
+
+emit_serena_fallback()
+{
+  local phase="${1:-general}"
+  local reason="${2:-setup-failure}"
+
+  printf 'SERENA_FALLBACK target=validate phase=%s reason=%s\n' \
+    "$(sanitize_serena_log_value "${phase}")" \
+    "$(sanitize_serena_log_value "${reason}")" >&2
+}
+
 ensure_serena_bootstrap()
 {
+  local serena_phase="${1:-general}"
   local bootstrap_env_file=""
   local env_key=""
   local env_value=""
   local serena_project_hash=""
 
   if ! env_is_truthy "${SERENA_ENABLED:-false}"; then
+    emit_serena_fallback "${serena_phase}" "disabled"
     clear_stale_serena_codex_config
     SERENA_AVAILABLE="false"
     export SERENA_AVAILABLE
@@ -567,6 +590,7 @@ ensure_serena_bootstrap()
 
   if [ ! -f "scripts/setup_serena.sh" ]; then
     echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."
+    emit_serena_fallback "${serena_phase}" "setup-failure"
     clear_stale_serena_codex_config
     SERENA_AVAILABLE="false"
     export SERENA_AVAILABLE
@@ -575,8 +599,9 @@ ensure_serena_bootstrap()
   fi
 
   bootstrap_env_file="$(mktemp "${RUNTIME_DIR}/serena-bootstrap-env.XXXXXX")"
-  if ! GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh; then
+  if ! SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh; then
     echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."
+    emit_serena_fallback "${serena_phase}" "setup-failure"
     clear_stale_serena_codex_config
     SERENA_AVAILABLE="false"
   else
@@ -652,7 +677,7 @@ attempt_self_heal_and_reexec()
     return 0
   fi
 
-  ensure_serena_bootstrap
+  ensure_serena_bootstrap "${phase}"
 
   local heal_exit=0
   SELF_HEAL_FAILURE_PHASE="${phase}" \
@@ -2435,7 +2460,7 @@ else
   if [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
     echo "::warning::Cached validation hints at ${VALIDATE_HINTS_CACHE_FILE} failed sanity checks; falling back to codex discovery." >&2
   fi
-  ensure_serena_bootstrap
+  ensure_serena_bootstrap "discover"
   DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"
   discover_semble_query="$(build_validate_discover_semble_query || true)"
 {
@@ -3142,7 +3167,7 @@ fi
 # ---------------------------------------------------------------
 # Phase 4: Diagnose failures
 # ---------------------------------------------------------------
-ensure_serena_bootstrap
+ensure_serena_bootstrap "diagnose"
 DIAGNOSE_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "diagnose" || true)"
 diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"
 {

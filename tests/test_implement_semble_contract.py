@@ -174,7 +174,8 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	setup_block = _step_run_text("Setup Serena")
 	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SERENA_ENABLED == 'true'"
 	assert setup_step.get("continue-on-error") is True
-	assert 'bash scripts/setup_serena.sh' in setup_block
+	assert 'SERENA_FALLBACK_TARGET="implement" bash scripts/setup_serena.sh' in setup_block
+	assert 'SERENA_FALLBACK target=implement reason=setup-failure' in setup_block
 	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in setup_block
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block
 	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena")

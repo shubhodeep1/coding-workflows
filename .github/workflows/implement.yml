@@ -1004,11 +1004,13 @@ jobs:
           set -euo pipefail
           if [ ! -f scripts/setup_serena.sh ]; then
             echo "::warning::Optional Serena bootstrap helper is unavailable on ${SCRIPT_REF:-current checkout}; leaving Serena disabled for this run."
+            echo "SERENA_FALLBACK target=implement reason=setup-failure" >&2
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
-          if ! bash scripts/setup_serena.sh; then
+          if ! SERENA_FALLBACK_TARGET="implement" bash scripts/setup_serena.sh; then
             echo "::warning::Serena bootstrap helper failed; leaving Serena disabled for this run."
+            echo "SERENA_FALLBACK target=implement reason=setup-failure" >&2
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
           if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then

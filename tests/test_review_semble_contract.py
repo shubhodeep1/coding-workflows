@@ -87,13 +87,15 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' not in index_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
 	assert "if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'" in setup_serena_block
-	assert 'bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in setup_serena_block
+	assert 'SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in setup_serena_block
+	assert 'SERENA_FALLBACK target=review-autofix-editor reason=setup-failure' in setup_serena_block
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_serena_block
 	assert "if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'" in clear_serena_block
 	assert 'SERENA_ENABLED=false bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in clear_serena_block
 	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in clear_serena_block
-	assert 'git ls-files --error-unmatch -- .serena' in detect_serena_block
-	assert '[ -e .serena ]' in detect_serena_block
+	assert "if: env.PR_CLOSED != 'true'" in detect_serena_block
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_serena_block
+	assert '[ -e .serena/project.yml ]' in detect_serena_block
 	assert 'echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"' in detect_serena_block
 	assert 'echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"' in detect_serena_block
 	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor") < workflow.find("- name: Apply fixes with editor model")

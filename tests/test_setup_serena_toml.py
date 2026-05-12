@@ -192,6 +192,7 @@ def test_setup_serena_clears_stale_block_fail_soft_when_binary_unavailable() -> 
 			home=home,
 			path_value="",
 			github_env=github_env,
+			extra_env={"SERENA_FALLBACK_TARGET": "implement"},
 		)
 
 		assert result.returncode == 0, result.stderr
@@ -199,6 +200,7 @@ def test_setup_serena_clears_stale_block_fail_soft_when_binary_unavailable() -> 
 		parsed = tomllib.loads(body)
 		assert parsed == {"existing": {"value": "keep"}}
 		assert "[mcp_servers.serena]" not in body
+		assert "SERENA_FALLBACK target=implement reason=setup-failure" in result.stderr
 		assert github_env.read_text(encoding="utf-8").splitlines()[-1] == "SERENA_AVAILABLE=false"
 
 

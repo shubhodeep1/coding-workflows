@@ -8,7 +8,14 @@ SERENA_SPEC="serena-agent==${SERENA_VERSION}"
 SERENA_BIN_NAME="serena"
 SERENA_UV_PYTHON_BIN="${SERENA_UV_PYTHON_BIN:-python3}"
 SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC:-30}"
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+case "${BASH_SOURCE[0]}" in
+	*/*)
+		SCRIPT_DIR="$(CDPATH= cd -- "${BASH_SOURCE[0]%/*}" && pwd)"
+		;;
+	*)
+		SCRIPT_DIR="$(pwd)"
+		;;
+esac
 WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 SERENA_TEMPLATE_PATH="${SCRIPT_DIR}/templates/serena_project.yml.j2"
 SERENA_PROJECT_PATH="${WORKSPACE_ROOT}/.serena/project.yml"
@@ -16,6 +23,37 @@ SERENA_PROJECT_PATH="${WORKSPACE_ROOT}/.serena/project.yml"
 log()
 {
 	printf 'setup_serena: %s\n' "$*" >&2
+}
+
+sanitize_log_value()
+{
+	local value="${1:-unknown}"
+
+	value="${value//[[:space:]]/_}"
+	value="${value//=/_}"
+	if [ -z "${value}" ]; then
+		value="unknown"
+	fi
+	printf '%s\n' "${value}"
+}
+
+emit_serena_fallback()
+{
+	local reason="${1:-setup-failure}"
+	local target="${SERENA_FALLBACK_TARGET:-}"
+	local phase="${SERENA_FALLBACK_PHASE:-}"
+
+	if [ -z "${target}" ]; then
+		return 0
+	fi
+
+	printf 'SERENA_FALLBACK target=%s reason=%s' \
+		"$(sanitize_log_value "${target}")" \
+		"$(sanitize_log_value "${reason}")" >&2
+	if [ -n "${phase}" ]; then
+		printf ' phase=%s' "$(sanitize_log_value "${phase}")" >&2
+	fi
+	printf '\n' >&2
 }
 
 write_github_env()
@@ -54,8 +92,8 @@ append_github_path()
 env_is_truthy()
 {
 	local value="${1:-}"
-	case "$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')" in
-		1|true|yes|on)
+	case "${value}" in
+		1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
 			return 0
 			;;
 		*)
@@ -359,6 +397,7 @@ main()
 
 	if ! env_is_truthy "${SERENA_ENABLED:-false}"; then
 		log 'SERENA_ENABLED is not true; skipping Serena bootstrap.'
+		emit_serena_fallback "disabled"
 		clear_serena_codex_config || log 'unable to clear stale Serena MCP configuration; continuing.'
 		export_serena_available "false"
 		return 0
@@ -374,6 +413,7 @@ main()
 			log "Serena not found; attempting install of ${SERENA_SPEC}."
 		fi
 		if ! attempt_uv_install; then
+			emit_serena_fallback "setup-failure"
 			clear_serena_codex_config || log 'unable to clear stale Serena MCP configuration after install failure; continuing.'
 			export_serena_available "false"
 			return 0
@@ -382,6 +422,7 @@ main()
 		append_github_path "${uv_bin}"
 		if ! binary_matches_pin; then
 			log "Serena install completed but the pinned ${SERENA_BIN_NAME} binary is still unavailable."
+			emit_serena_fallback "setup-failure"
 			clear_serena_codex_config || log 'unable to clear stale Serena MCP configuration after install validation failure; continuing.'
 			export_serena_available "false"
 			return 0
@@ -391,6 +432,7 @@ main()
 
 	if [ -z "${serena_bin}" ]; then
 		log "${SERENA_BIN_NAME} is unavailable after install checks."
+		emit_serena_fallback "setup-failure"
 		clear_serena_codex_config || log 'unable to clear stale Serena MCP configuration after binary lookup failure; continuing.'
 		export_serena_available "false"
 		return 0
@@ -398,6 +440,7 @@ main()
 
 	if ! render_serena_project; then
 		log "unable to render ${SERENA_PROJECT_PATH}; leaving Serena unavailable."
+		emit_serena_fallback "setup-failure"
 		clear_serena_codex_config || log 'unable to clear stale Serena MCP configuration after project render failure; continuing.'
 		export_serena_available "false"
 		return 0
@@ -405,6 +448,7 @@ main()
 
 	if ! probe_mcp_handshake "${serena_bin}"; then
 		log 'Serena handshake probe failed; omitting MCP registration.'
+		emit_serena_fallback "probe-failure"
 		clear_serena_codex_config || log 'unable to clear stale Serena MCP configuration after probe failure; continuing.'
 		export_serena_available "false"
 		return 0
@@ -412,6 +456,7 @@ main()
 
 	if ! write_serena_codex_config "${serena_bin}"; then
 		log 'unable to update ~/.codex/config.toml for Serena; leaving Serena unavailable.'
+		emit_serena_fallback "setup-failure"
 		clear_serena_codex_config || log 'unable to clear stale Serena MCP configuration after config write failure; continuing.'
 		export_serena_available "false"
 		return 0
