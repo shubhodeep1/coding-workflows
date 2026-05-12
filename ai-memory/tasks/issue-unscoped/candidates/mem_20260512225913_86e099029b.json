@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py:mode 100755 -> 100644 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Unnecessary executable bit removal on Python script / out-of-scope mode-only churn.\n  WHY: The script is invoked via explicit `python3 scripts/mcp_handshake_probe.py`, so the execute bit is irrelevant; reviewers disagreed on whether this is corrective cleanup or unnecessary scope violation, but the highest confidence reported is 5.\n- scripts/serena_stats_emit.py:mode 100755 -> 100644 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Unnecessary executable bit removal on Python script / out-of-scope mode-only churn.\n  WHY: The script is invoked via explicit `python3 scripts/serena_stats_emit.py`, so the execute bit is irrelevant; reviewers disagreed on whether this is corrective cleanup or unnecessary scope violation, but the highest confidence reported is 5.\n- scripts/setup_serena.sh:mode 100755 -> 100644 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Unnecessary executable bit removal on shell script / out-of-scope mode-only churn.\n  WHY: The script is invoked via explicit `bash scripts/setup_serena.sh`, so the execute bit is irrelevant; reviewers disagreed on whether this is corrective cleanup or unnecessary scope violation, but the highest confidence reported is 5.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh: mode 100755 \u2192 100644 | confidence=4\n  PROBLEM: Mode-only changes introduced by the previous autofix iteration.\n  WHY: These are explicit interpreter invocations (`python3 scripts/...`, `bash scripts/...`) in CI that ignore the execute bit, so the mode change is unnecessary git churn orthogonal to the ci.yml reorder task.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py: mode 100755 -> 100644 (git mode-only change) | confidence=5\n  PROBLEM: Unnecessary executable bit removal on Python script\n  WHY: No runtime failure \u2014 script invoked via explicit `python3 scripts/mcp_handshake_probe.py` in .github/workflows/ci.yml line ~320 and tests/test_mcp_handshake_probe.py; execute bit ignored by explicit interpreter prefix. Adds orthogonal git churn to scoped ci.yml reorder task.\n- scripts/serena_stats_emit.py: mode 100755 -> 100644 (git mode-only change) | confidence=5\n  PROBLEM: Unnecessary executable bit removal on Python script\n  WHY: No runtime failure \u2014 script invoked via explicit `python3 scripts/serena_stats_emit.py` in .github/workflows/ci.yml line ~325, tests/test_serena_stats_emit.py, and implement.yml post-editor emit; execute bit ignored.\n- scripts/setup_serena.sh: mode 100755 -> 100644 (git mode-only change) | confidence=5\n  PROBLEM: Unnecessary executable bit removal on shell script\n  WHY: No runtime failure \u2014 script invoked via explicit `bash scripts/setup_serena.sh` in .github/workflows/implement.yml/review_autofix.yml/validate.yml and indirectly tests/test_setup_serena_toml.py; execute bit ignored by explicit shell prefix.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh: Mode change from 100755 to 100644 (executable bit removed) | confidence=5\n  PROBLEM: Out-of-scope modification.\n  WHY: Issue #2551 explicitly requests only `.github/workflows/ci.yml` changes with \"stay inside the listed path\" and \"avoid unrelated CI cleanup\" constraints. The mode changes add git churn unrelated to the Semble test reordering. While the scripts are invoked with explicit interpreters (`python3` or `bash`), making the execute bit technically irrelevant, changing it violates issue scope and creates unnecessary diff noise.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "aa2e7e15397017e9aed5ef3f3233165593e3df8fcd43b34f1d7cf8d6caa51c9d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2552,
+    "run_id": "25766345610",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25766345610",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512225913_86e099029b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2552,
+    "run_id": "25766345610"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T22:59:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
