@@ -165,7 +165,7 @@ def test_diagnose_prompt_appends_bounded_semble_context() -> None:
 	assert 'DIAGNOSE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/implement_diagnose_semble_query.txt"' in diagnose
 	assert 'build_diagnose_semble_query "${DIAGNOSE_SEMBLE_QUERY_FILE}"' in diagnose
 	assert 'semble_query_block "$(cat "${DIAGNOSE_SEMBLE_QUERY_FILE}")" 6 "Implement Diagnose Context" || true' in diagnose
-	assert 'bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}"' in diagnose
+	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}"' in diagnose
 
 
 def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() -> None:

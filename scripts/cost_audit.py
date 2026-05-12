@@ -77,6 +77,11 @@ SEMBLE_QUERY_RE = re.compile(r"(?:^|\s)SEMBLE_QUERY(?:\s|$)")
 SEMBLE_FALLBACK_RE = re.compile(r"(?:^|\s)SEMBLE_FALLBACK(?:\s|$)")
 SERENA_QUERY_RE = re.compile(r"(?:^|\s)SERENA_QUERY(?:\s|$)")
 SERENA_FALLBACK_RE = re.compile(r"(?:^|\s)SERENA_FALLBACK(?:\s|$)")
+SERENA_TARGET_ALIASES = {
+    "review-autofix": "review_autofix",
+    "review-autofix-editor": "review_autofix",
+    "review_autofix_editor": "review_autofix",
+}
 
 # Conservative Serena legacy-read calibration until the repo has a bundled
 # pre-rollout baseline dataset. The floor avoids overstating savings for tiny
@@ -109,6 +114,11 @@ def _extract_log_int_field(line: str, field: str) -> int:
     return _to_int(_extract_log_field(line, field))
 
 
+def _normalize_serena_target(target: Optional[str]) -> str:
+    normalized = (target or "unknown").strip() or "unknown"
+    return SERENA_TARGET_ALIASES.get(normalized, normalized)
+
+
 def _ratio(numerator: int, denominator: int) -> Optional[float]:
     if denominator <= 0:
         return None
@@ -131,9 +141,10 @@ def _finalize_serena_targets(targets: dict) -> dict:
     finalized = {}
     for target, values in targets.items():
         entry = dict(values)
+        query_rollups = entry.get("query_rollups", 0)
         entry["fallback_ratio"] = _ratio(
             entry.get("fallbacks", 0),
-            entry.get("query_calls", 0),
+            query_rollups + entry.get("fallbacks", 0),
         )
         finalized[target] = entry
     return finalized
@@ -142,19 +153,10 @@ def _finalize_serena_targets(targets: dict) -> dict:
 def _finalize_serena_summary(summary: dict) -> None:
     summary["serena_fallback_ratio"] = _ratio(
         summary.get("serena_fallbacks", 0),
-        summary.get("serena_query_calls", 0),
+        summary.get("serena_query_rollups", 0) + summary.get("serena_fallbacks", 0),
     )
 
     observed_prompt_tokens = summary.get("serena_observed_prompt_tokens")
-    if observed_prompt_tokens is None and summary.get(
-        "serena_legacy_prompt_tokens_estimate", 0
-    ) > 0:
-        observed_prompt_tokens = (
-            summary["or_prompt_tokens"]
-            if summary.get("or_prompt_tokens", 0) > 0
-            else None
-        )
-        summary["serena_observed_prompt_tokens"] = observed_prompt_tokens
 
     if observed_prompt_tokens is None:
         summary["serena_observed_prompt_tokens_source"] = None
@@ -235,11 +237,14 @@ def parse_log(log: str) -> dict:
         "semble_query_bytes": 0,
         "semble_fallbacks": 0,
         "semble_targets": defaultdict(lambda: defaultdict(int)),
+        "serena_query_rollups": 0,
         "serena_query_calls": 0,
         "serena_query_bytes": 0,
         "serena_fallbacks": 0,
         "serena_legacy_prompt_bytes_estimate": 0,
         "serena_legacy_prompt_tokens_estimate": 0,
+        "serena_observed_prompt_tokens": None,
+        "serena_observed_prompt_tokens_source": None,
         "serena_targets": defaultdict(lambda: defaultdict(int)),
     }
 
@@ -282,15 +287,19 @@ def parse_log(log: str) -> dict:
             out["semble_targets"][target]["fallbacks"] += 1
 
         if SERENA_QUERY_RE.search(line):
-            target = _extract_log_field(line, "target") or "unknown"
+            target = _normalize_serena_target(_extract_log_field(line, "target"))
             tool = _extract_log_field(line, "tool") or "unknown"
-            calls = _extract_log_int_field(line, "calls")
+            calls_raw = _extract_log_field(line, "calls")
+            calls = _to_int(calls_raw)
             response_bytes = _extract_log_int_field(line, "response_bytes")
             legacy_estimate = _estimate_serena_legacy_prompt(
                 calls=calls,
                 response_bytes=response_bytes,
                 tool=tool,
             )
+            if calls_raw is not None:
+                out["serena_query_rollups"] += 1
+                out["serena_targets"][target]["query_rollups"] += 1
             out["serena_query_calls"] += calls
             out["serena_query_bytes"] += response_bytes
             out["serena_legacy_prompt_bytes_estimate"] += legacy_estimate["bytes"]
@@ -304,12 +313,17 @@ def parse_log(log: str) -> dict:
                 legacy_estimate["tokens"]
             )
         elif SERENA_FALLBACK_RE.search(line):
-            target = _extract_log_field(line, "target") or "unknown"
+            target = _normalize_serena_target(_extract_log_field(line, "target"))
             out["serena_fallbacks"] += 1
             out["serena_targets"][target]["fallbacks"] += 1
 
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
     out["semble_targets"] = {p: dict(v) for p, v in out["semble_targets"].items()}
+    if out["serena_legacy_prompt_tokens_estimate"] > 0 and out["or_prompt_tokens"] > 0:
+        out["serena_observed_prompt_tokens"] = out["or_prompt_tokens"]
+        out["serena_observed_prompt_tokens_source"] = (
+            SERENA_OBSERVED_PROMPT_TOKENS_SOURCE
+        )
     _finalize_serena_summary(out)
     return out
 
@@ -364,6 +378,7 @@ def main() -> int:
             "semble_query_bytes": 0,
             "semble_fallbacks": 0,
             "semble_targets": defaultdict(lambda: defaultdict(int)),
+            "serena_query_rollups": 0,
             "serena_query_calls": 0,
             "serena_query_bytes": 0,
             "serena_fallbacks": 0,
@@ -394,6 +409,7 @@ def main() -> int:
                 or parsed["or_calls"]
                 or parsed["semble_query_calls"]
                 or parsed["semble_fallbacks"]
+                or parsed["serena_query_rollups"]
                 or parsed["serena_query_calls"]
                 or parsed["serena_query_bytes"]
                 or parsed["serena_fallbacks"]
@@ -404,6 +420,7 @@ def main() -> int:
                       "or_cache_write_tokens", "or_cache_read_tokens",
                       "or_calls", "semble_query_calls",
                       "semble_query_bytes", "semble_fallbacks",
+                      "serena_query_rollups",
                       "serena_query_calls", "serena_query_bytes",
                       "serena_fallbacks",
                       "serena_legacy_prompt_bytes_estimate",
@@ -417,6 +434,7 @@ def main() -> int:
                     agg["semble_targets"][target][k] += v
             for target, vals in parsed["serena_targets"].items():
                 for k in (
+                    "query_rollups",
                     "query_calls",
                     "response_bytes",
                     "fallbacks",
