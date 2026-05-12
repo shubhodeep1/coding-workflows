@@ -78,9 +78,15 @@ Apply, in order:
 4. Avoid speculative refactors, architectural churn, and style-only edits.
 5. If multiple valid choices remain, choose lowest operational risk and document the assumption.
 
-If a required input is external and non-synthesizable from the repo (branch
-name, commit SHA, credential, or external URL), emit exactly
-`BLOCKED: <short reason>` instead of guessing.
+If a required input is a specific scalar value the model cannot derive or
+look up — a private credential, a not-yet-existing commit SHA, a branch
+name not yet decided, or an auth-walled/private URL whose contents are not
+public — emit exactly `BLOCKED: <short reason>` instead of guessing. Public
+3rd-party documentation is NOT a BLOCKED trigger: web search is available
+(the `web_search` tool is enabled by the codex config — see
+`scripts/write_codex_config.sh`'s `--web-search live` default), so fetch
+public API docs / RFCs / library reference via the web tool rather than
+emitting `BLOCKED:`.
 
 ---
 

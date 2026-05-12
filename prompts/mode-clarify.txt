@@ -9,10 +9,17 @@ Rules:
 - Do not ask style/preference questions when a safe default can be inferred.
 - Batch all blocking questions in one pass. Soft cap: 20 questions
   (highest-impact first).
-- If a required input is external and non-synthesizable by the auto-answerer
-  (branch name, commit SHA, credential, external URL): emit exactly `BLOCKED: <short reason>` instead of `Q<ID>` choices.
-- If external APIs are needed, use provided docs/artefacts; if unavailable,
-  ask rather than guess.
+- If a required input is a specific scalar value the model cannot derive or
+  look up — a private credential, a not-yet-existing commit SHA, a branch
+  name not yet decided, or an auth-walled/private URL whose contents are
+  not public — emit exactly `BLOCKED: <short reason>` instead of `Q<ID>`
+  choices. Public 3rd-party documentation is NOT a BLOCKED trigger.
+- Web search IS available (the `web_search` tool is enabled by the codex
+  config — `scripts/write_codex_config.sh` defaults `--web-search live`).
+  If external APIs/services are involved, fetch their official public docs
+  via the web tool and incorporate the concrete endpoints, signature
+  scheme, and payload shapes. Only ask (rather than fetch) when the docs
+  are private/auth-walled or genuinely unavailable.
 - Do not write code or propose solutions.
 - The responder is an autonomous LLM with repo access only — no database,
   no external APIs, no production systems. Do not ask questions whose only
