@@ -397,54 +397,77 @@ def _parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
 	return part, total, manifest, chunk
 
 
+def _build_v2_state_comment_chain(payload: str, *, chunk_size: int) -> list[dict[str, str]]:
+	raw = payload.encode("utf-8")
+	encoded = base64.b64encode(raw).decode("ascii")
+	manifest = hashlib.sha256(raw).hexdigest()
+	total = max(1, (len(encoded) + chunk_size - 1) // chunk_size)
+	comments: list[dict[str, str]] = []
+	for idx in range(total):
+		chunk = encoded[idx * chunk_size : (idx + 1) * chunk_size]
+		comments.append({
+			"body": (
+				f"<!-- ORCHESTRATOR_STATE_V2 part={idx + 1}/{total} manifest={manifest} -->\n"
+				f"{chunk}\n{_V2_CLOSER}"
+			),
+		})
+	return comments
+
+
 def _extract_state_payloads(comments: list[dict]) -> list[str]:
 	"""All orchestrator-state JSON payloads in chronological (oldest-first) order.
 
-	Walks comments forward.  Each V1 single-comment state contributes
-	one payload at its own index.  Each V2 chunk-chain contributes one
-	payload at the index of the comment where the chain completed
-	(the newest part of that chain).  Combined V2 + V1 listing keeps
-	the test contract that the latest state write is `payloads[-1]`.
+	Walks V2 comments newest-first to mirror scripts/orchestrate_state_v2.py,
+	but records each recovered chain at the index of that chain's newest
+	comment so the combined V2 + V1 payload list still stays in
+	chronological order and preserves the `payloads[-1]` latest-state
+	test contract.
 	"""
 	payloads: list[tuple[int, str]] = []
-	v2_parts: dict[str, dict[int, str]] = {}
-	v2_totals: dict[str, int] = {}
-	v2_complete: set[str] = set()
-	for idx, comment in enumerate(comments):
+	v2_candidates: dict[tuple[str, int], dict[str, object]] = {}
+	for idx, comment in reversed(list(enumerate(comments))):
 		body = (comment or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" in body:
 			parsed = _parse_v2_chunk(body)
 			if parsed is not None:
 				part, total, manifest, chunk = parsed
-				if manifest not in v2_complete:
-					slot = v2_parts.setdefault(manifest, {})
-					slot.setdefault(part, chunk)
-					prev_total = v2_totals.get(manifest)
-					mismatch = False
-					if prev_total is None:
-						v2_totals[manifest] = total
-					elif prev_total != total:
-						# Mismatched declared total — disqualify and skip.
-						v2_parts.pop(manifest, None)
-						mismatch = True
-					if not mismatch and len(slot) == total and all(p in slot for p in range(1, total + 1)):
-						stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
+				chain_key = (manifest, total)
+				candidate = v2_candidates.get(chain_key)
+				if part == total:
+					candidate = {
+						"latest_idx": idx,
+						"next_part": total - 1,
+						"parts": {part: chunk},
+					}
+					v2_candidates[chain_key] = candidate
+				elif candidate is not None and part == candidate.get("next_part"):
+					parts = candidate["parts"]
+					assert isinstance(parts, dict)
+					parts[part] = chunk
+					candidate["next_part"] = part - 1
+				else:
+					candidate = None
+				if candidate is not None:
+					parts = candidate["parts"]
+					assert isinstance(parts, dict)
+					if len(parts) == total and candidate.get("next_part") == 0:
+						stitched_b64 = "".join(parts[p] for p in range(1, total + 1))
 						compact = re.sub(r"\s+", "", stitched_b64)
 						try:
 							decoded = base64.b64decode(compact, validate=True)
 						except (binascii.Error, ValueError):
-							v2_parts.pop(manifest, None)
+							v2_candidates.pop(chain_key, None)
 						else:
 							if hashlib.sha256(decoded).hexdigest() == manifest:
-								v2_complete.add(manifest)
-								payloads.append((idx, decoded.decode("utf-8")))
+								payloads.append((int(candidate["latest_idx"]), decoded.decode("utf-8")))
+								v2_candidates.pop(chain_key, None)
 							else:
-								v2_parts.pop(manifest, None)
+								v2_candidates.pop(chain_key, None)
 		if "ORCHESTRATOR_STATE_V1" in body:
 			match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
 			if match:
 				payloads.append((idx, match.group(1)))
-	return [payload for _, payload in payloads]
+	return [payload for _, payload in sorted(payloads)]
 
 
 def _extract_latest_state(comments: list[dict]) -> dict:
@@ -4956,6 +4979,139 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 	assert len(result["validation_dispatches"]) == 1
 
 
+def test_revalidate_not_blocked_by_prose_marker_comment_after_command():
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[
+			"/revalidate",
+			"Operator note: I reviewed the ORCHESTRATOR_STATE_V2 framing above.",
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_revalidate_not_blocked_by_torn_v2_chunk_after_command():
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	partial_chain = _build_v2_state_comment_chain(payload, chunk_size=max(1, encoded_len // 2))
+	assert len(partial_chain) > 1
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["/revalidate", partial_chain[0]["body"]],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_different_total():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=encoded_len + 1)
+	newer_partial = _build_v2_state_comment_chain(
+		payload,
+		chunk_size=max(1, encoded_len // 2),
+	)[:1]
+	comments = older_complete + newer_partial
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
+def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_same_total_uses_different_chunking():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	older_chunk_size = (encoded_len // 2) + 1
+	newer_chunk_size = encoded_len - 1
+	assert max(1, (encoded_len + older_chunk_size - 1) // older_chunk_size) == 2
+	assert max(1, (encoded_len + newer_chunk_size - 1) // newer_chunk_size) == 2
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=older_chunk_size)
+	newer_partial = _build_v2_state_comment_chain(payload, chunk_size=newer_chunk_size)[:1]
+	comments = older_complete + newer_partial
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
+def test_v2_extract_helper_matches_production_for_interleaved_older_complete_and_newer_prefix_same_total():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	chunk_size = max(1, encoded_len // 4)
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=chunk_size)
+	assert len(older_complete) >= 4
+	newer_prefix = _build_v2_state_comment_chain(payload, chunk_size=chunk_size)[:1]
+	comments = older_complete[:-1] + newer_prefix + older_complete[-1:]
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
 def test_revalidate_ignored_when_no_comment():
 	"""Without a /revalidate comment, a validation-failed project stays skipped."""
 	state = _base_state(status="failed")
@@ -5033,6 +5189,26 @@ def test_judge_resume_plain_preserves_counters():
 		"Counter handling: judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in body
 		for body in tracking_comments
 	)
+
+
+def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 9
+	state["recovery_count"] = 6
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=[
+			"/judge_resume --force",
+			"FYI: the ORCHESTRATOR_STATE_V1 marker above came from the previous run.",
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 0
+	assert ls["recovery_count"] == 0
 
 
 def test_judge_resume_reset_recovery_only():

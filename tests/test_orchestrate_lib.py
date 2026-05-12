@@ -994,6 +994,41 @@ def test_cmd_check_stalls_forwards_phase_specific_max_recoveries_to_detect_stall
 	assert captured["max_recoveries_by_phase"] == {"ai:done": 99}
 
 
+def test_cmd_check_stalls_forwards_phase_specific_recovery_caps_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
+	) -> list[dict[str, object]]:
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:done"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			max_recoveries_by_phase_json='{"ai:done": 99}',
+			stall_judge_trigger_count=1,
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["max_recoveries_by_phase"] == {"ai:done": 99}
+
+
 # ---------------------------------------------------------------------------
 # Tests: state schema
 # ---------------------------------------------------------------------------
@@ -1893,9 +1928,8 @@ def test_detect_stalls_skips_when_phase_attempts_exhausted():
 	assert len(stalls) == 1
 	assert stalls[0]["recovery_action"] == "skip"
 	assert stalls[0]["phase_attempts_count"] == 5
-
-
 def test_detect_stalls_honors_phase_specific_cap_for_phase_attempts():
+	"""Phase-attempt caps must honour per-phase recovery overrides too."""
 	state = _make_state()
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"

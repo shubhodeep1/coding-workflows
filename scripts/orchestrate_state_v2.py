@@ -70,6 +70,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 # GitHub's hard cap on issue/PR comment body bytes.
 GITHUB_COMMENT_BODY_CAP = 65536
@@ -227,8 +228,19 @@ def cmd_extract(args: argparse.Namespace) -> int:
 		return 2
 	# GitHub returns comments oldest-first.  Reverse to walk newest-first
 	# so the first complete chain we encounter is the most recent write.
-	parts_by_manifest: dict[str, dict[int, str]] = {}
-	totals_by_manifest: dict[str, int] = {}
+	# Key by (manifest, total), not manifest alone: the same raw state bytes
+	# can legitimately be repacked into a different number of chunks when a
+	# later release changes chunk_size / framing headroom.  In that case we
+	# still want to accept an older COMPLETE chain if a newer differently-
+	# chunked chain is incomplete.
+	#
+	# A second edge case: two writes can share the same (manifest, total)
+	# while using different chunk boundaries. Because the writer posts parts
+	# in ascending order, a newest-first walk sees each complete write as
+	# total, total-1, ..., 1. Track only contiguous descending chains that
+	# start at part=total so a newer partial write cannot blend with an older
+	# complete chain that happened to use different chunk slicing.
+	active_chain_by_key: dict[tuple[str, int], dict[str, Any]] = {}
 	for c in reversed(comments):
 		body = (c or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" not in body:
@@ -237,25 +249,24 @@ def cmd_extract(args: argparse.Namespace) -> int:
 		if parsed is None:
 			continue
 		part, total, manifest, chunk = parsed
-		# Stash the part.  Newest occurrence wins (setdefault semantics)
-		# so an older identical-manifest re-post doesn't override the
-		# fresher copy in case of an interleaved retry.
-		slot = parts_by_manifest.setdefault(manifest, {})
-		slot.setdefault(part, chunk)
-		# Record the declared total for this manifest.  All chunks of a
-		# single write carry the same total; mismatches indicate a bug
-		# or hash collision and disqualify the chain.
-		prev_total = totals_by_manifest.get(manifest)
-		if prev_total is None:
-			totals_by_manifest[manifest] = total
-		elif prev_total != total:
-			# Disqualify this manifest entirely.
-			parts_by_manifest.pop(manifest, None)
-			totals_by_manifest[manifest] = -1
+		chain_key = (manifest, total)
+		candidate = active_chain_by_key.get(chain_key)
+		if part == total:
+			candidate = {
+				"next_part": total - 1,
+				"parts": {part: chunk},
+			}
+			active_chain_by_key[chain_key] = candidate
+		elif candidate is None or part != candidate.get("next_part"):
 			continue
-		# Check completeness: every part 1..N present?
-		if len(slot) == total and all(p in slot for p in range(1, total + 1)):
-			stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
+		else:
+			parts = candidate["parts"]
+			parts[part] = chunk
+			candidate["next_part"] = part - 1
+
+		parts = candidate["parts"]
+		if len(parts) == total and candidate.get("next_part") == 0:
+			stitched_b64 = "".join(parts[p] for p in range(1, total + 1))
 			# Strip any whitespace the comment renderer / round-trip
 			# might have introduced; standard base64 has no whitespace.
 			compact_b64 = re.sub(r"\s+", "", stitched_b64)
@@ -265,8 +276,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
 				# Corrupted or non-base64 payload.  Drop this manifest
 				# and keep walking older comments for an earlier
 				# intact chain.
-				parts_by_manifest.pop(manifest, None)
-				totals_by_manifest[manifest] = -1
+				active_chain_by_key.pop(chain_key, None)
 				continue
 			digest = hashlib.sha256(decoded).hexdigest()
 			if digest == manifest:
@@ -279,8 +289,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
 			# Hash mismatch — corrupted or truncated chunk(s).  Drop
 			# this manifest and keep walking older comments for an
 			# earlier intact chain.
-			parts_by_manifest.pop(manifest, None)
-			totals_by_manifest[manifest] = -1
+			active_chain_by_key.pop(chain_key, None)
 	# No complete chain.  Caller falls back to V1 extraction.
 	return 1
 
