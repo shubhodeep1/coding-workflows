@@ -2149,7 +2149,33 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
 
           CURRENT_BRANCH="$(git branch --show-current || true)"
-          git fetch --no-tags --prune origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}"
+
+          # Retry git fetch against transient github.com errors (5xx,
+          # connection resets, DNS hiccups). A single ~minute-long
+          # GitHub-side blip otherwise kills a 15-minute autofix run
+          # with exit 128 (observed in run 25674867638, where two
+          # consecutive HTTPS calls returned "remote: Internal Server
+          # Error" / HTTP 500 within ~105s and the unguarded fetch
+          # failed the whole job). Backoff follows the project standard
+          # for git fetch/pull retries: 2s, 4s, 8s, 16s across 4
+          # attempts. Same shape as the existing push-retry fetch loop
+          # later in this file (search "fetch_attempt").
+          fetch_attempt=1
+          fetch_max_attempts=4
+          fetch_backoff=2
+          while true; do
+            if git fetch --no-tags --prune origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}"; then
+              break
+            fi
+            if [ "${fetch_attempt}" -ge "${fetch_max_attempts}" ]; then
+              echo "::error::git fetch origin refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF} failed after ${fetch_max_attempts} attempts; giving up."
+              exit 1
+            fi
+            echo "::warning::git fetch origin refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF} failed (attempt ${fetch_attempt}/${fetch_max_attempts}); retrying in ${fetch_backoff}s."
+            sleep "${fetch_backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+            fetch_backoff=$((fetch_backoff * 2))
+          done
 
           if [ "${CURRENT_BRANCH}" = "${HEAD_REF}" ]; then
             git reset --hard "refs/remotes/origin/${HEAD_REF}"
