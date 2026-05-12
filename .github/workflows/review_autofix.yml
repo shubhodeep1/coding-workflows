@@ -37,15 +37,18 @@ on:
         required: false
         default: false
         type: boolean
-      # Claude-branch-review mode no-PR inputs (push-without-PR path).
+      # No-PR claude-branch review inputs (push-without-PR path).
       # When the caller fires for a push to a claude/** branch that has no
       # open PR, set force_claude_branch_review=true and pass head/base
       # overrides so the gate can bypass its PR-API fetch and synthesize
       # PR_META_FILE without calling /repos/{owner}/{repo}/pulls/{n}.
-      # post_review_comment.sh routes to a commit comment when PR_NUMBER
-      # is empty (see scripts/post_review_comment.sh §"Routing decision").
+      # PR-backed claude/** branches intentionally do NOT use this mode;
+      # they run the same review -> editor -> commit -> re-review loop as
+      # every other PR branch. post_review_comment.sh routes to a commit
+      # comment when PR_NUMBER is empty (see scripts/post_review_comment.sh
+      # §"Routing decision").
       force_claude_branch_review:
-        description: "No-PR claude-branch-review path: bypass gate's PR-number requirement and run review-only mode against the head_ref_override / head_sha_override / base_ref_override inputs."
+        description: "No-PR claude-branch review path: bypass gate's PR-number requirement and run reviewer-comment mode against the head_ref_override / head_sha_override / base_ref_override inputs. PR-backed claude/** branches run normal autofix."
         required: false
         default: false
         type: boolean
@@ -216,14 +219,12 @@ jobs:
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             : # fall through to existing PR-API fetch below
           elif [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] && [ -n "${HEAD_REF_OVERRIDE:-}" ]; then
-            # No-PR claude-branch-review path: caller (push to claude/** with
+            # No-PR claude-branch review path: caller (push to claude/** with
             # no open PR — see internal-review.yml resolve job) supplied the
-            # head ref directly.  Treat as an open "PR" for gating purposes;
-            # the claude-branch-review block below picks up pr_head_ref and
-            # flips claude_branch_review=true.  Skip the PR-API fetch — there
-            # is no PR.  PR-numeric-shaped fields (labels/size/state) are
-            # left empty; downstream consumers gated on
-            # CLAUDE_BRANCH_REVIEW_MODE != 'true' never read them.
+            # head ref directly. Treat as an open synthetic PR for gating
+            # purposes and leave PR-shaped fields empty; downstream editor /
+            # commit / auto-merge steps still require a real PR number and are
+            # skipped by the no-PR review-only mode below.
             pr_head_ref="${HEAD_REF_OVERRIDE}"
             pr_state="open"
             echo "AUTOFIX_GATE_NO_PR_FALLBACK head_ref=${pr_head_ref} reason=force_claude_branch_review_push"
@@ -262,28 +263,23 @@ jobs:
             SKIP_REASON="skip_ai_marker"
           fi
 
-          # Claude-branch review-only mode:
-          # PRs whose head branch starts with "claude/" (e.g.
-          # claude/investigate-poller-stalled-prs-STfJ5) are ad-hoc Claude
-          # sessions outside the orchestrator / issue-driven autofix loop.
-          # Running the full editor + commit + auto-merge pipeline on them
-          # would push autofix commits onto a branch the operator is
-          # actively working on. Instead, the gate flags claude-branch-review
-          # mode so codex-agent runs the reviewer panel + summariser, posts
-          # the consensus ledger as a PR comment via post_review_comment.sh,
-          # and then exits without invoking the editor / commit / push /
-          # rb_judge / auto-merge / validate-dispatch tail. The
-          # deterministic-skip-merge and post-merge-validate-dispatch jobs
-          # are also gated off in this mode (those would auto-mark the PR
-          # ai:ready-to-merge / dispatch validate, which is wrong for
-          # human-driven claude/* branches). See PR #1688 for the
-          # post_review_comment.sh helper that this path consumes.
+          # No-PR claude-branch reviewer-comment mode:
+          # Pushes to claude/** with no open PR have no PR thread to update
+          # and no PR number for the editor / commit / auto-merge loop. Keep
+          # that synthetic no-PR route as reviewer-comment-only, but do NOT
+          # special-case PR-backed claude/** branches. Once a claude/** branch
+          # has a PR, it should run the standard review -> editor -> commit ->
+          # re-review loop until reviewers stop generating new findings, just
+          # like any other branch.
           CLAUDE_BRANCH_REVIEW="false"
-          if [ "${SHOULD_RUN}" = "true" ] && [ -n "${pr_head_ref}" ]; then
+          if [ "${SHOULD_RUN}" = "true" ] \
+            && [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] \
+            && [ -z "${PR_NUMBER:-}" ] \
+            && [ -n "${pr_head_ref}" ]; then
             case "${pr_head_ref}" in
               claude/*)
                 CLAUDE_BRANCH_REVIEW="true"
-                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW pr=${PR_NUMBER} head_ref=${pr_head_ref} — running reviewer panel + comment-only path; editor/commit/judge/auto-merge skipped."
+                echo "AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW_NO_PR pr=${PR_NUMBER:-none} head_ref=${pr_head_ref} — running reviewer panel + commit-comment path because no PR exists."
                 ;;
             esac
           fi
@@ -466,13 +462,11 @@ jobs:
             fi
           fi
 
-          # Claude-branch-review and the deterministic doc-only / small-diff
-          # skip path are mutually exclusive: doc-only / tiny PRs on a
-          # claude/* branch should NOT auto-mark ai:ready-to-merge or enable
-          # auto-merge (those are operator-driven branches). Suppress the
-          # deterministic-skip-merge dispatch when the claude-branch-review
-          # flag is on so the reviewer-comment path is the sole automated
-          # output.
+          # The no-PR claude-branch reviewer-comment route and the deterministic
+          # doc-only / small-diff skip path are mutually exclusive: without a
+          # PR, there is nowhere to apply deterministic skip labeling /
+          # auto-merge. PR-backed claude/** branches are not in this mode and
+          # follow the same deterministic-skip behavior as other PRs.
           if [ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then
             echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_branch_review pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
             DETERMINISTIC_SKIP="false"
@@ -691,14 +685,12 @@ jobs:
 
   codex-agent:
     needs: gate
-    # Display name surfaces the gate's claude_branch_review decision in the
-    # GitHub Checks UI. When the head ref is claude/**, the gate flips into
-    # review-only mode (reviewer panel + summariser + PR comment; no
-    # editor/commit/push/judge/auto-merge tail) — the suffix below makes
-    # that mode obvious from the check name without having to open the gate
-    # job logs. Job ID stays "codex-agent" so cross-references in
-    # internal-review.yml / status checks / required-checks rules don't
-    # break.
+    # Display name surfaces the gate's no-PR claude_branch_review decision in
+    # the GitHub Checks UI. Only claude/** pushes without an open PR use the
+    # reviewer-comment path; PR-backed claude/** branches keep the normal
+    # codex-agent name and run the full autofix loop. Job ID stays
+    # "codex-agent" so cross-references in internal-review.yml / status
+    # checks / required-checks rules don't break.
     name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
     runs-on: ubuntu-latest
     # Sized to accommodate the resolver step's 170-min cap plus the
@@ -718,7 +710,7 @@ jobs:
     concurrency:
       # Two cancellation regimes, keyed off needs.gate.outputs.claude_branch_review:
       #
-      #   * Non-claude branches (regular PR autofix): cancel-in-progress=false.
+      #   * PR-backed branches, including claude/** PR branches (regular PR autofix): cancel-in-progress=false.
       #     New runs queue behind the running peer instead of cancelling it.
       #     If another run is already pending in this group, GitHub replaces
       #     that older pending run with the newest one. This keeps bursts
@@ -726,13 +718,10 @@ jobs:
       #     trail of cancelled in-progress runs that cancel-in-progress=true
       #     used to cause. Hung runs are bounded by the timeout-minutes above.
       #
-      #   * claude/** branches (claude_branch_review mode): cancel-in-progress=true.
-      #     A claude/** branch is being actively edited by an operator, so a
-      #     new commit means the in-flight reviewer panel is reviewing stale
-      #     code and its consensus comment will land on a superseded SHA.
-      #     Cancel the prior run on every new push so the latest commit gets
-      #     a fresh review instead of waiting through a queued run that's
-      #     about to be redone anyway.
+      #   * No-PR claude/** reviewer-comment mode: cancel-in-progress=true.
+      #     With no PR/autofix loop to preserve, a new push makes the in-flight
+      #     reviewer panel stale; cancel it so only the latest SHA gets a
+      #     commit comment.
       #
       # Group key fallback to inputs.head_ref_override covers the no-PR
       # claude-branch push path (review-claude-branch-push in
@@ -752,9 +741,10 @@ jobs:
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
-      # comment via scripts/post_review_comment.sh, and exits without
+      # commit comment via scripts/post_review_comment.sh, and exits without
       # invoking the editor / commit / push / rb_judge / auto-merge tail.
-      # Sourced from the gate's claude_branch_review output. See gate.
+      # This is only for claude/** pushes with no open PR; PR-backed claude/**
+      # branches run normal autofix. Sourced from the gate output. See gate.
       CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
       # No-PR claude-branch-review path overrides (push events on claude/**
       # without an open PR).  Read by "Collect PR metadata" and
@@ -2788,14 +2778,10 @@ jobs:
 
           true
 
-      # Claude-branch-review mode terminal step: post the reviewer-consensus
-      # ledger as a PR comment (or commit comment when no PR exists for the
-      # head SHA) via scripts/post_review_comment.sh. The script handles
-      # routing (PR comment vs commit comment), chunking on safe finding
-      # boundaries, and the empty-ledger sentinel. Subsequent editor /
-      # commit / push / rb_judge / auto-merge / telegram-success steps are
-      # all gated on CLAUDE_BRANCH_REVIEW_MODE != 'true', so this is the
-      # last codex-agent action in claude-branch-review mode.
+      # No-PR claude-branch-review terminal step: post the reviewer-consensus
+      # ledger as a commit comment for the head SHA via
+      # scripts/post_review_comment.sh. PR-backed claude/** branches are not in
+      # this mode and continue into the editor / commit / push / re-review tail.
       - name: Post claude-branch-review consensus comment
         if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         env:
