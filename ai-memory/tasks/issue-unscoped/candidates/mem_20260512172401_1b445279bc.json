@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:76 | flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The bare `CLAUDE.md` sparse-checkout pattern may not be included in cone mode, leaving `workflow-templates/CLAUDE.md` dangling.\n  WHY: Multiple reviewers report that the root file is not reliably checked out, which makes the sync step fail when it hits the symlink target.\n- .github/workflows/update_workflows.yml:223-226 | flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The unreadable-file error names `workflow-templates/CLAUDE.md` instead of the actual sync target `CLAUDE.md`.\n  WHY: That misattributes the failure location and can send operators to the wrong place during troubleshooting.\n- .github/workflows/update_workflows.yml:214-215 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The added `-L` test is redundant with `-e`.\n  WHY: This reviewer judged it to add only minor overhead and not change behavior.\n- .github/workflows/update_workflows.yml:214-218 | confidence=5\n  flagged_by: [qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The added `-L` test is not redundant; it is required to catch dangling symlinks.\n  WHY: For a dangling symlink, `-e` is false but `-L` is true, so the guard correctly falls through to the `cat` error path.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/update_workflows.yml:76 | confidence=4\n  PROBLEM: In cone-mode sparse checkout, the bare `CLAUDE.md` pattern may not include the root file, leaving `workflow-templates/CLAUDE.md` dangling.\n  WHY: If the root `CLAUDE.md` is omitted, the sync step reaches the dangling-symlink guard and fails.\n- .github/workflows/update_workflows.yml:223 | confidence=2\n  PROBLEM: The error message names `workflow-templates/CLAUDE.md` instead of the actual sync target.\n  WHY: This could confuse operators troubleshooting a failure.\n- .github/workflows/update_workflows.yml:214-215 | severity=low | confidence=3\n  PROBLEM: The added `-L` test is redundant with `-e`.\n  WHY: It only adds minor shell overhead and, in this reviewer's view, is functionally unnecessary.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/update_workflows.yml:76 | confidence=4\n  PROBLEM: The bare `\"CLAUDE.md\"` sparse-checkout pattern may not work correctly in cone mode, so the root file may not be checked out.\n  WHY: If the root `CLAUDE.md` is missing, the symlink guard fails and the workflow stops.\n- .github/workflows/update_workflows.yml:226 | confidence=3\n  PROBLEM: The error message says `workflow-templates/CLAUDE.md is unreadable` even though the semantic target is root `CLAUDE.md`.\n  WHY: This can send operators to the wrong place when debugging.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/update_workflows.yml:214-215 | confidence=5\n  PROBLEM: The prior claim that the `-L` test is redundant is incorrect; the combined guard is necessary for dangling symlinks.\n  WHY: For a dangling symlink, `-e` is false but `-L` is true, so the code correctly falls through to the `cat` guard.\n- .github/workflows/update_workflows.yml:223-224 | confidence=3\n  PROBLEM: The unreadable-file error names `workflow-templates/CLAUDE.md` instead of the root `CLAUDE.md` being synchronized.\n  WHY: That misattributes the failure source and slows troubleshooting.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/update_workflows.yml:76 | confidence=5\n  PROBLEM: `git clone --sparse` defaults to cone mode, which ignores the bare filename `CLAUDE.md`, so the root file is never checked out.\n  WHY: `workflow-templates/CLAUDE.md` then dangles and the step exits 1 on every dispatch.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/update_workflows.yml:76 | confidence=4\n  PROBLEM: In cone mode, `git sparse-checkout set` may not include the root `CLAUDE.md`.\n  WHY: The symlink `workflow-templates/CLAUDE.md \u2192 ../CLAUDE.md` would be dangling and the workflow would fail at the readability guard.\n- .github/workflows/update_workflows.yml:217-218 | confidence=5\n  PROBLEM: The `-L` check is intentionally necessary and not redundant with `-e`.\n  WHY: It is what keeps dangling symlinks from being skipped as missing targets.\n- .github/workflows/update_workflows.yml:223-225\n  PROBLEM: The error message names `workflow-templates/CLAUDE.md` but the actual sync target is root `CLAUDE.md`.\n  WHY: The path mismatch could confuse operators troubleshooting a dangling symlink.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "33957a46737c283170ebe77792879cbc37c329e702178f29806677c33bb9ecdc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2546,
+    "run_id": "25749086350",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25749086350",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512172401_1b445279bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2546,
+    "run_id": "25749086350"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T17:24:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
