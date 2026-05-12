@@ -2,7 +2,7 @@
 """cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
 
 Pulls the last N runs per workflow via `gh`, fetches each run's log, and
-aggregates token usage per workflow. Three patterns are recognised:
+aggregates token usage per workflow. Four patterns are recognised:
 
   1. Codex CLI ("tokens used\\n<N>") — emitted by clarify, plan, implement,
      validate, orchestrate*, orchestrate_clarify_respond.
@@ -13,6 +13,8 @@ aggregates token usage per workflow. Three patterns are recognised:
   3. Semble telemetry (`SEMBLE_QUERY ... bytes=N` and
      `SEMBLE_FALLBACK ...`) — emitted by Semble-backed prompt-context
      helpers.
+  4. Serena telemetry (`SERENA_QUERY ... calls=N response_bytes=N` and
+     `SERENA_FALLBACK ...`) — emitted by Serena bootstrap/stat rollups.
 
 Output: stdout markdown table + per-run JSON file.
 
@@ -73,11 +75,113 @@ OPENROUTER_RE = re.compile(
 
 SEMBLE_QUERY_RE = re.compile(r"(?:^|\s)SEMBLE_QUERY(?:\s|$)")
 SEMBLE_FALLBACK_RE = re.compile(r"(?:^|\s)SEMBLE_FALLBACK(?:\s|$)")
+SERENA_QUERY_RE = re.compile(r"(?:^|\s)SERENA_QUERY(?:\s|$)")
+SERENA_FALLBACK_RE = re.compile(r"(?:^|\s)SERENA_FALLBACK(?:\s|$)")
+
+# Conservative Serena legacy-read calibration until the repo has a bundled
+# pre-rollout baseline dataset. The floor avoids overstating savings for tiny
+# symbol responses that likely displaced a larger legacy read/grep slice.
+SERENA_LEGACY_READ_FLOOR_BYTES = 4096
+SERENA_LEGACY_TOKENS_PER_BYTE = 0.25
+SERENA_OBSERVED_PROMPT_TOKENS_SOURCE = "openrouter_prompt_tokens"
+SERENA_TOOL_MULTIPLIERS = {
+    "find_file": 1.25,
+    "find_referencing_symbols": 2.0,
+    "find_symbol": 1.25,
+    "get_symbols_overview": 1.5,
+    "search_for_pattern": 1.5,
+}
 
 
 def _extract_log_field(line: str, field: str) -> Optional[str]:
     m = re.search(rf"(?:^|\s){re.escape(field)}=([^\s]+)", line)
     return m.group(1) if m else None
+
+
+def _to_int(v: Optional[str]) -> int:
+    try:
+        return int(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_log_int_field(line: str, field: str) -> int:
+    return _to_int(_extract_log_field(line, field))
+
+
+def _ratio(numerator: int, denominator: int) -> Optional[float]:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
+
+
+def _estimate_serena_legacy_prompt(
+    *, calls: int, response_bytes: int, tool: Optional[str]
+) -> dict:
+    if calls <= 0:
+        return {"bytes": 0, "tokens": 0}
+    multiplier = SERENA_TOOL_MULTIPLIERS.get((tool or "").lower(), 1.0)
+    base_bytes = max(response_bytes, SERENA_LEGACY_READ_FLOOR_BYTES * calls)
+    legacy_bytes = int(round(base_bytes * multiplier))
+    legacy_tokens = int(round(legacy_bytes * SERENA_LEGACY_TOKENS_PER_BYTE))
+    return {"bytes": legacy_bytes, "tokens": legacy_tokens}
+
+
+def _finalize_serena_targets(targets: dict) -> dict:
+    finalized = {}
+    for target, values in targets.items():
+        entry = dict(values)
+        entry["fallback_ratio"] = _ratio(
+            entry.get("fallbacks", 0),
+            entry.get("query_calls", 0),
+        )
+        finalized[target] = entry
+    return finalized
+
+
+def _finalize_serena_summary(summary: dict) -> None:
+    summary["serena_fallback_ratio"] = _ratio(
+        summary.get("serena_fallbacks", 0),
+        summary.get("serena_query_calls", 0),
+    )
+
+    observed_prompt_tokens = summary.get("serena_observed_prompt_tokens")
+    if observed_prompt_tokens is None and summary.get(
+        "serena_legacy_prompt_tokens_estimate", 0
+    ) > 0:
+        observed_prompt_tokens = (
+            summary["or_prompt_tokens"]
+            if summary.get("or_prompt_tokens", 0) > 0
+            else None
+        )
+        summary["serena_observed_prompt_tokens"] = observed_prompt_tokens
+
+    if observed_prompt_tokens is None:
+        summary["serena_observed_prompt_tokens_source"] = None
+    elif summary.get("serena_observed_prompt_tokens_source") is None:
+        summary["serena_observed_prompt_tokens_source"] = (
+            SERENA_OBSERVED_PROMPT_TOKENS_SOURCE
+        )
+
+    if observed_prompt_tokens is None:
+        summary["serena_legacy_prompt_tokens_delta_vs_observed"] = None
+        summary["serena_legacy_prompt_tokens_ratio_vs_observed"] = None
+    else:
+        estimated_prompt_tokens = summary.get(
+            "serena_legacy_prompt_tokens_estimate_observed_subset",
+            summary.get("serena_legacy_prompt_tokens_estimate", 0),
+        )
+        summary["serena_legacy_prompt_tokens_delta_vs_observed"] = (
+            estimated_prompt_tokens - observed_prompt_tokens
+        )
+        summary["serena_legacy_prompt_tokens_ratio_vs_observed"] = _ratio(
+            estimated_prompt_tokens,
+            observed_prompt_tokens,
+        )
+
+    summary["serena_targets"] = _finalize_serena_targets(
+        summary.get("serena_targets", {})
+    )
 
 
 def gh(args: List[str]) -> Optional[str]:
@@ -131,6 +235,12 @@ def parse_log(log: str) -> dict:
         "semble_query_bytes": 0,
         "semble_fallbacks": 0,
         "semble_targets": defaultdict(lambda: defaultdict(int)),
+        "serena_query_calls": 0,
+        "serena_query_bytes": 0,
+        "serena_fallbacks": 0,
+        "serena_legacy_prompt_bytes_estimate": 0,
+        "serena_legacy_prompt_tokens_estimate": 0,
+        "serena_targets": defaultdict(lambda: defaultdict(int)),
     }
 
     for m in CODEX_TOKENS_RE.finditer(log):
@@ -139,12 +249,6 @@ def parse_log(log: str) -> dict:
             out["codex_calls"] += 1
         except ValueError:
             continue
-
-    def _to_int(v: str) -> int:
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return 0
 
     for m in OPENROUTER_RE.finditer(log):
         pt = _to_int(m.group("pt"))
@@ -177,13 +281,49 @@ def parse_log(log: str) -> dict:
             out["semble_fallbacks"] += 1
             out["semble_targets"][target]["fallbacks"] += 1
 
+        if SERENA_QUERY_RE.search(line):
+            target = _extract_log_field(line, "target") or "unknown"
+            tool = _extract_log_field(line, "tool") or "unknown"
+            calls = _extract_log_int_field(line, "calls")
+            response_bytes = _extract_log_int_field(line, "response_bytes")
+            legacy_estimate = _estimate_serena_legacy_prompt(
+                calls=calls,
+                response_bytes=response_bytes,
+                tool=tool,
+            )
+            out["serena_query_calls"] += calls
+            out["serena_query_bytes"] += response_bytes
+            out["serena_legacy_prompt_bytes_estimate"] += legacy_estimate["bytes"]
+            out["serena_legacy_prompt_tokens_estimate"] += legacy_estimate["tokens"]
+            out["serena_targets"][target]["query_calls"] += calls
+            out["serena_targets"][target]["response_bytes"] += response_bytes
+            out["serena_targets"][target]["legacy_prompt_bytes_estimate"] += (
+                legacy_estimate["bytes"]
+            )
+            out["serena_targets"][target]["legacy_prompt_tokens_estimate"] += (
+                legacy_estimate["tokens"]
+            )
+        elif SERENA_FALLBACK_RE.search(line):
+            target = _extract_log_field(line, "target") or "unknown"
+            out["serena_fallbacks"] += 1
+            out["serena_targets"][target]["fallbacks"] += 1
+
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
     out["semble_targets"] = {p: dict(v) for p, v in out["semble_targets"].items()}
+    _finalize_serena_summary(out)
     return out
 
 
 def fmt(n: int) -> str:
     return f"{n:,}" if n else "-"
+
+
+def fmt_pct(value: Optional[float]) -> str:
+    return f"{value * 100:.1f}%" if value is not None else "-"
+
+
+def fmt_ratio(value: Optional[float]) -> str:
+    return f"{value:.2f}x" if value is not None else "-"
 
 
 def main() -> int:
@@ -224,6 +364,17 @@ def main() -> int:
             "semble_query_bytes": 0,
             "semble_fallbacks": 0,
             "semble_targets": defaultdict(lambda: defaultdict(int)),
+            "serena_query_calls": 0,
+            "serena_query_bytes": 0,
+            "serena_fallbacks": 0,
+            "serena_legacy_prompt_bytes_estimate": 0,
+            "serena_legacy_prompt_tokens_estimate": 0,
+            "serena_observed_prompt_tokens": 0,
+            "serena_observed_prompt_tokens_runs": 0,
+            "serena_observed_prompt_tokens_source": None,
+            "serena_legacy_prompt_bytes_estimate_observed_subset": 0,
+            "serena_legacy_prompt_tokens_estimate_observed_subset": 0,
+            "serena_targets": defaultdict(lambda: defaultdict(int)),
         }
 
         for i, r in enumerate(runs, 1):
@@ -243,13 +394,20 @@ def main() -> int:
                 or parsed["or_calls"]
                 or parsed["semble_query_calls"]
                 or parsed["semble_fallbacks"]
+                or parsed["serena_query_calls"]
+                or parsed["serena_query_bytes"]
+                or parsed["serena_fallbacks"]
             ):
                 agg["runs_with_data"] += 1
             for k in ("codex_tokens_used", "codex_calls", "or_prompt_tokens",
                       "or_completion_tokens", "or_total_tokens",
                       "or_cache_write_tokens", "or_cache_read_tokens",
                       "or_calls", "semble_query_calls",
-                      "semble_query_bytes", "semble_fallbacks"):
+                      "semble_query_bytes", "semble_fallbacks",
+                      "serena_query_calls", "serena_query_bytes",
+                      "serena_fallbacks",
+                      "serena_legacy_prompt_bytes_estimate",
+                      "serena_legacy_prompt_tokens_estimate"):
                 agg[k] += parsed[k]
             for phase, vals in parsed["or_phases"].items():
                 for k, v in vals.items():
@@ -257,6 +415,30 @@ def main() -> int:
             for target, vals in parsed["semble_targets"].items():
                 for k, v in vals.items():
                     agg["semble_targets"][target][k] += v
+            for target, vals in parsed["serena_targets"].items():
+                for k in (
+                    "query_calls",
+                    "response_bytes",
+                    "fallbacks",
+                    "legacy_prompt_bytes_estimate",
+                    "legacy_prompt_tokens_estimate",
+                ):
+                    agg["serena_targets"][target][k] += vals.get(k, 0)
+            if parsed["serena_observed_prompt_tokens"] is not None:
+                agg["serena_observed_prompt_tokens"] += parsed[
+                    "serena_observed_prompt_tokens"
+                ]
+                agg["serena_observed_prompt_tokens_runs"] += 1
+                agg["serena_legacy_prompt_bytes_estimate_observed_subset"] += parsed[
+                    "serena_legacy_prompt_bytes_estimate"
+                ]
+                agg["serena_legacy_prompt_tokens_estimate_observed_subset"] += parsed[
+                    "serena_legacy_prompt_tokens_estimate"
+                ]
+                if agg["serena_observed_prompt_tokens_source"] is None:
+                    agg["serena_observed_prompt_tokens_source"] = parsed[
+                        "serena_observed_prompt_tokens_source"
+                    ]
             per_run.append({
                 "workflow": wf,
                 "run_id": rid,
@@ -268,19 +450,34 @@ def main() -> int:
                     "or_completion_tokens", "or_total_tokens",
                     "or_cache_write_tokens", "or_cache_read_tokens", "or_calls",
                     "semble_query_calls", "semble_query_bytes", "semble_fallbacks",
+                    "serena_query_calls", "serena_query_bytes", "serena_fallbacks",
+                    "serena_fallback_ratio",
+                    "serena_legacy_prompt_bytes_estimate",
+                    "serena_legacy_prompt_tokens_estimate",
+                    "serena_observed_prompt_tokens",
+                    "serena_observed_prompt_tokens_source",
+                    "serena_legacy_prompt_tokens_delta_vs_observed",
+                    "serena_legacy_prompt_tokens_ratio_vs_observed",
                 )},
                 "semble_targets": parsed["semble_targets"],
+                "serena_targets": parsed["serena_targets"],
             })
             sys.stderr.write(
                 f"codex={fmt(parsed['codex_tokens_used'])} "
                 f"or_total={fmt(parsed['or_total_tokens'])} "
                 f"or_calls={parsed['or_calls']} "
                 f"semble_bytes={fmt(parsed['semble_query_bytes'])} "
-                f"semble_fallbacks={fmt(parsed['semble_fallbacks'])}\n"
+                f"semble_fallbacks={fmt(parsed['semble_fallbacks'])} "
+                f"serena_calls={fmt(parsed['serena_query_calls'])} "
+                f"serena_fallbacks={fmt(parsed['serena_fallbacks'])}\n"
             )
 
         agg["or_phases"] = {p: dict(v) for p, v in agg["or_phases"].items()}
         agg["semble_targets"] = {p: dict(v) for p, v in agg["semble_targets"].items()}
+        if agg["serena_observed_prompt_tokens_runs"] == 0:
+            agg["serena_observed_prompt_tokens"] = None
+            agg["serena_observed_prompt_tokens_source"] = None
+        _finalize_serena_summary(agg)
         per_wf[wf] = agg
 
     # Markdown summary on stdout
@@ -357,6 +554,77 @@ def main() -> int:
                     f"| {target} | {fmt(vals.get('query_calls', 0))} | "
                     f"{fmt(vals.get('bytes', 0))} | "
                     f"{fmt(vals.get('fallbacks', 0))} |"
+                )
+            print()
+
+    serena_workflows = [
+        wf for wf, a in per_wf.items()
+        if a["serena_query_calls"] or a["serena_query_bytes"] or a["serena_fallbacks"]
+    ]
+    if serena_workflows:
+        print("\n## Serena telemetry breakdown\n")
+        print(
+            "Observed prompt-token comparisons use same-run OpenRouter "
+            "`prompt_tokens` when available; Codex-only runs stay unavailable "
+            "instead of being guessed."
+        )
+        print(
+            "When an observed prompt-token comparison exists, the legacy "
+            "estimate shown below uses only that same-run comparison subset; "
+            "all-run Serena estimate totals remain in the JSON payload."
+        )
+        print()
+        print(
+            "| Workflow | query_calls | response_bytes | fallbacks | "
+            "fallback_ratio | legacy_est_prompt_tokens_cmp | observed_prompt_tokens | "
+            "est/observed |"
+        )
+        print("|---|---:|---:|---:|---:|---:|---:|---:|")
+        for wf in serena_workflows:
+            a = per_wf[wf]
+            comparison_estimate = a.get(
+                "serena_legacy_prompt_tokens_estimate_observed_subset",
+                0,
+            )
+            if a["serena_observed_prompt_tokens"] is None or comparison_estimate <= 0:
+                comparison_estimate = a["serena_legacy_prompt_tokens_estimate"]
+            print(
+                f"| {wf} | {fmt(a['serena_query_calls'])} | "
+                f"{fmt(a['serena_query_bytes'])} | {fmt(a['serena_fallbacks'])} | "
+                f"{fmt_pct(a['serena_fallback_ratio'])} | "
+                f"{fmt(comparison_estimate)} | "
+                f"{fmt(a['serena_observed_prompt_tokens'] or 0)} | "
+                f"{fmt_ratio(a['serena_legacy_prompt_tokens_ratio_vs_observed'])} |"
+            )
+
+        print()
+        for wf in serena_workflows:
+            targets = per_wf[wf]["serena_targets"]
+            if not targets:
+                continue
+            print(f"### {wf}\n")
+            print(
+                "| target | query_calls | response_bytes | fallbacks | "
+                "fallback_ratio | legacy_est_prompt_tokens |"
+            )
+            print("|---|---:|---:|---:|---:|---:|")
+            ordered_targets = sorted(
+                targets,
+                key=lambda t: (
+                    -targets[t].get("response_bytes", 0),
+                    -targets[t].get("query_calls", 0),
+                    -targets[t].get("fallbacks", 0),
+                    t,
+                ),
+            )
+            for target in ordered_targets:
+                vals = targets[target]
+                print(
+                    f"| {target} | {fmt(vals.get('query_calls', 0))} | "
+                    f"{fmt(vals.get('response_bytes', 0))} | "
+                    f"{fmt(vals.get('fallbacks', 0))} | "
+                    f"{fmt_pct(vals.get('fallback_ratio'))} | "
+                    f"{fmt(vals.get('legacy_prompt_tokens_estimate', 0))} |"
                 )
             print()
 

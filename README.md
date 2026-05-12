@@ -924,6 +924,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `LABEL_REPAIR_DRY_RUN` | `false` | Contract-defined dry-run mode for label repair. Current branch status: reserved (not consumed yet); label diffs are applied live when detected. |
 | `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` | `50` | Contract-defined cap for per-cycle label-repair mutations. Current branch status: reserved (not consumed yet); effective scope is the current-wave issue set. |
 | `SEMBLE_ENABLED` | `false` | Opt-in gate for Semble-backed context retrieval. Reusable workflows read this repo variable from the caller repo; the Semble install/index steps live in `.github/workflows/*.yml`, not in `workflow-templates/*.yml` wrapper copies. |
+| `SERENA_ENABLED` | `false` | Opt-in gate for Serena MCP bootstrap in code-touching reusable workflows. Reusable workflows read this repo variable from the caller repo; bootstrap/probe/setup live in `.github/workflows/*.yml`, not in `workflow-templates/*.yml` wrapper copies. |
 
 ## Semantic Cache (Clarification Only)
 
@@ -1599,6 +1600,8 @@ coding-workflows/
 Consumer repos pin to `@stable` for automatic updates or exact tags for reproducibility. This repo's own `internal-*.yml` wrappers pin `@main`.
 
 > **Semble rollout note.** `workflow-templates/*.yml` remain thin caller wrappers. The opt-in `SEMBLE_ENABLED` gate plus the Semble install/index steps live in the reusable workflows under `.github/workflows/` (`clarify`, `plan`, `implement`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `review_autofix`, `validate`, and `workflow-log-analysis`). Consumer repos pick up those reusable-workflow changes only after a new `@stable` tag is cut; merging changes on `main` here does not update already-installed consumer wrappers by itself. `workflow-log-analysis.yml`'s three Codex passes (analyze-commit-notify, deep-audit, api-redundancy) each install Semble, build an index of the repo state they will analyze, and pass a `{{SEMBLE_PREFETCH}}` block into the rendered prompt via `scripts/render_prompt.sh`; misses are fail-soft (empty prefetch → blank placeholder).
+
+> **Serena rollout note.** `SERENA_ENABLED` also defaults to `false`, and the reusable workflows consume that opt-in from the caller repo rather than from the thin `workflow-templates/*.yml` wrappers. The Serena bootstrap/probe/setup path lives in the reusable workflows under `.github/workflows/`; consumer repos only receive that behavior after a new `@stable` tag is cut and their existing wrappers call the updated reusable workflows. Consumer repos that opt in should also ignore `.serena/`, because Serena writes runtime project state there during MCP bootstrap.
 
 ## Contributing
 

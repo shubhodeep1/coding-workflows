@@ -19,6 +19,7 @@
 - §19 Workflow Checkout Integration-Ref Contract
 - §20 Autofix Retrigger Dedup (with subsections 20.1–20.10)
 - §21 Semble rollout and observability
+- §22 Serena rollout and observability
 
 **From `README.md`:**
 - Workflow Log Analysis And Improvement
@@ -701,3 +702,26 @@ The analyzer is now a context-prep stage only — it loads the collector report,
   2. Check the reusable-workflow run log for `Install semble` / `Build semble index` step outcomes.
   3. Inspect whether fallbacks cluster on one `target=` value (for example `overflow`, `reviewer-context`, or `judge`) before broadening the investigation.
   4. If consumer repos need the fix, remember that updating this repo alone is insufficient — the separate `@stable` promotion must happen after validation.
+
+## 22. Serena rollout and observability
+
+- `SERENA_ENABLED` defaults to `false`. That default is intentional: Serena bootstrap stays opt-in per caller repo until operators are ready to pay the MCP setup cost on code-touching paths.
+- The bootstrap/probe/install path lives in the reusable workflows under `.github/workflows/`, not in `workflow-templates/*.yml`. Consumer templates stay thin `uses:` wrappers pinned to `@stable`, so they inherit Serena only after a new `@stable` release points at the updated reusable workflows.
+- Consumer repos that opt in should ignore `.serena/`. This repo already does (`.gitignore` has `.serena/`), and Serena writes runtime project state there during bootstrap.
+- Expected telemetry in job logs:
+  - `SERENA_PROBE target=<slug> result=<ok|failed|skipped> [reason=<...>]` — bootstrap handshake/probe result for the Serena MCP server. Repeated probe lines on short-circuit/no-code-work paths usually mean bootstrap happened too early.
+  - `SERENA_QUERY target=<slug> tool=<tool> calls=<n> response_bytes=<m> ms=<t>` — end-of-job Serena rollup line. `calls` is the query volume; do not count log lines 1:1. `response_bytes` is the emitted Serena response payload size, not a normalized whole-prompt byte metric.
+  - `SERENA_FALLBACK target=<slug> [phase=<...>] reason=<...>` — fail-open fallback activated because Serena was disabled, setup failed, probe failed, or a workflow intentionally stayed on the legacy path.
+- Interpretation guidance:
+  - Rare `SERENA_FALLBACK` lines are healthy fail-open behavior and should not block the pipeline by themselves.
+  - Repeated `SERENA_FALLBACK` clusters for the same workflow/target over a rolling window are a rollout bug, not just a transient. Escalate when the fallback ratio stays high instead of hand-waving it away as healthy fail-open behavior.
+  - `scripts/cost_audit.py` now aggregates Serena telemetry by workflow and `target=` and derives fallback ratios plus a conservative legacy prompt-token estimate from `response_bytes`, a legacy-read floor, and a small per-tool multiplier table. Treat that comparison as directional/derived rather than measured ground truth.
+  - When the same run also emits OpenRouter `prompt_tokens`, cost-audit compares the Serena legacy estimate against that observed prompt-input metric; when no same-run prompt/input metric exists, the comparison should remain unavailable rather than guessed.
+  - Lazy bootstrap matters: if `SERENA_PROBE` appears on runs that immediately short-circuit with no code work, fix the workflow gating before tuning Serena itself.
+- Operational checklist when Serena looks unhealthy:
+  1. Confirm the caller repo intentionally set `SERENA_ENABLED=true`.
+  2. Verify the reusable-workflow run actually had code work to do; if not, a `SERENA_PROBE` line may indicate a lazy-bootstrap regression rather than a Serena outage.
+  3. Check the `Setup Serena` / bootstrap step result and the preceding `SERENA_PROBE` line for `result=failed` or `reason=` clues.
+  4. Inspect whether `SERENA_FALLBACK` lines cluster on one `target=` or `phase=` value before broadening the investigation.
+  5. Use `scripts/cost_audit.py` output to confirm whether `calls=` and `response_bytes=` are being aggregated as expected; if query calls stay at zero despite Serena-heavy runs, look at the stats emitter path before blaming the workflows.
+  6. If consumer repos need the fix, remember that updating this repo alone is insufficient — the separate `@stable` promotion must happen after validation.
