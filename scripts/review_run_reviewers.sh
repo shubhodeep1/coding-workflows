@@ -130,7 +130,7 @@ run_cache_probe() {
     return 0
   fi
   case "${OPENROUTER_PROMPT_CACHE_DISABLED:-false}" in
-    1|true|TRUE|yes|YES|on|ON|y|Y)
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
       echo "INFO: cache probe skipped because OPENROUTER_PROMPT_CACHE_DISABLED=${OPENROUTER_PROMPT_CACHE_DISABLED}."
       return 0
       ;;
