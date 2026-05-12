@@ -649,6 +649,8 @@ jobs:
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
             attempt_ok=0
+            attempt_started_at="$(date +%s)"
+            attempt_worktree_before="$(git status --porcelain=v1 --untracked-files=all)"
             # `--` terminates `timeout`'s option parsing so a leading
             # '-' in DURATION cannot be mistaken for an option (defence
             # in depth on top of the regex check above). stdin
@@ -766,22 +768,38 @@ jobs:
               fi
             else
               rc=$?
+              attempt_elapsed=$(( $(date +%s) - attempt_started_at ))
               # `timeout` documents two exit codes for timer expiry:
               #   - 124: child sent SIGTERM after DURATION expired.
-              #   - 137: SIGKILL (128 + 9). `timeout --kill-after=30s`
-              #     produces this when the child ignored SIGTERM long
-              #     enough for the kill-after backstop to fire. 137 is
-              #     also produced by OOM kill / external `kill -9`,
-              #     but those are rare on the decomposer step and
-              #     surfacing them as "timeout" still routes the retry
-              #     correctly (re-run with the same prompt).
-              if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
-                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit ${rc})."
-                last_status="codex timeout ${rc} (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+              #   - 137: the child received SIGKILL (128 + 9). `timeout
+              #     --kill-after=30s` produces this when the child
+              #     ignored SIGTERM long enough for the kill-after
+              #     backstop to fire, BUT 137 is also produced by OOM
+              #     kill / external `kill -9`. Mirror the conflict-
+              #     resolver pattern and disambiguate via elapsed wall
+              #     clock: a timer-driven 137 should arrive only after
+              #     the configured budget has elapsed.
+              if [ "$rc" = "124" ]; then
+                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
+                last_status="codex timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+              elif [ "$rc" = "137" ] && [ "${attempt_elapsed}" -ge "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
+                last_status="codex timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
               else
-                echo "::warning::Codex exited with code $rc on attempt ${attempt}."
-                last_status="codex exit ${rc}"
+                if [ "$rc" = "137" ]; then
+                  echo "::warning::Codex exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
+                  last_status="codex exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
+                else
+                  echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+                  last_status="codex exit ${rc}"
+                fi
               fi
+            fi
+            attempt_worktree_after="$(git status --porcelain=v1 --untracked-files=all)"
+            if [ "${attempt_worktree_after}" != "${attempt_worktree_before}" ]; then
+              echo "::error::Codex decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
+              git status --short
+              exit 1
             fi
             if [ "${attempt_ok}" = "1" ]; then
               break
