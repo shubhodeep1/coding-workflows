@@ -192,8 +192,6 @@ def test_judge_cache_key_changes_when_head_sha_advances(tmp_path):
 	assert lines[-1] == "distinct"
 	# Both keys must be 64-char hex.
 	assert all(len(line) == 64 and all(c in "0123456789abcdef" for c in line) for line in lines[:2])
-
-
 def test_judge_cache_key_changes_when_recent_comments_change(tmp_path):
 	"""When recent_comments change, the memoization key must change so the
 	judge sees the new diagnostics instead of replaying a stale action."""

@@ -214,8 +214,6 @@ def test_reference_clause_path_not_treated_as_edit_target(tmp_path: Path) -> Non
 		"Expected shim to strip the trailing 'This matches `Y`' reference "
 		f"clause and treat the bullet as a single-file edit; got {result!r}."
 	)
-
-
 def test_reference_clause_capitalised_verb_is_stripped(tmp_path: Path) -> None:
 	"""Same shape as the bitsafe.io reproducer above, but with a
 	title-cased verb ('This Matches `Y`'). The strip regex must
