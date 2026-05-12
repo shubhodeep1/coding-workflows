@@ -4137,7 +4137,17 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        # Clean-review-tail gate: did_commit=false OR LEDGER_ONLY_COMMIT_STRICT=true.
+        # We deliberately read the STRICT flag (not LEDGER_ONLY_COMMIT) because
+        # the non-strict flag is also set by the audit-convergence branch in
+        # scripts/review_commit_changes.sh, which can fire on commits that DID
+        # land real source-file edits. Reading the loose flag here would mark
+        # the linked issue ai:ready-to-merge for a run whose committed edits
+        # have not yet been re-reviewed. See PR #2542 (mergedAt 12:36:08Z on
+        # head f11d6dc while editor commit 005824e was still local) and the
+        # docstring at scripts/review_commit_changes.sh:32-41 for the same
+        # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -4363,7 +4373,24 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        # Clean-review-tail gate: did_commit=false OR LEDGER_ONLY_COMMIT_STRICT=true.
+        # The STRICT flag means "only the review-issue ledger was committed";
+        # the non-strict LEDGER_ONLY_COMMIT also fires on the audit-convergence
+        # branch in scripts/review_commit_changes.sh, which can be true on a
+        # commit that DID land real source-file edits. Reading the loose flag
+        # here caused PR #2542 to auto-merge at the pre-edit head SHA f11d6dc
+        # while the editor's productive commit 005824e (real edits to
+        # review_autofix.yml + README.md) was still local: the auto-merge step
+        # fires before "Push all pending commits" by design (see :4436-4440
+        # comment), and GitHub squashed the old head before the new commit
+        # reached the remote. With STRICT, an audit-converged commit that
+        # contains real edits blocks auto-merge here; the synchronize event
+        # from the deferred push then triggers a fresh review_autofix
+        # iteration on the new tip (the gate-job AUTOFIX_SKIP_SELF_TRIGGERED
+        # default is `false`, so the [ai-autofix] synchronize is NOT
+        # skipped — see :327). The autofix loop now actually "keeps going
+        # until there are no edits" instead of converging on a stale head.
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -4755,7 +4782,11 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        # Clean-review-tail gate: matches the auto-merge / mark-ready siblings
+        # above so the success notification only fires on a truly converged
+        # iteration. See the comment block on "Enable auto-merge on PR" for
+        # the LEDGER_ONLY_COMMIT_STRICT rationale.
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
