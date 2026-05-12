@@ -4610,27 +4610,35 @@ jobs:
           #
           # Autofix continuation (probably_unnecessary_but_read_if_stuck.md §20.4): when the just-pushed
           # [ai-autofix] commit is a productive edit (DID_COMMIT=true,
-          # LEDGER_ONLY_COMMIT!=true, CONFLICT_RESOLVED!=true) and
-          # AUTOFIX_CONTINUATION_ENABLED is not `false`, the dispatch
-          # proceeds even though the gate job would suppress the parallel
-          # pull_request.synchronize event.  This closes the ~0–120 min
-          # stall window where a PR otherwise had to wait for the
-          # orchestrator stall cron before its next autofix iteration —
-          # critical for non-orchestrator PRs that the cron does not
-          # scan.  Ledger-only commits are still skipped here (the
-          # clean-review tail in the same run handles auto-merge, so no
-          # continuation is needed).  Opt out globally with
+          # LEDGER_ONLY_COMMIT!=true, CONFLICT_RESOLVED!=true),
+          # AUTOFIX_CONTINUATION_ENABLED is not `false`, AND the
+          # synchronize self-skip is enabled
+          # (AUTOFIX_SKIP_SELF_TRIGGERED=true), the dispatch becomes the
+          # designated successor run even though the gate job would
+          # suppress the parallel pull_request.synchronize event.  This
+          # closes the ~0–120 min stall window where a PR otherwise had to
+          # wait for the orchestrator stall cron before its next autofix
+          # iteration — critical for non-orchestrator PRs that the cron
+          # does not scan.  When AUTOFIX_SKIP_SELF_TRIGGERED is left at the
+          # new default (`false`), the push's synchronize event already
+          # drives the next full pass, so this step falls back to the
+          # normal peer-dedup path instead of bypassing it.  Ledger-only
+          # commits are still skipped here regardless (the clean-review
+          # tail in the same run handles auto-merge, so no continuation is
+          # needed).  Opt out globally with
           # AUTOFIX_CONTINUATION_ENABLED=false, which restores the
-          # pre-continuation behaviour where AUTOFIX_SKIP_SELF_TRIGGERED
-          # alone gated productive autofixes out of this step.
+          # pre-continuation behaviour only when
+          # AUTOFIX_SKIP_SELF_TRIGGERED=true.
           #
-          # Opt-out: AUTOFIX_SKIP_SELF_TRIGGERED=false on the repo variable.
+          # Opt-in: AUTOFIX_SKIP_SELF_TRIGGERED=true on the repo variable.
           continuation_enabled="${AUTOFIX_CONTINUATION_ENABLED:-true}"
           is_ledger_only_commit="${LEDGER_ONLY_COMMIT:-false}"
-          if [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-true}" != "false" ] \
-            && [ "${DID_COMMIT:-false}" = "true" ] \
+          self_triggered_skip_enabled="${AUTOFIX_SKIP_SELF_TRIGGERED:-false}"
+          if [ "${DID_COMMIT:-false}" = "true" ] \
             && [ "${CONFLICT_RESOLVED:-false}" != "true" ] \
-            && { [ "${continuation_enabled}" = "false" ] || [ "${is_ledger_only_commit}" = "true" ]; }; then
+            && { [ "${is_ledger_only_commit}" = "true" ] \
+              || { [ "${self_triggered_skip_enabled}" = "true" ] \
+                && [ "${continuation_enabled}" = "false" ]; }; }; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation_enabled=${continuation_enabled} ledger_only=${is_ledger_only_commit}"
             exit 0
           fi
@@ -4646,7 +4654,9 @@ jobs:
             is_productive_autofix_commit="true"
           fi
           is_continuation_dispatch="false"
-          if [ "${is_productive_autofix_commit}" = "true" ] && [ "${continuation_enabled}" != "false" ]; then
+          if [ "${is_productive_autofix_commit}" = "true" ] \
+            && [ "${continuation_enabled}" != "false" ] \
+            && [ "${self_triggered_skip_enabled}" = "true" ]; then
             # Settle delay: allow the push to propagate through GitHub's
             # indices before dispatching a run that will check out the
             # new HEAD SHA.  Tunable via
