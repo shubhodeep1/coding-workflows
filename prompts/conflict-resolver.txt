@@ -18,6 +18,8 @@ Conflicted files reported by `git diff --name-only --diff-filter=U` ({{CONFLICTE
 Your task:
 Resolve merge conflicts safely.
 
+{{SERENA_TOOL_HINTS_RESOLVER}}
+
 Rules:
 - You MUST resolve EVERY conflicted file listed above in this single run. Do not stop after fixing only one file or a subset.
 - Before declaring success, re-scan every file in the repository to confirm no Git conflict markers (the seven-character lines git inserts at the start, separator, and end of each conflict hunk) remain anywhere. If any remain, keep resolving until none are left.

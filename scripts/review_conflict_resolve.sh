@@ -54,6 +54,14 @@ PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
 CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"
+RESOLVER_SERENA_TOOL_HINTS="$({
+  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+    printf '%s\n' \
+      'Resolver Serena hints:' \
+      '- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).' \
+      '- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.'
+  fi
+}; )"
 
 # ----------------------------------------------------------------------
 # Immediate orchestrator-poll dispatch on resolver bail (Q3: A).
@@ -556,6 +564,7 @@ _build_retry_prompt() {
     MARKER_VIOLATION_FILES="${_marker_list}" \
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
+    SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
     PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
     python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
