@@ -417,15 +417,15 @@ def _build_v2_state_comment_chain(payload: str, *, chunk_size: int) -> list[dict
 def _extract_state_payloads(comments: list[dict]) -> list[str]:
 	"""All orchestrator-state JSON payloads in chronological (oldest-first) order.
 
-	Walks comments forward.  Each V1 single-comment state contributes
-	one payload at its own index.  Each V2 chunk-chain contributes one
-	payload at the index of the comment where the chain completed
-	(the newest part of that chain).  Combined V2 + V1 listing keeps
-	the test contract that the latest state write is `payloads[-1]`.
+	Walks V2 comments newest-first to mirror scripts/orchestrate_state_v2.py,
+	but records each recovered chain at the index of that chain's newest
+	comment so the combined V2 + V1 payload list still stays in
+	chronological order and preserves the `payloads[-1]` latest-state
+	test contract.
 	"""
 	payloads: list[tuple[int, str]] = []
 	v2_candidates: dict[tuple[str, int], dict[str, object]] = {}
-	for idx, comment in enumerate(comments):
+	for idx, comment in reversed(list(enumerate(comments))):
 		body = (comment or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" in body:
 			parsed = _parse_v2_chunk(body)
@@ -433,9 +433,10 @@ def _extract_state_payloads(comments: list[dict]) -> list[str]:
 				part, total, manifest, chunk = parsed
 				chain_key = (manifest, total)
 				candidate = v2_candidates.get(chain_key)
-				if part == 1:
+				if part == total:
 					candidate = {
-						"next_part": 2,
+						"latest_idx": idx,
+						"next_part": total - 1,
 						"parts": {part: chunk},
 					}
 					v2_candidates[chain_key] = candidate
@@ -443,13 +444,13 @@ def _extract_state_payloads(comments: list[dict]) -> list[str]:
 					parts = candidate["parts"]
 					assert isinstance(parts, dict)
 					parts[part] = chunk
-					candidate["next_part"] = part + 1
+					candidate["next_part"] = part - 1
 				else:
 					candidate = None
 				if candidate is not None:
 					parts = candidate["parts"]
 					assert isinstance(parts, dict)
-					if len(parts) == total and candidate.get("next_part") == total + 1:
+					if len(parts) == total and candidate.get("next_part") == 0:
 						stitched_b64 = "".join(parts[p] for p in range(1, total + 1))
 						compact = re.sub(r"\s+", "", stitched_b64)
 						try:
@@ -458,7 +459,7 @@ def _extract_state_payloads(comments: list[dict]) -> list[str]:
 							v2_candidates.pop(chain_key, None)
 						else:
 							if hashlib.sha256(decoded).hexdigest() == manifest:
-								payloads.append((idx, decoded.decode("utf-8")))
+								payloads.append((int(candidate["latest_idx"]), decoded.decode("utf-8")))
 								v2_candidates.pop(chain_key, None)
 							else:
 								v2_candidates.pop(chain_key, None)
@@ -466,7 +467,7 @@ def _extract_state_payloads(comments: list[dict]) -> list[str]:
 			match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
 			if match:
 				payloads.append((idx, match.group(1)))
-	return [payload for _, payload in payloads]
+	return [payload for _, payload in sorted(payloads)]
 
 
 def _extract_latest_state(comments: list[dict]) -> dict:
@@ -5058,6 +5059,37 @@ def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_same_t
 	older_complete = _build_v2_state_comment_chain(payload, chunk_size=older_chunk_size)
 	newer_partial = _build_v2_state_comment_chain(payload, chunk_size=newer_chunk_size)[:1]
 	comments = older_complete + newer_partial
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
+def test_v2_extract_helper_matches_production_for_interleaved_older_complete_and_newer_prefix_same_total():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	chunk_size = max(1, encoded_len // 4)
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=chunk_size)
+	assert len(older_complete) >= 4
+	newer_prefix = _build_v2_state_comment_chain(payload, chunk_size=chunk_size)[:1]
+	comments = older_complete[:-1] + newer_prefix + older_complete[-1:]
 
 	with tempfile.TemporaryDirectory() as td:
 		comments_json = Path(td) / "comments.json"
