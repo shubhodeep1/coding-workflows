@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:690-692 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new rule text introduces non-ASCII em-dashes in the updated clarify workflow instructions.\n  WHY: The reviewer says this violates the repository's ASCII-default style guidance and can reduce portability for grep/regex-based tooling even though YAML parses.\n- .github/workflows/clarify.yml:700-710 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The updated clarify workflow tells the model to fetch public docs with web_search but does not specify any fallback if the search fails.\n  WHY: The reviewer says a failed fetch could leave the model without authoritative API details and lead to hallucinated endpoint or payload assumptions.\n- .github/workflows/clarify.yml:694-698 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The updated clarify workflow does not require validating that fetched documentation comes from a canonical official source.\n  WHY: The reviewer says top search results may be unofficial or outdated mirrors, which could poison the generated signature and payload details.\n- .github/workflows/plan.yml:892-901 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The updated plan workflow also lacks source-validation guidance for docs fetched via web_search.\n  WHY: The reviewer says the plan can be built from unofficial or wrong sources, leading to incorrect concrete endpoint, method, or parameter details.\n- .github/workflows/plan.yml:905-907 + 873-889 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The plan workflow repeats the web_search guidance without any explicit fallback when fetching fails.\n  WHY: The reviewer says the model may continue with hallucinated details after a failed fetch and propagate broken assumptions into implementation.\n- prompts/mode-clarify.txt:16-25 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The standalone clarify prompt introduces non-ASCII em-dashes in the new web-search guidance.\n  WHY: The reviewer says this violates the ASCII-default style guidance and can cause issues for text-processing tools.\n- prompts/mode-plan.txt:50-65 + 28-44 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The standalone plan prompt introduces non-ASCII em-dashes in the updated guidance.\n  WHY: The reviewer says this violates the ASCII-default style guidance and can hurt grep/regex-based tooling.\n- unattended_system_instructions.md:84-92 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The updated unattended system instructions introduce a non-ASCII em-dash in the BLOCKED guidance.\n  WHY: The reviewer says this violates the ASCII-default style guidance for Markdown parsed by tools.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/clarify.yml:690-692 | confidence=5\n  PROBLEM: Introduces non-ASCII em-dashes (U+2014) in \"config \u2014 see `scripts/write_codex_config.sh`'s\" and similar phrases across the block.\n  WHY: Violates unattended_system_instructions.md \u00a711 Code Style (\"Default to ASCII for new content unless the file already uses non-ASCII characters or there is a clear justification\"). YAML parses (parsers handle Unicode), but grep/sed/regex tooling may fail portability (e.g. [[:ascii:]] mismatches), reducing operational clarity for log analysis or script extraction.\n- .github/workflows/clarify.yml:700-710 | confidence=4\n  PROBLEM: Instructs \"fetch it with the web tool and proceed with `STATUS: CLEAR`\" for public docs but provides no fallback if web_search fails (network error, rate limit, empty results).\n  WHY: Model may silently hallucinate API details (endpoints/payloads) when fetch fails, propagating invalid assumptions to plan.txt (emits STATUS: CLEAR anyway), causing implement phase to generate broken code against real APIs.\n- .github/workflows/clarify.yml:694-698 | confidence=4\n  PROBLEM: Tells model to \"fetch its official docs via the web tool\" without requiring source validation (e.g. canonical domain like stripe.com/docs).\n  WHY: web_search returns top results; model may inline unofficial/outdated 3rd-party mirrors (stackoverflow, blogs), leading to wrong \"signature scheme, and payload shapes\" in clarification output, poisoning plan/implement with invalid contracts.\n- .github/workflows/plan.yml:892-901 | confidence=4\n  PROBLEM: \"fetch their official public docs via the web tool\" lacks domain/source validation instruction.\n  WHY: Same as above; plan includes \"concrete endpoint/method/parameter details\" from potentially wrong sources, generating code that fails API calls at runtime.\n- .github/workflows/plan.yml:905-907 + 873-889 | confidence=4\n  PROBLEM: Same web_search failure fallback gap as clarify.yml; \"continue planning\" after fetch with no error handling.\n  WHY: Plan emits with hallucinated details on fetch failure, implement executes broken logic.\n- prompts/mode-clarify.txt:16-25 | confidence=5\n  PROBLEM: Non-ASCII em-dashes in \"config \u2014 `scripts/write_codex_config.sh` defaults\".\n  WHY: Same \u00a711 ASCII default violation; plain-text prompt but grep-extractable for analysis tools chokes.\n- prompts/mode-plan.txt:50-65 + 28-44 | confidence=5\n  PROBLEM: Non-ASCII em-dashes (multiple: \"config \u2014 `scripts/write_codex_config.sh` defaults\", \"tool (see the web-access rule below)\").\n  WHY: Same \u00a711 violation.\n- unattended_system_instructions.md:84-92 | confidence=5\n  PROBLEM: Non-ASCII em-dash in \"config \u2014 see `scripts/write_codex_config.sh`'s\".\n  WHY: Same \u00a711 violation in Markdown parsed by tools expecting ASCII.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "84fd9833226532a3fbbce7cd81a4d4ec094860aeae94a1d97f521e6d69f16211",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2538,
+    "run_id": "25712864392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25712864392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512043457_1e21945fbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2538,
+    "run_id": "25712864392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 8 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-12T04:34:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
