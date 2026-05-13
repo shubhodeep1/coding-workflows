@@ -103,14 +103,25 @@ jobs:
           set -euo pipefail
           # `stable` must be an ancestor of `origin/main` (or equal). If
           # it isn't, stable has commits not present on main — most
-          # likely a forward-merge PR that wasn't merged, or a direct
-          # push to stable that bypassed the forward-merge workflow.
-          # Refuse rather than silently force-pushing or merging — the
-          # operator should investigate first.
+          # likely a forward-merge PR that wasn't merged, a direct push
+          # to stable that bypassed the forward-merge workflow, or — by
+          # far the most common cause in this repo's history — a
+          # forward-merge PR that WAS merged but via "Squash and merge"
+          # / "Rebase and merge" instead of "Create a merge commit",
+          # which copies the file content into a new single-parent
+          # commit on main and silently strips stable's commits from
+          # main's ancestry. Refuse rather than silently force-pushing
+          # or merging — the operator should investigate first.
           if ! git merge-base --is-ancestor HEAD origin/main; then
             ahead=$(git rev-list --count origin/main..HEAD)
+            mb=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
             echo "::error::stable has ${ahead} commit(s) not present on main — refusing to promote."
-            echo "::error::Forward-merge those commits via forward-merge-stable-to-main.yml first, then re-run."
+            if [ -z "${mb}" ]; then
+              echo "::error::stable and main have NO common ancestor (unrelated histories) — every recent forward-merge PR was likely squash-merged. Recovery: cherry-pick any genuinely unforwarded stable patches onto main, then force-reset stable to origin/main (\`git push --force-with-lease origin <main-sha>:refs/heads/stable\`)."
+            else
+              echo "::error::Most likely cause: a forward-merge PR was merged via \"Squash and merge\" or \"Rebase and merge\" instead of \"Create a merge commit\". Squash/rebase strips stable's commits from main's ancestry even though the file content was forwarded. Inspect with: \`git log --oneline origin/main..HEAD\` and verify the corresponding squash commits on main."
+            fi
+            echo "::error::Forward-merge those commits via forward-merge-stable-to-main.yml first (and use \"Create a merge commit\" when merging the fallback PR), then re-run."
             exit 1
           fi
 
