@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:2647-2656,2717-2724 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The bulk-delete guard does not pass the active threshold label/effective threshold to downstream steps, so the P3 issue comment and Telegram alert always say \"bulk deletion exceeded BULK_DELETE_THRESHOLD\" even when the markdown-only threshold fired.\n  WHY: The guard computes the correct label for the inline error, but only outputs `bulk-delete` and the count, while the consumer hardcodes `BULK_DELETE_THRESHOLD`, making markdown-only blocks report the wrong threshold name.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/implement.yml:2651-2656,2717-2724,2753,2780 | confidence=4\n  PROBLEM: The commit-guard step does not forward `threshold_label`/`effective_threshold`, so the downstream P3 handler always renders the bulk-delete message as `BULK_DELETE_THRESHOLD`.\n  WHY: The inline error uses the computed threshold correctly, but the issue comment and Telegram alert are built from a hardcoded human-readable string, which is wrong when the markdown-only threshold is the one exceeded.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:2652-2655,2717-2723,2753,2780-2781 | confidence=4\n  PROBLEM: The P3 failure handling maps `DCB_REASON=bulk-delete` to `bulk deletion exceeded BULK_DELETE_THRESHOLD` without knowing whether the markdown-only threshold was the one exceeded.\n  WHY: The guard computes the active threshold correctly, but it is not emitted as an output, so the downstream comment and Telegram alert can contradict the actual rejected threshold.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:2648,2720-2724 | confidence=3\n  PROBLEM: The downstream P3 failure handler hardcodes `BULK_DELETE_THRESHOLD` in the human-readable message even when the lenient markdown-only threshold was the one exceeded.\n  WHY: This makes the GitHub issue comment and Telegram alert report the wrong threshold name, which is misleading during operator review.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/implement.yml:2647-2654,2722-2724 | confidence=4\n  PROBLEM: The bulk-delete guard writes only `destructive_commit_blocked=bulk-delete` to `GITHUB_OUTPUT`, while the P3 step maps that reason to a fixed `BULK_DELETE_THRESHOLD` message.\n  WHY: When the 100-file markdown cap is the actual violated threshold, the Telegram alert and issue comment incorrectly claim the 3-file threshold was exceeded.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/implement.yml:~2615-2651,~2647-2648,2720-2724 | confidence=4\n  PROBLEM: The post-guard outputs do not distinguish `BULK_DELETE_THRESHOLD` from `BULK_DELETE_THRESHOLD_MD`, so downstream consumers render a stale human-readable bulk-delete reason.\n  WHY: The later alert/comment steps map `bulk-delete` to a hardcoded threshold name, which is misleading when the markdown-only cap triggered the block.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/implement.yml:2647-2652,2717-2724 | confidence=5\n  PROBLEM: The guard emits `destructive_commit_blocked=bulk-delete` without the active threshold label, and the P3 case statement always turns that into `bulk deletion exceeded BULK_DELETE_THRESHOLD`.\n  WHY: As a result, all-markdown deletions that hit the 100-file limit are reported as if they had hit the 3-file limit, which misleads operators.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "bb6509419aacb9f0b8be851642ba585cf641af836b852d4ae3ae83c87351abcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2565,
+    "run_id": "25793339909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25793339909",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513105911_4d310a5fc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2565,
+    "run_id": "25793339909"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-13T10:59:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
