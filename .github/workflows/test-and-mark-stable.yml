@@ -3315,7 +3315,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::GH_PAT secret is required for orphan-workflow dispatch"
+            echo "::error::GH_PAT secret is required for workflow-log-analysis dispatch"
             exit 1
           fi
 
@@ -3504,7 +3504,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::GH_PAT secret is required for workflow-log-analysis dispatch"
+            echo "::error::GH_PAT secret is required for orphan-workflows dispatch"
             exit 1
           fi
 
