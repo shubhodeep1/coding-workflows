@@ -56,22 +56,43 @@ Phases of the unattended pipeline (each is a separate workflow file under
 | clarify, clarify-respond | `openai/gpt-5.4` | `xhigh` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` |
 | plan | `openai/gpt-5.4` | `xhigh` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` |
 | orchestrate (decompose), judge | `openai/gpt-5.4` | `xhigh` | `low` |
-| implement (main editor) | `openai/gpt-5.4` | `xhigh` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | default |
-| implement-repair, implement-repair-syntax | `openai/gpt-5.4` | `xhigh` | default |
+| implement (main editor) | `openai/gpt-5.4` | `xhigh` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` |
+| implement-repair, implement-repair-syntax | `openai/gpt-5.4` | `xhigh` | `low` |
 | implement-diagnose | `openai/gpt-5.4` | `xhigh` | `low` |
-| review autofix editor | `openai/gpt-5.4` | `xhigh` (smoke: `medium`) | default |
+| review autofix editor | `openai/gpt-5.4` | `xhigh` (smoke: `medium`) | `low` |
 | review autofix reviewers (pass 1) | `openai/gpt-5.4` | `xhigh` (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:1173`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
 | review autofix reviewers (pass 2) | `openai/gpt-5.4` | `xhigh` (LOC gate collapsed: both `REVIEWER_PASS2_REASONING_SMALL` and `REVIEWER_PASS2_REASONING_LARGE` default to `xhigh`); smoke: `low`; operator override wins | `low` |
 | review consolidator | `openai/gpt-5.4` | `xhigh` | `low` |
-| conflict resolver | `openai/gpt-5.4` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | default |
+| conflict resolver | `openai/gpt-5.4` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
 | validate generate, diagnose | `openai/gpt-5.4` | `xhigh` | `low` |
 | validate discover | `openai/gpt-5.4` | `xhigh` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` |
-| validate fix-harness, self-heal | `openai/gpt-5.4` | `xhigh` | default |
+| validate fix-harness, self-heal | `openai/gpt-5.4` | `xhigh` | `low` |
 | workflow log analyze | `openai/gpt-5.4` | `xhigh` | `low` |
 | workflow audit | `openai/gpt-5.4` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` |
 | workflow api-redundancy | `openai/gpt-5.4` | `xhigh` (default of `THINKING_LEVEL_ANALYSIS`) | `low` |
 | workflow log summary | `openai/gpt-5.4-mini` | default | `low` |
 | reviewer consensus summariser | `openai/gpt-5.4-mini` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` |
+
+All gpt-5.4 phases now resolve to `low` verbosity at every layer: the per-phase
+`MODEL_VERBOSITY` env-var default in `.github/workflows/*.yml` (`VERBOSITY_*`
+repo-vars), the `-c model_verbosity=low` CLI flag on every `codex exec`
+callsite (≈20 sites across `scripts/*.sh` and `.github/workflows/*.yml`),
+the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
+writes into `config.toml`, and the `"default_verbosity": "low"` for
+`openai/gpt-5.4` in `scripts/codex_model_catalog.json:354`. Third-party
+reviewer models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,
+`deepseek/deepseek-v4-pro`, `qwen/qwen3.6-plus`, `x-ai/grok-4.1-fast`)
+carry `support_verbosity = false` in the catalog — codex CLI logs
+`model_verbosity is set but ignored as the model does not support verbosity`
+and continues; the value is operationally moot for those rows. The
+historical `high` value across every layer was a workaround for the
+openai/codex#11151 announce-without-emit failure mode (implement /
+review_autofix smoke runs at 2026-05-07 12:41 / 12:42, where the model
+emitted a reasoning trace and exited without a tool call); the workaround
+now relies on `include_apply_patch_tool = true` as the primary
+belt-and-suspenders. If the announce-without-emit pattern recurs at `low`,
+raise verbosity at the layer that needs it (start with the editor /
+implement callsites, since those are the original 11151 reproducers).
 
 Every editor / reviewer / resolver phase now defaults to `openai/gpt-5.4`.
 The previous legacy editor split (patch-heavy phases on a separate older

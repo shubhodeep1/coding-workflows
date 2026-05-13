@@ -63,7 +63,7 @@ def test_helper_emits_apply_patch_keys_under_github_actions() -> None:
 	  - [projects."<workdir>"] trust_level = "trusted"
 	  - approval_policy = "never"
 	  - sandbox_mode = "danger-full-access"
-	  - model_verbosity = "high"
+	  - model_verbosity = "low"
 	  - include_apply_patch_tool = true
 	plus the static [model_providers.openrouter] / [sandbox_workspace_write]
 	blocks. The first four keys are the load-bearing fix for the recurring
@@ -96,7 +96,7 @@ def test_helper_emits_apply_patch_keys_under_github_actions() -> None:
 		assert 'model_provider = "openrouter"' in body, body
 		assert 'model = "openai/gpt-5.4"' in body, body
 		assert 'model_reasoning_effort = "medium"' in body, body
-		assert 'model_verbosity = "high"' in body, body
+		assert 'model_verbosity = "low"' in body, body
 		assert 'include_apply_patch_tool = true' in body, body
 		assert f'model_catalog_json = "{catalog}"' in body, body
 		assert "[model_providers.openrouter]" in body, body

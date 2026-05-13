@@ -351,7 +351,7 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
-      "default_verbosity": "medium",
+      "default_verbosity": "low",
       "apply_patch_tool_type": "function",
       "truncation_policy": {"mode": "tokens", "limit": 272000},
       "supports_parallel_tool_calls": true,
