@@ -244,6 +244,21 @@ jobs:
           # and abort before the PR is opened.
           BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
+          # The merge-strategy warning is identical on both paths and
+          # MUST appear at the top of the PR body. Squash-merging or
+          # rebase-merging this PR drops `stable`'s commits from `main`'s
+          # ancestry — the content lands but `git merge-base
+          # --is-ancestor stable origin/main` returns false, which is
+          # exactly what promote-main-to-stable.yml's pre-flight check
+          # refuses on. The fix is to merge with "Create a merge
+          # commit" so the 2-parent merge commit preserves ancestry.
+          MERGE_STRATEGY_WARNING="> [!CAUTION]
+          > **DO NOT use \"Squash and merge\" or \"Rebase and merge\" on this PR.**
+          > Use **\"Create a merge commit\"** so \`stable\`'s commits remain in \`main\`'s ancestry.
+          > Squashing strips ancestry — \`promote-main-to-stable.yml\`'s pre-flight
+          > \`git merge-base --is-ancestor HEAD origin/main\` check will then refuse
+          > the next promote run, even though the file content has been forwarded."
+
           if [ "${MERGE_STATUS}" = "conflict" ]; then
             # Conflict path: HEAD is back at origin/main after `merge
             # --abort`, so push a branch rooted at origin/stable. With
@@ -252,7 +267,9 @@ jobs:
             # commits from stable.
             git push origin "refs/remotes/origin/stable:refs/heads/${BRANCH}"
             CONFLICT_LIST="${CONFLICT_FILES:-(none captured)}"
-            BODY="Automated forward-merge of \`stable\` into \`main\` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on \`stable\` is also present on \`main\`.
+            BODY="${MERGE_STRATEGY_WARNING}
+
+          Automated forward-merge of \`stable\` into \`main\` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on \`stable\` is also present on \`main\`.
 
           Conflicting files (from the aborted merge attempt): \`${CONFLICT_LIST}\`
 
@@ -264,7 +281,9 @@ jobs:
             # so the PR contains the merge that branch protection
             # rejected on `main`.
             git push origin "HEAD:refs/heads/${BRANCH}"
-            BODY="Automated forward-merge of \`stable\` into \`main\` could not push directly (branch protection). Merge this PR so the bug fix on \`stable\` is also present on \`main\`.
+            BODY="${MERGE_STRATEGY_WARNING}
+
+          Automated forward-merge of \`stable\` into \`main\` could not push directly (branch protection). Merge this PR so the bug fix on \`stable\` is also present on \`main\`.
 
           Source SHA: \`${GITHUB_SHA}\`
           Triggered by: forward-merge-stable-to-main.yml"
