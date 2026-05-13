@@ -420,16 +420,25 @@ rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 # window on a single attempt before emitting the final JSON.
 # Stepping the effort down each retry frees enough budget for the
 # model to terminate exploration and write the JSON. Starting
-# level is JUDGE_REASONING_EFFORT (default `xhigh`, override via
-# the THINKING_LEVEL_REVIEW_BLOCKED_JUDGE repo var).
+# level is resolved from JUDGE_REASONING_EFFORT (default `xhigh`,
+# override via the THINKING_LEVEL_REVIEW_BLOCKED_JUDGE repo var).
+# Keep the ladder inside the reasoning levels advertised for the
+# default gpt-5.4 judge path; `low` is the floor in this script.
 case "${JUDGE_REASONING_EFFORT}" in
   xhigh)   JUDGE_ATTEMPT_LEVELS=("xhigh" "high" "medium") ;;
   high)    JUDGE_ATTEMPT_LEVELS=("high" "medium" "low") ;;
-  medium)  JUDGE_ATTEMPT_LEVELS=("medium" "low" "minimal") ;;
-  low)     JUDGE_ATTEMPT_LEVELS=("low" "minimal") ;;
-  minimal) JUDGE_ATTEMPT_LEVELS=("minimal") ;;
-  *)       JUDGE_ATTEMPT_LEVELS=("${JUDGE_REASONING_EFFORT}") ;;
+  medium)  JUDGE_ATTEMPT_LEVELS=("medium" "low" "low") ;;
+  low)     JUDGE_ATTEMPT_LEVELS=("low" "low") ;;
+  none)
+    echo "::warning::JUDGE_REASONING_EFFORT='none' is not advertised in the local model catalog for ${MODEL_EDITOR}; using low as the retry floor."
+    JUDGE_ATTEMPT_LEVELS=("low" "low")
+    ;;
+  *)
+    echo "::warning::Invalid JUDGE_REASONING_EFFORT='${JUDGE_REASONING_EFFORT}'; falling back to high→medium."
+    JUDGE_ATTEMPT_LEVELS=("high" "medium")
+    ;;
 esac
+JUDGE_EFFECTIVE_REASONING_EFFORT="${JUDGE_ATTEMPT_LEVELS[0]}"
 JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
 
 # -----------------------------------------------------------
@@ -439,46 +448,37 @@ JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
 # window is exhausted on hidden reasoning + exec reads — the
 # final assistant message is never emitted. If anything resembling
 # the final JSON landed in the captured buffer (typically stderr),
-# extract the last balanced {...} block that parses AND carries an
-# `action` field, and write it to `dst` so the downstream parser
-# proceeds normally. The `action` requirement guards against
-# matching unrelated JSON from codex's internal logging
-# (config dumps, tool-call traces, etc.).
+# probe each opening brace with json.JSONDecoder.raw_decode and keep
+# the last object that parses with an `action` field. That avoids
+# brace-depth bugs from unmatched `}`, braces inside JSON strings,
+# fenced JSON wrappers, and non-UTF-8 log bytes while still
+# preferring the terminal judge object from the attempt-local buffer.
 _recover_judge_json() {
   local src="$1" dst="$2" recovered=""
   [ -s "${src}" ] || return 1
   recovered="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${src}" <<'PY' 2>/dev/null
-import json, re, sys
+import json, sys
 
 src = sys.argv[1]
 try:
-    with open(src, 'r') as f:
+    with open(src, 'r', encoding='utf-8', errors='replace') as f:
         raw = f.read()
 except OSError:
     sys.exit(1)
 
-cleaned = re.sub(r'```(?:json)?\s*', '', raw)
-cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.MULTILINE)
-
+decoder = json.JSONDecoder()
 best = None
-brace_depth = 0
-start = None
-for i, ch in enumerate(cleaned):
-    if ch == '{':
-        if brace_depth == 0:
-            start = i
-        brace_depth += 1
-    elif ch == '}':
-        brace_depth -= 1
-        if brace_depth == 0 and start is not None:
-            candidate = cleaned[start:i+1]
-            try:
-                data = json.loads(candidate)
-                if isinstance(data, dict) and isinstance(data.get('action'), str):
-                    best = data
-            except json.JSONDecodeError:
-                pass
-            start = None
+idx = -1
+while True:
+    idx = raw.find('{', idx + 1)
+    if idx == -1:
+        break
+    try:
+        data, _ = decoder.raw_decode(raw, idx)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(data, dict) and isinstance(data.get('action'), str):
+        best = data
 
 if best is None:
     sys.exit(1)
@@ -830,7 +830,7 @@ __EDIT_DISCIPLINE__
 
       # Temporarily restore judge reasoning for fix application
       if [ -f "${HOME}/.codex/config.toml" ]; then
-        sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${JUDGE_REASONING_EFFORT}\"/" "${HOME}/.codex/config.toml"
+        sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${JUDGE_EFFECTIVE_REASONING_EFFORT}\"/" "${HOME}/.codex/config.toml"
       fi
 
       if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
