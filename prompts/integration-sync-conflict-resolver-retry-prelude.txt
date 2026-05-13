@@ -12,6 +12,8 @@ per-file fingerprint pre-flight, no out-of-scope edits, no inventing
 files, synthesize rather than pick-a-side when both sides carry
 merged sub-issue intent.
 
+{{SERENA_TOOL_HINTS_RESOLVER}}
+
 This is the most important retry hint: the violations below are the
 EXACT checks the `scripts/verify_integration_fingerprints.py`
 gate will re-run on your next output.  If you satisfy every one of
@@ -50,4 +52,3 @@ file touched by your resolution, not just the ones listed above, so
 you do not trade one regression for another.
 
 === ORIGINAL TASK ===
-

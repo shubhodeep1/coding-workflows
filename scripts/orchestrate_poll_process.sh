@@ -29,6 +29,23 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
+# shellcheck source=scripts/semble_helpers.sh
+SEMBLE_HELPERS_AVAILABLE="false"
+JUDGE_SEMBLE_MAX_CHUNKS="4"
+JUDGE_SEMBLE_QUERY_MAX_BYTES="12000"
+JUDGE_SEMBLE_CONTEXT_MAX_BYTES="12000"
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  if source scripts/semble_helpers.sh; then
+    if type semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble judge context." >&2
+    fi
+  else
+    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble judge context." >&2
+  fi
+fi
 
 # Process-lifetime cache of labels we've already verified exist on the
 # repo.  `ensure_label_exists` is called from 10+ code paths with a
@@ -105,6 +122,45 @@ tg_notify_issue() {
 if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+
+append_judge_semble_query_text() {
+  local label="$1"
+  local text="${2:-}"
+  local max_bytes="${3:-2048}"
+  local truncated_text=""
+
+  [ -n "${text}" ] || return 0
+
+  truncated_text="${text:0:${max_bytes}}"
+
+  printf '%s\n' "${label}"
+  printf '%s' "${truncated_text}"
+  printf '\n'
+}
+
+render_judge_semble_prefetch_from_query_file() {
+  local query_file="$1"
+  local header_label="${2:-Judge Context}"
+  local max_chunks="${3:-${JUDGE_SEMBLE_MAX_CHUNKS}}"
+  local query_text=""
+  local prefetch_text=""
+
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
+    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
+    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+    || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+
+  query_text="$(cat "${query_file}" 2>/dev/null || true)"
+  query_text="${query_text:0:${JUDGE_SEMBLE_QUERY_MAX_BYTES}}"
+  [ -n "${query_text}" ] || return 0
+
+  prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
+  [ -n "${prefetch_text}" ] || return 0
+
+  printf '%s\n' "${prefetch_text:0:${JUDGE_SEMBLE_CONTEXT_MAX_BYTES}}"
+}
 
 is_truthy() {
   local value
@@ -188,11 +244,38 @@ _pr_checks_completed()
 	fi
 
 	local check_runs_json
-	check_runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "")"
+	# --paginate --slurp walks all pages and emits an array of page
+	# response objects (each shaped {"total_count": N, "check_runs":
+	# [...]}). Without pagination a commit with >100 check-runs hides
+	# pending/failing runs on later pages and the gate would
+	# incorrectly report success. Matches the canonical pattern used
+	# elsewhere in the repo (e.g. .github/workflows/review_autofix.yml's
+	# "Collect PR check-run failures" step).
+	#
+	# Fallback to '{}' (NOT '[]') on API failure. The jq filter
+	# below has two matching branches: `type == "array"` (production
+	# --paginate --slurp shape) and the elif `type == "object" and
+	# (.check_runs | type == "array")` (legacy single-object shape).
+	# An empty object '{}' matches neither — falls through to `else
+	# empty`, the numeric guard below trips, and the helper returns
+	# 1 (fail-closed). An empty array '[]' would match the first
+	# branch and produce `incomplete=0`, fail-OPEN — treating an API
+	# error as "no check-runs" and letting the merge proceed.
+	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "{}")"
 
+	# jq filter: handle both the paginated array-of-pages shape (the
+	# production --paginate --slurp call) and the single-object
+	# shape (backward compatibility with callers / tests that
+	# pre-date the pagination change). In either case, flatten every
+	# page check_runs and count items that are NOT yet completed
+	# with an acceptable conclusion. (Note: comments stay outside
+	# the jq script — apostrophes in jq-internal comments would
+	# terminate the outer single-quoted expression early.)
 	local incomplete
 	incomplete="$(printf '%s' "${check_runs_json}" | jq -r '
-		if (type == "object" and (.check_runs | type == "array")) then
+		if (type == "array") then
+			[.[]? | (.check_runs // [])[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+		elif (type == "object" and (.check_runs | type == "array")) then
 			[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
 		else
 			empty
@@ -315,12 +398,10 @@ probe_sibling_merge_conflicts()
 	if ! command -v git >/dev/null 2>&1; then
 		return 0
 	fi
-	# Availability check: modern git (>= 2.38) prints a usage line
-	# containing "--write-tree" on stderr when invoked with no args.
-	# We deliberately avoid `git merge-tree --help` because the help
-	# pager requires man pages which are absent on minimized images
-	# (including the standard ubuntu-latest runner when trimmed).
-	if ! git merge-tree 2>&1 | grep -q -- '--write-tree'; then
+	# Availability check: run the modern merge-tree mode directly instead
+	# of grepping help text, which exits non-zero under `set -o pipefail`
+	# on many git builds when invoked without refs.
+	if ! git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
 		echo "  [merge-probe] git merge-tree --write-tree unavailable; skipping probe for PR #${candidate_pr}."
 		return 0
 	fi
@@ -1027,12 +1108,12 @@ fi
 # MAX_JUDGE_REPLAY caps how many consecutive cached judge decisions the
 # orchestrator will replay before forcing escalate_human. The judge
 # decision cache (see invoke_stall_judge) keyed on
-# sha256({issue_num, head_sha, phase, last_conclusion}) skips the LLM
-# call when the same inputs reproduce — but if the cached decision is
-# wrong (the judge picked resolve_merge_conflict on a hot-file collision
-# the resolver can't fix), replaying it forever wastes budget. After
-# this many replays, the judge cache is bypassed and the issue is
-# escalated.
+# sha256({issue_num, head_sha, phase, last_conclusion,
+# recent_comments_hash}) skips the LLM call when the same inputs
+# reproduce — but if the cached decision is wrong (the judge picked
+# resolve_merge_conflict on a hot-file collision the resolver can't
+# fix), replaying it forever wastes budget. After this many replays,
+# the judge cache is bypassed and the issue is escalated.
 MAX_JUDGE_REPLAY="${MAX_JUDGE_REPLAY:-2}"
 if ! [[ "${MAX_JUDGE_REPLAY}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_JUDGE_REPLAY must be a non-negative integer; defaulting to 2"
@@ -1043,6 +1124,12 @@ post_tracking_comment() {
   local comment_body="$1"
   local payload_file
   local payload_err_file
+  local body_bytes
+  body_bytes="$(printf '%s' "${comment_body}" | wc -c | tr -d '[:space:]')"
+  if [ "${body_bytes}" -gt 65536 ]; then
+    echo "::warning::Tracking comment body too large for issue #${TRACKING_NUM} (${body_bytes} bytes > 65536 GitHub limit); skipping post." >&2
+    return 0
+  fi
   payload_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload.XXXXXX")"
   payload_err_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload_err.XXXXXX")"
   # Pipe the body through jq's stdin (-Rs reads it as a single raw
@@ -1093,7 +1180,7 @@ post_state_comment() {
     echo "::error::scripts/orchestrate_state_v2.py is missing from the staged scripts tree; V2 state persistence cannot run for issue #${TRACKING_NUM}. Update the workflow's 'Stage workflow support files' loop to include this helper." >&2
     return 1
   fi
-  local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx
+  local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
   if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
       --state-file "${STATE_FILE}" \
@@ -1109,7 +1196,16 @@ post_state_comment() {
     rm -rf "${pack_dir}"
     return 1
   fi
-  chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || true)"
+  # Validate the manifest's files array before posting anything.  A
+  # mismatched count would otherwise emit a torn V2 chain and then fall
+  # back to stale state on the next poll.
+  chunk_count="$(printf '%s' "${manifest_json}" | jq -r '.files | if type == "array" then length else -1 end' 2>/dev/null || echo -1)"
+  if ! [[ "${chunk_count}" =~ ^-?[0-9]+$ ]] || [ "${chunk_count}" -ne "${total}" ]; then
+    echo "::error::orchestrate_state_v2 pack returned ${chunk_count} chunk file(s) but declared total=${total} for issue #${TRACKING_NUM} (raw_bytes=${raw_bytes}); skipping torn V2 state write." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
+  chunk_files="$(printf '%s' "${manifest_json}" | jq -r '.files[]' 2>/dev/null || echo "")"
   idx=0
   while IFS= read -r chunk_file; do
     [ -n "${chunk_file}" ] || continue
@@ -1120,6 +1216,11 @@ post_state_comment() {
       return 1
     fi
   done <<< "${chunk_files}"
+  if [ "${idx}" -ne "${total}" ]; then
+    echo "::error::orchestrate_state_v2 pack manifest mismatch for issue #${TRACKING_NUM}: posted ${idx} chunk(s) but manifest declared ${total} (raw_bytes=${raw_bytes}); treating V2 write as failed to avoid persisting a torn chain." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
   rm -rf "${pack_dir}"
   return 0
 }
@@ -2934,12 +3035,27 @@ invoke_judge_for_integration_conflict() {
   local intent_fingerprints
   intent_fingerprints="$(jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" 2>/dev/null || echo "{}")"
   [ -n "${intent_fingerprints}" ] || intent_fingerprints='{}'
+  local judge_semble_query_file
+  local judge_semble_prefetch=""
+  judge_semble_query_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_semble_query.XXXXXX")"
+  {
+    printf '%s\n' 'Integration conflict judge context.'
+    append_judge_semble_query_text "Tracking + branch summary:" "tracking issue #${TRACKING_NUM}; final PR #${final_pr}; integration branch ${integration_branch}; default branch ${default_branch}; retries ${retries}" 800
+    append_judge_semble_query_text "Changed files JSON:" "${pr_files}" 2500
+    append_judge_semble_query_text "PR diff excerpt:" "${pr_diff}" 5000
+    append_judge_semble_query_text "Intent fingerprints JSON:" "${intent_fingerprints}" 3500
+  } > "${judge_semble_query_file}"
+  judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"
 
   {
     cat "${judge_static_file}"
     echo
     echo "=== INTEGRATION CONFLICT JUDGE TASK ==="
     echo
+    if [ -n "${judge_semble_prefetch}" ]; then
+      printf '%s\n' "${judge_semble_prefetch}"
+      echo
+    fi
     echo "You are the orchestrator final-merge judge. The automated resolver"
     echo "pipeline has attempted to sync \`${default_branch}\` into"
     echo "\`${integration_branch}\` ${retries} times without producing a"
@@ -2999,14 +3115,14 @@ invoke_judge_for_integration_conflict() {
     echo "   short diagnosis in the commit message."
   } > "${prompt_file}"
 
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
     return 0
   fi
 
   echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
-  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   return 1
 }
 
@@ -3227,13 +3343,15 @@ _list_integration_conflict_files() {
 
   [ -n "${integration_branch}" ] && [ -n "${default_branch}" ] || return 1
   command -v git >/dev/null 2>&1 || return 1
-  if ! git merge-tree 2>&1 | grep -q -- '--write-tree'; then
+  if ! git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
     return 1
   fi
 
   local ib_ref="refs/remotes/origin/${integration_branch}"
   local db_ref="refs/remotes/origin/${default_branch}"
-  git fetch --no-tags --quiet origin "${integration_branch}" "${default_branch}" 2>/dev/null || true
+  git fetch --no-tags --quiet origin \
+    "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+    "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null || true
   git rev-parse --verify --quiet "${ib_ref}" >/dev/null 2>&1 || return 1
   git rev-parse --verify --quiet "${db_ref}" >/dev/null 2>&1 || return 1
 
@@ -3326,8 +3444,8 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       local _ihb_conflict_files
       if _ihb_conflict_files="$(_list_integration_conflict_files "${integration_branch}" "${default_branch}" 2>/dev/null)"; then
         local _ihb_conflict_count
-        _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l)"
-        if [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
+        _ihb_conflict_count="$(printf '%s\n' "${_ihb_conflict_files}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+        if [[ "${_ihb_conflict_count}" =~ ^[0-9]+$ ]] && [ "${_ihb_conflict_count}" -gt 0 ] && [ "${_ihb_conflict_count}" -le 3 ] && [ -f ".github/ai/hot_files.json" ]; then
           local _ihb_hot_files
           _ihb_hot_files="$(jq -r '.hot_files[]? // empty' .github/ai/hot_files.json 2>/dev/null || echo "")"
           if [ -n "${_ihb_hot_files}" ]; then
@@ -4994,19 +5112,19 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
     return
   fi
 
@@ -5016,9 +5134,11 @@ _extract_standalone_state_json_from_comments() {
       last_seen_phase: (.last_seen_phase // ""),
       status_since_ts: ((.status_since_ts // 0) | tonumber),
       stall_recovery_count: ((.stall_recovery_count // 0) | tonumber),
+      phase_attempts: (if (.phase_attempts | type) == "object" then .phase_attempts else {} end),
+      conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -5075,15 +5195,19 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
 recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
+  local effective_max_recoveries="${MAX_STALL_RECOVERIES_PER_ISSUE}"
 
   [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
-  if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
+  if [ "${phase}" = "ai:done" ]; then
+    effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
+  fi
+  if [ "${recovery_count}" -ge "${effective_max_recoveries}" ]; then
     echo "skip"
     return
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_stall_recovery_action
@@ -5375,8 +5499,9 @@ STALL_EOF
           # MAX_BUDGET_NEUTRAL_OVERRIDES so the stall ladder can advance.
           # head_sha changes on every new commit, so once the resolver
           # pushes a fix, the counter restarts for the new sha.
+          local _rtr_dispatched="${STALL_RECOVERY_SHOULD_INCREMENT:-false}"
           STALL_RECOVERY_SHOULD_INCREMENT="false"
-          if [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+          if [ "${_rtr_dispatched}" = "true" ] && [ -n "${_rtr_head_sha}" ] && [ "${_rtr_head_sha}" != "null" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
             local _rtr_override_count
             _rtr_override_count="$(jq -r --arg sha "${_rtr_head_sha}" '.conflict_override_count[$sha] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
             [[ "${_rtr_override_count}" =~ ^[0-9]+$ ]] || _rtr_override_count="0"
@@ -5756,7 +5881,7 @@ invoke_stall_judge() {
   local issue_comments_json
   issue_comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${comments_issue_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
   local recent_comments
-  # Filter out ORCHESTRATOR_STATE_V1 snapshots (they are ~57KB each and
+  # Filter out ORCHESTRATOR_STATE_V1/V2 snapshots (they are ~57KB each and
   # are noise for the judge — it wants phase-change / recovery narrative,
   # not state dumps) and cap each remaining body at 2000 characters. Without
   # these two caps, 8 state snapshots produce ~260KB of argv which trips
@@ -5765,7 +5890,7 @@ invoke_stall_judge() {
   # return E2BIG and the diagnostics blob to come out empty.
   recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '
     [.[]
-      | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
+      | select(((.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or startswith("<!-- ORCHESTRATOR_STATE_V2"))) | not)
       | {
           author: (.user.login // ""),
           created_at: (.created_at // ""),
@@ -5815,20 +5940,26 @@ invoke_stall_judge() {
   ' 2>/dev/null || echo '[]')"
 
   # Judge decision cache (Q1d): memoise judge output by
-  # sha256({issue_num, head_sha, phase, last_conclusion}). When the same
-  # inputs reproduce, replay the cached action instead of burning a fresh
-  # LLM call.  After MAX_JUDGE_REPLAY consecutive replays without
+  # sha256({issue_num, head_sha, phase, last_conclusion,
+  # recent_comments_hash_excluding_prior_stall_judge_comments}). When the same
+  # inputs reproduce, replay the
+  # cached action instead of burning a fresh LLM call.  After
+  # MAX_JUDGE_REPLAY consecutive replays without
   # progress, bypass the cache and escalate so the issue isn't stuck on a
   # bad decision forever. The cache is only consulted when STATE_FILE
   # exists; missing-state cycles fall through to the LLM path.
   local _judge_last_conclusion=""
+  local _judge_cacheable_comments='[]'
+  local _judge_recent_comments_hash=""
   local _judge_cache_key=""
   local _judge_cache_hit_action=""
   local _judge_cache_replay_count=0
   local _judge_force_escalate="false"
   if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
     _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
-    _judge_cache_key="$(printf '%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    _judge_cacheable_comments="$(printf '%s' "${recent_comments}" | jq -c '[.[] | select(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge")) | not)]' 2>/dev/null || echo '[]')"
+    _judge_recent_comments_hash="$(printf '%s' "${_judge_cacheable_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
     if [ -n "${_judge_cache_key}" ]; then
       _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
       _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
@@ -5923,7 +6054,17 @@ invoke_stall_judge() {
 
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
+  local stall_judge_semble_query_file="${RUNTIME_DIR}/stall_judge_semble_query_${issue_num}.txt"
+  local stall_judge_semble_prefetch=""
   local static_file="${RUNTIME_DIR}/judge_static.txt"
+
+  {
+    printf '%s\n' 'Stall recovery judge context.'
+    append_judge_semble_query_text "Issue summary:" "issue #${issue_num}; local id ${local_id}; phase ${phase}; stall minutes ${stall_minutes}; recovery count ${recovery_count}; fallback action ${fallback_action}" 900
+    append_judge_semble_query_text "Linked PR summary:" "target_pr ${target_pr}; pr_state ${pr_state}; mergeable ${pr_mergeable}; head_ref ${head_ref}; base_ref ${base_ref}" 900
+    append_judge_semble_query_text "Diagnostics JSON:" "${diagnostics}" 7000
+  } > "${stall_judge_semble_query_file}"
+  stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context")"
 
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
@@ -5939,7 +6080,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -5977,7 +6118,7 @@ invoke_stall_judge() {
       if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
         printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
       else
-        codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
         judge_success="true"
@@ -5986,6 +6127,8 @@ invoke_stall_judge() {
       sleep $(( 8 * attempt ))
     done
   fi
+
+  rm -f "${stall_judge_semble_query_file}"
 
   if [ "${judge_success}" != "true" ]; then
     echo "::warning::Stall judge failed for issue #${issue_num}; falling back to ${fallback_action}."
@@ -6006,7 +6149,11 @@ invoke_stall_judge() {
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
   local effective_action
-  effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+  if [ "${_judge_force_escalate}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
+    effective_action="escalate_human"
+  else
+    effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+  fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -6138,7 +6285,7 @@ _fetch_standalone_marker_issues_graphql() {
 #   { "123": {"state": "open|closed",
 #             "labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
-#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null} | null },
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"head_sha":"<oid>"|null,"headPushedAt":"ISO8601"|null} | null },
 #     ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null, e.g. for squashed commits).
@@ -6211,6 +6358,7 @@ _fetch_candidate_issue_details_graphql() {
                   ... on PullRequest {
                     number state merged
                     headRefName
+                    headRefOid
                     mergeable
                     mergeStateStatus
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
@@ -6262,6 +6410,7 @@ _fetch_candidate_issue_details_graphql() {
                     state: .state,
                     merged: (.merged // false),
                     head_ref: (.headRefName // null),
+                    head_sha: (.headRefOid // null),
                     mergeable: (.mergeable // null),
                     merge_state_status: (.mergeStateStatus // null),
                     headPushedAt: (
@@ -6711,6 +6860,8 @@ run_standalone_stall_recovery() {
   local updated_state
   local status_since
   local recovery_count
+  local phase_attempts_count
+  local effective_max_recoveries
   local threshold_minutes
   local elapsed_minutes
   local action
@@ -6784,6 +6935,12 @@ PY
 
     status_since="$(echo "${updated_state}" | jq -r '.status_since_ts // 0')"
     recovery_count="$(echo "${updated_state}" | jq -r '.stall_recovery_count | tonumber? // 0')"
+    phase_attempts_count="$(printf '%s' "${updated_state}" | jq -r --arg phase "${phase}" '.phase_attempts[$phase] | tonumber? // 0' 2>/dev/null || echo "0")"
+    [[ "${phase_attempts_count}" =~ ^[0-9]+$ ]] || phase_attempts_count="0"
+    effective_max_recoveries="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+    if [ "${phase}" = "ai:done" ]; then
+      effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
+    fi
     threshold_minutes="$(python3 - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
 import json, sys
 sys.path.insert(0, 'scripts')
@@ -6809,7 +6966,7 @@ PY
       continue
     fi
 
-    if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
+    if [ "${recovery_count}" -ge "${effective_max_recoveries}" ] || [ "${phase_attempts_count}" -ge "${effective_max_recoveries}" ]; then
       action="skip"
     elif [ "${ENABLE_STALL_JUDGE}" = "true" ] && [ "${recovery_count}" -ge "${STALL_JUDGE_TRIGGER_COUNT}" ]; then
       action="run_stall_judge"
@@ -6980,6 +7137,7 @@ PY
                 number: (.number // null),
                 state: (.state // null),
                 head_ref: (.head.ref // null),
+                head_sha: (.head.sha // null),
                 mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
                 merge_state_status: (.mergeable_state // null)
               }' 2>/dev/null || echo "null")"
@@ -7007,10 +7165,36 @@ PY
       fi
 
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
+        local _std_conflict_head_sha=""
+        local _std_override_count="0"
+        local _std_next_count="0"
+        local _std_consume_budget="false"
+        _std_conflict_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // .headRefOid // empty)' 2>/dev/null || echo "")"
+        if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
+          _std_override_count="$(printf '%s' "${updated_state}" | jq -r --arg sha "${_std_conflict_head_sha}" '.conflict_override_count[$sha] // 0' 2>/dev/null || echo "0")"
+          [[ "${_std_override_count}" =~ ^[0-9]+$ ]] || _std_override_count="0"
+          if [ "${_std_override_count}" -ge "${MAX_BUDGET_NEUTRAL_OVERRIDES}" ]; then
+            echo "  [standalone-stall] Issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} head_sha ${_std_conflict_head_sha} has hit budget-neutral override cap (${_std_override_count} >= ${MAX_BUDGET_NEUTRAL_OVERRIDES}); consuming stall budget on this attempt."
+            _std_consume_budget="true"
+          fi
+          _std_next_count=$(( _std_override_count + 1 ))
+        fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
           0)
+            if [ -n "${_std_conflict_head_sha}" ] && [ "${_std_conflict_head_sha}" != "null" ]; then
+              updated_state="$(printf '%s' "${updated_state}" | jq -c --arg sha "${_std_conflict_head_sha}" --argjson n "${_std_next_count}" '.conflict_override_count = ((.conflict_override_count // {}) | .[$sha] = $n)' 2>/dev/null || echo "${updated_state}")"
+            fi
+			if [ "${_std_consume_budget}" = "true" ]; then
+			  updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
+				.stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+				| .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+				| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+				| .status_since_ts = $now
+				| .updated_ts = $now
+			  ' 2>/dev/null || echo "${updated_state}")"
+			fi
             echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver instead of '${action}'."
             echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=dispatch_conflict_resolver override_from=${action}"
             tg_notify_issue "${issue_num}" "Standalone stall recovery: PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver (phase=${phase}, stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
@@ -7272,36 +7456,25 @@ REISSUE_EOF
             --add-label 'ai:closed' 2>/dev/null || true
           gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery. Issue was stuck in '${phase}' for ${elapsed_minutes} minutes after $((recovery_count + 1)) recovery attempt(s)." 2>/dev/null || true
           local new_state
-          new_state="$(python3 - "$updated_state" <<'PY'
-import json, sys, time
-state = json.loads(sys.argv[1])
-now = int(time.time())
-state["last_seen_phase"] = ""
-state["status_since_ts"] = now
-state["stall_recovery_count"] = 0
-state["updated_ts"] = now
-print(json.dumps(state, separators=(",", ":")))
-PY
-)"
-          write_standalone_state_json "${new_num}" "${new_state}" ""
-          tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
+		  new_state="$(printf '%s' "${updated_state}" | jq -c --argjson now "$(date +%s)" '
+			.last_seen_phase = ""
+			| .status_since_ts = $now
+			| .stall_recovery_count = 0
+			| .phase_attempts = {}
+			| .updated_ts = $now
+		  ' 2>/dev/null || echo "${updated_state}")"
+		  write_standalone_state_json "${new_num}" "${new_state}" ""
+		  tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
 		else
 		  echo "::warning::Standalone close_and_reissue failed to create replacement issue for #${issue_num}."
 		  tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
-		  failed_reissue_state="$(python3 - "$updated_state" <<'PY'
-import json, sys, time
-state = json.loads(sys.argv[1])
-now = int(time.time())
-try:
-    current = int(state.get("stall_recovery_count", 0) or 0)
-except (TypeError, ValueError):
-    current = 0
-state["stall_recovery_count"] = current + 1
-state["status_since_ts"] = now
-state["updated_ts"] = now
-print(json.dumps(state, separators=(",", ":")))
-PY
-)"
+			  failed_reissue_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
+				.stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+				| .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+				| .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+				| .status_since_ts = $now
+				| .updated_ts = $now
+			  ' 2>/dev/null || echo "${updated_state}")"
 		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
 		fi
 		took_action="true"
@@ -7369,23 +7542,16 @@ PY
         ;;
     esac
 
-    if [ "${took_action}" = "true" ] && [ "${action}" != "close_and_reissue" ]; then
-      updated_state="$(python3 - "$updated_state" "$STALL_RECOVERY_SHOULD_INCREMENT" <<'PY'
-import json, sys, time
-state = json.loads(sys.argv[1])
-should_increment = sys.argv[2].lower() == "true"
-now = int(time.time())
-if should_increment:
-    try:
-        current = int(state.get("stall_recovery_count", 0) or 0)
-    except (TypeError, ValueError):
-        current = 0
-    state["stall_recovery_count"] = current + 1
-state["status_since_ts"] = now
-state["updated_ts"] = now
-print(json.dumps(state, separators=(",", ":")))
-PY
-)"
+	    if [ "${took_action}" = "true" ] && [ "${action}" != "close_and_reissue" ]; then
+	      updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --arg should_increment "${STALL_RECOVERY_SHOULD_INCREMENT}" --argjson now "$(date +%s)" '
+			(if ($should_increment | ascii_downcase) == "true" then
+			  .stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+			  | .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+			  | .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+			 else . end)
+			| .status_since_ts = $now
+			| .updated_ts = $now
+	      ' 2>/dev/null || echo "${updated_state}")"
       write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
     fi
   done
@@ -8434,7 +8600,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && (has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"); then
     REVALIDATE_REQUESTED="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select(.value.body | contains("ORCHESTRATOR_STATE_V1"))) | last | .key // -1) as $last_state_idx |
+      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
       [to_entries[] | select(.key > $last_state_idx and (.value.body | test("^\\s*/revalidate(\\s|$)"; "m")))] | length > 0
     ')"
 
@@ -8482,7 +8648,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
     && ! has_label "${TRACKING_LABELS}" "ai:validation-failed" \
     && ! has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
     JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select(.value.body | contains("ORCHESTRATOR_STATE_V1"))) | last | .key // -1) as $last_state_idx |
+      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
       [to_entries[]
         | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))
       ]
@@ -9450,6 +9616,17 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
       fi
       ISSUE_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
+      RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query_${rb_issue}.txt"
+      RB_JUDGE_SEMBLE_PREFETCH=""
+      {
+        printf '%s\n' 'Review-blocked judge context.'
+        append_judge_semble_query_text "Issue body:" "${ISSUE_BODY}" 2500
+        append_judge_semble_query_text "PR metadata JSON:" "${PR_META}" 2000
+        append_judge_semble_query_text "PR diff excerpt:" "${PR_DIFF}" 5000
+        append_judge_semble_query_text "PR issue comments JSON:" "${PR_COMMENTS}" 2500
+        append_judge_semble_query_text "PR review comments JSON:" "${PR_REVIEW_COMMENTS}" 2500
+      } > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt
       IS_FINAL="false"
@@ -9668,7 +9845,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -9697,11 +9874,16 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "Retries exhausted: ${IS_FINAL}"
         if [ "${IS_FINAL}" = "true" ]; then
           echo
-          echo "IMPORTANT: This is the FINAL attempt. You MUST choose either 'merge' or"
-          echo "'close_and_reissue'. The 'fix' option is NOT available because previous"
-          echo "fix attempts did not resolve the issues. Pick the action that best serves"
-          echo "the project: merge if the PR is good enough, or close and reissue if the"
-          echo "approach is fundamentally wrong."
+          echo "IMPORTANT: This is the FINAL attempt. You MUST choose 'merge',"
+          echo "'merge_with_followup', or 'close_and_reissue'. The 'fix' option is"
+          echo "NOT available because previous fix attempts did not resolve the issues."
+          echo "Pick the action that best serves the project: merge if the PR is fully"
+          echo "good as-is; merge_with_followup if the PR is shippable (no build/test"
+          echo "breakage, no critical correctness/security defects) but a deferred gap"
+          echo "remains that should be tracked in a fresh issue (preferred over"
+          echo "close_and_reissue when the PR's existing changes are worth keeping);"
+          echo "close_and_reissue only if the approach is fundamentally wrong and"
+          echo "the PR's work should be discarded."
         fi
         if [ "${RB_COMBINED_MODE}" = "true" ]; then
           echo
@@ -9714,16 +9896,19 @@ ${FOLLOWUP_BLOCK_REASON}"
           echo "  that blocked the review. Do not create new files unless absolutely required."
           echo "  After applying fixes, emit the JSON with action=\"fix\" and fix_description"
           echo "  describing what you changed."
-          echo "- If you choose action=\"merge\" or action=\"close_and_reissue\": DO NOT modify"
-          echo "  any files. Emit the JSON with the chosen action and an empty fix_description."
+          echo "- If you choose action=\"merge\", action=\"merge_with_followup\", or"
+          echo "  action=\"close_and_reissue\": DO NOT modify any files. Emit the JSON with"
+          echo "  the chosen action and an empty fix_description. For merge_with_followup,"
+          echo "  populate the followup_issue { title, body } payload."
         fi
       } > "${RB_JUDGE_PROMPT_FILE}"
+      rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
       # Run the judge
       RB_JUDGE_SUCCESS=false
       for attempt in 1 2; do
         echo "  Review-blocked judge attempt ${attempt}/2..."
-        cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+        cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
         if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
           RB_JUDGE_SUCCESS=true
           break
@@ -10171,6 +10356,200 @@ ${RB_FIX_DESC}
               REVIEW_BLOCKED_STATE_CHANGED=true
             fi
           fi
+          fi
+          ;;
+
+        merge_with_followup)
+          echo "  Judge says merge PR #${RB_PR} and open a follow-up issue for the deferred gap."
+          # Discard any accidental file modifications from the combined
+          # judge call; this path operates via GitHub API only.
+          rb_cleanup_combined_workspace
+
+          # Parse follow-up details before any state changes. Missing
+          # details would silently downgrade the action to a plain merge
+          # with no tracking issue, defeating the purpose of the new
+          # action — refuse and leave the issue in ai:review-blocked
+          # for stall recovery / retry.
+          FOLLOWUP_TITLE="$(echo "${RB_JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
+          FOLLOWUP_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
+          if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
+            # Structured log + WARNING tg_notify so the refusal is
+            # observable to operators and downstream log analysis
+            # (parity with the standalone rb_judge.sh's
+            # judge_skip_reason=missing_followup_details emission;
+            # the orchestrator doesn't write GITHUB_OUTPUT but
+            # surfaces the refusal via the same MWF_REFUSAL prefix
+            # so workflow-log-analysis can grep for it).
+            echo "::error::Judge chose merge_with_followup for PR #${RB_PR} (issue #${rb_issue}) but provided no follow-up details (followup_issue.title or .body empty). Refusing — leaving issue in ai:review-blocked for stall recovery."
+            echo "MWF_REFUSAL action=merge_with_followup pr=${RB_PR} issue=${rb_issue} reason=missing_followup_details"
+            tg_notify "Orchestrator merge_with_followup REFUSED for PR #${RB_PR} (issue #${rb_issue}): judge provided no follow-up issue details (followup_issue.title or .body empty). Issue stays in ai:review-blocked; stall recovery will retry. Manual fallback: open the follow-up issue manually and reference PR #${RB_PR}."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+            REVIEW_BLOCKED_STATE_CHANGED=true
+          else
+            # Re-fetch PR data (state may have changed since the judge
+            # ran) and run the MERGE_CONFIRMED ladder. Mirrors the
+            # standalone review_rb_judge.sh script's merge_with_followup
+            # branch — see that file for the rationale on each gate.
+            _rb_mwf_json="$(_fetch_pr_json "${RB_PR}")"
+            # GitHub's REST /pulls/{N} returns .state as one of `open`
+            # or `closed` (never `merged` — merged PRs are state=closed
+            # + merged=true). Constrain the validator to the actual API
+            # vocabulary; .merged below disambiguates the two.
+            PR_STATE="$(_jq_field "${_rb_mwf_json}" '.state' 'open|closed')"
+            PR_MERGEABLE="$(_jq_field "${_rb_mwf_json}" '.mergeable' 'true|false')"
+            # Detect merged via `(.merged_at != null) or (.merged ==
+            # true)` — matches the orchestrator's existing
+            # `.merged_at != null` pattern (see line ~8844 etc.) and
+            # survives REST payloads that omit either field
+            # individually.
+            PR_MERGED_NOW="$(_jq_field "${_rb_mwf_json}" '(.merged_at != null) or (.merged == true)' 'true|false')"
+            [ -n "${PR_MERGED_NOW}" ] || PR_MERGED_NOW="false"
+            _rb_mwf_sha="$(_jq_field "${_rb_mwf_json}" '.head.sha')"
+
+            MERGE_CONFIRMED="false"
+            if [ "${PR_MERGED_NOW}" = "true" ]; then
+              echo "  PR #${RB_PR} already merged (.merged=true) before merge_with_followup ran."
+              MERGE_CONFIRMED="true"
+            elif [ "${PR_STATE}" = "closed" ]; then
+              echo "::warning::PR #${RB_PR} closed without merge — skipping follow-up creation; deferred gap not tracked because source PR's changes never landed."
+            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
+              # _pr_checks_completed gates the merge attempt the same
+              # way the existing orchestrator `merge)` action does
+              # (line 9758). The helper checks ALL check-runs on the
+              # PR head (not just branch-protection-required ones),
+              # so non-required CI is also waited for. This prevents
+              # merge_with_followup from creating a follow-up issue
+              # while informational checks are still running — same
+              # gating as the plain merge path.
+              if ! _pr_checks_completed "${RB_PR}" "${_rb_mwf_sha}"; then
+                echo "::warning::PR #${RB_PR} mergeable=true but check-runs still pending/failing — leaving issue in ai:review-blocked. Next orchestrator poll cycle will re-fire the judge after checks complete; that run will hit the PR_MERGED_NOW=true short path (after the existing \`merge)\` action's auto-merge enrollment lands the PR)."
+              elif [ -z "${_rb_mwf_sha}" ]; then
+                # Defensive: `_pr_checks_completed` may have re-fetched
+                # the SHA locally and returned 0 while our outer
+                # `_rb_mwf_sha` is still empty (transient API failure
+                # at the initial fetch). Refuse the merge here so we
+                # never call `gh pr merge` without --match-head-commit
+                # — an unbound merge could let a concurrent push slip
+                # in. Leave the issue in ai:review-blocked for the
+                # next poll cycle, which re-fetches PR metadata.
+                echo "::warning::PR #${RB_PR} head SHA could not be resolved from the PR-meta fetch — refusing merge_with_followup to avoid an unbound merge (no --match-head-commit guard against concurrent pushes). Leaving issue in ai:review-blocked."
+              elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+                # Sync merge only — NEVER --auto enrollment. The whole
+                # point of the conservative ladder is to ensure follow-
+                # up creation happens only against a definitively-
+                # merged base. `gh pr merge --squash` (no --auto)
+                # returns 0 iff the merge actually landed (all required
+                # checks satisfied, no conflicts, no merge-queue
+                # rejection). When checks are still pending it returns
+                # non-zero — we leave the issue in ai:review-blocked
+                # and let the orchestrator's next ~5min poll re-fire
+                # the judge. That run will hit the PR_MERGED_NOW=true
+                # short path (after the existing `merge)` action has
+                # had a chance to enroll auto-merge and the merge has
+                # actually landed asynchronously) and create the
+                # follow-up against the now-real base ref. This
+                # eliminates the orphan-follow-up risk of --auto
+                # enrollment; the trade-off is that protected-branch
+                # repos need one extra poll cycle to materialize the
+                # follow-up. Matches scripts/review_rb_judge.sh's
+                # merge_with_followup ladder behaviourally — both
+                # paths gate on check-runs (this branch via the
+                # shared `_pr_checks_completed` helper above; the
+                # standalone via its own inline check-runs query
+                # using the same fail-closed jq filter), and both
+                # bind the merge via --match-head-commit.
+                #
+                # NOTE: gh pr merge is intentionally NOT wrapped with
+                # gh_retry — sync merge failures here are typically
+                # non-transient (pending required checks, branch
+                # protection rules, merge-queue mode) and retrying
+                # them only adds backoff cost before falling through
+                # to the same warning path. Matches the standalone
+                # review_rb_judge.sh's pattern.
+                #
+                # `--match-head-commit "${_rb_mwf_sha}"` binds the
+                # merge to the head SHA the PR-meta fetch observed.
+                # The `elif [ -z "${_rb_mwf_sha}" ]` branch above
+                # ensures we never reach here with an empty SHA, so
+                # the merge is always bound — no concurrent-push
+                # window between judge decision and merge.
+                _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
+                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
+                  echo "  PR #${RB_PR} merged synchronously."
+                  MERGE_CONFIRMED="true"
+                else
+                  echo "::warning::PR #${RB_PR} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge after merge lands; that run hits the PR_MERGED_NOW=true short path and creates the follow-up."
+                fi
+              else
+                echo "::warning::PR #${RB_PR} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving issue in ai:review-blocked so the follow-up is not opened against unmerged code; operator should merge manually and the next orchestrator poll cycle will create the follow-up via the PR_MERGED_NOW=true short path."
+              fi
+            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+              echo "::warning::PR #${RB_PR} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving issue in ai:review-blocked so conflicts can be resolved before follow-up creation."
+            else
+              echo "::warning::PR #${RB_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE} merged=${PR_MERGED_NOW}, cannot confirm merge (checks pending / mergeability still computing / PR not open). Leaving issue in ai:review-blocked."
+            fi
+
+            if [ "${MERGE_CONFIRMED}" = "true" ]; then
+              # Build follow-up body with full orchestrator metadata
+              # footer (mirrors close_and_reissue's pattern). The
+              # follow-up is a standalone orchestrator-managed issue
+              # that flows through clarify -> plan -> implement on its
+              # own; we do NOT remap the original wave slot (the
+              # original issue is merged, not closed, so the wave's
+              # accounting of the merged issue should stay).
+              RB_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+              FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Integration branch: ${RB_INTEGRATION_BRANCH}
+- Source PR: #${RB_PR} (review-blocked judge merged with deferred gap tracked here)
+- Parent issue: #${rb_issue}
+- Type: review-blocked-followup
+- Managed by: AI Orchestrator"
+
+              ensure_label_exists "ai:clarification"
+              ensure_label_exists "ai:orchestrator-managed"
+              # Create follow-up FIRST. If it fails (transient API /
+              # disabled-issues / permissions / token scope), do NOT
+              # advance the linked issue's labels — leave it in
+              # ai:review-blocked so stall recovery / the next judge
+              # run retries follow-up creation. Otherwise the PR is
+              # merged but the deferred gap has no durable tracking.
+              FOLLOWUP_URL=""
+              FOLLOWUP_NUM=""
+              if FOLLOWUP_URL="$(gh_retry gh issue create \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --title "${FOLLOWUP_TITLE}" \
+                  --body "${FULL_FOLLOWUP_BODY}" \
+                  --label "ai:clarification" \
+                  --label "ai:orchestrator-managed")"; then
+                FOLLOWUP_URL_CLEAN="$(printf '%s\n' "${FOLLOWUP_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+                FOLLOWUP_NUM="$(basename "${FOLLOWUP_URL_CLEAN%%[?#]*}")"
+                echo "  Created follow-up issue #${FOLLOWUP_NUM}: ${FOLLOWUP_TITLE}"
+              else
+                _create_rc=$?
+                echo "::error::Failed to create follow-up issue for merge_with_followup (rc=${_create_rc}; PR #${RB_PR} merge confirmed but deferred gap untracked). Leaving issue #${rb_issue} in ai:review-blocked so stall recovery / next judge run can retry. Manual fallback: open an issue describing the gap and reference PR #${RB_PR}."
+                tg_notify "Orchestrator merge_with_followup: PR #${RB_PR} (issue #${rb_issue}) merged but follow-up issue creation failed (rc=${_create_rc}). Deferred gap is currently untracked — stall recovery will retry. Manual fallback may be required."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                FOLLOWUP_URL=""
+                FOLLOWUP_NUM=""
+              fi
+
+              if [ -n "${FOLLOWUP_URL}" ] && [[ "${FOLLOWUP_NUM}" =~ ^[0-9]+$ ]]; then
+                # Phase-swap the linked issue only after BOTH merge AND
+                # follow-up creation are confirmed.
+                ensure_label_exists "ai:ready-to-merge"
+                gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                  --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+
+                tg_notify "Orchestrator judge merge_with_followup: PR #${RB_PR} merged (issue #${rb_issue}); follow-up issue #${FOLLOWUP_NUM} created for deferred gap. ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Parent issue: $(_gh_url "issues/${rb_issue}")"$'\n'"Follow-up: $(_gh_url "issues/${FOLLOWUP_NUM}")" "DEBUG"
+              fi
+              REVIEW_BLOCKED_STATE_CHANGED=true
+            else
+              # MERGE_CONFIRMED=false — leave issue in ai:review-blocked
+              # so stall recovery / next judge run handles it.
+              REVIEW_BLOCKED_STATE_CHANGED=true
+            fi
           fi
           ;;
 
@@ -10721,6 +11100,7 @@ fi
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
+    _stall_check_args+=(--max-recoveries-by-phase-json "$(printf '{\"ai:done\":%s}' "${MAX_STALL_RECOVERIES_DONE}")")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
@@ -11024,6 +11404,18 @@ ${PR_DIFF}
     PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
   fi
 
+  JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/judge_semble_query.txt"
+  JUDGE_SEMBLE_PREFETCH=""
+  {
+    printf '%s\n' 'Project judge context.'
+    append_judge_semble_query_text "Project spec:" "${PROJECT_BODY}" 3000
+    append_judge_semble_query_text "Merged PR summaries:" "${MERGED_PR_SUMMARIES}" 3500
+    append_judge_semble_query_text "Open PR summaries:" "${OPEN_PR_SUMMARIES}" 3500
+    append_judge_semble_query_text "Wave status JSON:" "${WAVE_STATUS}" 2500
+    append_judge_semble_query_text "CI status JSON:" "${CI_STATUS}" 1500
+  } > "${JUDGE_SEMBLE_QUERY_FILE}"
+  JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context")"
+
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
@@ -11033,7 +11425,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    bash scripts/render_prompt.sh prompts/mode-judge.txt
+    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -11108,6 +11500,7 @@ ${PR_DIFF}
     echo "IMPORTANT: If current wave < total waves, the project is NOT complete."
     echo "Return in_progress to advance to the next wave."
   } > "${JUDGE_PROMPT_FILE}"
+  rm -f "${JUDGE_SEMBLE_QUERY_FILE}"
 
   # Run judge via Codex
   JUDGE_SUCCESS=false
@@ -11117,7 +11510,7 @@ ${PR_DIFF}
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    cat "${JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
       JUDGE_SUCCESS=true
       break
@@ -11640,8 +12033,7 @@ $(for inum in ${CREATED_NUMS}; do echo "- #${inum}"; done)
 
 These issues will enter the AI pipeline (clarify → plan → implement → review)."
 
-          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-            -f body="${WAVE_COMMENT}" >/dev/null
+          post_tracking_comment "${WAVE_COMMENT}"
         else
           echo "Wave ${NEXT_WAVE} advance: all sub-issues already exist; suppressing duplicate narration."
         fi

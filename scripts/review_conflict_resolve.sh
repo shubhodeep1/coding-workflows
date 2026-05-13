@@ -41,6 +41,11 @@
 
 set -euo pipefail
 
+if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
+fi
+
 # Re-derive runtime paths set in the prepare step. Shell variables
 # do not cross step boundaries; RUNTIME_DIR itself is in
 # $GITHUB_ENV so it survives, and both paths are deterministic
@@ -48,6 +53,15 @@ set -euo pipefail
 PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
 CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
+CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"
+RESOLVER_SERENA_TOOL_HINTS="$({
+  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+    printf '%s\n' \
+      'Resolver Serena hints:' \
+      '- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).' \
+      '- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.'
+  fi
+}; )"
 
 # ----------------------------------------------------------------------
 # Immediate orchestrator-poll dispatch on resolver bail (Q3: A).
@@ -535,10 +549,13 @@ _build_retry_prompt() {
   # — that way a future template that adds a new placeholder
   # (e.g. `{{INTEGRATION_BRANCH_NAME}}`) does not silently render
   # the literal `{{...}}` text into the prelude on a stable
-  # script_ref pin.  Keys are matched against `[A-Z_][A-Z0-9_]*`
-  # (the convention used by every existing placeholder); any key
-  # whose corresponding env var is unset is replaced with the
-  # empty string, matching the existing hardcoded-list behaviour.
+  # script_ref pin.  Keys are matched against `[A-Za-z_][A-Za-z0-9_]*`
+  # with optional interior whitespace (`{{ KEY }}` / `{{key}}` /
+  # `{{ key }}` all match), so future templates authored with a
+  # different convention still substitute cleanly.  Env-var lookup
+  # uses the uppercased key, matching the convention every existing
+  # caller binds against; any key whose corresponding env var is
+  # unset is replaced with the empty string.
   PRELUDE_TPL="${_prelude_tpl}" \
     ORIGINAL_PROMPT_FILE="${CONFLICT_RESOLVER_PROMPT_FILE}" \
     PREVIOUS_ATTEMPT_NUMBER="${_prev_attempt}" \
@@ -547,8 +564,9 @@ _build_retry_prompt() {
     MARKER_VIOLATION_FILES="${_marker_list}" \
     FINGERPRINT_VIOLATION_COUNT="${_fp_count}" \
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
+    SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
     PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
-    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); keys=sorted(set(re.findall(r'\{\{([A-Z_][A-Z0-9_]*)\}\}', tpl))); [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
   if [ "${_failure_kind}" = "timeout" ]; then
     _retry_prompt_outcome="timeout-prelude"
@@ -645,14 +663,28 @@ _verify_fingerprints_soft() {
 # head-truncated copy. Fail-open: any error here continues the resolver
 # loop without the targeted-context block.
 TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
+CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/conflict_resolver_semble_context.txt"
+TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
 : > "${TARGETED_FILES_CONTEXT_FILE}"
-if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "scripts/targeted_file_context.py" ]; then
-  python3 scripts/targeted_file_context.py \
-    --paths-file "${RESOLVER_ALLOWLIST_FILE}" \
-    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}" \
-    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" \
-    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block." \
-    --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ]; then
+  targeted_file_context_args=(
+    python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"
+    --paths-file "${RESOLVER_ALLOWLIST_FILE}"
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
+    --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
+    --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
+    --output "${TARGETED_FILES_CONTEXT_FILE}"
+  )
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ]; then
+    targeted_file_context_args+=(
+      --semble-bin "${SEMBLE_BIN:-}"
+      --semble-index "${SEMBLE_INDEX_PATH:-}"
+      --semble-query-from "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"
+      --semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"
+      --semble-fallback marker
+    )
+  fi
+  "${targeted_file_context_args[@]}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
 # Append the targeted-context block to the rendered prompt once, so
@@ -661,6 +693,179 @@ fi
 if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+   && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] \
+   && declare -F semble_query_block >/dev/null 2>&1; then
+  semble_query_block \
+    "$(cat "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}")" \
+    "${SEMBLE_CONFLICT_PROMPT_CHUNKS:-8}" \
+    "Conflict Resolver Context" \
+    > "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" || true
+fi
+if [ -s "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" ]; then
+  printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+  cat "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+
+# _prev_attempt_failure_kind tracks why the previous attempt left
+# the loop without breaking out via success.  Three values:
+#   - "validation": codex returned 0 but soft validation (residual
+#     markers / fingerprint verifier) rejected its output.  The
+#     marker/fingerprint violation files are populated and accurate,
+#     so the standard prelude lists them and the model can react.
+#   - "timeout": the `timeout` wrapper killed codex before it
+#     completed.  Detected via `timeout`'s exit codes:
+#       * 124 — unconditional timer expiry (SIGTERM after duration).
+#       * 137 — SIGKILL.  Disambiguated against OOM kill / external
+#         SIGKILL by elapsed wall-clock time: a `timeout`-driven
+#         SIGKILL fires at duration + ~30s (the `--kill-after=30s`
+#         backstop), so elapsed >= duration is treated as a real
+#         timeout.  Elapsed << duration on exit 137 routes to
+#         "exec_error" instead.  See the `case` block at the
+#         classification site.
+#     On a real timeout, soft validation never ran (any partial
+#     apply_patch calls were discarded by the per-attempt working-
+#     tree restore on the next iteration), so the violation files
+#     are stale / empty and the standard prelude would falsely
+#     report "0 markers, 0 fingerprint violations".  We render a
+#     timeout-aware prelude instead — see _build_retry_prompt.
+#   - "exec_error": codex itself exited non-zero (config / auth /
+#     model / network errors that are not the timer firing).  The
+#     script has no useful reflexion data; we retry with the
+#     original prompt verbatim rather than render either prelude
+#     with misleading wording.
+_prev_attempt_failure_kind=""
+
+# Per-attempt cap so a runaway first attempt can't burn the full
+# 170-min step budget (review_autofix.yml's resolver step cap)
+# before retries get a turn.  50 min × 3 attempts = 150 min,
+# leaving ~20 min for soft validation, commit, and the EXIT-trap
+# dispatch within the 170-min step cap.  Default raised from 18
+# min to 50 min after run 25629086684 (PR #2865 on
+# tele-funtoken-msg-scoring) where every one of the 3 attempts
+# hit the previous 18-min ceiling without ever producing
+# apply_patch on a 7-file mixed-implementation merge — symptom in
+# log: 3 × "Conflict resolver retry … (prev markers=0, prev
+# fingerprint_violations=0)" then "Conflict resolver failed after
+# retries."  Override via CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS
+# for per-PR tuning.
+#
+# Default + validation + clamp run ONCE here, before the retry
+# loop, so the value enforced by the `timeout` wrapper, the value
+# substituted into the retry-prompt template, and the value
+# printed in the retry log are guaranteed to agree.  Doing this
+# inside the loop body created a window (loop top, on retry
+# attempts) where _build_retry_prompt and the retry-log line
+# could see an unclamped override.
+: "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:=3000}"
+# Defensive: an empty / non-numeric / leading-'-' override would
+# either be rejected by `timeout` outright or parsed as an option,
+# burning the 3-attempt budget on env-config errors instead of
+# real model work.  Restrict to positive integer seconds (matches
+# the README contract).
+if ! [[ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 3000."
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=3000
+fi
+# Upper bound: the default of 3000s (50 min) is sized for 3
+# attempts × 50 min = 150 min inside the 170-min step cap
+# (review_autofix.yml's resolver step), leaving ~20 min for soft
+# validation, commit, and the EXIT-trap dispatch.  Overrides above
+# 3000s would consume that headroom and risk SIGKILL'ing attempt 3
+# mid-flight (or starving the EXIT-trap dispatch), so any value
+# above the default is clamped back to 3000s with a `::warning::`.
+# In other words: this env var is a knob for shrinking the budget
+# on a specific PR (e.g. forcing earlier retries on a small conflict
+# set), not for enlarging it.  If a particular conflict set
+# legitimately needs longer attempts, raise BOTH the step cap
+# (`timeout-minutes: 170`) and the outer job cap
+# (`timeout-minutes: 240`) in review_autofix.yml first, then bump
+# this max accordingly and re-do the 3 × per_attempt + ~20m
+# headroom math.  Keeping the max equal to the default makes that
+# coupling explicit: you cannot accidentally raise this env var
+# alone and have it take effect.
+CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS=3000
+if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
+  echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would eat the soft-validation / commit / dispatch headroom under the 170-min step cap); clamping to ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
+fi
+
+# _prev_attempt_failure_kind tracks why the previous attempt left
+# the loop without breaking out via success.  Three values:
+#   - "validation": codex returned 0 but soft validation (residual
+#     markers / fingerprint verifier) rejected its output.  The
+#     marker/fingerprint violation files are populated and accurate,
+#     so the standard prelude lists them and the model can react.
+#   - "timeout": the `timeout` wrapper killed codex before it
+#     completed.  Detected via `timeout`'s exit codes:
+#       * 124 — unconditional timer expiry (SIGTERM after duration).
+#       * 137 — SIGKILL.  Disambiguated against OOM kill / external
+#         SIGKILL by elapsed wall-clock time: a `timeout`-driven
+#         SIGKILL fires at duration + ~30s (the `--kill-after=30s`
+#         backstop), so elapsed >= duration is treated as a real
+#         timeout.  Elapsed << duration on exit 137 routes to
+#         "exec_error" instead.  See the `case` block at the
+#         classification site.
+#     On a real timeout, soft validation never ran (any partial
+#     apply_patch calls were discarded by the per-attempt working-
+#     tree restore on the next iteration), so the violation files
+#     are stale / empty and the standard prelude would falsely
+#     report "0 markers, 0 fingerprint violations".  We render a
+#     timeout-aware prelude instead — see _build_retry_prompt.
+#   - "exec_error": codex itself exited non-zero (config / auth /
+#     model / network errors that are not the timer firing).  The
+#     script has no useful reflexion data; we retry with the
+#     original prompt verbatim rather than render either prelude
+#     with misleading wording.
+_prev_attempt_failure_kind=""
+
+# Per-attempt cap so a runaway first attempt can't burn the full
+# 170-min step budget (review_autofix.yml's resolver step cap)
+# before retries get a turn.  50 min × 3 attempts = 150 min,
+# leaving ~20 min for soft validation, commit, and the EXIT-trap
+# dispatch within the 170-min step cap.  Default raised from 18
+# min to 50 min after run 25629086684 (PR #2865 on
+# tele-funtoken-msg-scoring) where every one of the 3 attempts
+# hit the previous 18-min ceiling without ever producing
+# apply_patch on a 7-file mixed-implementation merge — symptom in
+# log: 3 × "Conflict resolver retry … (prev markers=0, prev
+# fingerprint_violations=0)" then "Conflict resolver failed after
+# retries."  Override via CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS
+# for per-PR tuning.
+#
+# Default + validation + clamp run ONCE here, before the retry
+# loop, so the value enforced by the `timeout` wrapper, the value
+# substituted into the retry-prompt template, and the value
+# printed in the retry log are guaranteed to agree.  Doing this
+# inside the loop body created a window (loop top, on retry
+# attempts) where _build_retry_prompt and the retry-log line
+# could see an unclamped override.
+: "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:=3000}"
+# Defensive: an empty / non-numeric / leading-'-' override would
+# either be rejected by `timeout` outright or parsed as an option,
+# burning the 3-attempt budget on env-config errors instead of
+# real model work.  Restrict to positive integer seconds (matches
+# the README contract).
+if ! [[ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} is not a positive integer; falling back to 3000."
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=3000
+fi
+# Upper bound: the default of 3000s (50 min) is sized for 3
+# attempts × 50 min = 150 min inside the 170-min step cap
+# (review_autofix.yml's resolver step), leaving ~20 min for soft
+# validation, commit, and the EXIT-trap dispatch.  Operators can
+# raise the env var for a particular PR, but values above 3000s
+# start eating into that 20-min headroom and risk SIGKILL'ing
+# attempt 3 mid-flight on a hung run.  We clamp anything above
+# 3000s with a `::warning::` rather than rejecting it because a
+# legitimately-large per-attempt budget on a multi-file conflict
+# set is occasionally the right tuning — just not at unbounded
+# values.
+CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS=3000
+if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}" ]; then
+  echo "::warning::CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} exceeds the upper bound of ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}s (would eat the soft-validation / commit / dispatch headroom under the 170-min step cap); clamping to ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}."
+  CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
 fi
 
 # _prev_attempt_failure_kind tracks why the previous attempt left
@@ -858,7 +1063,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   _codex_exit=0
   _attempt_started_at=$(date +%s)
   timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-    codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
     || _codex_exit=$?
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
   # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
@@ -1413,4 +1618,3 @@ if [ -n "$(git status --porcelain)" ]; then
 else
   echo "No conflict resolution changes to commit"
 fi
-

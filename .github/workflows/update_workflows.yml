@@ -32,7 +32,12 @@ name: Update Workflow Wrappers
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  # Default is SILENT (not DEBUG like other workflows) so the per-run
+  # "🔍 DEBUG: Workflow wrappers updated in <repo>…" notification at line ~452
+  # is suppressed by tg_helpers.sh::_tg_should_send. Consumer repos that
+  # want the wrapper-update alert back can set vars.ALERT_MSG_LEVEL=DEBUG
+  # (or any level ≤ DEBUG=0), or pass alert_msg_level=DEBUG on dispatch.
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'SILENT' }}
 
 jobs:
   update-wrappers:
@@ -65,6 +70,10 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
             "${TMPDIR}/upstream"
           cd "${TMPDIR}/upstream"
+          # In cone mode, repo-root files remain present alongside these
+          # directory patterns, which keeps workflow-templates/CLAUDE.md
+          # (a symlink to ../CLAUDE.md) readable without passing a bare
+          # root-file argument here; modern git rejects that form.
           git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
           cd -
 
@@ -183,6 +192,49 @@ jobs:
             echo ".claude/ assets synced: ${CHANGED_COUNT} file(s) changed."
           else
             echo ".claude/ assets already up to date."
+          fi
+
+      - name: Sync top-level CLAUDE.md from upstream
+        id: claude_md_sync
+        run: |
+          set -euo pipefail
+
+          # Mirror upstream's root CLAUDE.md → consumer's root CLAUDE.md.
+          # Semantics match the .claude/ sync above and the wrapper
+          # update: upstream is source of truth, hand-edits are
+          # overwritten on every sync. The upstream copy reached here
+          # via the workflow-templates/CLAUDE.md symlink (→ ../CLAUDE.md);
+          # cp -L dereferences it so the consumer gets a regular file
+          # at its repo root, not a symlink. If upstream has no
+          # CLAUDE.md at this stable ref the sync is a no-op.
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          UPSTREAM_CLAUDE_MD="${UPSTREAM_DIR}/CLAUDE.md"
+          LOCAL_CLAUDE_MD="CLAUDE.md"
+
+          echo "claude_md_changed=false" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/claude_md_changed_file.txt
+
+          if [ ! -e "${UPSTREAM_CLAUDE_MD}" ] && [ ! -L "${UPSTREAM_CLAUDE_MD}" ]; then
+            echo "Upstream has no workflow-templates/CLAUDE.md at this ref — nothing to sync."
+            exit 0
+          fi
+
+          # Dereferenced read — if the symlink target wasn't pulled by
+          # sparse-checkout this will fail loudly rather than silently
+          # writing a broken file.
+          if ! cat -- "${UPSTREAM_CLAUDE_MD}" >/dev/null 2>&1; then
+            echo "::error::Root CLAUDE.md is unreadable via workflow-templates/CLAUDE.md (dangling symlink or missing sparse-checkout target)."
+            exit 1
+          fi
+
+          if [ ! -f "${LOCAL_CLAUDE_MD}" ] || ! diff -q --strip-trailing-cr --ignore-space-at-eol "${UPSTREAM_CLAUDE_MD}" "${LOCAL_CLAUDE_MD}" >/dev/null 2>&1; then
+            cp -L "${UPSTREAM_CLAUDE_MD}" "${LOCAL_CLAUDE_MD}"
+            echo "claude_md_changed=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "${LOCAL_CLAUDE_MD}" > /tmp/claude_md_changed_file.txt
+            echo "Top-level CLAUDE.md synced from upstream."
+          else
+            echo "Top-level CLAUDE.md already up to date."
           fi
 
       - name: Compare and update workflow wrappers
@@ -310,7 +362,7 @@ jobs:
           fi
 
       - name: Commit and push updates
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true'
         run: |
           set -euo pipefail
 
@@ -329,6 +381,12 @@ jobs:
               [ -n "$changed_path" ] || continue
               git add -- "$changed_path"
             done < /tmp/claude_changed_files.txt
+          fi
+          if [ -f /tmp/claude_md_changed_file.txt ] && [ -s /tmp/claude_md_changed_file.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              git add -- "$changed_path"
+            done < /tmp/claude_md_changed_file.txt
           fi
 
           COMMIT_BODY=""
@@ -360,6 +418,16 @@ jobs:
           if [ -n "$CLAUDE_CHANGED_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}.claude/ assets:\n${CLAUDE_CHANGED_LIST}\n"
           fi
+          CLAUDE_MD_CHANGED_LIST=""
+          if [ -f /tmp/claude_md_changed_file.txt ] && [ -s /tmp/claude_md_changed_file.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              CLAUDE_MD_CHANGED_LIST="${CLAUDE_MD_CHANGED_LIST}• ${changed_path}\n"
+            done < /tmp/claude_md_changed_file.txt
+          fi
+          if [ -n "$CLAUDE_MD_CHANGED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Top-level CLAUDE.md:\n${CLAUDE_MD_CHANGED_LIST}\n"
+          fi
 
           if git diff --cached --quiet; then
             echo "No staged changes detected after update step; skipping commit."
@@ -371,7 +439,7 @@ jobs:
           git push
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -420,6 +488,11 @@ jobs:
           if [ -f /tmp/claude_changed_files.txt ] && [ -s /tmp/claude_changed_files.txt ]; then
             CLAUDE_CHANGED_LIST=$(cat /tmp/claude_changed_files.txt)
           fi
+          CLAUDE_MD_CHANGED="${{ steps.claude_md_sync.outputs.claude_md_changed }}"
+          CLAUDE_MD_CHANGED_LIST=""
+          if [ -f /tmp/claude_md_changed_file.txt ] && [ -s /tmp/claude_md_changed_file.txt ]; then
+            CLAUDE_MD_CHANGED_LIST=$(cat /tmp/claude_md_changed_file.txt)
+          fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           MSG="Workflow wrappers updated in ${REPO}
@@ -443,6 +516,11 @@ jobs:
             MSG="${MSG}
           ${CLAUDE_CHANGED_COUNT} .claude/ asset(s) synced:
           ${CLAUDE_CHANGED_LIST}"
+          fi
+          if [ "${CLAUDE_MD_CHANGED}" = "true" ] && [ -n "$CLAUDE_MD_CHANGED_LIST" ]; then
+            MSG="${MSG}
+          Top-level CLAUDE.md synced:
+          ${CLAUDE_MD_CHANGED_LIST}"
           fi
           MSG="${MSG}
           Source: coding-workflows@stable
@@ -532,6 +610,8 @@ jobs:
           fi
           CLAUDE_CHANGED_COUNT="${{ steps.claude_sync.outputs.claude_changed }}"
           echo "- **.claude/ assets synced:** ${CLAUDE_CHANGED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
+          CLAUDE_MD_CHANGED="${{ steps.claude_md_sync.outputs.claude_md_changed }}"
+          echo "- **Top-level CLAUDE.md synced:** ${CLAUDE_MD_CHANGED:-false}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${HAS_UPDATES}" = "true" ]; then
@@ -571,5 +651,12 @@ jobs:
             echo "**.claude/ files:**" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             cat /tmp/claude_changed_files.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -s /tmp/claude_md_changed_file.txt ]; then
+            echo "**Top-level CLAUDE.md:**" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/claude_md_changed_file.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi

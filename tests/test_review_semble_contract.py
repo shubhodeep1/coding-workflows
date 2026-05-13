@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Contract tests for review_autofix Semble + Serena wiring."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+COMMIT_CHANGES = REPO_ROOT / "scripts" / "review_commit_changes.sh"
+CONFLICT_PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
+CONFLICT_RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
+CONFLICT_PROMPT = REPO_ROOT / "prompts" / "conflict-resolver.txt"
+INTEGRATION_CONFLICT_PROMPT = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt"
+INTEGRATION_RETRY_PRELUDE = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver-retry-prelude.txt"
+
+
+def _read(path: Path) -> str:
+	return path.read_text(encoding="utf-8")
+
+
+def _step_block(text: str, step_name: str) -> str:
+	marker = f"- name: {step_name}"
+	start = text.find(marker)
+	assert start != -1, f"Missing workflow step: {step_name}"
+	next_step = text.find("\n      - name:", start + len(marker))
+	if next_step == -1:
+		return text[start:]
+	return text[start:next_step]
+
+
+def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
+	workflow = _read(WORKFLOW)
+	stage_block = _step_block(workflow, "Stage workflow support files")
+	init_block = _step_block(workflow, "Initialize runtime workspace")
+
+	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
+	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in stage_block
+	# build_semble_wrapper.sh added once the BM25 wrapper was extracted to a
+	# shared script (semble 0.1.3 ships no index/query CLI). Kept in the same
+	# optional-bootstrap loop so callers without it still fail-soft.
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_block
+	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_block
+	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_block
+	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_block
+	assert 'install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"' in stage_block
+	assert 'Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_block
+	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
+	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
+	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block
+	assert 'echo "SEMBLE_AVAILABLE=false"' in init_block
+	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in init_block
+	assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in init_block
+	assert 'echo "SERENA_AVAILABLE=false"' in init_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false"' in init_block
+	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH="' in init_block
+
+
+def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() -> None:
+	workflow = _read(WORKFLOW)
+	uv_block = _step_block(workflow, "Setup uv for Semble")
+	install_block = _step_block(workflow, "Install semble")
+	index_block = _step_block(workflow, "Build semble index")
+	setup_serena_block = _step_block(workflow, "Setup Serena for editor")
+	clear_serena_block = _step_block(workflow, "Clear Serena after editor")
+	detect_serena_block = _step_block(workflow, "Detect preexisting Serena project config")
+
+	assert "astral-sh/setup-uv@v3" in uv_block
+	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in uv_block
+	assert "continue-on-error: true" in uv_block
+	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in install_block
+	assert "continue-on-error: true" in install_block
+	assert 'if [ "${SEMBLE_ENABLED:-false}" != "true" ]; then' in install_block
+	assert 'if ! bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"; then' in install_block
+	assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
+	assert "Optional Semble installer is unavailable" in install_block
+	assert "if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'" in index_block
+	# Inline `semble index . --out ...` was unreachable code on the pinned
+	# semble (0.1.3 lacks the CLI). The shared wrapper builder owns the
+	# index build now and writes SEMBLE_INDEX_AVAILABLE=true on success.
+	assert 'wrapper_script=""' in index_block
+	assert 'wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"' in index_block
+	assert 'wrapper_script="scripts/build_semble_wrapper.sh"' in index_block
+	assert 'bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true' in index_block
+	assert "build_semble_wrapper: Semble wrapper unavailable:" in index_block
+	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' not in index_block
+	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
+	assert "if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'" in setup_serena_block
+	assert 'SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in setup_serena_block
+	assert 'SERENA_FALLBACK target=review-autofix-editor reason=setup-failure' in setup_serena_block
+	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_serena_block
+	assert "if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'" in clear_serena_block
+	assert 'SERENA_ENABLED=false bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in clear_serena_block
+	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in clear_serena_block
+	assert "if: env.PR_CLOSED != 'true'" in detect_serena_block
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_serena_block
+	assert '[ -e .serena/project.yml ]' in detect_serena_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"' in detect_serena_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"' in detect_serena_block
+	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor") < workflow.find("- name: Apply fixes with editor model")
+	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena for editor")
+	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena for editor")
+	assert workflow.find("- name: Apply fixes with editor model") < workflow.find("- name: Clear Serena after editor") < workflow.find("- name: Prepare merge-conflict resolver prompt and pre-snapshot")
+
+
+def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena() -> None:
+	workflow = _read(WORKFLOW)
+	reviewers = _read(REVIEWERS)
+	assemble_start = reviewers.index("assemble_reviewer_prompt()")
+	assemble_end = reviewers.index("# Assemble the default", assemble_start)
+	assemble_block = reviewers[assemble_start:assemble_end]
+
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"' in reviewers
+	assert 'REVIEWER_SEMBLE_QUERY_FILE="${REVIEWER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/reviewer_semble_query.txt}"' in reviewers
+	assert 'semble_query_block \\\n    "$(cat "${REVIEWER_SEMBLE_QUERY_FILE}")"' in reviewers
+	assert 'cat "${prompt_body_file}"' in assemble_block
+	assert 'cat "${REVIEWER_SEMBLE_CONTEXT_FILE}"' in assemble_block
+	assert 'cat "${extra_context_file}"' in assemble_block
+	assert assemble_block.index('cat "${prompt_body_file}"') < assemble_block.index('cat "${REVIEWER_SEMBLE_CONTEXT_FILE}"') < assemble_block.index('cat "${extra_context_file}"')
+	assert 'cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"' in reviewers
+	assert 'export CODEX_HOME="${reviewer_codex_home}"' in reviewers
+	assert "SERENA_TOOL_HINTS" not in reviewers
+	assert "setup_serena.sh" not in reviewers
+	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor")
+
+
+def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> None:
+	apply_fixes = _read(APPLY_FIXES)
+
+	assert 'EDITOR_SEMBLE_QUERY_FILE="${EDITOR_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/editor_semble_query.txt}"' in apply_fixes
+	assert '--semble-bin "${SEMBLE_BIN:-}"' in apply_fixes
+	assert '--semble-index "${SEMBLE_INDEX_PATH:-}"' in apply_fixes
+	assert '--semble-query-from "${EDITOR_SEMBLE_QUERY_FILE}"' in apply_fixes
+	assert '--semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"' in apply_fixes
+	assert "{{SERENA_TOOL_HINTS}}" in apply_fixes
+	assert 'EDITOR_SERENA_TOOL_HINTS=""' in apply_fixes
+	assert 'Serena hints:' in apply_fixes
+	assert 'SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"' in apply_fixes
+	assert "serena_runtime_noise_should_be_ignored()" in apply_fixes
+	assert "SERENA_PROJECT_PREEXISTED" in apply_fixes
+	assert "SERENA_PROJECT_BOOTSTRAP_HASH" in apply_fixes
+	assert "pathspec=(-- . ':(exclude).serena' ':(exclude).serena/**')" in apply_fixes
+
+
+def test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging() -> None:
+	commit_changes = _read(COMMIT_CHANGES)
+
+	assert 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then' in commit_changes
+	assert "current_serena_project_hash=\"$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)\"" in commit_changes
+	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_changes
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_changes
+	assert "rm -rf .serena" in commit_changes
+	assert ".serena|.serena/*) continue ;;" in commit_changes
+	assert "':!.serena'" in commit_changes
+	assert "':!.serena/**'" in commit_changes
+
+
+def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> None:
+	prepare = _read(CONFLICT_PREPARE)
+	resolve = _read(CONFLICT_RESOLVE)
+	conflict_prompt = _read(CONFLICT_PROMPT)
+	integration_prompt = _read(INTEGRATION_CONFLICT_PROMPT)
+	retry_prelude = _read(INTEGRATION_RETRY_PRELUDE)
+
+	assert 'CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"' in prepare
+	assert "append_semble_query_section 'Resolver allowlist:' \"${RESOLVER_ALLOWLIST_FILE}\" 3000" in prepare
+	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}" >> "$GITHUB_ENV"' in prepare
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in conflict_prompt
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in integration_prompt
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in retry_prelude
+	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in prepare
+	assert '[ "${SERENA_AVAILABLE:-false}" = "true" ]' in prepare
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in prepare
+	assert 'Resolver Serena hints:' in prepare
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"' in resolve
+	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in resolve
+	assert '[ "${SERENA_AVAILABLE:-false}" = "true" ]' in resolve
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in resolve
+	assert 'Resolver Serena hints:' in resolve
+	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"' in resolve
+	assert '--semble-query-from "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"' in resolve
+	assert 'semble_query_block \\\n    "$(cat "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}")"' in resolve
+	assert resolve.index('cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"') < resolve.index('cat "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"')
+
+
+def main() -> int:
+	test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena()
+	test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps()
+	test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena()
+	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
+	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
+	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()
+	print("OK: review_autofix Semble contract assertions hold")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

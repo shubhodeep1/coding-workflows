@@ -29,12 +29,33 @@ else
 	WORKFLOW_EDIT_RESTRICTION_LINE="- Do not change CI workflows."
 fi
 
+# {{SEMBLE_PREFETCH}} resolves from the optional ${SEMBLE_PREFETCH}
+# environment variable. Prompt consumers set it per render invocation so the
+# bounded Semble block stays in the dynamic prompt section and does not leak
+# across different prompt builds in the same shell process.
+SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
+
+# {{SERENA_TOOL_HINTS}} resolves from the optional ${SERENA_TOOL_HINTS}
+# environment variable. Prompt consumers set it per render invocation so the
+# Serena tool-usage guidance stays prompt-local and renders to an empty block
+# when Serena is unavailable.
+# Editor-only Serena guidance can be injected through the shared renderer
+# without touching reviewer or judge prompt assembly.
+SERENA_TOOL_HINTS_BLOCK="${SERENA_TOOL_HINTS:-}"
+
 line=""
 while IFS= read -r line || [ -n "${line}" ]; do
 	trimmed_line="${line#"${line%%[![:space:]]*}"}"
+	trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
 	case "${trimmed_line}" in
 		"{{WORKFLOW_EDIT_RESTRICTION}}")
 			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
+			;;
+		"{{SEMBLE_PREFETCH}}")
+			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK%$'\n'}"
+			;;
+		"{{SERENA_TOOL_HINTS}}")
+			printf '%s\n' "${SERENA_TOOL_HINTS_BLOCK%$'\n'}"
 			;;
 		*)
 			printf '%s\n' "${line}"
@@ -44,6 +65,16 @@ done < "${PROMPT_FILE}" > "${RENDERED_FILE}"
 
 if grep -qE '^[[:space:]]*\{\{WORKFLOW_EDIT_RESTRICTION\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
 	echo "Unresolved WORKFLOW_EDIT_RESTRICTION placeholder in rendered output for ${PROMPT_FILE}" >&2
+	exit 1
+fi
+
+if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
+	exit 1
+fi
+
+if grep -qE '^[[:space:]]*\{\{SERENA_TOOL_HINTS\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
+	echo "Unresolved SERENA_TOOL_HINTS placeholder in rendered output for ${PROMPT_FILE}" >&2
 	exit 1
 fi
 

@@ -322,6 +322,18 @@ def _state_comment(state: dict) -> str:
 	return "<!-- ORCHESTRATOR_STATE_V1\n" + json.dumps(state) + "\nORCHESTRATOR_STATE_V1 -->"
 
 
+def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
+	for comment in reversed(comments):
+		body = str((comment or {}).get("body", ""))
+		open_marker = "<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		close_marker = "\nAI_STANDALONE_STALL_STATE_V1 -->"
+		if not body.startswith(open_marker) or not body.endswith(close_marker):
+			continue
+		payload = body[len(open_marker):-len(close_marker)]
+		return json.loads(payload)
+	return None
+
+
 def _write_exec(path: Path, body: str) -> None:
 	path.write_text(body, encoding="utf-8")
 	path.chmod(0o755)
@@ -385,54 +397,77 @@ def _parse_v2_chunk(body: str) -> tuple[int, int, str, str] | None:
 	return part, total, manifest, chunk
 
 
+def _build_v2_state_comment_chain(payload: str, *, chunk_size: int) -> list[dict[str, str]]:
+	raw = payload.encode("utf-8")
+	encoded = base64.b64encode(raw).decode("ascii")
+	manifest = hashlib.sha256(raw).hexdigest()
+	total = max(1, (len(encoded) + chunk_size - 1) // chunk_size)
+	comments: list[dict[str, str]] = []
+	for idx in range(total):
+		chunk = encoded[idx * chunk_size : (idx + 1) * chunk_size]
+		comments.append({
+			"body": (
+				f"<!-- ORCHESTRATOR_STATE_V2 part={idx + 1}/{total} manifest={manifest} -->\n"
+				f"{chunk}\n{_V2_CLOSER}"
+			),
+		})
+	return comments
+
+
 def _extract_state_payloads(comments: list[dict]) -> list[str]:
 	"""All orchestrator-state JSON payloads in chronological (oldest-first) order.
 
-	Walks comments forward.  Each V1 single-comment state contributes
-	one payload at its own index.  Each V2 chunk-chain contributes one
-	payload at the index of the comment where the chain completed
-	(the newest part of that chain).  Combined V2 + V1 listing keeps
-	the test contract that the latest state write is `payloads[-1]`.
+	Walks V2 comments newest-first to mirror scripts/orchestrate_state_v2.py,
+	but records each recovered chain at the index of that chain's newest
+	comment so the combined V2 + V1 payload list still stays in
+	chronological order and preserves the `payloads[-1]` latest-state
+	test contract.
 	"""
 	payloads: list[tuple[int, str]] = []
-	v2_parts: dict[str, dict[int, str]] = {}
-	v2_totals: dict[str, int] = {}
-	v2_complete: set[str] = set()
-	for idx, comment in enumerate(comments):
+	v2_candidates: dict[tuple[str, int], dict[str, object]] = {}
+	for idx, comment in reversed(list(enumerate(comments))):
 		body = (comment or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" in body:
 			parsed = _parse_v2_chunk(body)
 			if parsed is not None:
 				part, total, manifest, chunk = parsed
-				if manifest not in v2_complete:
-					slot = v2_parts.setdefault(manifest, {})
-					slot.setdefault(part, chunk)
-					prev_total = v2_totals.get(manifest)
-					mismatch = False
-					if prev_total is None:
-						v2_totals[manifest] = total
-					elif prev_total != total:
-						# Mismatched declared total — disqualify and skip.
-						v2_parts.pop(manifest, None)
-						mismatch = True
-					if not mismatch and len(slot) == total and all(p in slot for p in range(1, total + 1)):
-						stitched_b64 = "".join(slot[p] for p in range(1, total + 1))
+				chain_key = (manifest, total)
+				candidate = v2_candidates.get(chain_key)
+				if part == total:
+					candidate = {
+						"latest_idx": idx,
+						"next_part": total - 1,
+						"parts": {part: chunk},
+					}
+					v2_candidates[chain_key] = candidate
+				elif candidate is not None and part == candidate.get("next_part"):
+					parts = candidate["parts"]
+					assert isinstance(parts, dict)
+					parts[part] = chunk
+					candidate["next_part"] = part - 1
+				else:
+					candidate = None
+				if candidate is not None:
+					parts = candidate["parts"]
+					assert isinstance(parts, dict)
+					if len(parts) == total and candidate.get("next_part") == 0:
+						stitched_b64 = "".join(parts[p] for p in range(1, total + 1))
 						compact = re.sub(r"\s+", "", stitched_b64)
 						try:
 							decoded = base64.b64decode(compact, validate=True)
 						except (binascii.Error, ValueError):
-							v2_parts.pop(manifest, None)
+							v2_candidates.pop(chain_key, None)
 						else:
 							if hashlib.sha256(decoded).hexdigest() == manifest:
-								v2_complete.add(manifest)
-								payloads.append((idx, decoded.decode("utf-8")))
+								payloads.append((int(candidate["latest_idx"]), decoded.decode("utf-8")))
+								v2_candidates.pop(chain_key, None)
 							else:
-								v2_parts.pop(manifest, None)
+								v2_candidates.pop(chain_key, None)
 		if "ORCHESTRATOR_STATE_V1" in body:
 			match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
 			if match:
 				payloads.append((idx, match.group(1)))
-	return [payload for _, payload in payloads]
+	return [payload for _, payload in sorted(payloads)]
 
 
 def _extract_latest_state(comments: list[dict]) -> dict:
@@ -491,6 +526,7 @@ def _run_poller(
 	actions_runs_status_sequence: list[int] | None = None,
 	actions_runs_etag: str = '"etag-initial"',
 	codex_touch_file: str | None = None,
+	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
@@ -1154,6 +1190,7 @@ if args[0] == 'api':
 							'state': pr_state,
 							'merged': bool(pr.get('merged', False)),
 							'headRefName': pr.get('headRefName', ''),
+							'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
 							'mergeable': pr.get('mergeable', None),
 							'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 							'commits': {
@@ -1206,6 +1243,36 @@ if args[0] == 'api':
 		issue['comments'].append({'id': cid, 'body': body})
 		save()
 		print(json.dumps({'id': cid}))
+		sys.exit(0)
+
+	m = re.search(r'/issues/comments/(\d+)$', path)
+	if m and method == 'PATCH' and (fields or input_file):
+		comment_id = int(m.group(1))
+		body = ''
+		for f in fields:
+			if f.startswith('body='):
+				body = f.split('=', 1)[1]
+		if input_file:
+			if input_file == '-':
+				payload_raw = sys.stdin.read()
+			else:
+				payload_raw = Path(input_file).read_text(encoding='utf-8')
+			try:
+				payload_obj = json.loads(payload_raw)
+			except Exception:
+				payload_obj = {}
+			body = payload_obj.get('body', body)
+		updated = False
+		for issue in store['issues'].values():
+			for comment in issue.get('comments', []):
+				if int(comment.get('id', 0) or 0) == comment_id:
+					comment['body'] = body
+					updated = True
+					break
+			if updated:
+				break
+		save()
+		print(json.dumps({'id': comment_id, 'updated': updated}))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/labels$', path)
@@ -1346,6 +1413,7 @@ if args[0] == 'api':
 			print(pr.get('headRefFromApi', pr.get('headRefName', '')))
 		else:
 			print(json.dumps({
+				'number': pr_num,
 				'state': pr_state,
 				'mergeable': pr.get('mergeable', True),
 				'mergeable_state': pr.get('mergeable_state', ''),
@@ -1709,6 +1777,42 @@ if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "actions-
 		print(json.dumps(payload))
 		sys.exit(0)
 
+if len(args) >= 2 and args[0] == "scripts/orchestrate_state_v2.py" and args[1] == "pack":
+	mode = os.environ.get("MOCK_ORCH_STATE_V2_PACK_MODE", "")
+	if mode == "count_mismatch":
+		out_dir = ""
+		state_file = ""
+		i = 2
+		while i < len(args):
+			if args[i] == "--out-dir" and i + 1 < len(args):
+				out_dir = args[i + 1]
+				i += 2
+				continue
+			if args[i] == "--state-file" and i + 1 < len(args):
+				state_file = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		raw_bytes = 0
+		if state_file:
+			try:
+				raw_bytes = len(Path(state_file).read_bytes())
+			except Exception:
+				raw_bytes = 0
+		out_path = Path(out_dir)
+		out_path.mkdir(parents=True, exist_ok=True)
+		chunk_path = out_path / "chunk-0001.txt"
+		chunk_path.write_text("mock chunk payload\n", encoding="utf-8")
+		print(json.dumps({
+			"manifest": "0" * 64,
+			"total": 2,
+			"files": [str(chunk_path)],
+			"raw_bytes": raw_bytes,
+			"encoded_bytes": len("mock chunk payload\n"),
+			"chunk_size": 65280,
+		}))
+		sys.exit(0)
+
 proc = subprocess.run([real_python, *args])
 sys.exit(proc.returncode)
 ''',
@@ -1755,6 +1859,8 @@ sys.exit(proc.returncode)
 			if not touch_path.is_absolute():
 				touch_path = runtime_dir / touch_path
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
+		if mock_orch_state_v2_pack_mode:
+			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -2972,6 +3078,105 @@ def test_standalone_conflict_sweep_missing_head_ref_logs_warning_and_continues()
 	assert result["update_branch_calls"] == []
 	assert result["review_dispatches"] == []
 	assert "unavailable head ref" in (result["stdout"] + result["stderr"])
+
+
+def test_standalone_conflict_sweep_consumes_budget_after_override_cap():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"conflict_override_count": {"sha416": 2},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/issue-501",
+				"headRefFromApi": "claude/issue-501",
+				"headSha": "sha416",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 1
+	assert standalone_state["conflict_override_count"]["sha416"] == 3
+	assert len([d for d in result["review_dispatches"] if str(d.get("pr_number")) == "416"]) == 1
+
+
+def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:review-blocked",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:review-blocked": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert standalone_state["phase_attempts"]["ai:review-blocked"] == 5
+	assert "ai:closed" in result["issues"]["501"]["labels"]
+	assert result["review_dispatches"] == []
+
+
+def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:done": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 6
+	assert "ai:closed" not in result["issues"]["501"]["labels"]
 
 
 
@@ -4774,6 +4979,139 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 	assert len(result["validation_dispatches"]) == 1
 
 
+def test_revalidate_not_blocked_by_prose_marker_comment_after_command():
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[
+			"/revalidate",
+			"Operator note: I reviewed the ORCHESTRATOR_STATE_V2 framing above.",
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_revalidate_not_blocked_by_torn_v2_chunk_after_command():
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	partial_chain = _build_v2_state_comment_chain(payload, chunk_size=max(1, encoded_len // 2))
+	assert len(partial_chain) > 1
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["/revalidate", partial_chain[0]["body"]],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_uses_different_total():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=encoded_len + 1)
+	newer_partial = _build_v2_state_comment_chain(
+		payload,
+		chunk_size=max(1, encoded_len // 2),
+	)[:1]
+	comments = older_complete + newer_partial
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
+def test_v2_extract_accepts_older_complete_chain_when_newer_same_manifest_same_total_uses_different_chunking():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	older_chunk_size = (encoded_len // 2) + 1
+	newer_chunk_size = encoded_len - 1
+	assert max(1, (encoded_len + older_chunk_size - 1) // older_chunk_size) == 2
+	assert max(1, (encoded_len + newer_chunk_size - 1) // newer_chunk_size) == 2
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=older_chunk_size)
+	newer_partial = _build_v2_state_comment_chain(payload, chunk_size=newer_chunk_size)[:1]
+	comments = older_complete + newer_partial
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
+def test_v2_extract_helper_matches_production_for_interleaved_older_complete_and_newer_prefix_same_total():
+	state = _base_state(status="in_progress")
+	payload = json.dumps(state)
+	encoded_len = len(base64.b64encode(payload.encode("utf-8")))
+	chunk_size = max(1, encoded_len // 4)
+	older_complete = _build_v2_state_comment_chain(payload, chunk_size=chunk_size)
+	assert len(older_complete) >= 4
+	newer_prefix = _build_v2_state_comment_chain(payload, chunk_size=chunk_size)[:1]
+	comments = older_complete[:-1] + newer_prefix + older_complete[-1:]
+
+	with tempfile.TemporaryDirectory() as td:
+		comments_json = Path(td) / "comments.json"
+		comments_json.write_text(json.dumps(comments), encoding="utf-8")
+		proc = subprocess.run(
+			[
+				"python3",
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"extract",
+				"--comments-json",
+				str(comments_json),
+			],
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads(proc.stdout) == state
+	assert _extract_latest_state(comments) == state
+
+
 def test_revalidate_ignored_when_no_comment():
 	"""Without a /revalidate comment, a validation-failed project stays skipped."""
 	state = _base_state(status="failed")
@@ -4851,6 +5189,26 @@ def test_judge_resume_plain_preserves_counters():
 		"Counter handling: judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in body
 		for body in tracking_comments
 	)
+
+
+def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
+	state = _base_state(status="failed")
+	state["judge_stall_cycles"] = 9
+	state["recovery_count"] = 6
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=[
+			"/judge_resume --force",
+			"FYI: the ORCHESTRATOR_STATE_V1 marker above came from the previous run.",
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["judge_stall_cycles"] == 0
+	assert ls["recovery_count"] == 0
 
 
 def test_judge_resume_reset_recovery_only():
@@ -5519,6 +5877,26 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		except json.JSONDecodeError:
 			continue
 	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in following_valid_payloads)
+
+
+def test_state_comment_pack_manifest_count_mismatch_skips_partial_v2_write():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		mock_orch_state_v2_pack_mode="count_mismatch",
+	)
+	state_comment_bodies = [
+		c.get("body", "")
+		for c in result["issues"]["192"]["comments"]
+		if _is_state_comment(c.get("body", ""))
+	]
+	assert not any("ORCHESTRATOR_STATE_V2" in body for body in state_comment_bodies), (
+		"a pack manifest whose files count does not match its declared total must not post a partial "
+		f"V2 state chain. Saw state comments={state_comment_bodies!r}"
+	)
+	assert "pack returned 1 chunk file(s) but declared total=2" in result["stderr"]
 
 
 def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
@@ -6516,6 +6894,155 @@ def test_verify_integration_fingerprints_still_fails_on_real_violation_when_mixe
 	try:
 		os.chdir(sandbox)
 		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_cross_issue_exact_conflicts_prefer_newer_capture():
+	# Historic merged-subissue state can contain the exact same (file, regex)
+	# pair across DIFFERENT issues with opposite intent: an older issue kept
+	# a line under must_contain, then a newer issue intentionally deleted that
+	# same line under must_not_contain. The verifier should prefer the newer
+	# captured_at intent rather than report an impossible contradiction.
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	legacy_line = "# Serena tool-usage guidance appears only when the workflow has bootstrapped"
+	files = {
+		"scripts/render_prompt.sh": (
+			"# Serena tool-usage guidance stays prompt-local and renders to an empty block\n"
+			"# when Serena is unavailable.\n"
+		),
+	}
+	fingerprints = {
+		"2523": {
+			"issue": 2523,
+			"pr": 2524,
+			"captured_at": "2026-05-11T18:16:20Z",
+			"must_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+			"must_not_contain": [],
+		},
+		"2525": {
+			"issue": 2525,
+			"pr": 2527,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [],
+			"must_not_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+		},
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	stdout_buf = io.StringIO()
+	try:
+		os.chdir(sandbox)
+		with contextlib.redirect_stdout(stdout_buf):
+			rc = mod.main([str(fp)])
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+	assert rc == 0, f"verify must PASS when newer exact conflicting capture wins; got rc={rc}"
+	captured = stdout_buf.getvalue()
+	assert "::warning::Fingerprint cross-issue exact-conflict dedup" in captured, (
+		"verifier must emit a ::warning:: naming the cross-issue exact-conflict dedup so "
+		f"operators can see the stale-state cause; got stdout={captured!r}"
+	)
+	assert "#2525 (PR #2527)" in captured, (
+		"warning should name the newer winning capture so operators can trace provenance; "
+		f"got stdout={captured!r}"
+	)
+
+
+
+def test_verify_integration_fingerprints_cross_issue_exact_conflicts_require_strictly_newer_capture():
+	# Conservative guardrail: if opposite-intent exact conflicts tie on
+	# captured_at, the verifier must NOT guess. Leave the contradiction live
+	# so verify mode fails instead of silently preferring one side.
+	mod = _verifier_module()
+	legacy_line = "# Serena tool-usage guidance appears only when the workflow has bootstrapped"
+	files = {
+		"scripts/render_prompt.sh": (
+			"# Serena tool-usage guidance stays prompt-local and renders to an empty block\n"
+			"# when Serena is unavailable.\n"
+		),
+	}
+	fingerprints = {
+		"2523": {
+			"issue": 2523,
+			"pr": 2524,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+			"must_not_contain": [],
+		},
+		"2525": {
+			"issue": 2525,
+			"pr": 2527,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [],
+			"must_not_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+		},
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+
+def test_verify_integration_fingerprints_list_mode_skips_cross_issue_exact_conflicts():
+	# list-violated-files shares the verify-mode dedup logic, but must stay
+	# silent on stdout except for genuinely violated file paths. A stale older
+	# exact conflict superseded by a newer capture must therefore produce no
+	# file-path output at all.
+	mod = _verifier_module()
+	legacy_line = "# Serena tool-usage guidance appears only when the workflow has bootstrapped"
+	files = {
+		"scripts/render_prompt.sh": (
+			"# Serena tool-usage guidance stays prompt-local and renders to an empty block\n"
+			"# when Serena is unavailable.\n"
+		),
+	}
+	fingerprints = {
+		"2523": {
+			"issue": 2523,
+			"pr": 2524,
+			"captured_at": "2026-05-11T18:16:20Z",
+			"must_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+			"must_not_contain": [],
+		},
+		"2525": {
+			"issue": 2525,
+			"pr": 2527,
+			"captured_at": "2026-05-11T22:09:20Z",
+			"must_contain": [],
+			"must_not_contain": [
+				{"file": "scripts/render_prompt.sh", "regex": re.escape(legacy_line)},
+			],
+		},
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		rc, out, err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		assert out == ""
+		assert err == ""
 	finally:
 		os.chdir(prev_cwd)
 		shutil.rmtree(sandbox, ignore_errors=True)

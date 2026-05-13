@@ -82,6 +82,11 @@ if ! [[ "${CODEX_RETRY_BACKOFF_BASE_SECS}" =~ ^[0-9]+$ ]] || [ "${CODEX_RETRY_BA
   CODEX_RETRY_BACKOFF_BASE_SECS="10"
 fi
 VALIDATION_COMPOSE_FILE="${VALIDATION_COMPOSE_FILE:-docker-compose.yml}"
+SERENA_ENABLED="${SERENA_ENABLED:-false}"
+SERENA_AVAILABLE="${SERENA_AVAILABLE:-false}"
+SERENA_BOOTSTRAP_ATTEMPTED="${SERENA_BOOTSTRAP_ATTEMPTED:-false}"
+SERENA_PROJECT_PREEXISTED="${SERENA_PROJECT_PREEXISTED:-}"
+SERENA_PROJECT_BOOTSTRAP_HASH="${SERENA_PROJECT_BOOTSTRAP_HASH:-}"
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
 VALIDATION_TEST_API_KEY="${VALIDATION_TEST_API_KEY:-test-api-key}"
@@ -239,6 +244,391 @@ if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 
+write_github_env_value()
+{
+  local key="${1:?write_github_env_value: key required}"
+  local value="${2-}"
+
+  if [ -z "${GITHUB_ENV:-}" ]; then
+    return 0
+  fi
+  printf '%s=%s\n' "${key}" "${value}" >> "${GITHUB_ENV}" 2>/dev/null || true
+}
+
+env_is_truthy()
+{
+  local value="${1:-}"
+
+  case "$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+detect_serena_project_preexisting()
+{
+  if command -v git >/dev/null 2>&1 && git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1; then
+    printf '%s\n' "true"
+    return 0
+  fi
+  if [ -e .serena/project.yml ]; then
+    printf '%s\n' "true"
+  else
+    printf '%s\n' "false"
+  fi
+}
+
+clear_stale_serena_codex_config()
+{
+  local codex_config_path=""
+
+  if [ -z "${HOME:-}" ]; then
+    return 0
+  fi
+  codex_config_path="${HOME}/.codex/config.toml"
+  if [ ! -f "${codex_config_path}" ]; then
+    return 0
+  fi
+
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${codex_config_path}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+existing = config_path.read_text(encoding="utf-8")
+lines = existing.splitlines(keepends=True)
+out = []
+i = 0
+
+def is_serena_header(line: str) -> bool:
+    stripped = line.strip()
+    return bool(re.match(r"^\[mcp_servers\.serena(?:\.[^\]]+)?\](?:[ \t]+#.*)?$", stripped))
+
+def is_table_header(line: str) -> bool:
+    stripped = line.strip()
+    return bool(re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped))
+
+while i < len(lines):
+    if is_serena_header(lines[i]):
+        i += 1
+        while i < len(lines) and (not is_table_header(lines[i]) or is_serena_header(lines[i])):
+            i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+
+rendered = "".join(out).rstrip("\n")
+if rendered == existing.rstrip("\n"):
+    raise SystemExit(0)
+if rendered:
+    config_path.write_text(rendered + "\n", encoding="utf-8")
+else:
+    config_path.unlink()
+PY
+  then
+    echo "::warning::Failed to clear stale Serena MCP configuration from ${codex_config_path}; continuing." >&2
+  fi
+}
+
+if [ -z "${SERENA_PROJECT_PREEXISTED}" ]; then
+  SERENA_PROJECT_PREEXISTED="$(detect_serena_project_preexisting)"
+fi
+export SERENA_ENABLED SERENA_AVAILABLE SERENA_BOOTSTRAP_ATTEMPTED SERENA_PROJECT_PREEXISTED SERENA_PROJECT_BOOTSTRAP_HASH
+
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  if source scripts/semble_helpers.sh; then
+    if type semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble prompt context." >&2
+    fi
+  else
+    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble prompt context." >&2
+  fi
+fi
+
+VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS="${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+  echo "::warning::VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}); defaulting to 3." >&2
+  VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS="3"
+fi
+
+VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS="${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+  echo "::warning::VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}); defaulting to 3." >&2
+  VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS="3"
+fi
+
+build_validate_semble_query()
+{
+  local label="${1:-validation}"
+  shift || true
+
+  python3 - "${label}" "$@" <<'PY'
+import pathlib
+import re
+import sys
+
+label = sys.argv[1].strip() or "validation"
+raw_inputs = sys.argv[2:]
+path_tokens = []
+interesting_lines = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\."
+    r"(?:py|sh|ya?ml|json|toml|js|jsx|ts|tsx|go|rs|java|kt|rb|php|sql|md|txt)"
+    r"(?![A-Za-z0-9_./-])"
+)
+special_file_re = re.compile(r"\b(?:Dockerfile(?:\.[A-Za-z0-9_.-]+)?|Makefile|Procfile)\b")
+
+def append_unique(bucket, value, *, limit):
+    value = value.strip()
+    if not value or value in bucket or len(bucket) >= limit:
+        return
+    bucket.append(value)
+
+def iter_source_texts(values):
+    for raw in values:
+        if not raw:
+            continue
+        candidate_path = pathlib.Path(raw)
+        if "\n" not in raw and len(raw) < 512 and candidate_path.is_file():
+            try:
+                yield candidate_path.read_text(encoding="utf-8", errors="replace")[:12000]
+            except OSError:
+                yield raw[:12000]
+        else:
+            yield raw[:12000]
+
+for text in iter_source_texts(raw_inputs):
+    if not text.strip():
+        continue
+
+    for token in re.findall(r"`([^`\n]+)`", text):
+        token = token.strip()
+        if "/" in token or "." in pathlib.Path(token).name or token in {"Dockerfile", "Makefile", "Procfile"}:
+            append_unique(path_tokens, token, limit=10)
+
+    for token in path_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+    for token in special_file_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or line.startswith(("===", "---", "```", "#")):
+            continue
+        if len(line) < 8:
+            continue
+        append_unique(interesting_lines, line[:180], limit=8)
+
+query_parts = [label]
+if path_tokens:
+    query_parts.append("files " + " ".join(path_tokens[:8]))
+if interesting_lines:
+    query_parts.extend(interesting_lines[:6])
+
+query = " ; ".join(part for part in query_parts if part)
+query = query[:700].strip(" ;")
+if query:
+    print(query)
+PY
+}
+
+build_validate_discover_semble_query()
+{
+  build_validate_semble_query \
+    "validation discover context" \
+    "validation harness docker compose canary runtime validation" \
+    "${VALIDATION_COMPOSE_FILE}" \
+    "${PROJECT_SPEC_FILE}"
+}
+
+build_validate_diagnose_semble_query()
+{
+  build_validate_semble_query \
+    "validation diagnose failure context" \
+    "runtime validation failure diagnose failing tests" \
+    "${FIRST_FAILURE:-}" \
+    "${VALIDATION_RESULT_FILE}" \
+    "${VALIDATION_LOG_TAIL_FILE}" \
+    "${CONTAINER_LOG_TAIL_FILE}" \
+    "${VALIDATE_HINTS_FILE}"
+}
+
+append_validate_semble_context()
+{
+  local query_text="${1:-}"
+  local max_chunks="${2:-3}"
+  local header_label="${3:-Validation Context}"
+
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  echo
+  if semble_query_block "${query_text}" "${max_chunks}" "${header_label}"; then
+    echo
+  fi
+}
+
+# Filter workflow-generated Serena runtime artifacts from path-constraint
+# bookkeeping only when the repo did not already own the Serena project
+# config before bootstrap and that config stayed unchanged. That keeps
+# bootstrap-owned .serena/ state from looking like a validation-side edit
+# while still preserving repo-owned .serena files.
+filter_runtime_status_noise()
+{
+  local line current_hash
+
+  while IFS= read -r line; do
+    case "${line}" in
+      *' .serena/'*|*' .serena')
+        if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
+           [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
+           [ -f .serena/project.yml ]; then
+          current_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+          if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+            continue
+          fi
+        fi
+        ;;
+    esac
+    printf '%s\n' "${line}"
+  done
+}
+
+build_validate_serena_tool_hints()
+{
+  local phase="${1:-general}"
+
+  if [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
+    return 0
+  fi
+
+  case "${phase}" in
+    discover)
+      printf '%s\n' \
+        'Serena hints:' \
+        '- Serena MCP is available in this run. Prefer Serena symbol/navigation tools for discovery when they materially reduce shell reads (for example: activate_project, find_symbol, get_symbols_overview, find_referencing_symbols, search_for_pattern).' \
+        '- Use Serena to confirm runtime entrypoints, env readers, health routes, Docker/build files, and existing test commands; keep the YAML output grounded in repo evidence and preserve the required schema.'
+      ;;
+    diagnose)
+      printf '%s\n' \
+        'Serena hints:' \
+        '- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads while confirming which repository-owned file, function, or script path a failure comes from.' \
+        '- Use Serena to strengthen evidence for `needs_fixes` vs `harness_error`, but keep the JSON schema unchanged and do not invent ownership facts.'
+      ;;
+    *)
+      printf '%s\n' \
+        'Serena hints:' \
+        '- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads.' \
+        '- Keep repository changes and output contracts unchanged.'
+      ;;
+  esac
+}
+
+sanitize_serena_log_value()
+{
+  local value="${1:-unknown}"
+
+  value="$(printf '%s' "${value}" | tr '[:space:]=' '__')"
+  if [ -z "${value}" ]; then
+    value="unknown"
+  fi
+  printf '%s\n' "${value}"
+}
+
+emit_serena_fallback()
+{
+  local phase="${1:-general}"
+  local reason="${2:-setup-failure}"
+
+  printf 'SERENA_FALLBACK target=validate phase=%s reason=%s\n' \
+    "$(sanitize_serena_log_value "${phase}")" \
+    "$(sanitize_serena_log_value "${reason}")" >&2
+}
+
+ensure_serena_bootstrap()
+{
+  local serena_phase="${1:-general}"
+  local bootstrap_env_file=""
+  local env_key=""
+  local env_value=""
+  local serena_project_hash=""
+
+  if ! env_is_truthy "${SERENA_ENABLED:-false}"; then
+    emit_serena_fallback "${serena_phase}" "disabled"
+    clear_stale_serena_codex_config
+    SERENA_AVAILABLE="false"
+    export SERENA_AVAILABLE
+    write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
+    return 0
+  fi
+  if env_is_truthy "${SERENA_AVAILABLE:-false}"; then
+    return 0
+  fi
+  if env_is_truthy "${SERENA_BOOTSTRAP_ATTEMPTED:-false}"; then
+    return 0
+  fi
+
+  SERENA_BOOTSTRAP_ATTEMPTED="true"
+  export SERENA_BOOTSTRAP_ATTEMPTED
+
+  if [ -z "${SERENA_PROJECT_PREEXISTED:-}" ]; then
+    SERENA_PROJECT_PREEXISTED="$(detect_serena_project_preexisting)"
+  fi
+  export SERENA_PROJECT_PREEXISTED
+  write_github_env_value "SERENA_PROJECT_PREEXISTED" "${SERENA_PROJECT_PREEXISTED}"
+
+  if [ ! -f "scripts/setup_serena.sh" ]; then
+    echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."
+    emit_serena_fallback "${serena_phase}" "setup-failure"
+    clear_stale_serena_codex_config
+    SERENA_AVAILABLE="false"
+    export SERENA_AVAILABLE
+    write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
+    return 0
+  fi
+
+  bootstrap_env_file="$(mktemp "${RUNTIME_DIR}/serena-bootstrap-env.XXXXXX")"
+  if ! SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh; then
+    echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."
+    emit_serena_fallback "${serena_phase}" "setup-failure"
+    clear_stale_serena_codex_config
+    SERENA_AVAILABLE="false"
+  else
+    SERENA_AVAILABLE="false"
+    while IFS='=' read -r env_key env_value; do
+      case "${env_key}" in
+        SERENA_AVAILABLE)
+          SERENA_AVAILABLE="${env_value}"
+          ;;
+      esac
+    done < "${bootstrap_env_file}"
+  fi
+  rm -f "${bootstrap_env_file}"
+
+  if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then
+    serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+    SERENA_PROJECT_BOOTSTRAP_HASH="${serena_project_hash}"
+  else
+    SERENA_PROJECT_BOOTSTRAP_HASH=""
+  fi
+
+  export SERENA_AVAILABLE SERENA_PROJECT_BOOTSTRAP_HASH
+  write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
+  write_github_env_value "SERENA_PROJECT_BOOTSTRAP_HASH" "${SERENA_PROJECT_BOOTSTRAP_HASH}"
+}
+
 # attempt_self_heal_and_reexec — last-chance interception before a hard
 # validation failure. If the self-heal LLM proposes a patch to one of the
 # four validation prompt files and the patch applies cleanly, we re-exec
@@ -287,6 +677,8 @@ attempt_self_heal_and_reexec()
     echo "::warning::self-heal dependency scripts/render_prompt.sh not found; skipping self-heal." >&2
     return 0
   fi
+
+  ensure_serena_bootstrap "${phase}"
 
   local heal_exit=0
   SELF_HEAL_FAILURE_PHASE="${phase}" \
@@ -2069,18 +2461,22 @@ else
   if [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
     echo "::warning::Cached validation hints at ${VALIDATE_HINTS_CACHE_FILE} failed sanity checks; falling back to codex discovery." >&2
   fi
+  ensure_serena_bootstrap "discover"
+  DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"
+  discover_semble_query="$(build_validate_discover_semble_query || true)"
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "=== DISCOVERY TASK ==="
   echo
-  bash scripts/render_prompt.sh prompts/mode-validate-discover.txt
+  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-discover.txt
   echo
   echo "TOOL_CALL_BUDGET: 15"
   echo
   echo "=== PROJECT SPEC ==="
     cat "${PROJECT_SPEC_FILE}"
     echo
+    append_validate_semble_context "${discover_semble_query}" "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" "Validate Discover Context"
     echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
   } > "${DISCOVER_PROMPT_FILE}"
 
@@ -2117,7 +2513,7 @@ else
     DISCOVER_ATTEMPTS_USED="${attempt}"
     echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
     set +e
-    cat "${DISCOVER_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
+    cat "${DISCOVER_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
     DISCOVER_EXIT=$?
     set -e
 
@@ -2291,7 +2687,7 @@ touch validation/.ai-validation-owned
 ensure_validate_wrapper
 
 if command -v git >/dev/null 2>&1; then
-  git status --porcelain --untracked-files=all -- . ':!validation/**' | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
+  git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------
@@ -2417,7 +2813,7 @@ case "${renderer_exit}" in
 esac
 
 if command -v git >/dev/null 2>&1; then
-  git status --porcelain --untracked-files=all -- . ':!validation/**' | sort > "${POST_GENERATE_STATUS_FILE}" 2>/dev/null || true
+  git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > "${POST_GENERATE_STATUS_FILE}" 2>/dev/null || true
   NON_VALIDATION_CHANGES=""
   if [ -f "${PRE_GENERATE_STATUS_FILE}" ] && [ -f "${POST_GENERATE_STATUS_FILE}" ] && ! cmp -s "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}"; then
     NON_VALIDATION_CHANGES="$(diff -u "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}" || true)"
@@ -2772,12 +3168,15 @@ fi
 # ---------------------------------------------------------------
 # Phase 4: Diagnose failures
 # ---------------------------------------------------------------
+ensure_serena_bootstrap "diagnose"
+DIAGNOSE_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "diagnose" || true)"
+diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
+  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo
@@ -2795,6 +3194,7 @@ fi
   echo
   echo "=== VALIDATION HINTS ==="
   cat "${VALIDATE_HINTS_FILE}"
+  append_validate_semble_context "${diagnose_semble_query}" "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" "Validate Diagnose Context"
 } > "${DIAGNOSE_PROMPT_FILE}"
 
 DIAGNOSE_SUCCESS=false
@@ -2804,7 +3204,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DIAGNOSE_ATTEMPTS_USED="${attempt}"
   echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
   set +e
-  cat "${DIAGNOSE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+  cat "${DIAGNOSE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
   DIAGNOSE_EXIT=$?
   set -e
 

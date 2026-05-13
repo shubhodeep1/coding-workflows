@@ -43,6 +43,27 @@ set -euo pipefail
 command -v jq >/dev/null 2>&1 || { echo "self-heal: jq is required" >&2; exit 2; }
 command -v patch >/dev/null 2>&1 || { echo "self-heal: patch is required" >&2; exit 2; }
 
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	if source scripts/semble_helpers.sh; then
+		if type semble_query_block >/dev/null 2>&1; then
+			SEMBLE_HELPERS_AVAILABLE="true"
+		else
+			echo "self-heal: semble_helpers.sh did not expose semble_query_block; continuing without Semble context" >&2
+		fi
+	else
+		echo "self-heal: failed to source scripts/semble_helpers.sh; continuing without Semble context" >&2
+	fi
+fi
+
+SELF_HEAL_SEMBLE_MAX_CHUNKS="${SELF_HEAL_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+	echo "self-heal: SELF_HEAL_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${SELF_HEAL_SEMBLE_MAX_CHUNKS}); defaulting to 3" >&2
+	SELF_HEAL_SEMBLE_MAX_CHUNKS="3"
+fi
+
 # Budget check — if we're already at or past the budget, bail out immediately.
 if [ "${SELF_HEAL_ATTEMPT}" -ge "${MAX_SELF_HEAL_ATTEMPTS}" ]; then
 	echo "self-heal: budget exhausted (attempt=${SELF_HEAL_ATTEMPT} max=${MAX_SELF_HEAL_ATTEMPTS})" >&2
@@ -97,6 +118,111 @@ _tail_if_exists()
 	fi
 }
 
+build_self_heal_semble_query()
+{
+	python3 - \
+		"${SELF_HEAL_FAILURE_PHASE}" \
+		"${VALIDATION_RESULT_FILE:-}" \
+		"${DIAGNOSE_RESULT_FILE:-}" \
+		"${VALIDATION_LOG_TAIL_FILE:-}" \
+		"${CONTAINER_LOG_TAIL_FILE:-}" \
+		"${VALIDATE_HINTS_FILE:-}" \
+		"${DISCOVER_OUTPUT_FILE:-}" \
+		"${GENERATE_OUTPUT_FILE:-}" \
+		"${DIAGNOSE_OUTPUT_FILE:-}" <<'PY'
+import pathlib
+import re
+import sys
+
+phase = sys.argv[1].strip() or "unknown"
+sources = sys.argv[2:]
+path_tokens = []
+interesting_lines = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\."
+    r"(?:py|sh|ya?ml|json|toml|js|jsx|ts|tsx|go|rs|java|kt|rb|php|sql|md|txt)"
+    r"(?![A-Za-z0-9_./-])"
+)
+special_file_re = re.compile(r"\b(?:Dockerfile(?:\.[A-Za-z0-9_.-]+)?|Makefile|Procfile)\b")
+
+def append_unique(bucket, value, *, limit):
+    value = value.strip()
+    if not value or value in bucket or len(bucket) >= limit:
+        return
+    bucket.append(value)
+
+for source in sources:
+    if not source:
+        continue
+    candidate = pathlib.Path(source)
+    if candidate.is_file():
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")[:14000]
+        except OSError:
+            continue
+    else:
+        text = source[:14000]
+    if not text.strip():
+        continue
+
+    for token in re.findall(r"`([^`\n]+)`", text):
+        token = token.strip()
+        if "/" in token or "." in pathlib.Path(token).name or token in {"Dockerfile", "Makefile", "Procfile"}:
+            append_unique(path_tokens, token, limit=10)
+
+    for token in path_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+    for token in special_file_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or line.startswith(("===", "---", "```", "#")):
+            continue
+        if len(line) < 8:
+            continue
+        append_unique(interesting_lines, line[:180], limit=8)
+
+query_parts = [f"validation self-heal {phase} prompt context"]
+if path_tokens:
+    query_parts.append("files " + " ".join(path_tokens[:8]))
+if interesting_lines:
+    query_parts.extend(interesting_lines[:6])
+
+query = " ; ".join(part for part in query_parts if part)
+query = query[:700].strip(" ;")
+if query:
+    print(query)
+PY
+}
+
+append_self_heal_semble_context()
+{
+	local query_text="${1:-}"
+
+	if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+		return 0
+	fi
+
+	echo
+	if semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then
+		echo
+	fi
+}
+
+build_self_heal_serena_tool_hints()
+{
+	if [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
+		return 0
+	fi
+
+	printf '%s\n' \
+		'Serena hints:' \
+		'- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads while tracing which validation prompt instruction likely caused the failure.' \
+		'- Use Serena for evidence and focused navigation only; keep any proposed patch additive, prompt-only, and limited to the four allow-listed validation prompts.'
+}
+
 # Ensure the patches ledger exists.
 : > "${SELF_HEAL_LOG_FILE}"
 if [ ! -f "${SELF_HEAL_PATCHES_FILE}" ]; then
@@ -106,12 +232,14 @@ fi
 # ---------------------------------------------------------------
 # Compose the self-heal prompt
 # ---------------------------------------------------------------
+self_heal_semble_query="$(build_self_heal_semble_query || true)"
+self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 {
 	_cat_if_exists "STATIC CONTEXT" "${STATIC_CONTEXT_FILE:-}"
 	echo
 	echo "=== SELF-HEAL TASK ==="
 	echo
-	bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
+	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
 	echo
 	echo "=== SELF-HEAL ATTEMPT ==="
 	echo "attempt_number: $((SELF_HEAL_ATTEMPT + 1))"
@@ -125,7 +253,9 @@ fi
 		echo "(none — this is the first self-heal attempt for this run)"
 	fi
 	echo
-	echo "=== CURRENT VALIDATION PROMPT FILES (with any prior self-heal patches already applied) ==="
+	echo "=== CURRENT VALIDATION PROMPT FILES (raw on-disk contents with any prior self-heal patches already applied) ==="
+	echo "Note: keep diffs anchored to the literal file text shown here; some prompts intentionally contain the runtime placeholder {{SERENA_TOOL_HINTS}}."
+	echo
 	for _target in "${ALLOWED_TARGETS[@]}"; do
 		if [ -f "prompts/${_target}" ]; then
 			echo "--- prompts/${_target} ---"
@@ -144,6 +274,7 @@ fi
 	_tail_if_exists "DISCOVER OUTPUT" "${DISCOVER_OUTPUT_FILE:-}" 120
 	_tail_if_exists "GENERATE OUTPUT" "${GENERATE_OUTPUT_FILE:-}" 120
 	_tail_if_exists "DIAGNOSE OUTPUT" "${DIAGNOSE_OUTPUT_FILE:-}" 120
+	append_self_heal_semble_context "${self_heal_semble_query}"
 } > "${SELF_HEAL_PROMPT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"
 
 # ---------------------------------------------------------------
@@ -152,7 +283,7 @@ fi
 SELF_HEAL_LLM_SUCCESS=false
 for _llm_attempt in 1 2; do
 	echo "self-heal: LLM call attempt ${_llm_attempt}/2" >> "${SELF_HEAL_LOG_FILE}"
-	if cat "${SELF_HEAL_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"; then
+	if cat "${SELF_HEAL_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"; then
 		# Extract the last JSON object that contains a "target_prompt" key.
 		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
 		# (the earlier brace-depth counter mis-handled JSON strings that
