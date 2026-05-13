@@ -2889,12 +2889,12 @@ jobs:
           git config user.name "codex-bot" 2>/dev/null || true
           git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
-          MERGE_STASH="$(mktemp -d)"
+          MERGE_STASH="$(mktemp -d 2>/dev/null || printf '')"
           if [ -z "${MERGE_STASH}" ] || [ ! -d "${MERGE_STASH}" ]; then
             echo "::warning::mktemp -d failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
           fi
-          MERGE_STDERR_FILE="$(mktemp)"
+          MERGE_STDERR_FILE="$(mktemp 2>/dev/null || printf '')"
           if [ -z "${MERGE_STDERR_FILE}" ] || [ ! -f "${MERGE_STDERR_FILE}" ]; then
             echo "::warning::mktemp failed for merge stderr capture during pre-review merge-topology gate; fail-open to reviewer path."
             rm -rf "${MERGE_STASH}" >/dev/null 2>&1 || true

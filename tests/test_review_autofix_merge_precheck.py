@@ -57,29 +57,31 @@ def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
     must explicitly remove known CI-generated files so they cannot linger as
     untracked files and cause 'Untracked working tree file would be overwritten'
     errors on subsequent git merge invocations."""
-    wf = _workflow()
-    rm_line = FULL_RM_LINE
+    detect_step = _section(
+        "- name: Detect merge conflicts",
+        "\n      - name: Prepare merge-conflict resolver prompt and pre-snapshot",
+    )
     # Match the actual git command (not a comment line) by requiring a newline
     # immediately before the indented command.
-    reset_match = re.search(r"\n\s+git reset --hard HEAD\s*\n", wf)
-    rm_pos = wf.find(rm_line)
+    reset_match = re.search(r"\n\s+git reset --hard HEAD\s*\n", detect_step)
+    rm_pos = detect_step.find(FULL_RM_LINE)
     assert rm_pos != -1, (
-        f"Expected {rm_line!r} to appear in review_autofix.yml"
+        f"Expected {FULL_RM_LINE!r} to appear in the Detect merge conflicts step"
     )
     assert reset_match is not None, (
-        "Expected 'git reset --hard HEAD' command in review_autofix.yml"
+        "Expected 'git reset --hard HEAD' command in the Detect merge conflicts step"
     )
     reset_pos = reset_match.start()
     assert rm_pos < reset_pos, (
-        "rm -f of known CI artifacts must appear before the first "
-        "git reset --hard HEAD so the untracked files are gone before reset runs"
+        "rm -f of known CI artifacts must appear before git reset --hard HEAD "
+        "inside the Detect merge conflicts step so the untracked files are gone "
+        "before reset runs"
     )
 
 
 def test_known_ci_artifacts_removed_in_resolve_step():
-    """The 'Resolve merge conflicts' step must also remove the same set of
-    CI-generated files before running git merge, since it performs its own
-    merge invocation."""
+    """Every merge-performing review_autofix probe should remove the same set
+    of known CI-generated files before running git merge."""
     pre_review_step = _section(
         "- name: Pre-review deterministic merge-topology gate",
         "\n      - name: Run reviewer models",
@@ -95,6 +97,21 @@ def test_known_ci_artifacts_removed_in_resolve_step():
     assert FULL_RM_LINE in detect_step, (
         "Expected the late detect-conflicts step to remove the same known "
         "CI-artifact set before its git reset/merge probe"
+    )
+
+
+def test_pre_review_gate_mktemp_fail_open_reachable_under_errexit():
+    """The early gate's documented mktemp fail-open checks must remain
+    reachable even though the step runs with set -euo pipefail."""
+    section = _section(
+        "- name: Pre-review deterministic merge-topology gate",
+        "\n      - name: Run reviewer models",
+    )
+    assert 'MERGE_STASH="$(mktemp -d 2>/dev/null || printf \'\')"' in section, (
+        "Expected the pre-review gate to keep mktemp -d fail-open under errexit"
+    )
+    assert 'MERGE_STDERR_FILE="$(mktemp 2>/dev/null || printf \'\')"' in section, (
+        "Expected the pre-review gate to keep merge stderr mktemp fail-open under errexit"
     )
 
 
