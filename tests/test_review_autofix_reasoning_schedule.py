@@ -22,6 +22,13 @@ def _workflow() -> str:
 	return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
 
 
+def _step_block(step_name: str) -> str:
+	marker = f"      - name: {step_name}"
+	wf = _workflow()
+	assert marker in wf
+	return wf.split(marker, 1)[1].split("\n      - name:", 1)[0]
+
+
 def test_no_reasoning_schedule_env_vars() -> None:
 	wf = _workflow()
 	assert "REVIEW_REASONING_SCHEDULE" not in wf
@@ -43,6 +50,16 @@ def test_smoke_test_reasoning_split() -> None:
 	assert 'model_reasoning_effort = "low"' in wf
 	# Ensure the old all-low assignment is gone.
 	assert 'EDITOR_REASONING_EFFORT=low' not in wf
+
+
+def test_no_pr_claude_branch_review_uses_lightweight_reviewer_profile() -> None:
+	block = _step_block("Use lightweight reviewer profile for no-PR claude-branch-review")
+	assert "if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && env.PR_NUMBER == ''" in block
+	assert 'echo "ENABLE_REVIEWER_TWO_PASS=false" >> "$GITHUB_ENV"' in block
+	assert 'echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"' in block
+	assert 'sed -i \'s/^model_reasoning_effort = ".*"/model_reasoning_effort = "low"/\' ~/.codex/config.toml' in block
+	assert 'review_run_reviewers.sh' not in block
+	assert 'CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false' in block
 
 
 def test_editor_switch_replaces_any_reasoning_value() -> None:
