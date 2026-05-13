@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:420-833 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `JUDGE_EFFECTIVE_REASONING_EFFORT` is initialized before the judge retry loop and never updated when a later judge attempt succeeds.\n  WHY: If the judge only succeeds after backing off to a lower reasoning level, the fix step still runs with the initial higher level and can re-trigger the same context-exhaustion failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:439, 833 | confidence=3\n  PROBLEM: `JUDGE_EFFECTIVE_REASONING_EFFORT` is set before the judge loop and is used by the fix step, but it never tracks the reasoning level that actually succeeded.\n  WHY: If the judge fails at `xhigh` and succeeds at `high`, the fix step still runs at `xhigh`, so context exhaustion can recur during fix application.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:441, 507, 513, 527, 833 | confidence=5\n  PROBLEM: `JUDGE_EFFECTIVE_REASONING_EFFORT` is set to `${JUDGE_ATTEMPT_LEVELS[0]}` before the loop and is never updated on success.\n  WHY: When a later, lower-effort attempt succeeds, the fix step still uses the original highest level and can hit the same context-exhaustion failure the backoff ladder was meant to avoid.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:441-444, 830-833 | confidence=4\n  PROBLEM: `JUDGE_EFFECTIVE_REASONING_EFFORT` is set to the first ladder entry before the loop, but it is never updated when the judge succeeds later.\n  WHY: The fix step then uses the stale initial level instead of the successful lower level, which can re-trigger context exhaustion and undermine progressive backoff.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_rb_judge.sh:441 \u2192 833 | confidence=4\n  PROBLEM: `JUDGE_EFFECTIVE_REASONING_EFFORT` is always set to the initial (highest) reasoning level before the retry loop and never updated when a later attempt succeeds.\n  WHY: If the judge succeeds only after backoff, the fix step still runs at `xhigh` (or the starting level), which can re-trigger the same context-exhaustion failure the ladder was designed to avoid.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_rb_judge.sh:420, 538-544, 830 | confidence=5\n  PROBLEM: `JUDGE_EFFECTIVE_REASONING_EFFORT` is preset before the judge retry loop and never updated, so the fix step always restores the initial reasoning level.\n  WHY: If a lower-effort attempt is the one that succeeds, the fix step can run at the higher starting level, defeating progressive backoff and risking the same context-exhaustion failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_rb_judge.sh:~441, 833 | confidence=4\n  PROBLEM: `JUDGE_EFFECTIVE_REASONING_EFFORT` is set to the first ladder entry before the retry loop and never updated when a later attempt succeeds.\n  WHY: If the judge succeeds on a lower-effort attempt, the fix step still runs at the original higher level, re-triggering the context-exhaustion failure the backoff was meant to avoid.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "da0224e4709d2b87cbce77b5dcfb6d5b796f0735a32c703850bafffbfdb5751b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2564,
+    "run_id": "25798342580",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25798342580",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513124734_f98703099d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2564,
+    "run_id": "25798342580"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-13T12:47:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
