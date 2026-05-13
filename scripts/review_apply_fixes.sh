@@ -1015,6 +1015,14 @@ fi
 EDITOR_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min
 EDITOR_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min
 EDITOR_MIN_ATTEMPT_SECS="${EDITOR_MIN_ATTEMPT_SECS:-300}"  # 5 min minimum
+EDITOR_VERBOSITY="${EDITOR_VERBOSITY:-low}"
+case "${EDITOR_VERBOSITY}" in
+  low|medium|high) ;;
+  *)
+    echo "::warning::Invalid EDITOR_VERBOSITY='${EDITOR_VERBOSITY}' (expected low|medium|high); falling back to low."
+    EDITOR_VERBOSITY="low"
+    ;;
+esac
 JOB_TIMEOUT_SECS=$((180 * 60))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
@@ -1133,7 +1141,7 @@ while [ "${attempt}" -le 3 ]; do
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   (
     trap '' PIPE
-    exec codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
+    exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
   ) > "${tmp_output}" &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
