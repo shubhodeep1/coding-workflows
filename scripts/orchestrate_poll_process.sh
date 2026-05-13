@@ -3329,7 +3329,7 @@ _refresh_integration_resolver_tooling() {
 # or judge invoked), 1 if the circuit breaker has tripped and the
 # state was marked failed.
 # _list_integration_conflict_files — enumerate the filenames that would
-# conflict if <default_branch> were merged into <integration_branch>.
+# conflict if <integration_branch> were merged into <default_branch>.
 # Uses ``git merge-tree --write-tree --name-only`` for a stateless
 # three-way merge probe (same technique as probe_sibling_merge_conflicts
 # at line 304+).  Echoes one file path per line on stdout; returns 0
@@ -3384,6 +3384,42 @@ heal_integration_branch_conflict() {
     return 0
   fi
 
+  # Pre-flight merge probe (Fix D): the orchestrator only sees GitHub's
+  # PR-mergeable signal, which is computed asynchronously and can lag by
+  # minutes/hours on large PRs. heal_integration_branch_conflict is
+  # regularly called with that signal stale — mergeable=false when the
+  # real merge is already clean (e.g. after a recent [ai-merge-resolve]
+  # or sub-issue squash-merge advanced the integration branch). When
+  # that happens, the downstream ai-review.yml dispatch recomputes
+  # MERGE_CONFLICT at runtime and falls through to the regular autofix
+  # path, but the orchestrator has already incremented
+  # integration_conflict_total_dispatches, eating one of the
+  # INTEGRATION_CONFLICT_LIFETIME_MAX lifetime slots without engaging
+  # the resolver (orchestrator/project-40, 2026-05-12: 7 of 10 lifetime
+  # dispatches were this stale-signal case). Catching clean-merge here
+  # skips dispatch and the counter increment.
+  #
+  # Fail-open on any probe error (git unavailable, merge-tree
+  # unsupported, refs unreachable): fall through to the existing
+  # dispatch path so behaviour is unchanged on unsupported runners.
+  # The "clean" branch only fires when we positively verified a clean
+  # three-way merge — we never mark clean on probe failure.
+  if command -v git >/dev/null 2>&1 \
+     && git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
+    if git fetch --no-tags --quiet origin \
+         "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+         "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null \
+       && git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 \
+       && git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
+       && git merge-tree --write-tree --name-only --no-messages \
+            "refs/remotes/origin/${default_branch}" \
+            "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+      echo "  [integration-heal] Pre-flight merge probe: ${integration_branch} merges cleanly into ${default_branch}; clearing conflict state without dispatching for PR #${final_pr}."
+      mark_integration_sync_clean "${default_branch}"
+      return 0
+    fi
+  fi
+
   local now_ts
   now_ts="$(date -u +%s)"
   local last_ts
@@ -3403,6 +3439,44 @@ heal_integration_branch_conflict() {
   # judge invocation resets unresolved_ticks to 0 but the merge stays
   # dirty as main keeps moving (orchestrator/project-1479, 2026-04-25).
   if [ "${total_dispatches}" -ge "${INTEGRATION_CONFLICT_LIFETIME_MAX}" ]; then
+    # Race-recovery (Fix A): before terminalizing, check whether the
+    # apparent cap exhaustion is actually a timing artifact. The
+    # counter is incremented at dispatch time (see line ~3556), not at
+    # dispatch completion, so a long-running resolver invocation can
+    # still be in flight when the next poll tick fires this cap
+    # (orchestrator/project-40, 2026-05-12: dispatch #10 completed
+    # success ~22 min after the cap alert was posted, leaving the PR
+    # mergeable but the state terminalized to failed).
+    #
+    # Two recovery paths:
+    #   (1) PR is now mergeable — an earlier dispatch landed its
+    #       [ai-merge-resolve] commit between the previous tick and
+    #       now. Clear conflict state and return so
+    #       finalize_integration_merge_if_needed can merge on the next
+    #       tick.
+    #   (2) An autofix run is still in flight against the integration
+    #       branch — defer the terminalization decision one tick so
+    #       the in-flight dispatch gets to finish what it started.
+    #
+    # Both checks fail-open on API error (treat as "no recovery
+    # signal" → fall through to existing terminalization), so a
+    # GitHub outage cannot silently extend the cap indefinitely.
+    local _ihbc_pr_mergeable
+    _ihbc_pr_mergeable="$(gh_retry _safe_gh_jq \
+      "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" \
+      --jq '.mergeable // false' 2>/dev/null || {
+        echo "::warning::Unable to re-query mergeable status for PR #${final_pr}; treating it as no recovery signal during lifetime-cap handling." >&2
+        echo "false"
+      })"
+    if [ "${_ihbc_pr_mergeable}" = "true" ]; then
+      echo "  [integration-heal] Lifetime cap reached but PR #${final_pr} is now mergeable (late-finishing resolver dispatch landed); clearing conflict state instead of terminalizing."
+      mark_integration_sync_clean "${default_branch}"
+      return 0
+    fi
+    if _has_active_autofix_run "${final_pr}" "${integration_branch}"; then
+      echo "  [integration-heal] Lifetime cap reached but an autofix run is still in flight for PR #${final_pr}; deferring terminalization one tick."
+      return 0
+    fi
     jq --arg err "lifetime dispatch cap (${INTEGRATION_CONFLICT_LIFETIME_MAX}) reached" \
       '.status = "failed" |
        .final_merge_status = "failed" |
@@ -3578,7 +3652,8 @@ Detected a real merge conflict while syncing \`${default_branch}\` into \`${inte
   return 0
 }
 
-# Called after a successful sync to clear conflict state. Idempotent.
+# Called after conflict recovery determines the final merge is clean.
+# Idempotent.
 # Usage: mark_integration_sync_clean <default_branch>
 mark_integration_sync_clean() {
   local default_branch="${1:-main}"
@@ -3592,7 +3667,7 @@ mark_integration_sync_clean() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_tracking_comment "## ✅ Integration self-healing resolved
 
-\`${default_branch}\` now merges cleanly into the integration branch. Final merge will proceed on the next poll tick."
+Integration conflicts are cleared; final merge into \`${default_branch}\` will proceed on the next poll tick."
   fi
 }
 
