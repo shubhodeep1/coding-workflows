@@ -126,7 +126,7 @@ env:
   # per-reviewer CODEX_HOME copies used during the reviewer passes are
   # isolated and never read by the editor.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
-  EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'medium' }}
+  EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'low' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to scripts/
   # review_apply_fixes.sh (autofix editor) and scripts/review_conflict_resolve.sh

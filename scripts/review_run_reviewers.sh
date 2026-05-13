@@ -152,8 +152,8 @@ EOF
   fi
   export CODEX_HOME="${probe_home}"
 
-  codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
-  codex --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
+  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
+  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
 
   normalize_openrouter_usage "${probe_log_one}" "1" "${probe_model}" || true
   normalize_openrouter_usage "${probe_log_two}" "2" "${probe_model}" || true
@@ -1000,7 +1000,7 @@ run_reviewer() {
       # Reviewers must not mutate the workspace: writes here pollute the pre-editor
       # snapshot used by review_autofix.yml's touched-file detector (comm -13 safety
       # union) and cause EDITOR_CHANGES_LOST false positives.
-      exec "${codex_bin}" --ask-for-approval never -c model_verbosity=high -c include_apply_patch_tool=true exec --model "${model}" --sandbox read-only < "${prompt_file}"
+      exec "${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${model}" --sandbox read-only < "${prompt_file}"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename

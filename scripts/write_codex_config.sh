@@ -227,13 +227,19 @@ trap 'rm -f "${_tmp_path}"' EXIT
 	# request field. For models with `support_verbosity = false`
 	# codex CLI logs `model_verbosity is set but ignored as the model
 	# does not support verbosity` and continues — harmless. We set
-	# `high` here because the announce-without-emit failure mode
-	# observed in the implement / review_autofix smoke runs (logs at
-	# 2026-05-07 12:41 / 12:42) was the model emitting a reasoning
-	# trace and exiting without a tool call; high verbosity pushes
-	# the model toward emitting the assistant message + tool call
-	# rather than stopping after reasoning.
-	printf 'model_verbosity = "high"\n'
+	# `low` here per operator policy (every codex callsite across the
+	# repo uses `low`) — outputs are JSON-schema-bound or otherwise
+	# shape-controlled, and OpenAI's prompt guide recommends low
+	# verbosity for concise structured outputs. The historical
+	# `high` value was a workaround for the openai/codex#11151
+	# announce-without-emit failure mode (implement / review_autofix
+	# smoke runs at 2026-05-07 12:41 / 12:42, where the model emitted
+	# a reasoning trace and exited without a tool call). The workaround
+	# now relies on `include_apply_patch_tool = true` below as the
+	# primary belt-and-suspenders against codex#11151; if the
+	# announce-without-emit pattern recurs at `low`, revisit this
+	# value.
+	printf 'model_verbosity = "low"\n'
 	# include_apply_patch_tool: emitted unconditionally. Forces the
 	# apply_patch tool surface to be wired even when the catalog
 	# `apply_patch_tool_type` resolution path falls back. Belt-and-
