@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CHANGELOG.md:19 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `CHANGELOG.md` still references `scripts/write_codex_config.sh:236` for the `model_verbosity = \"low\"` write, but the `printf 'model_verbosity = \"low\"\\n'` is at line 242.\n  WHY: This is a stale documentation cross-reference only; the code is correct, and reviewers disagreed only on whether the old line number is acceptable context, with the highest confidence being 5.\n- agents.md:73-80 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `agents.md` still references `scripts/write_codex_config.sh:236` for the `model_verbosity = \"low\"` write, but the `printf 'model_verbosity = \"low\"\\n'` is at line 242.\n  WHY: This is a stale documentation cross-reference only; the code is correct, and all reviewers agreed it has no runtime impact, with the highest confidence being 5.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- agents.md:80 | confidence=5\n  PROBLEM: The paragraph states `scripts/write_codex_config.sh:236` writes `model_verbosity = \"low\"` into `config.toml`, but the actual `printf 'model_verbosity = \"low\"\\n'` is at line 242 in `scripts/write_codex_config.sh`.\n  WHY: This is a documentation-only cross-reference error; the code is correct, but the stale citation can mislead readers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- CHANGELOG.md:19 | confidence=4\n  PROBLEM: The CHANGELOG entry references `scripts/write_codex_config.sh:236` for the `model_verbosity = \"low\"` write, but the actual line is 242.\n  WHY: This is a documentation accuracy issue only; the printf executes correctly regardless of what line number is cited in prose.\n- agents.md:73-80 | confidence=4\n  PROBLEM: The documentation states the `model_verbosity = \"low\"` line is at line 236, but the actual line number in `scripts/write_codex_config.sh` is 242.\n  WHY: This is a documentation accuracy issue only; no runtime impact.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- agents.md:73-80 | confidence=4\n  PROBLEM: Documentation cites `scripts/write_codex_config.sh:236` as the line that writes `model_verbosity = \"low\"`, but the actual `printf` statement is at line 242.\n  WHY: This is documentation inaccuracy only; no runtime impact, but the stale cross-reference could mislead future developers or automated verification scripts.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- CHANGELOG.md:19 | confidence=4\n  PROBLEM: `CHANGELOG.md` still says `scripts/write_codex_config.sh:236` wrote `model_verbosity = \"high\"`, but in the new version the `printf` is at line 242.\n  WHY: This is a documentation accuracy issue only; the CHANGELOG references the pre-PR line number rather than the post-PR line number.\n- agents.md:80 | confidence=4\n  PROBLEM: `agents.md` still says `scripts/write_codex_config.sh:236` writes `model_verbosity = \"low\"`, but the `printf` is now at line 242.\n  WHY: This is a documentation accuracy issue only; no runtime impact.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- agents.md:~80 | confidence=5\n  PROBLEM: `agents.md` still cites `scripts/write_codex_config.sh:236` for `model_verbosity = \"low\"`, but the `printf 'model_verbosity = \"low\"\\n'` statement is actually at line 242.\n  WHY: This is a documentation-only issue with no runtime impact, but the incorrect line reference could mislead future maintainers or automated verification tools.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cf574b4dbc9f5d2ef53783c1c7229616880331f2984563ce7522d398421ecf2b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2560,
+    "run_id": "25784761455",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25784761455",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513081014_c1d4982b5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2560,
+    "run_id": "25784761455"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-13T08:10:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
