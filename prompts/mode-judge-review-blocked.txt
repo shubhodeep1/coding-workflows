@@ -111,23 +111,6 @@ Rules:
   the wiring directly. Reserve C for cases where the approach itself is
   wrong, not where the editor was conservative about scope.
 
-EDIT TOOL DISCIPLINE for option B:
-- Try `apply_patch` first for single-file surgical edits — it produces the
-  cleanest diff. If it does not land on a particular hunk, it is fine to
-  switch tools: a different `apply_patch` shape, a shell heredoc or
-  `printf` redirected to the target file for fully-specified plain-text
-  files, or any other write tool. What matters is that the bytes land on
-  disk this turn.
-- Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line source —
-  they exit 0 even when the regex misses, leaving the file unchanged. After
-  any shell write, verify with `git diff --stat` scoped to the edited file;
-  if zero lines changed, switch tools rather than retrying the same regex
-  shape.
-- Returning an empty completion, or a final assistant message that only
-  describes the fix without invoking a write tool, leaves the worktree
-  unchanged — the post-judge commit step will detect this and treat the run
-  as a no-op. Always finish with a successful write tool call.
-
 Autonomous decision-making: you are the decision-maker — there is no human in the loop. Do not defer decisions to humans or flag items as "needs human review."
 - When review comments raise architectural questions (e.g., security design,
   approach alternatives, API design), YOU must evaluate the trade-offs and
@@ -161,3 +144,13 @@ Output contract:
 - new_issue: null unless action is close_and_reissue.
 - followup_issue: null unless action is merge_with_followup.
 - fix_description: empty string unless action is fix.
+- Primary deliverable: this JSON object IS your output. Emit it before
+  you exhaust your context window or tool-call budget. An empty
+  completion is treated as a workflow failure, not as "no decision."
+  If your budget runs low while you are still uncertain, pick the
+  safest available action given the evidence you do have (typically
+  `merge` when the PR appears shippable; `close_and_reissue` when the
+  approach is fundamentally wrong) and record the residual uncertainty
+  in `remaining_issues_summary` so the operator can see what you could
+  not finish assessing. Do not spend remaining budget on further
+  exploration once you have enough signal to choose.
