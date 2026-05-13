@@ -504,12 +504,14 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   fi
   if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
+      JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
       break
     fi
     echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
     if _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
       echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding."
+      JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
       break
     fi
@@ -523,6 +525,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     fi
     if _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
       echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding despite codex rc=${rc}."
+      JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
       break
     fi
