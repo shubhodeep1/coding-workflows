@@ -2105,7 +2105,7 @@ jobs:
             # baked in by the "Create Codex config" step that ran earlier.
             # The editor phase re-patches the config in "Switch reasoning effort
             # for editor" using EDITOR_REASONING_EFFORT=medium (set above).
-            sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
+            sed -i 's/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
             echo "🔬 Smoke test PR detected — reviewer reasoning=low, editor reasoning=medium (Phase 4b fix)"
             # Suppress per-phase Telegram alerts; the test-and-mark-stable
             # gate emits a single combined pass/fail notification at the
@@ -2126,6 +2126,19 @@ jobs:
           else
             echo "Standard PR — using default LLM settings"
           fi
+
+      - name: Use lightweight reviewer profile for no-PR claude-branch-review
+        if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && env.PR_NUMBER == ''
+        run: |
+          set -euo pipefail
+          echo "ENABLE_REVIEWER_TWO_PASS=false" >> "$GITHUB_ENV"
+          echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+          # Override the reviewer config written earlier by Create Codex
+          # config. This step intentionally runs after the smoke-test
+          # tuning block so no-PR claude/** comment-only reviews always use
+          # the lightweight single-pass reviewer profile.
+          sed -i 's/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
+          echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false"
 
       - name: Checkout PR head branch
         run: |
