@@ -4233,7 +4233,7 @@ jobs:
           # match the "Detect merge conflicts" step's sanitisation.
           #
           # Probe a candidate resolver path and echo one of:
-          #   ok | missing | parse_fail:<sanitized one-line stderr>
+          #   ok | missing | parse_fail:<sanitized annotation-safe stderr>
           # The state string is embedded verbatim in the
           # warning/error annotation below so the triple-failure path
           # (in-tree corrupted AND both fallbacks unavailable or
@@ -4250,9 +4250,10 @@ jobs:
             fi
             # `bash -n` writes diagnostics to stderr only; merge them
             # into the command substitution with `2>&1` so the err= capture
-            # actually receives them.  An earlier shape used `2>&1
-            # >/dev/null` which is order-dependent and leaks stderr to the
-            # job log instead of capturing it — see PR #2481 review.
+            # actually receives them.  Keep the probe to `2>&1` only:
+            # `bash -n` is stderr-only here, so extra stdout redirection is
+            # unnecessary and would only make the capture semantics harder
+            # to reason about.
             if err="$(bash -n "${path}" 2>&1)"; then
               printf '%s\n' "ok"
             else
@@ -4862,18 +4863,17 @@ jobs:
           # critical for non-orchestrator PRs that the cron does not
           # scan.  Ledger-only commits are still skipped here (the
           # clean-review tail in the same run handles auto-merge, so no
-          # continuation is needed).  Opt out globally with
-          # AUTOFIX_CONTINUATION_ENABLED=false, which restores the
-          # pre-continuation behaviour where AUTOFIX_SKIP_SELF_TRIGGERED
-          # alone gated productive autofixes out of this step.
-          #
-          # Opt-out: AUTOFIX_SKIP_SELF_TRIGGERED=false on the repo variable.
+          # continuation is needed).  Setting
+          # AUTOFIX_CONTINUATION_ENABLED=false restores the
+          # pre-continuation path, where productive autofix commits skip
+          # this step only when AUTOFIX_SKIP_SELF_TRIGGERED=true.
           continuation_enabled="${AUTOFIX_CONTINUATION_ENABLED:-true}"
           is_ledger_only_commit="${LEDGER_ONLY_COMMIT:-false}"
-          if [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-true}" != "false" ] \
-            && [ "${DID_COMMIT:-false}" = "true" ] \
+          if [ "${DID_COMMIT:-false}" = "true" ] \
             && [ "${CONFLICT_RESOLVED:-false}" != "true" ] \
-            && { [ "${continuation_enabled}" = "false" ] || [ "${is_ledger_only_commit}" = "true" ]; }; then
+            && { [ "${is_ledger_only_commit}" = "true" ] \
+              || { [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-false}" = "true" ] \
+                && [ "${continuation_enabled}" = "false" ]; }; }; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation_enabled=${continuation_enabled} ledger_only=${is_ledger_only_commit}"
             exit 0
           fi

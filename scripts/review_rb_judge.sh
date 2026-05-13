@@ -379,7 +379,11 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   echo
   echo "=== PR #${PR_NUMBER} DIFF ==="
   echo
-  head -1000 <<< "${PR_DIFF}"
+  # Pass the full diff to the judge: forcing the model to exec-read
+  # files to reconstruct the truncated tail burns more context per
+  # turn than including the full diff up front. codex compacts older
+  # turns when its window fills, so a long diff degrades gracefully.
+  printf '%s\n' "${PR_DIFF}"
   echo
   echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
   echo
@@ -409,35 +413,124 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
 rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
 # -----------------------------------------------------------
-# Temporarily set judge reasoning effort in codex config
+# Per-attempt reasoning ladder for progressive backoff
 # -----------------------------------------------------------
-if [ -f "${HOME}/.codex/config.toml" ]; then
-  sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${JUDGE_REASONING_EFFORT}\"/" "${HOME}/.codex/config.toml"
-fi
+# Hidden reasoning tokens dominate per-turn context usage at
+# `xhigh`; on a large PR the judge can exhaust the codex context
+# window on a single attempt before emitting the final JSON.
+# Stepping the effort down each retry frees enough budget for the
+# model to terminate exploration and write the JSON. Starting
+# level is resolved from JUDGE_REASONING_EFFORT (default `xhigh`,
+# override via the THINKING_LEVEL_REVIEW_BLOCKED_JUDGE repo var).
+# Keep the ladder inside the reasoning levels advertised for the
+# default gpt-5.4 judge path; `low` is the floor in this script.
+case "${JUDGE_REASONING_EFFORT}" in
+  xhigh)   JUDGE_ATTEMPT_LEVELS=("xhigh" "high" "medium") ;;
+  high)    JUDGE_ATTEMPT_LEVELS=("high" "medium" "low") ;;
+  medium)  JUDGE_ATTEMPT_LEVELS=("medium" "low" "low") ;;
+  low)     JUDGE_ATTEMPT_LEVELS=("low" "low") ;;
+  none)
+    echo "::warning::JUDGE_REASONING_EFFORT='none' is not advertised in the local model catalog for ${MODEL_EDITOR}; using low as the retry floor."
+    JUDGE_ATTEMPT_LEVELS=("low" "low")
+    ;;
+  *)
+    echo "::warning::Invalid JUDGE_REASONING_EFFORT='${JUDGE_REASONING_EFFORT}'; falling back to high→medium."
+    JUDGE_ATTEMPT_LEVELS=("high" "medium")
+    ;;
+esac
+JUDGE_EFFECTIVE_REASONING_EFFORT="${JUDGE_ATTEMPT_LEVELS[0]}"
+JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
+
+# -----------------------------------------------------------
+# Recover judge JSON from a non-empty buffer
+# -----------------------------------------------------------
+# codex can terminate rc=0 with empty stdout when the context
+# window is exhausted on hidden reasoning + exec reads — the
+# final assistant message is never emitted. If anything resembling
+# the final JSON landed in the captured buffer (typically stderr),
+# probe each opening brace with json.JSONDecoder.raw_decode and keep
+# the last object that parses with an `action` field. That avoids
+# brace-depth bugs from unmatched `}`, braces inside JSON strings,
+# fenced JSON wrappers, and non-UTF-8 log bytes while still
+# preferring the terminal judge object from the attempt-local buffer.
+_recover_judge_json() {
+  local src="$1" dst="$2" recovered=""
+  [ -s "${src}" ] || return 1
+  recovered="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${src}" <<'PY' 2>/dev/null
+import json, sys
+
+src = sys.argv[1]
+try:
+    with open(src, 'r', encoding='utf-8', errors='replace') as f:
+        raw = f.read()
+except OSError:
+    sys.exit(1)
+
+decoder = json.JSONDecoder()
+best = None
+idx = -1
+while True:
+    idx = raw.find('{', idx + 1)
+    if idx == -1:
+        break
+    try:
+        data, _ = decoder.raw_decode(raw, idx)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(data, dict) and isinstance(data.get('action'), str):
+        best = data
+
+if best is None:
+    sys.exit(1)
+json.dump(best, sys.stdout)
+PY
+)" || true
+  [ -n "${recovered}" ] || return 1
+  printf '%s\n' "${recovered}" > "${dst}"
+  return 0
+}
 
 # -----------------------------------------------------------
 # Run the judge
 # -----------------------------------------------------------
 JUDGE_SUCCESS=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
-for attempt in 1 2; do
-  echo "Review-blocked judge attempt ${attempt}/2..."
+for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
+  attempt="$((attempt_idx + 1))"
+  level="${JUDGE_ATTEMPT_LEVELS[$attempt_idx]}"
+  echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} (reasoning=${level})..."
+  if [ -f "${HOME}/.codex/config.toml" ]; then
+    sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${level}\"/" "${HOME}/.codex/config.toml"
+  fi
   if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
+      JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
       break
-    else
-      echo "::warning::Judge attempt ${attempt}/2 produced empty output."
+    fi
+    echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
+    if _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
+      echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding."
+      JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+      JUDGE_SUCCESS=true
+      break
     fi
   else
-    echo "::warning::Judge attempt ${attempt}/2 codex exec failed (rc=$?)."
+    rc=$?
+    echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} codex exec failed (rc=${rc}, reasoning=${level})."
     if [ -s "${JUDGE_STDERR_FILE}" ]; then
       echo "--- judge stderr (attempt ${attempt}) ---"
       cat "${JUDGE_STDERR_FILE}"
       echo "---"
     fi
+    if _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
+      echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding despite codex rc=${rc}."
+      JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+      JUDGE_SUCCESS=true
+      break
+    fi
   fi
-  if [ "${attempt}" -lt 2 ]; then
+  if [ "${attempt}" -lt "${JUDGE_ATTEMPT_COUNT}" ]; then
     sleep 10
   fi
 done
@@ -448,7 +541,7 @@ if [ -f "${HOME}/.codex/config.toml" ]; then
 fi
 
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
-  echo "::warning::Review-blocked judge LLM execution failed after 2 attempts — needs human intervention."
+  echo "::warning::Review-blocked judge LLM execution failed after ${JUDGE_ATTEMPT_COUNT} attempts — needs human intervention."
   if [ -s "${JUDGE_STDERR_FILE}" ]; then
     echo "::group::Last judge stderr"
     cat "${JUDGE_STDERR_FILE}"
@@ -711,11 +804,36 @@ case "${RB_ACTION}" in
         echo "Do not create new files unless absolutely required."
         echo "After applying fixes, output the same JSON with action='fix' and"
         echo "fix_description describing what you changed."
+        echo
+        # Edit-discipline guidance is scoped to THIS step (the fix
+        # step runs with --sandbox danger-full-access and is expected
+        # to write files). The read-only judge step intentionally
+        # omits this block — its sandbox would silently reject any
+        # write, and including it there encouraged the model to
+        # re-explore in pursuit of a write it could never land.
+        cat <<'__EDIT_DISCIPLINE__'
+EDIT TOOL DISCIPLINE:
+- Try `apply_patch` first for single-file surgical edits — it produces the
+  cleanest diff. If it does not land on a particular hunk, it is fine to
+  switch tools: a different `apply_patch` shape, a shell heredoc or
+  `printf` redirected to the target file for fully-specified plain-text
+  files, or any other write tool. What matters is that the bytes land on
+  disk this turn.
+- Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line source —
+  they exit 0 even when the regex misses, leaving the file unchanged. After
+  any shell write, verify with `git diff --stat` scoped to the edited file;
+  if zero lines changed, switch tools rather than retrying the same regex
+  shape.
+- Returning an empty completion, or a final assistant message that only
+  describes the fix without invoking a write tool, leaves the worktree
+  unchanged — the post-judge commit step will detect this and treat the run
+  as a no-op. Always finish with a successful write tool call.
+__EDIT_DISCIPLINE__
       } > "${RB_FIX_PROMPT}"
 
       # Temporarily restore judge reasoning for fix application
       if [ -f "${HOME}/.codex/config.toml" ]; then
-        sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${JUDGE_REASONING_EFFORT}\"/" "${HOME}/.codex/config.toml"
+        sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${JUDGE_EFFECTIVE_REASONING_EFFORT}\"/" "${HOME}/.codex/config.toml"
       fi
 
       if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
