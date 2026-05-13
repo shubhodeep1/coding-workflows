@@ -4,6 +4,8 @@ Edit-tool discipline (apply_patch first with fallbacks, verify-after-write,
 no `sed -i`/`perl -i`/`awk` for multi-line edits) is defined in
 `unattended_system_instructions.md` §4. Apply it; don't restate it.
 
+{{SERENA_TOOL_HINTS}}
+
 Scope and safety:
 - Modify only files explicitly provided in the allow-list / capture context.
 - Do not create new files.

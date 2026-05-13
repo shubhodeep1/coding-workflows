@@ -81,12 +81,17 @@ if [ -n "${changes_section}" ]; then
 	# unusual in editor summaries (one edit per bullet is the
 	# convention), so the trade-off is acceptable.
 	#
-	# POSIX-only constructs: case-insensitive first letters via
-	# character classes and `[^A-Za-z0-9_]` for word boundary, so the
-	# shim behaves the same on GNU and BSD sed (Linux CI and macOS
-	# local development both pass).
+	# POSIX-only constructs: full-word case-insensitive matching via
+	# per-letter character classes and `[^A-Za-z0-9_]` for word
+	# boundary, so the shim behaves the same on GNU and BSD sed
+	# (Linux CI and macOS local development both pass).  Each letter
+	# of every keyword is wrapped in `[Aa]`-style alternation rather
+	# than just the first letter, so all-caps / mixed-case spellings
+	# ("This MATCHES `Y`", "Which mIrRoRs `Y`") are stripped instead
+	# of slipping through and resurrecting the false-positive
+	# EDITOR_CHANGES_LOST the bitsafe.io PR #135 fix eliminated.
 	narrative_claims="$(printf '%s\n' "${changes_section}" \
-		| sed -E 's/\.[[:space:]]+(([Tt]his|[Tt]hat|[Ww]hich|[Tt]he (caller|reference))[[:space:]]+(matches|mirrors|references|aligns with|maps to|tracks|points to|comes from)[^A-Za-z0-9_].*)$/./' \
+		| sed -E 's/\.[[:space:]]+(([Tt][Hh][Ii][Ss]|[Tt][Hh][Aa][Tt]|[Ww][Hh][Ii][Cc][Hh]|[Tt][Hh][Ee] ([Cc][Aa][Ll][Ll][Ee][Rr]|[Rr][Ee][Ff][Ee][Rr][Ee][Nn][Cc][Ee]))[[:space:]]+([Mm][Aa][Tt][Cc][Hh][Ee][Ss]|[Mm][Ii][Rr][Rr][Oo][Rr][Ss]|[Rr][Ee][Ff][Ee][Rr][Ee][Nn][Cc][Ee][Ss]|[Aa][Ll][Ii][Gg][Nn][Ss] [Ww][Ii][Tt][Hh]|[Mm][Aa][Pp][Ss] [Tt][Oo]|[Tt][Rr][Aa][Cc][Kk][Ss]|[Pp][Oo][Ii][Nn][Tt][Ss] [Tt][Oo]|[Cc][Oo][Mm][Ee][Ss] [Ff][Rr][Oo][Mm])[^A-Za-z0-9_].*)$/./' \
 		| grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|No modifications)' || true)"
 fi
 

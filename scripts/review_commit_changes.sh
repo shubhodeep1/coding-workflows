@@ -22,8 +22,23 @@
 #   GITHUB_REPOSITORY                 owner/repo slug (auto-set by GitHub Actions).
 #
 # Outputs:
-#   $GITHUB_ENV:     DID_COMMIT, LEDGER_ONLY_COMMIT.
-#   $GITHUB_OUTPUT:  did_commit, ledger_only_commit.
+#   $GITHUB_ENV:     DID_COMMIT, LEDGER_ONLY_COMMIT, LEDGER_ONLY_COMMIT_STRICT.
+#   $GITHUB_OUTPUT:  did_commit, ledger_only_commit, ledger_only_commit_strict.
+#
+#   LEDGER_ONLY_COMMIT signals "this commit should NOT trigger an rb_judge
+#   rerun" and is `true` for BOTH (a) the commit's only tracked path is the
+#   review-issue ledger, AND (b) the editor's per-file audit reports the
+#   autofix loop has converged (applied=0, already_applied≥1).  Existing
+#   consumers (auto-merge, retrigger-guard, continuation-dispatch skip) read
+#   this flag.
+#
+#   LEDGER_ONLY_COMMIT_STRICT signals ONLY (a) — the commit's tracked paths
+#   equal the ledger path.  Callers that need to know "did the editor's
+#   productive edits actually land?" (the EDITOR_CHANGES_LOST detector in
+#   review_autofix.yml) MUST read this strict flag; reading
+#   LEDGER_ONLY_COMMIT causes a false positive when the audit-convergence
+#   branch fires on a commit that DID land real source-file edits
+#   (bitsafe.io PR #177 / run 25653654000).
 #   ${COMMITTED_FILES_FILE}:  one "- <path>" line per committed file, or a single marker line.
 #
 # Failure modes:
@@ -71,6 +86,8 @@ echo "DID_COMMIT=false" >> "$GITHUB_ENV"
 echo "did_commit=false" >> "$GITHUB_OUTPUT"
 echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
 echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
+echo "LEDGER_ONLY_COMMIT_STRICT=false" >> "$GITHUB_ENV"
+echo "ledger_only_commit_strict=false" >> "$GITHUB_OUTPUT"
 
 if [ "${CAN_PUSH:-false}" != "true" ]; then
   echo "Skipping commit/push: branch is not writable from this workflow."
@@ -79,6 +96,22 @@ if [ "${CAN_PUSH:-false}" != "true" ]; then
 fi
 
 rm -f "${COMMITTED_FILES_FILE}"
+
+# Drop unchanged bootstrap-owned Serena runtime state before any
+# untracked-file cleanup or staging. If the repo already owned the
+# Serena project config, or Codex mutated it away from the bootstrap
+# hash, leave the tree on disk and let the staging guards below exclude
+# it from commits without deleting repo-owned content. Defense-in-depth:
+# if the preexisting detector ever misclassifies the tree, never delete a
+# tracked `.serena/` subtree.
+if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
+  current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+  if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+    if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then
+      rm -rf .serena
+    fi
+  fi
+fi
 
 # On the workflow source repo the editor is legitimately allowed
 # to create new files (e.g. new workflow-templates/** assets,
@@ -106,6 +139,7 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
       # They are cleaned up after conflict resolution (or are harmless
       # untracked files if no conflicts exist).
       case "${created_file}" in
+        .serena|.serena/*) continue ;;
         scripts/*|prompts/*) continue ;;
       esac
       echo "- ${created_file}"
@@ -279,7 +313,7 @@ else
     done < scripts/.gitignore
   fi
   git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.serena' ':!.serena/**' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
 fi
 
 echo "Staged files before commit:"
@@ -502,6 +536,8 @@ PY
     echo "Commit contains only the review-issue ledger (${LEDGER_PATH_FOR_DETECTOR}); marking as editor no-op for downstream clean-review gates."
     echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
     echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
+    echo "LEDGER_ONLY_COMMIT_STRICT=true" >> "$GITHUB_ENV"
+    echo "ledger_only_commit_strict=true" >> "$GITHUB_OUTPUT"
   else
     # Audit-driven convergence detector.  When every per-file audit entry
     # in the editor summary reports `issues applied: 0` AND the cumulative
@@ -548,9 +584,20 @@ PY
     if [ "${_audit_convergence_applies}" = "true" ]; then
       echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
       echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
+      # Strict flag stays false: audit convergence is NOT the same as
+      # "only the ledger was committed".  Callers that gate on whether
+      # the editor's productive edits actually landed (the
+      # EDITOR_CHANGES_LOST detector in review_autofix.yml) MUST read
+      # the strict flag to avoid a false positive on commits that
+      # contain real source-file diffs alongside a converged audit
+      # (bitsafe.io PR #177 / run 25653654000).
+      echo "LEDGER_ONLY_COMMIT_STRICT=false" >> "$GITHUB_ENV"
+      echo "ledger_only_commit_strict=false" >> "$GITHUB_OUTPUT"
     else
       echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
       echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
+      echo "LEDGER_ONLY_COMMIT_STRICT=false" >> "$GITHUB_ENV"
+      echo "ledger_only_commit_strict=false" >> "$GITHUB_OUTPUT"
     fi
   fi
 fi

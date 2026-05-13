@@ -4,6 +4,8 @@ Edit-tool discipline (apply_patch first with fallbacks, verify-after-write,
 no `sed -i`/`perl -i`/`awk` for multi-line edits) is defined in
 `unattended_system_instructions.md` §4. Apply it; don't restate it.
 
+{{SERENA_TOOL_HINTS}}
+
 Make minimal, targeted edits inside the allow-listed files to clear the
 failures. Do not edit files outside the allow-list, create new files not on
 the allow-list, or run unrelated refactors / cleanups.

@@ -14,6 +14,8 @@ name: AI Implement
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
+  SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
   # prompt guide that step is research/synthesis, not coding. The implement
@@ -103,6 +105,12 @@ jobs:
           {
             echo "JOB_START_EPOCH=$(date +%s)"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "SEMBLE_AVAILABLE=false"
+            echo "SEMBLE_INDEX_AVAILABLE=false"
+            echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+            echo "SERENA_AVAILABLE=false"
+            echo "SERENA_PROJECT_PREEXISTED=false"
+            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
@@ -335,6 +343,16 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+      - name: Detect preexisting Serena project config
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
+            echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"
+          else
+            echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Log checkout ref
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -442,6 +460,52 @@ jobs:
             _fetched_scripts+=("${f}")
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
             # see the persistence note above the loop.
+          done
+
+          for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional Serena support asset ${f} is unavailable on ${SCRIPT_REF}; Serena bootstrap remains disabled."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          mkdir -p scripts/templates
+          serena_template_src=".codex-workflow-src/scripts/templates/serena_project.yml.j2"
+          if [ ! -f "${serena_template_src}" ] && [ -f ".codex-workflow-src-main/scripts/templates/serena_project.yml.j2" ]; then
+            serena_template_src=".codex-workflow-src-main/scripts/templates/serena_project.yml.j2"
+          fi
+          if [ ! -f "${serena_template_src}" ]; then
+            echo "::notice::Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable on ${SCRIPT_REF}; Serena bootstrap remains disabled."
+          elif [ "${is_self_repo}" = "false" ] && git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2" >/dev/null 2>&1; then
+            echo "::notice::Consumer repo already tracks scripts/templates/serena_project.yml.j2; preserving caller-owned Serena template."
+          else
+            install -m 0644 "${serena_template_src}" "scripts/templates/serena_project.yml.j2"
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"
+            fi
+          fi
+
+          for f in install_semble.sh build_semble_wrapper.sh semble_helpers.sh; do
+            if [ "${is_self_repo}" = "true" ] && [ ! -f "scripts/${f}" ]; then
+              echo "::notice::Optional Semble support script ${f} is not tracked in this checkout; skipping canonical self-repo bootstrap."
+              continue
+            fi
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional Semble support script ${f} is unavailable on ${SCRIPT_REF}; legacy path remains active."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
           done
 
           if [ "${is_self_repo}" = "false" ]; then
@@ -554,6 +618,53 @@ jobs:
               # workflow artifact.
               echo "probably_unnecessary_but_read_if_stuck.md" >> "${FETCHED_MANIFEST}"
             fi
+          fi
+
+      - name: setup-uv
+        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install semble
+        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # The shared installer is still pip-based today. Keep setup-uv as
+          # additive bootstrap so the workflow-level Semble contract lands
+          # without redesigning scripts/install_semble.sh in this issue.
+          if [ "${SEMBLE_ENABLED:-false}" != "true" ]; then
+            echo "::notice::SEMBLE_ENABLED is not true; skipping Semble install."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ ! -f scripts/install_semble.sh ]; then
+            echo "::warning::Optional Semble installer is unavailable on ${SCRIPT_REF}; leaving Semble disabled for this run."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if ! bash scripts/install_semble.sh; then
+            echo "::warning::Semble install helper failed; leaving Semble disabled for this run."
+            echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build semble index
+        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"
+          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
+          # for the rationale (semble 0.1.3 lacks the index/query CLI).
+          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
+          # exits 0, falling back to legacy implement context paths.
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            SEMBLE_INDEX_PATH="${semble_index_path}" \
+              bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not staged; falling back to legacy implement context paths."
+            echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
 
       - name: Fetch issue metadata
@@ -886,6 +997,29 @@ jobs:
 
           # MCP server configuration is managed in ~/.codex/config.toml.
 
+      - name: Setup Serena
+        if: env.SKIP_IMPLEMENT != 'true' && env.SERENA_ENABLED == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/setup_serena.sh ]; then
+            echo "::warning::Optional Serena bootstrap helper is unavailable on ${SCRIPT_REF:-current checkout}; leaving Serena disabled for this run."
+            echo "SERENA_FALLBACK target=implement reason=setup-failure" >&2
+            echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if ! SERENA_FALLBACK_TARGET="implement" bash scripts/setup_serena.sh; then
+            echo "::warning::Serena bootstrap helper failed; leaving Serena disabled for this run."
+            echo "SERENA_FALLBACK target=implement reason=setup-failure" >&2
+            echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+          if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then
+            serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+            echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"
+          else
+            echo "SERENA_PROJECT_BOOTSTRAP_HASH=" >> "$GITHUB_ENV"
+          fi
+
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -944,6 +1078,8 @@ jobs:
           defines the persistence rule, edit-tool discipline (apply_patch first
           with fallbacks, verify-after-write), no-revert / no-destructive-git
           rules, and parallel-reads guidance. Apply them.
+
+          {{SERENA_TOOL_HINTS}}
 
           Efficiency:
           - If a `=== TARGETED FILE CONTEXT ===` block appears below, those
@@ -1007,9 +1143,21 @@ jobs:
             python3 scripts/targeted_file_context.py \
               --plan-file "${PLAN_FILE}" \
               --repo-root "${GITHUB_WORKSPACE}" \
+              --semble-bin "$(command -v semble 2>/dev/null || true)" \
+              --semble-index "${SEMBLE_INDEX_PATH}" \
+              --semble-max-chunks "6" \
+              --semble-fallback "marker" \
               --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
               --output "${TARGETED_FILES_CONTEXT_FILE}" || \
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
+          fi
+
+          IMPLEMENT_SERENA_TOOL_HINTS=""
+          if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+            IMPLEMENT_SERENA_TOOL_HINTS="$(printf '%s\n' \
+              'Serena hints:' \
+              '- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).' \
+              '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
           fi
 
           # Build prompt: static context + instructions + targeted file context +
@@ -1023,7 +1171,7 @@ jobs:
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
-            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            SERENA_TOOL_HINTS="${IMPLEMENT_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
             if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
               cat "${TARGETED_FILES_CONTEXT_FILE}"
@@ -1053,6 +1201,30 @@ jobs:
           max_attempts=5
           implement_succeeded=false
 
+          # Filter workflow-generated Serena runtime artifacts from the
+          # baseline/no-op detector only when the repo did not already own the
+          # Serena project config before bootstrap and that config stayed
+          # unchanged. That keeps bootstrap-owned .serena/ state from looking
+          # like a Codex edit while still preserving repo-owned .serena files.
+          filter_runtime_status_noise() {
+            local line current_hash
+            while IFS= read -r line; do
+              case "${line}" in
+                *' .serena/'*|*' .serena')
+                  if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
+                     [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
+                     [ -f .serena/project.yml ]; then
+                    current_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+                    if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+                      continue
+                    fi
+                  fi
+                  ;;
+              esac
+              printf '%s\n' "${line}"
+            done
+          }
+
           # ────────────────────────────────────────────────────────────────
           # Pre-Codex worktree baseline.
           # The workflow's setup steps check out runtime support trees
@@ -1072,7 +1244,7 @@ jobs:
           # that this attempt never classified as success-no-op.
           rm -f "${RUNTIME_DIR}/codex_success_noop.flag"
           CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
-          git status --porcelain -uall > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
+          git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
           codex_pre_baseline_lines="$(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ')"
           echo "Pre-Codex worktree baseline (${codex_pre_baseline_lines} line(s)):"
           if [ "${codex_pre_baseline_lines}" -gt 0 ]; then
@@ -1240,7 +1412,7 @@ jobs:
             # where 5 back-to-back attempts all spent their full window
             # exploring and never wrote a single file.
             PROMPT_FILE_TO_USE="${CODEX_PROMPT_FILE}"
-            codex_retry_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+            codex_retry_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
             if [ "${attempt}" -gt 1 ] && [ -z "${codex_retry_delta}" ]; then
               PROMPT_FILE_TO_USE="${RUNTIME_DIR}/codex_prompt_retry.txt"
               # Extract distinct `exec` commands from prior-attempt stderr
@@ -1385,7 +1557,7 @@ jobs:
                 # Diff against the pre-Codex baseline so untouched workflow
                 # bootstrap artifacts (.codex-workflow-src*, etc.) don't
                 # count as a false-positive Codex change.
-                codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+                codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
                 if [ -n "${codex_delta}" ]; then
                   echo "Codex implement succeeded with file changes on attempt ${attempt}."
                   implement_succeeded=true
@@ -1440,7 +1612,7 @@ jobs:
                 # for this case, so back-to-back 3h jobs on the same issue
                 # discarded full sets of streamed apply_patch diffs.
                 # Salvage any file changes already on disk here too.
-                codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+                codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
                 if delta_is_substantive "${codex_delta}"; then
                   echo "::warning::Codex returned empty output on attempt ${attempt} but produced file changes; salvaging partial work."
                   implement_succeeded=true
@@ -1476,7 +1648,7 @@ jobs:
               # otherwise long attempts that produce real partial work get
               # discarded and the loop wastes its remaining budget restarting
               # from scratch (see analyze-log run 24989488561).
-              codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+              codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
               if delta_is_substantive "${codex_delta}"; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} but produced file changes; salvaging partial work."
                 implement_succeeded=true
@@ -1827,12 +1999,72 @@ jobs:
               ;;
           esac
           REPAIR_CODEX_CONFIG="${HOME:-/root}/.codex/config.toml"
-          if [ -f "${REPAIR_CODEX_CONFIG}" ] && grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${REPAIR_CODEX_CONFIG}"; then
-            sed -i \
-              -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${REPAIR_REASONING}\"/" \
-              -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${REPAIR_REASONING}\"/" \
-              "${REPAIR_CODEX_CONFIG}" || true
+          upsert_repair_reasoning_into_config() {
+            local cfg="$1"
+            PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<'PY' || return 1
+          from pathlib import Path
+          import re
+          import sys
+
+          config_path = Path(sys.argv[1])
+          reasoning = sys.argv[2]
+          replacement = f'model_reasoning_effort = "{reasoning}"\n'
+
+          if not config_path.exists():
+              config_path.parent.mkdir(parents=True, exist_ok=True)
+              config_path.write_text(replacement, encoding="utf-8")
+              raise SystemExit(0)
+
+          text = config_path.read_text(encoding="utf-8")
+          lines = text.splitlines(keepends=True)
+
+          first_table_idx = len(lines)
+          for idx, line in enumerate(lines):
+              stripped = line.lstrip()
+              if re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped):
+                  first_table_idx = idx
+                  break
+
+          top_level_lines = lines[:first_table_idx]
+          rest_lines = lines[first_table_idx:]
+          pattern = re.compile(r"^[ \t]*model_reasoning_effort[ \t]*=")
+
+          updated_top = []
+          replaced = False
+          for line in top_level_lines:
+              if pattern.match(line):
+                  if not replaced:
+                      updated_top.append(replacement)
+                      replaced = True
+                  continue
+              updated_top.append(line)
+
+          if not replaced:
+              if updated_top and not updated_top[-1].endswith("\n"):
+                  updated_top[-1] += "\n"
+              updated_top.append(replacement)
+
+          config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
+          PY
+          }
+          if ! upsert_repair_reasoning_into_config "${REPAIR_CODEX_CONFIG}"; then
+            echo "::warning::Failed to patch ~/.codex/config.toml for repair reasoning; leaving existing config unchanged."
+          else
             echo "Patched ~/.codex/config.toml: model_reasoning_effort=${REPAIR_REASONING} for repair phase."
+          fi
+
+          REPAIR_SERENA_TOOL_HINTS=""
+          if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+            REPAIR_SERENA_TOOL_HINTS="$(printf '%s\n' \
+              'Serena hints:' \
+              '- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).' \
+              '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
+          fi
+          REPAIR_RENDERED_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-repair.rendered.txt"
+          if SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}" > "${REPAIR_RENDERED_PROMPT_TEMPLATE}"; then
+            REPAIR_PROMPT_TEMPLATE="${REPAIR_RENDERED_PROMPT_TEMPLATE}"
+          else
+            echo "::warning::Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt."
           fi
 
           : > "${INITIAL_CHANGED_FILE}"
@@ -1866,6 +2098,111 @@ jobs:
             local p="$1"
             grep -Fqx -- "${p}" "${ALLOW_LIST_FILE}" 2>/dev/null
           }
+
+          if [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck source=/dev/null
+            source scripts/semble_helpers.sh 2>/dev/null || true
+          fi
+
+            build_repair_semble_query() {
+              local output_file="$1"
+              : > "${output_file}"
+              python3 - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build repair Semble query" >&2; :; }
+          import os
+          import re
+          import sys
+
+          capture_path, allow_list_path, captured_files_path, output_path = sys.argv[1:5]
+
+
+          def read_lines(path: str) -> list[str]:
+          	try:
+          		with open(path, "r", encoding="utf-8", errors="replace") as handle:
+          			return [line.rstrip("\n") for line in handle]
+          	except OSError:
+          		return []
+
+
+          capture_lines = read_lines(capture_path)
+          allow_list_lines = [line.strip() for line in read_lines(allow_list_path) if line.strip()]
+          captured_file_lines = [line.strip() for line in read_lines(captured_files_path) if line.strip()]
+          tail_text = "\n".join(capture_lines[-120:])
+
+          seen: set[str] = set()
+          identifiers: list[str] = []
+          stop_words = {
+          	"and",
+          	"bash",
+          	"captured",
+          	"command",
+          	"diff",
+          	"error",
+          	"errors",
+          	"failed",
+          	"failure",
+          	"file",
+          	"files",
+          	"from",
+          	"line",
+          	"lines",
+          	"list",
+          	"path",
+          	"repair",
+          	"syntax",
+          	"the",
+          	"traceback",
+          	"validate",
+          	"validation",
+          	"warning",
+          	"with",
+          	"yaml",
+          }
+
+
+          def add_identifier(value: str) -> None:
+          	value = value.strip()
+          	if not value or value in seen:
+          		return
+          	seen.add(value)
+          	identifiers.append(value)
+
+
+          for path in allow_list_lines[:20]:
+          	add_identifier(path)
+          	add_identifier(os.path.basename(path))
+
+          for path in captured_file_lines[:20]:
+          	add_identifier(path)
+          	add_identifier(os.path.basename(path))
+
+          for match in re.findall(r"(?:[A-Za-z0-9_.-]+/)*([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)", tail_text):
+          	add_identifier(match)
+
+          for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", tail_text):
+          	if match.lower() in stop_words:
+          		continue
+          	add_identifier(match)
+          	if len(identifiers) >= 40:
+          		break
+
+          parts: list[str] = ["Implement post-Codex syntax repair"]
+          if allow_list_lines:
+          	parts.append("Allow-list files:\n" + "\n".join(allow_list_lines[:20]))
+          if captured_file_lines:
+          	parts.append("Captured syntax-failure files:\n" + "\n".join(captured_file_lines[:20]))
+          if identifiers:
+          	parts.append("Captured diagnostics identifiers:\n" + "\n".join(identifiers[:40]))
+
+          query_text = "\n\n".join(part for part in parts if part).strip()
+          if query_text:
+          	with open(output_path, "w", encoding="utf-8") as handle:
+          		handle.write(query_text)
+          		handle.write("\n")
+          PY
+            }
+
+          REPAIR_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/post_codex_repair_semble_query.txt"
+          build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"
 
           repair_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
@@ -1925,6 +2262,10 @@ jobs:
                   echo "(file not found in working tree)"
                 fi
               done < "${ALLOW_LIST_FILE}"
+              echo
+              if [ -s "${REPAIR_SEMBLE_QUERY_FILE}" ] && declare -F semble_query_block >/dev/null 2>&1; then
+                semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true
+              fi
             } > "${REPAIR_PROMPT_FILE}"
 
             REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
@@ -2141,6 +2482,15 @@ jobs:
             while IFS= read -r fetched_file; do
               [ -n "${fetched_file}" ] && rm -f "${fetched_file}"
             done < "${FETCHED_MANIFEST}"
+          fi
+
+          if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
+            current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+            if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+              if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then
+                rm -rf .serena
+              fi
+            fi
           fi
 
           porcelain_status="$(git status --porcelain)"
@@ -3536,6 +3886,37 @@ jobs:
       - name: Exit safely
         if: failure() || cancelled()
         run: exit 0
+
+      - name: Emit Serena stats
+        if: always() && env.SKIP_IMPLEMENT != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/serena_stats_emit.py ]; then
+            echo "::notice::serena_stats_emit.py is unavailable; skipping Serena stats emission."
+            exit 0
+          fi
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
+            echo "::notice::RUNTIME_DIR is unavailable; skipping Serena stats emission."
+            exit 0
+          fi
+
+          serena_stat_args=(--target implement)
+          for log_path in "${RUNTIME_DIR}/codex_log.txt" "${RUNTIME_DIR}/implement_diagnose.log"; do
+            if [ -f "${log_path}" ]; then
+              serena_stat_args+=(--log "${log_path}")
+            fi
+          done
+          while IFS= read -r -d '' log_path; do
+            serena_stat_args+=(--log "${log_path}")
+          done < <(find "${RUNTIME_DIR}" -maxdepth 1 -type f \( -name 'codex_log_attempt_*.txt' -o -name 'post_codex_repair_log_attempt_*.txt' \) -print0 2>/dev/null)
+
+          if [ "${#serena_stat_args[@]}" -le 2 ]; then
+            echo "::notice::No Serena log files were found for this implement run."
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
 
       - name: Cleanup temporary artifacts
         if: always()

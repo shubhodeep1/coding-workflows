@@ -8,6 +8,7 @@ contract is validated against workflow behavior, not reimplemented logic.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -442,6 +443,7 @@ def _run_diagnose_step(
 			"DEFAULT_BRANCH": "main",
 			"MODEL_EDITOR": "openai/gpt-5.4",
 			"PR_BASE_BRANCH": "orchestrator/project-829",
+			"SERENA_AVAILABLE": "true",
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"IMPLEMENT_DIAGNOSE_PROMPT_FILE": str(prompt_file),
 			"IMPLEMENT_DIAGNOSE_OUTPUT_FILE": str(output_file),
@@ -718,6 +720,9 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
+	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
 
 
 def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
@@ -833,6 +838,8 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "tracked.txt" in stdin_prompt
 		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
 		assert "scanner error on line 3" in stdin_prompt
+		assert "Serena hints:" in stdin_prompt
+		assert "Keep apply_patch as the primary write path in implement-family runs" in stdin_prompt
 
 		created_issues = state.get("created_issues", [])
 		assert len(created_issues) == 1
@@ -1116,15 +1123,58 @@ def test_out_of_scope_noop_when_capture_file_missing():
 		assert state.get("created_issues", []) == []
 
 
+def test_diagnose_reasoning_patch_preserves_serena_mcp_block() -> None:
+	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert "top_level_lines = lines[:first_table_idx]" in diagnose
+	assert "rest_lines = lines[first_table_idx:]" in diagnose
+	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in diagnose
+	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in diagnose
+	assert 'if ! patch_diagnose_reasoning_into_config; then' in diagnose
+	assert 'Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged.' in diagnose
+	assert "[mcp_servers.serena]" not in diagnose.split("patch_diagnose_reasoning_into_config()", 1)[1].split("patch_diagnose_reasoning_into_config", 1)[0], (
+		"Diagnose reasoning patch must update only the top-level model_reasoning_effort key without inlining Serena table rewrites"
+	)
+
+
+def test_repair_reasoning_patch_preserves_serena_mcp_block() -> None:
+	repair_block = _extract_run_script("Attempt post-Codex syntax repair")
+	repair_patcher = repair_block.split("upsert_repair_reasoning_into_config() {", 1)[1].split('if ! upsert_repair_reasoning_into_config', 1)[0]
+	assert "\nfrom pathlib import Path\n" in repair_patcher
+	assert "top_level_lines = lines[:first_table_idx]" in repair_patcher
+	assert "rest_lines = lines[first_table_idx:]" in repair_patcher
+	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in repair_patcher
+	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in repair_patcher
+	assert "[mcp_servers.serena]" not in repair_patcher
+
+
+def test_repair_reasoning_heredoc_is_column_zero_after_yaml_strip() -> None:
+	block = _step_block("Attempt post-Codex syntax repair")
+	run_idx = next(i for i, line in enumerate(block) if line.strip() == "run: |")
+	run_indent = len(block[run_idx]) - len(block[run_idx].lstrip(" "))
+	opener_idx = next(
+		i for i, line in enumerate(block)
+		if 'PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<\'PY\'' in line
+	)
+	body_line = block[opener_idx + 1]
+	terminator_idx = next(i for i in range(opener_idx + 1, len(block)) if block[i].strip() == "PY")
+	terminator_line = block[terminator_idx]
+	assert len(body_line) - len(body_line.lstrip(" ")) == run_indent + 2, (
+		"Repair heredoc Python must be flush with the run-block base indent so YAML stripping leaves Python at column 0"
+	)
+	assert len(terminator_line) - len(terminator_line.lstrip(" ")) == run_indent + 2, (
+		"Repair heredoc terminator must share the run-block base indent so bash terminates <<'PY' correctly"
+	)
+
+
 def test_codex_pre_baseline_captured_before_retry_loop() -> None:
 	codex_block = _step_block_text("Run Codex implementation")
 	assert 'CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"' in codex_block, (
 		"Pre-Codex baseline snapshot must be captured so detection/retry-nudge/no-op "
 		"handlers can diff only real Codex-produced deltas"
 	)
-	assert 'git status --porcelain -uall > "${CODEX_PRE_BASELINE}"' in codex_block, (
+	assert 'git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}"' in codex_block, (
 		"Baseline must be written with --porcelain -uall so untracked directories "
-		"expand to stable per-file lines"
+		"expand to stable per-file lines while filtering runtime Serena noise"
 	)
 	# The baseline must be captured before the retry loop so it doesn't drift
 	# between attempts.
@@ -1153,13 +1203,16 @@ def test_success_noop_flag_cleared_before_retry_loop() -> None:
 
 def test_codex_success_detection_uses_baseline_diff() -> None:
 	codex_block = _step_block_text("Run Codex implementation")
+	assert 'filter_runtime_status_noise() {' in codex_block, (
+		"Retry and success detection must share the Serena runtime-noise filter helper"
+	)
 	# Retry-nudge check must use baseline-filtered delta, not raw porcelain.
-	assert 'codex_retry_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+	assert 'codex_retry_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
 		"Retry-nudge must use baseline-filtered delta so workflow bootstrap artifacts "
-		"(.codex-workflow-src*) don't falsely trigger the 'modify files' nudge"
+		"(.codex-workflow-src*, .serena/project.yml) don't falsely trigger the 'modify files' nudge"
 	)
 	# Success detection must also use baseline-filtered delta.
-	assert 'codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+	assert 'codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
 		"Success-detection must use baseline-filtered delta so bootstrap artifacts "
 		"don't produce a false-positive 'Codex changed files' signal"
 	)
@@ -1194,6 +1247,176 @@ def test_codex_success_detection_uses_baseline_diff() -> None:
 			f"Success-no-op regex should include the '{phrase}' completion signal "
 			f"(observed Codex phrasings on issues #1768, #1816, #1859)"
 		)
+
+
+def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_is_content_aware() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	assert 'SERENA_PROJECT_BOOTSTRAP_HASH' in _workflow_text(), (
+		"Workflow must export a Serena bootstrap hash for runtime-noise filtering"
+	)
+	assert "bootstrap-owned .serena/ state" in codex_block, (
+		"Runtime-noise filter should document that bootstrap-owned .serena state is filtered together"
+	)
+	assert "*' .serena/'*|*' .serena')" in codex_block, (
+		"Run Codex implementation must filter bootstrap-owned .serena directory entries, not only project.yml"
+	)
+	assert 'current_hash="$(sha256sum .serena/project.yml' in codex_block, (
+		"Run Codex implementation must hash .serena/project.yml when deciding whether it is only runtime noise"
+	)
+	assert 'if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in codex_block, (
+		"Only the unchanged bootstrap Serena project file should be filtered from no-op detection"
+	)
+
+	commit_block = _step_block_text("Commit changes")
+	assert 'current_serena_project_hash="$(sha256sum .serena/project.yml' in commit_block, (
+		"Commit cleanup must compare the current Serena project file against the bootstrap hash before deleting it"
+	)
+	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_block, (
+		"Commit cleanup must preserve .serena/project.yml when Codex changed it"
+	)
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_block, (
+		"Commit cleanup must never remove a git-tracked .serena tree"
+	)
+	assert 'rm -rf .serena' in commit_block, (
+		"Commit cleanup must remove the full bootstrap-owned .serena directory once the project hash still matches"
+	)
+
+
+def test_serena_runtime_filter_and_cleanup_preserve_mutated_tree_and_drop_unchanged_bootstrap_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_serena_runtime_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+
+		run_codex_script = _extract_run_script("Run Codex implementation")
+		filter_helper = "filter_runtime_status_noise() {" + run_codex_script.split("filter_runtime_status_noise() {", 1)[1].split(
+			"\n\n# ────────────────────────────────────────────────────────────────", 1
+		)[0]
+		commit_script = _extract_run_script("Commit changes")
+		cleanup_start = 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then'
+		cleanup_snippet = cleanup_start + commit_script.split(cleanup_start, 1)[1].split('porcelain_status="$(git status --porcelain)"', 1)[0]
+
+		def _write_serena_tree(project_body: str) -> str:
+			project_path = repo_dir / ".serena" / "project.yml"
+			cache_path = repo_dir / ".serena" / "cache" / "state.json"
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			project_path.write_text(project_body, encoding="utf-8")
+			cache_path.write_text('{"runtime": true}\n', encoding="utf-8")
+			return hashlib.sha256(project_path.read_bytes()).hexdigest()
+
+		def _run_inline_bash(script: str, *, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+			env = os.environ.copy()
+			env.update(extra_env)
+			return subprocess.run(
+				["bash", "-s"],
+				cwd=str(repo_dir),
+				env=env,
+				input=script,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+
+		filter_script = "set -euo pipefail\n" + filter_helper + "\ngit status --porcelain -uall | filter_runtime_status_noise\n"
+		cleanup_script = "set -euo pipefail\n" + cleanup_snippet + "\n"
+
+		bootstrap_hash = _write_serena_tree("project_name: bootstrap\n")
+		filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert filter_result.returncode == 0, filter_result.stderr
+		assert ".serena/" not in filter_result.stdout, (
+			"Unchanged bootstrap-owned .serena state should be filtered out of the no-op baseline delta"
+		)
+
+		(repo_dir / ".serena" / "project.yml").write_text("project_name: mutated\n", encoding="utf-8")
+		mutated_filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert mutated_filter_result.returncode == 0, mutated_filter_result.stderr
+		assert ".serena/project.yml" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the filter from hiding .serena/project.yml"
+		)
+		assert ".serena/cache/state.json" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the filter from hiding sibling .serena runtime files"
+		)
+
+		shutil.rmtree(repo_dir / ".serena")
+		bootstrap_hash = _write_serena_tree("project_name: cleanup-bootstrap\n")
+		cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert cleanup_result.returncode == 0, cleanup_result.stderr
+		assert not (repo_dir / ".serena").exists(), (
+			"Commit cleanup must drop the unchanged bootstrap-owned .serena tree before staging"
+		)
+
+		bootstrap_hash = _write_serena_tree("project_name: cleanup-mutated\n")
+		(repo_dir / ".serena" / "project.yml").write_text("project_name: cleanup-mutated-again\n", encoding="utf-8")
+		preserved_cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert preserved_cleanup_result.returncode == 0, preserved_cleanup_result.stderr
+		assert (repo_dir / ".serena" / "project.yml").is_file(), (
+			"Commit cleanup must preserve .serena/project.yml once its content diverges from the bootstrap hash"
+		)
+		assert (repo_dir / ".serena" / "cache" / "state.json").is_file(), (
+			"Commit cleanup must preserve sibling .serena files once project.yml diverges from the bootstrap hash"
+		)
+
+		shutil.rmtree(repo_dir / ".serena")
+		bootstrap_hash = _write_serena_tree("project_name: tracked-bootstrap\n")
+		_git(["git", "add", ".serena/cache/state.json"], cwd=repo_dir)
+		tracked_cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert tracked_cleanup_result.returncode == 0, tracked_cleanup_result.stderr
+		assert (repo_dir / ".serena").is_dir(), (
+			"Commit cleanup must preserve git-tracked .serena content even when the bootstrap hash still matches"
+		)
+
+
+def test_serena_preexistence_detection_runs_after_checkout() -> None:
+	workflow = _workflow_text()
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false"' in _step_block_text("Create runtime workspace"), (
+		"Runtime workspace should default Serena preexistence to false until checkout makes the repo visible"
+	)
+	detect_block = _step_block_text("Detect preexisting Serena project config")
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_block, (
+		"Serena preexistence detection must query the checked-out repo, not the pre-checkout workspace"
+	)
+	assert workflow.find("- name: Checkout repository") < workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena"), (
+		"Serena preexistence detection must run after checkout and before Setup Serena records bootstrap hashes"
+	)
+
+
+def test_stage_support_files_preserves_consumer_owned_serena_template() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	assert 'elif [ "${is_self_repo}" = "false" ] && git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2" >/dev/null 2>&1; then' in stage_block, (
+		"Stage workflow support files must preserve a consumer-owned Serena template instead of overwriting it"
+	)
+	assert "preserving caller-owned Serena template" in stage_block, (
+		"Preserved consumer Serena templates should emit an audit notice"
+	)
 
 
 def test_retry_prompt_includes_exec_history_recap() -> None:
@@ -1366,6 +1589,9 @@ def test_yaml_reserved_indicator_recipe_in_repair_prompts() -> None:
 			f"{prompt_path.name} must explicitly forbid the failed strategy "
 			"(rg/grep with literal backtick)"
 		)
+		assert "{{SERENA_TOOL_HINTS}}" in body, (
+			f"{prompt_path.name} must expose the Serena guidance placeholder"
+		)
 
 
 def test_yaml_quoting_clause_in_implement_prompt() -> None:
@@ -1374,6 +1600,9 @@ def test_yaml_quoting_clause_in_implement_prompt() -> None:
 	recipe — without this, Codex keeps emitting bare scalars starting
 	with backtick / @ / etc. in db/contracts/*.yml prose."""
 	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "{{SERENA_TOOL_HINTS}}" in body, (
+		"mode-implement.txt must expose the Serena guidance placeholder"
+	)
 	assert "YAML reserved-indicator quoting" in body, (
 		"mode-implement.txt must have a labelled clause for YAML reserved-"
 		"indicator quoting so it's discoverable on review"
