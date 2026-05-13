@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_reasoning_schedule.py:26-29 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `_step_block()` can misidentify step boundaries because its lookahead may not stop cleanly at the next sibling step.\n  WHY: Both reviewers reported that the regex-based block extraction can overcapture workflow step content when YAML formatting changes.\n- .github/workflows/review_autofix.yml:2140 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `sed` replacement does not preserve leading whitespace from the matched TOML line.\n  WHY: The reviewer reported that if `model_reasoning_effort` is written with indentation, the later exact-prefix override can fail and leave the reviewer config at the wrong reasoning level.\n- tests/test_review_autofix_reasoning_schedule.py:61 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The test assertion hardcodes a single-quoted `sed` form.\n  WHY: Both reviewers reported that a valid workflow variant using a different quoting style would fail this contract test.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:file mode 755\u2192644 | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: File mode changes from 755 to 644 are outside the issue scope.\n  WHY: The reviewer noted these are non-functional source mode flips because the workflow bootstrap installs them with `install -m 0755` anyway.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_autofix_reasoning_schedule.py:26-29 | confidence=3\n  PROBLEM: The `_step_block()` lookahead pattern `(?=^\\1- |\\Z)` can misidentify step boundaries when YAML formatting drifts (e.g., added comments, different indentation).\n  WHY: `test_no_pr_claude_branch_review_uses_lightweight_reviewer_profile` could fail intermittently, blocking CI.\n- tests/test_review_autofix_reasoning_schedule.py:61 | confidence=3\n  PROBLEM: Assertion hardcodes single-quote sed syntax; valid double-quote variants would fail the test.\n  WHY: False negative blocking workflow evolution; forces single-quote style even where double-quotes match repo patterns.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_review_autofix_reasoning_schedule.py:26-29 | confidence=3\n  PROBLEM: Regex lookahead `(?=\\1- |\\Z)` checks for the next step starting exactly with the captured indent plus `- `, which can fail to detect the peer-step boundary under formatting variation.\n  WHY: The test can falsely extract an oversized block including subsequent steps, causing assertions to fail when multi-line steps or comments appear.\n- .github/workflows/review_autofix.yml:2140 | confidence=4\n  PROBLEM: The replacement omits leading whitespace captured in the match, forcing the key line to exact `model_reasoning_effort = \"low\"` formatting.\n  WHY: If downstream TOML writer output is indented differently, the later exact-prefix `sed` override can fail and leave the reviewer config stale at the prior reasoning level.\n- tests/test_review_autofix_reasoning_schedule.py:61 | confidence=4\n  PROBLEM: The assertion hardcodes single-quoted `sed` syntax with escaped inner quotes.\n  WHY: A workflow evolution to double quotes would break CI even if the command remained functionally equivalent.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:file mode 755\u2192644 | confidence=2\n  PROBLEM: File mode changes are outside the scope defined by issue #2555.\n  WHY: The changes are benign because `install -m 0755` in the workflow bootstrap sets executable mode regardless of source file mode.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4106346316c072e30725b5f596f0345f4239943719a18960deec1193b8599bcd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2556,
+    "run_id": "25771726176",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25771726176",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513013003_0ea431bd7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2556,
+    "run_id": "25771726176"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-13T01:30:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
