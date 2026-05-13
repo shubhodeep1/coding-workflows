@@ -4647,13 +4647,10 @@ jobs:
           # critical for non-orchestrator PRs that the cron does not
           # scan.  Ledger-only commits are still skipped here (the
           # clean-review tail in the same run handles auto-merge, so no
-          # continuation is needed).  Opt out globally with
-          # AUTOFIX_CONTINUATION_ENABLED=false, which restores the
-          # pre-continuation behaviour where AUTOFIX_SKIP_SELF_TRIGGERED
-          # alone gated productive autofixes out of this step.
-          #
-          # Opt in to the legacy synchronize-self-skip with
-          # AUTOFIX_SKIP_SELF_TRIGGERED=true on the repo variable.
+          # continuation is needed).  Setting
+          # AUTOFIX_CONTINUATION_ENABLED=false restores the
+          # pre-continuation path, where productive autofix commits skip
+          # this step only when AUTOFIX_SKIP_SELF_TRIGGERED=true.
           continuation_enabled="${AUTOFIX_CONTINUATION_ENABLED:-true}"
           is_ledger_only_commit="${LEDGER_ONLY_COMMIT:-false}"
           if [ "${DID_COMMIT:-false}" = "true" ] \
