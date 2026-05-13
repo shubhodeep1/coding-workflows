@@ -74,16 +74,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Fetch open PRs, filter to non-draft client-side. Single /pulls call
-          # batches state/draft/head/title/body, honouring CLAUDE.md §15.
-          prs_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" \
+          # Fetch open PRs, filter to non-draft client-side. Single paginated
+          # /pulls traversal batches state/draft/head/title/body without
+          # silently dropping PRs beyond page 1, honouring CLAUDE.md §15.
+          prs_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/pulls" \
             -f state=open -f per_page=100 \
-            --jq '[.[] | select(.draft == false) | {
-              number,
-              head_ref: .head.ref,
-              title: (.title // ""),
-              body: (.body // "")
-            }]')"
+            | jq -cs 'add // [] | [.[] | select(.draft == false) | {
+                number,
+                head_ref: .head.ref,
+                title: (.title // ""),
+                body: (.body // "")
+              }]')"
 
           total="$(printf '%s' "${prs_json}" | jq 'length')"
           echo "AUTOFIX_SWEEP_START repo=${REPOSITORY} candidates=${total} head_ref_filter=${HEAD_REF_FILTER:-<none>} dry_run=${DRY_RUN}"

@@ -4426,13 +4426,15 @@ jobs:
           # pre-continuation behaviour where AUTOFIX_SKIP_SELF_TRIGGERED
           # alone gated productive autofixes out of this step.
           #
-          # Opt-out: AUTOFIX_SKIP_SELF_TRIGGERED=false on the repo variable.
+          # Opt in to the legacy synchronize-self-skip with
+          # AUTOFIX_SKIP_SELF_TRIGGERED=true on the repo variable.
           continuation_enabled="${AUTOFIX_CONTINUATION_ENABLED:-true}"
           is_ledger_only_commit="${LEDGER_ONLY_COMMIT:-false}"
-          if [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-true}" != "false" ] \
-            && [ "${DID_COMMIT:-false}" = "true" ] \
+          if [ "${DID_COMMIT:-false}" = "true" ] \
             && [ "${CONFLICT_RESOLVED:-false}" != "true" ] \
-            && { [ "${continuation_enabled}" = "false" ] || [ "${is_ledger_only_commit}" = "true" ]; }; then
+            && { [ "${is_ledger_only_commit}" = "true" ] \
+              || { [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-false}" = "true" ] \
+                && [ "${continuation_enabled}" = "false" ]; }; }; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation_enabled=${continuation_enabled} ledger_only=${is_ledger_only_commit}"
             exit 0
           fi
