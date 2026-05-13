@@ -2841,7 +2841,7 @@ jobs:
             echo "::warning::git reset --hard HEAD failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
           fi
-          if ! git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main; then
+          if ! git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt; then
             echo "::warning::git clean -ffdx failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
           fi
@@ -2908,7 +2908,7 @@ jobs:
               git merge --abort >/dev/null 2>&1 || true
             fi
             git reset --hard HEAD >/dev/null 2>&1 || true
-            git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main >/dev/null 2>&1 || true
+            git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt >/dev/null 2>&1 || true
             for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
               if [ -d "${MERGE_STASH}/${d}" ]; then
                 cp -a "${MERGE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${MERGE_STASH}/${d}" "${d}" 2>/dev/null || true
@@ -2934,7 +2934,7 @@ jobs:
               fi
             fi
           done
-          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt 2>/dev/null || true
 
           echo "=== pre-review merge working tree state ==="
           git status --porcelain 2>/dev/null || true
@@ -2996,7 +2996,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
 
       - name: Upload per-reviewer logs (always)
-        if: always() && env.PREVIOUS_REVIEWS_DIR != ''
+        if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: reviewer-logs-${{ github.run_id }}-${{ github.run_attempt }}
