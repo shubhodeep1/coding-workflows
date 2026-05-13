@@ -11,6 +11,7 @@ produces empty output — same failure mode as reasoning=none).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -20,6 +21,13 @@ REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
 def _workflow() -> str:
 	return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
+
+
+def _step_block(step_name: str) -> str:
+	wf = _workflow()
+	match = re.search(rf'(?ms)^([ \t]*)- name: {re.escape(step_name)}\n.*?(?=^\1- |\Z)', wf)
+	assert match is not None, step_name
+	return match.group(0)
 
 
 def test_no_reasoning_schedule_env_vars() -> None:
@@ -43,6 +51,15 @@ def test_smoke_test_reasoning_split() -> None:
 	assert 'model_reasoning_effort = "low"' in wf
 	# Ensure the old all-low assignment is gone.
 	assert 'EDITOR_REASONING_EFFORT=low' not in wf
+
+
+def test_no_pr_claude_branch_review_uses_lightweight_reviewer_profile() -> None:
+	block = _step_block("Use lightweight reviewer profile for no-PR claude-branch-review")
+	assert "if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && env.PR_NUMBER == ''" in block
+	assert 'echo "ENABLE_REVIEWER_TWO_PASS=false" >> "$GITHUB_ENV"' in block
+	assert 'echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"' in block
+	assert 'sed -i \'s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/\' ~/.codex/config.toml' in block
+	assert 'CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false' in block
 
 
 def test_editor_switch_replaces_any_reasoning_value() -> None:
