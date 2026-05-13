@@ -5,13 +5,26 @@
   "entry_id": "processed_command_2555_4435900186_approved",
   "issue_number": 2555,
   "metadata": {
+    "branch": "ai/issue-2555",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "scripts/mcp_handshake_probe.py",
+      "scripts/serena_stats_emit.py",
+      "scripts/setup_serena.sh",
+      "tests/test_review_autofix_reasoning_schedule.py"
+    ],
+    "issue_number": 2555,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2555",
+    "pr_number": 2556,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2556",
+    "run_attempt": "1",
+    "run_id": "25770156319",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25770156319"
   },
   "run_attempt": 1,
   "run_id": "25770156319",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-13T00:21:47Z",
+  "status": "completed",
+  "timestamp": "2026-05-13T00:26:06Z",
   "workflow": "implement"
 }
