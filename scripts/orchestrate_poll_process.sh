@@ -3329,7 +3329,7 @@ _refresh_integration_resolver_tooling() {
 # or judge invoked), 1 if the circuit breaker has tripped and the
 # state was marked failed.
 # _list_integration_conflict_files — enumerate the filenames that would
-# conflict if <default_branch> were merged into <integration_branch>.
+# conflict if <integration_branch> were merged into <default_branch>.
 # Uses ``git merge-tree --write-tree --name-only`` for a stateless
 # three-way merge probe (same technique as probe_sibling_merge_conflicts
 # at line 304+).  Echoes one file path per line on stdout; returns 0
@@ -3406,15 +3406,15 @@ heal_integration_branch_conflict() {
   # three-way merge — we never mark clean on probe failure.
   if command -v git >/dev/null 2>&1 \
      && git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
-    git fetch --no-tags --quiet origin \
-      "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
-      "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null || true
-    if git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 \
+    if git fetch --no-tags --quiet origin \
+         "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+         "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null \
+       && git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 \
        && git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
        && git merge-tree --write-tree --name-only --no-messages \
             "refs/remotes/origin/${default_branch}" \
             "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
-      echo "  [integration-heal] Pre-flight merge probe: ${default_branch} merges cleanly into ${integration_branch}; clearing conflict state without dispatching for PR #${final_pr}."
+      echo "  [integration-heal] Pre-flight merge probe: ${integration_branch} merges cleanly into ${default_branch}; clearing conflict state without dispatching for PR #${final_pr}."
       mark_integration_sync_clean "${default_branch}"
       return 0
     fi
@@ -3464,7 +3464,10 @@ heal_integration_branch_conflict() {
     local _ihbc_pr_mergeable
     _ihbc_pr_mergeable="$(gh_retry _safe_gh_jq \
       "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" \
-      --jq '.mergeable // false' 2>/dev/null || echo "false")"
+      --jq '.mergeable // false' 2>/dev/null || {
+        echo "::warning::Unable to re-query mergeable status for PR #${final_pr}; treating it as no recovery signal during lifetime-cap handling." >&2
+        echo "false"
+      })"
     if [ "${_ihbc_pr_mergeable}" = "true" ]; then
       echo "  [integration-heal] Lifetime cap reached but PR #${final_pr} is now mergeable (late-finishing resolver dispatch landed); clearing conflict state instead of terminalizing."
       mark_integration_sync_clean "${default_branch}"
@@ -3649,7 +3652,8 @@ Detected a real merge conflict while syncing \`${default_branch}\` into \`${inte
   return 0
 }
 
-# Called after a successful sync to clear conflict state. Idempotent.
+# Called after conflict recovery determines the final merge is clean.
+# Idempotent.
 # Usage: mark_integration_sync_clean <default_branch>
 mark_integration_sync_clean() {
   local default_branch="${1:-main}"
@@ -3663,7 +3667,7 @@ mark_integration_sync_clean() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_tracking_comment "## ✅ Integration self-healing resolved
 
-\`${default_branch}\` now merges cleanly into the integration branch. Final merge will proceed on the next poll tick."
+Integration conflicts are cleared; final merge into \`${default_branch}\` will proceed on the next poll tick."
   fi
 }
 
