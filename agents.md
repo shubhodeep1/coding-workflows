@@ -77,7 +77,7 @@ All gpt-5.4 phases now resolve to `low` verbosity at every layer: the per-phase
 `MODEL_VERBOSITY` env-var default in `.github/workflows/*.yml` (`VERBOSITY_*`
 repo-vars), the `-c model_verbosity=low` CLI flag on every `codex exec`
 callsite (≈20 sites across `scripts/*.sh` and `.github/workflows/*.yml`),
-the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:236`
+the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-5.4` in `scripts/codex_model_catalog.json:354`. Third-party
 reviewer models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,
