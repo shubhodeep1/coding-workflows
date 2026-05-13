@@ -2137,7 +2137,7 @@ jobs:
           # config. This step intentionally runs after the smoke-test
           # tuning block so no-PR claude/** comment-only reviews always use
           # the lightweight single-pass reviewer profile.
-          sed -i 's/^model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
+          sed -i 's/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
           echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false"
 
       - name: Checkout PR head branch
