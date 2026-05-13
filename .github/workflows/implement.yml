@@ -2575,11 +2575,20 @@ jobs:
           #       of these files is almost never what an issue asked for;
           #       legitimate workflow-editing issues must opt in.
           #
-          #   (b) the total number of staged deletions exceeds
-          #       BULK_DELETE_THRESHOLD (default 3) and ALLOW_BULK_DELETE
-          #       is not set to 'true'. This catches destructive paths
-          #       that don't touch the canonical list but still wipe an
-          #       unexpected number of files.
+          #   (b) the total number of staged deletions exceeds the
+          #       effective bulk-delete threshold and ALLOW_BULK_DELETE
+          #       is not set to 'true'. The effective threshold is
+          #       BULK_DELETE_THRESHOLD (default 3) for any commit that
+          #       includes at least one non-.md deletion, and
+          #       BULK_DELETE_THRESHOLD_MD (default 100) for commits whose
+          #       staged deletions are all .md files. This relaxes the
+          #       cap for docs/scratchpad cleanups (e.g. analysis/*.md
+          #       backlog purges) while keeping the strict cap whenever
+          #       any source file is staged for deletion. Canonical .md
+          #       files (agents.md, ai_pipeline.md, CLAUDE.md,
+          #       unattended_system_instructions.md) remain covered by
+          #       the canonical-source check above regardless of the
+          #       threshold.
           #
           # On rejection, `destructive_commit_blocked` is written to the
           # step output with the reason ('canonical-source' or
@@ -2593,10 +2602,31 @@ jobs:
               | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
+            # Count non-.md deletions to decide whether the lenient
+            # markdown-only threshold applies. Case-insensitive match so
+            # .MD / .Md are treated the same as .md.
+            non_md_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | grep -ivE '\.md$' || true)"
+            non_md_count="$(printf '%s\n' "${non_md_deletions}" | sed '/^$/d' | wc -l | tr -d ' ')"
             threshold="${BULK_DELETE_THRESHOLD:-3}"
             if ! [[ "${threshold}" =~ ^[0-9]+$ ]]; then
               echo "::warning::Invalid BULK_DELETE_THRESHOLD='${threshold}'; defaulting to 3."
               threshold=3
+            fi
+            md_threshold="${BULK_DELETE_THRESHOLD_MD:-100}"
+            if ! [[ "${md_threshold}" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Invalid BULK_DELETE_THRESHOLD_MD='${md_threshold}'; defaulting to 100."
+              md_threshold=100
+            fi
+            # When every staged deletion is a .md file, apply the
+            # lenient markdown-only threshold; otherwise fall back to
+            # the strict mixed-content threshold so any source-file
+            # deletion still trips at the original limit.
+            if [ "${non_md_count}" -eq 0 ]; then
+              effective_threshold="${md_threshold}"
+              threshold_label="BULK_DELETE_THRESHOLD_MD"
+            else
+              effective_threshold="${threshold}"
+              threshold_label="BULK_DELETE_THRESHOLD"
             fi
 
             if [ -n "${canonical_deletions}" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
@@ -2614,8 +2644,8 @@ jobs:
               exit 1
             fi
 
-            if [ "${total_deletions}" -gt "${threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
-              echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds BULK_DELETE_THRESHOLD=${threshold} and ALLOW_BULK_DELETE is not 'true'."
+            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+              echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
               echo "Deletions blocked by bulk-delete threshold:"
               printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
               {
