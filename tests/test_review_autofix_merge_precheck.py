@@ -2,9 +2,10 @@
 """Tests for merge-precheck hardening in review_autofix.yml.
 
 These tests verify that the workflow contains the required guardrails to prevent
-untracked CI-generated files (e.g. scripts/ai_memory.py) from causing
-git merge/reset failures, that deterministic early merge-topology failures are
-gated before reviewers run, and that failure classification is correct.
+untracked runtime-populated helper files (for example scripts/ai_memory.py and
+bootstrapped support scripts) from causing git merge/reset failures, that
+deterministic early merge-topology failures are gated before reviewers run, and
+that failure classification is correct.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+# Shared cleanup line: intentionally covers both CI-generated helpers and
+# support scripts copied into the working tree during review jobs.
 FULL_RM_LINE = (
     "rm -f scripts/ai_memory.py scripts/ai_memory_lib.py "
     "scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py "
@@ -38,7 +41,7 @@ def _section(start_marker: str, end_marker: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fix 1: explicit removal of known CI-generated files before git reset/merge
+# Fix 1: explicit removal of runtime-populated helper files before git reset/merge
 # ---------------------------------------------------------------------------
 
 def test_workflow_checks_out_pr_head_ref_for_judge_context():
@@ -54,9 +57,9 @@ def test_workflow_checks_out_pr_head_ref_for_judge_context():
 
 def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
     """Before git reset --hard HEAD in the detect-conflicts step, the workflow
-    must explicitly remove known CI-generated files so they cannot linger as
-    untracked files and cause 'Untracked working tree file would be overwritten'
-    errors on subsequent git merge invocations."""
+    must explicitly remove the shared runtime-populated helper files so they
+    cannot linger as untracked files and cause 'Untracked working tree file
+    would be overwritten' errors on subsequent git merge invocations."""
     detect_step = _section(
         "- name: Detect merge conflicts",
         "\n      - name: Prepare merge-conflict resolver prompt and pre-snapshot",
@@ -73,15 +76,15 @@ def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
     )
     reset_pos = reset_match.start()
     assert rm_pos < reset_pos, (
-        "rm -f of known CI artifacts must appear before git reset --hard HEAD "
-        "inside the Detect merge conflicts step so the untracked files are gone "
-        "before reset runs"
+        "rm -f of the shared runtime-populated helper files must appear before "
+        "git reset --hard HEAD inside the Detect merge conflicts step so the "
+        "untracked files are gone before reset runs"
     )
 
 
 def test_known_ci_artifacts_removed_in_resolve_step():
     """Every merge-performing review_autofix probe should remove the same set
-    of known CI-generated files before running git merge."""
+    of runtime-populated helper files before running git merge."""
     pre_review_step = _section(
         "- name: Pre-review deterministic merge-topology gate",
         "\n      - name: Run reviewer models",
@@ -91,12 +94,12 @@ def test_known_ci_artifacts_removed_in_resolve_step():
         "\n      - name: Prepare merge-conflict resolver prompt and pre-snapshot",
     )
     assert FULL_RM_LINE in pre_review_step, (
-        "Expected the pre-review merge-topology gate to remove the full known "
-        "CI-artifact set before its git reset/merge probe"
+        "Expected the pre-review merge-topology gate to remove the shared "
+        "runtime-helper cleanup line before its git reset/merge probe"
     )
     assert FULL_RM_LINE in detect_step, (
-        "Expected the late detect-conflicts step to remove the same known "
-        "CI-artifact set before its git reset/merge probe"
+        "Expected the late detect-conflicts step to remove the same shared "
+        "runtime-helper cleanup line before its git reset/merge probe"
     )
 
 
