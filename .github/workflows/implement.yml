@@ -2593,8 +2593,10 @@ jobs:
           # On rejection, `destructive_commit_blocked` is written to the
           # step output with the reason ('canonical-source' or
           # 'bulk-delete'); the `destructive_commit_deletions` output
-          # carries the deletion list (newline-separated) so downstream
-          # steps (P3: label + TG alert) can act on it before exiting.
+          # carries the deletion list (newline-separated), and the
+          # bulk-delete path also emits the active threshold label/value
+          # so downstream steps (P3: label + TG alert) can act on it
+          # before exiting.
           # -----------------------------------------------------------------
           deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
           if [ -n "${deleted_staged}" ]; then
@@ -2651,6 +2653,8 @@ jobs:
               {
                 echo "destructive_commit_blocked=bulk-delete"
                 echo "destructive_commit_count=${total_deletions}"
+                echo "destructive_commit_threshold_label=${threshold_label}"
+                echo "destructive_commit_effective_threshold=${effective_threshold}"
                 echo 'destructive_commit_deletions<<__DCD_EOF__'
                 printf '%s\n' "${deleted_staged}"
                 echo '__DCD_EOF__'
@@ -2709,6 +2713,8 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           DCB_REASON: ${{ steps.commit_changes.outputs.destructive_commit_blocked }}
           DCB_COUNT: ${{ steps.commit_changes.outputs.destructive_commit_count }}
+          DCB_THRESHOLD_LABEL: ${{ steps.commit_changes.outputs.destructive_commit_threshold_label }}
+          DCB_EFFECTIVE_THRESHOLD: ${{ steps.commit_changes.outputs.destructive_commit_effective_threshold }}
           DCB_DELETIONS: ${{ steps.commit_changes.outputs.destructive_commit_deletions }}
         run: |
           set -euo pipefail
@@ -2720,7 +2726,13 @@ jobs:
               REASON_HUMAN="canonical workflow-source file deletion"
               ;;
             bulk-delete)
-              REASON_HUMAN="bulk deletion exceeded BULK_DELETE_THRESHOLD"
+              if [ -n "${DCB_THRESHOLD_LABEL}" ] && [ -n "${DCB_EFFECTIVE_THRESHOLD}" ]; then
+                REASON_HUMAN="bulk deletion exceeded ${DCB_THRESHOLD_LABEL}=${DCB_EFFECTIVE_THRESHOLD}"
+              elif [ -n "${DCB_THRESHOLD_LABEL}" ]; then
+                REASON_HUMAN="bulk deletion exceeded ${DCB_THRESHOLD_LABEL}"
+              else
+                REASON_HUMAN="bulk deletion exceeded BULK_DELETE_THRESHOLD"
+              fi
               ;;
           esac
 
