@@ -75,12 +75,14 @@ jobs:
           set -euo pipefail
 
           # Fetch all open PRs, then filter to non-draft client-side.
-          # `gh api --paginate --slurp` returns an array of page arrays for
-          # /pulls, so `add // []` merges every page into one snapshot while
-          # preserving the single logical lookup path for this sweep.
-          prs_json="$(gh api --paginate --slurp -X GET "repos/${REPOSITORY}/pulls" \
+          # `gh` rejects `--slurp` combined with `--jq`, so pipe the
+          # per-page arrays from `gh api --paginate` through a separate
+          # `jq -s 'add // []'` to merge them into one snapshot before
+          # filtering. Mirrors the established repo pattern (e.g.
+          # implement.yml:786, gh_helpers.sh:916).
+          prs_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/pulls" \
             -f state=open -f per_page=100 \
-            --jq '(add // []) | map(select(.draft == false) | {
+            | jq -s '(add // []) | map(select(.draft == false) | {
               number,
               head_ref: .head.ref,
               title: (.title // ""),
