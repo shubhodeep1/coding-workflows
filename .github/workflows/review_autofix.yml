@@ -2790,8 +2790,202 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: df -h /
 
+      - name: Pre-review deterministic merge-topology gate
+        # Fail open on ambiguous git/API errors so reviewer/editor work is only
+        # skipped for deterministic stale-base or structurally unmergeable PRs.
+        # Ordinary content conflicts continue to the existing late
+        # Detect merge conflicts + resolver path below.
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
+          LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -x "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" ]; then
+            echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-review stale-base gate)."
+          else
+            advance_out="$(bash "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" || printf 'ADVANCE=unknown\n')"
+            advance_val="$(printf '%s\n' "${advance_out}" | grep -E '^ADVANCE=' | tail -n 1 | cut -d= -f2 || true)"
+            advance_val="${advance_val:-unknown}"
+            case "${advance_val}" in
+              external)
+                echo "AUTOFIX_PRE_REVIEW_STALE_BASE pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=soft_exit"
+                echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+                exit 0
+                ;;
+              self_only)
+                echo "AUTOFIX_PRE_REVIEW_SELF_ADVANCE pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=continue"
+                ;;
+              none)
+                echo "AUTOFIX_PRE_REVIEW_BASE_FRESH pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH}"
+                ;;
+              *)
+                echo "AUTOFIX_PRE_REVIEW_UNKNOWN pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=fail_open"
+                ;;
+            esac
+          fi
+
+          if [ ! -x "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" ]; then
+            echo "::warning::git_ref_health_check.sh missing from support scripts; fail-open (skipping pre-review merge-topology probe)."
+            exit 0
+          fi
+
+          # Mirror the late merge-precheck cleanup so runtime-fetched helper
+          # files cannot trip an exit-128 pre-merge abort before reviewers run.
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
+          if ! git reset --hard HEAD; then
+            echo "::warning::git reset --hard HEAD failed during pre-review merge-topology gate; fail-open to reviewer path."
+            exit 0
+          fi
+          if ! git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main; then
+            echo "::warning::git clean -ffdx failed during pre-review merge-topology gate; fail-open to reviewer path."
+            exit 0
+          fi
+
+          if ! bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair; then
+            echo "::warning::git_ref_health_check.sh repair failed during pre-review merge-topology gate; fail-open to reviewer path."
+            exit 0
+          fi
+
+          if ! git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" 2>/dev/null; then
+            echo "::warning::git fetch for origin/${BASE_BRANCH} failed during pre-review merge-topology gate; fail-open to reviewer path."
+            exit 0
+          fi
+
+          merge_probe_ambiguous=false
+          _merge_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+          if [ -n "${TARGET_BRANCH:-}" ]; then
+            _merge_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+          fi
+          if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
+            _merge_base_deepen_iter=0
+            while [ "${_merge_base_deepen_iter}" -lt 4 ]; do
+              if git merge-base "origin/${BASE_BRANCH}" HEAD >/dev/null 2>&1; then
+                break
+              fi
+              _merge_base_deepen_iter=$((_merge_base_deepen_iter + 1))
+              echo "pre-review merge-base origin/${BASE_BRANCH}…HEAD unreachable in shallow clone — deepening (attempt ${_merge_base_deepen_iter}/4) on refs: ${_merge_refspecs[*]}."
+              if ! git fetch --no-tags --prune --deepen=200 origin "${_merge_refspecs[@]}" 2>/dev/null; then
+                echo "::warning::git fetch --deepen=200 origin ${_merge_refspecs[*]} failed during pre-review gate; trying --unshallow and treating any structural merge failure as ambiguous if history stays incomplete."
+                git fetch --no-tags --prune --unshallow origin "${_merge_refspecs[@]}" 2>/dev/null || true
+                break
+              fi
+            done
+            if ! git merge-base "origin/${BASE_BRANCH}" HEAD >/dev/null 2>&1; then
+              echo "::warning::merge-base origin/${BASE_BRANCH}…HEAD still unreachable after pre-review deepen attempts; continuing to the merge probe, but any unrelated-histories result will fail-open as ambiguous."
+              git fetch --no-tags --prune --unshallow origin "${_merge_refspecs[@]}" 2>/dev/null || true
+              if ! git merge-base "origin/${BASE_BRANCH}" HEAD >/dev/null 2>&1; then
+                if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
+                  merge_probe_ambiguous=true
+                fi
+              fi
+            fi
+          fi
+
+          git config user.name "codex-bot" 2>/dev/null || true
+          git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
+
+          MERGE_STASH="$(mktemp -d)"
+          if [ -z "${MERGE_STASH}" ] || [ ! -d "${MERGE_STASH}" ]; then
+            echo "::warning::mktemp -d failed during pre-review merge-topology gate; fail-open to reviewer path."
+            exit 0
+          fi
+          MERGE_STDERR_FILE="$(mktemp)"
+          if [ -z "${MERGE_STDERR_FILE}" ] || [ ! -f "${MERGE_STDERR_FILE}" ]; then
+            echo "::warning::mktemp failed for merge stderr capture during pre-review merge-topology gate; fail-open to reviewer path."
+            rm -rf "${MERGE_STASH}" >/dev/null 2>&1 || true
+            exit 0
+          fi
+          cleanup_pre_review_merge_probe() {
+            local status="$1"
+            trap - EXIT
+            set +e
+            if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+              git merge --abort >/dev/null 2>&1 || true
+            fi
+            git reset --hard HEAD >/dev/null 2>&1 || true
+            git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main >/dev/null 2>&1 || true
+            for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+              if [ -d "${MERGE_STASH}/${d}" ]; then
+                cp -a "${MERGE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${MERGE_STASH}/${d}" "${d}" 2>/dev/null || true
+              fi
+            done
+            rm -rf "${MERGE_STASH}" >/dev/null 2>&1 || true
+            rm -f "${MERGE_STDERR_FILE}" >/dev/null 2>&1 || true
+            exit "${status}"
+          }
+          trap 'cleanup_pre_review_merge_probe $?' EXIT
+
+          for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+            if [ -d "${d}" ]; then
+              if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
+                while IFS= read -r f; do
+                  [ -n "${f}" ] && [ -e "${f}" ] && {
+                    mkdir -p "${MERGE_STASH}/$(dirname "${f}")"
+                    mv "${f}" "${MERGE_STASH}/${f}"
+                  }
+                done < <(git ls-files --others -- "${d}/")
+              else
+                mv "${d}" "${MERGE_STASH}/${d}"
+              fi
+            fi
+          done
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
+
+          echo "=== pre-review merge working tree state ==="
+          git status --porcelain 2>/dev/null || true
+          _pre_review_untracked="$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+          if [ -n "${_pre_review_untracked}" ]; then
+            echo "untracked files:"
+            printf '%s\n' "${_pre_review_untracked}" | head -20
+          fi
+          echo "========================================"
+
+          merge_exit=0
+          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
+          if [ -s "${MERGE_STDERR_FILE}" ]; then
+            sed 's/^/git merge stderr: /' "${MERGE_STDERR_FILE}"
+          fi
+
+          if [ -z "$(git ls-files --unmerged)" ]; then
+            if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+              _merge_stderr_oneline="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+              _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+              _merge_stderr_oneline="$(printf '%s' "${_merge_stderr_oneline}" | sed 's/%/%25/g; s/\r/%0D/g')"
+              if grep -qi 'refusing to merge unrelated histories' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+                if [ "${merge_probe_ambiguous}" = "true" ]; then
+                  echo "::warning::Pre-review merge topology gate saw 'refusing to merge unrelated histories' after ambiguous history preparation; continuing to reviewers. git stderr: ${_merge_stderr_oneline}"
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=unrelated_histories_ambiguous action=fail_open"
+                else
+                  _head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+                  _base_sha="$(git rev-parse --short "origin/${BASE_BRANCH}" 2>/dev/null || echo unknown)"
+                  echo "::error::Pre-review merge topology gate failed: HEAD (${_head_sha}) and origin/${BASE_BRANCH} (${_base_sha}) have no common ancestor. Skipping reviewer/editor spend. git stderr: ${_merge_stderr_oneline}"
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=no_common_ancestor action=soft_exit"
+                  echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+                  exit 0
+                fi
+              elif [ "${merge_exit}" -eq 128 ]; then
+                echo "::error::Pre-review merge topology gate failed (exit 128): git merge aborted before entering merge state. Skipping reviewer/editor spend. See pre-review diagnostics above. git stderr: ${_merge_stderr_oneline}"
+                echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_precheck_failed_exit_128 action=soft_exit"
+                echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+                exit 0
+              else
+                echo "::warning::Pre-review merge topology gate hit an inconclusive merge failure (exit ${merge_exit}); continuing to reviewers. git stderr: ${_merge_stderr_oneline}"
+                echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_failure_inconclusive_exit_${merge_exit} action=fail_open"
+              fi
+            else
+              echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=clean_or_up_to_date action=continue"
+            fi
+          else
+            echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=content_conflict action=continue"
+          fi
+
       - name: Run reviewer models
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         id: reviewers
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -2815,7 +3009,7 @@ jobs:
           retention-days: 7
 
       - name: Record reviewer consensus candidate in memory (fail-open)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         run: |
           set +e
 
@@ -2899,7 +3093,7 @@ jobs:
         # GitHub API glitch never silently drops a review.
         # Claude-branch-review mode never runs the editor, so this
         # check (and the API calls it makes) is unnecessary.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3631,6 +3825,10 @@ jobs:
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
+        # The pre-review gate above only short-circuits deterministic stale/
+        # structurally-unmergeable cases before reviewer spend. This late step
+        # remains the authoritative MERGE_CONFLICT + resolver entry point for
+        # ordinary content conflicts on runs that still reach the editor tail.
         # Run conflict detection regardless of max_iterations_reached or
         # did_commit — merge conflicts are independent of the autofix cycle.
         # When did_commit is true the autofix commit already happened (push is

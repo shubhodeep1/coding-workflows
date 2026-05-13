@@ -3,7 +3,8 @@
 
 These tests verify that the workflow contains the required guardrails to prevent
 untracked CI-generated files (e.g. scripts/ai_memory.py) from causing
-git merge/reset failures and that failure classification is correct.
+git merge/reset failures, that deterministic early merge-topology failures are
+gated before reviewers run, and that failure classification is correct.
 """
 
 from __future__ import annotations
@@ -18,6 +19,15 @@ REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
 def _workflow() -> str:
     return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
+
+
+def _section(start_marker: str, end_marker: str) -> str:
+    wf = _workflow()
+    start = wf.find(start_marker)
+    assert start != -1, f"Expected section start marker: {start_marker!r}"
+    end = wf.find(end_marker, start)
+    assert end != -1, f"Expected section end marker after {start_marker!r}: {end_marker!r}"
+    return wf[start:end]
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +86,68 @@ def test_known_ci_artifacts_removed_in_resolve_step():
 
 
 # ---------------------------------------------------------------------------
+# Fix 1b: deterministic merge-topology gate runs before reviewers
+# ---------------------------------------------------------------------------
+
+def test_pre_review_merge_topology_gate_present_before_reviewers():
+    """A deterministic pre-review gate must run before reviewer fan-out so
+    obviously stale / structurally unmergeable PRs stop early."""
+    wf = _workflow()
+    gate_name = "- name: Pre-review deterministic merge-topology gate"
+    reviewer_name = "- name: Run reviewer models"
+    gate_pos = wf.find(gate_name)
+    reviewer_pos = wf.find(reviewer_name)
+    assert gate_pos != -1, f"Expected workflow step: {gate_name!r}"
+    assert reviewer_pos != -1, f"Expected workflow step: {reviewer_name!r}"
+    assert gate_pos < reviewer_pos, (
+        "The pre-review deterministic merge-topology gate must appear before "
+        "Run reviewer models"
+    )
+
+
+def test_pre_review_gate_reuses_stale_base_classifier_and_merge_probe():
+    """The early gate should reuse the existing stale-base classifier and a
+    narrow git merge --no-commit probe rather than inventing a new mechanism."""
+    section = _section(
+        "- name: Pre-review deterministic merge-topology gate",
+        "\n      - name: Run reviewer models",
+    )
+    assert "check_external_branch_advance.sh" in section, (
+        "Expected the pre-review merge-topology gate to reuse "
+        "check_external_branch_advance.sh"
+    )
+    assert 'git merge --no-commit --no-ff "origin/${BASE_BRANCH}"' in section, (
+        "Expected the pre-review merge-topology gate to run a compact "
+        "git merge --no-commit probe against origin/${BASE_BRANCH}"
+    )
+
+
+def test_run_reviewer_models_guarded_by_skip_flag():
+    """Reviewer fan-out must be skipped when the early deterministic gate has
+    already concluded the branch is stale or structurally unmergeable."""
+    reviewer_step = _section(
+        "- name: Run reviewer models",
+        "\n      - name: Upload per-reviewer logs (always)",
+    )
+    assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in reviewer_step, (
+        "Expected Run reviewer models to be guarded by AUTOFIX_STALE_BASE_SKIP"
+    )
+
+
+def test_pre_editor_stale_base_gate_skipped_after_early_short_circuit():
+    """If the early deterministic gate already set AUTOFIX_STALE_BASE_SKIP,
+    the older pre-editor stale-base gate should not perform redundant work."""
+    pre_editor_step = _section(
+        "- name: Pre-editor stale-base gate",
+        "\n      - name: Install project dependencies (best-effort)",
+    )
+    assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in pre_editor_step, (
+        "Expected Pre-editor stale-base gate to skip when the early gate "
+        "already short-circuited the run"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Fix 2: pre-merge guardrail diagnostics
 # ---------------------------------------------------------------------------
 
@@ -129,6 +201,16 @@ def test_exit_128_check_inside_merge_command_failed_guard():
     assert inner_pos > outer_pos, (
         "The exit-128 inner check must appear after (inside) the outer "
         "merge_exit -ne 0 && !MERGE_HEAD guard"
+    )
+
+
+def test_late_detect_merge_conflicts_step_preserved():
+    """The existing late merge-conflict detection step must remain in place so
+    ordinary content conflicts still flow into the resolver path."""
+    wf = _workflow()
+    assert "- name: Detect merge conflicts" in wf, (
+        "Expected the late Detect merge conflicts step to remain present in "
+        "review_autofix.yml"
     )
 
 
