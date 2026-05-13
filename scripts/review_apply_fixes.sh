@@ -1133,7 +1133,7 @@ while [ "${attempt}" -le 3 ]; do
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   (
     trap '' PIPE
-    exec codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
+    exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY:-low}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
   ) > "${tmp_output}" &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
