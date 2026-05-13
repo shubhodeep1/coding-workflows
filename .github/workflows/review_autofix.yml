@@ -4034,9 +4034,10 @@ jobs:
             fi
             # `bash -n` writes diagnostics to stderr only; merge them
             # into the command substitution with `2>&1` so the err= capture
-            # actually receives them.  An earlier shape used `2>&1
-            # >/dev/null` which is order-dependent and leaks stderr to the
-            # job log instead of capturing it — see PR #2481 review.
+            # actually receives them.  Keep the probe to `2>&1` only:
+            # `bash -n` is stderr-only here, so extra stdout redirection is
+            # unnecessary and would only make the capture semantics harder
+            # to reason about.
             if err="$(bash -n "${path}" 2>&1)"; then
               printf '%s\n' "ok"
             else
