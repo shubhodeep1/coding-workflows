@@ -6,7 +6,7 @@ source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
-CONTAINER_IMPORT_AUDIT="/workspace/validation/tests/_lib/import_audit.py"
+CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/validation/tests/_lib/import_audit.py}"
 
 echo "1..1"
 

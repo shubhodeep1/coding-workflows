@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--pid", type=int, required=True)
 	parser.add_argument("--url", required=True)
 	parser.add_argument("--host-header", default="app.local.test")
-	parser.add_argument("--compose-file", default="validation/docker-compose.test.yml")
+	parser.add_argument("--compose-file", default="{{ output_root_name }}/docker-compose.test.yml")
 	parser.add_argument("--timeout-seconds", type=int, default=30)
 	parser.add_argument("--poll-seconds", type=float, default=1.0)
 	parser.add_argument("--log-tail-lines", type=int, default=40)
