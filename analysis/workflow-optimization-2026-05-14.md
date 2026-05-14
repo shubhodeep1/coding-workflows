@@ -478,3 +478,109 @@ _No actionable TODO/FIXME/HACK markers surfaced in scope; the earlier `XXXXXX` g
 | Code modularization | 5 | Medium |
 | Expression size reduction | 5 | Large |
 | Medium/Low fixes | 4 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-14)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is local and mechanically mergeable without changing retries, filters, auth scope, or concurrency behavior. `NEEDS_VERIFICATION` means the overlap is real, but a human or follow-up pass must verify payload equivalence or event-context guarantees before changing it. `RISKY_SKIP` means the overlap is visible, but it sits in a retry/race-defense/polling path where auto-merging/removal is unsafe.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** MERGE-001
+  - **Safety tag:** SAFE_TO_MERGE
+  - **File path and line ranges:** `scripts/implement_diagnose_post_codex_failure.sh:160-171`, `scripts/implement_diagnose_post_codex_failure.sh:261-272`
+  - **Current call count:** 2 `GET /repos/{repo}/issues/{issue_number}` calls on the cache-miss path
+  - **Proposed call count:** 1
+  - **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`
+  - **Evidence:**
+    ```bash
+    if [ -z "${ISSUE_LABELS_JSON}" ]; then
+      ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+    fi
+    ...
+    if [ ! -s "${ISSUE_BODY_FILE}" ]; then
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+    fi
+    ```
+  - **Proposed fix:** In `scripts/implement_diagnose_post_codex_failure.sh`, extend the existing cache-miss branch to fetch the full issue JSON once into a temp file (or via `gh_api_json_to_file` from `scripts/gh_helpers.sh`), then derive both `ISSUE_LABELS_JSON` and `ISSUE_BODY_FILE` from that single payload.
+  - **Safety rationale:** Both reads hit the same endpoint in one straight-line cache-miss path with no intervening mutation, and one shared JSON fetch can preserve the existing fail-open outputs (`[]` labels, empty body file).
+  - **Downstream signal:** Consolidate the two cache-miss `GET /issues/{n}` reads into one temp JSON fetch and parse both labels and body from it.
+
+- **ID:** MERGE-002
+  - **Safety tag:** NEEDS_VERIFICATION
+  - **File path and line ranges:** `.github/workflows/review_autofix.yml:512-517`, `.github/workflows/review_autofix.yml:519-522`
+  - **Current call count:** 2 on the “GraphQL succeeded but `closingIssuesReferences` is empty” path
+  - **Proposed call count:** 1 on that path
+  - **Endpoint(s):** `POST /graphql` (`pullRequest(number){closingIssuesReferences...}`), `GET /repos/{repo}/pulls/{pr_number}`
+  - **Evidence:**
+    ```bash
+    issue_nodes_json="$(gh api graphql \
+      ...
+      -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
+      --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+
+    if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
+      pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+    ```
+  - **Proposed fix:** Extend this GraphQL query to also request `title` and `body` on `pullRequest`, then use those fields for the body/title regex fallback when `closingIssuesReferences` is empty; keep the REST pull fetch only as a backup when the GraphQL response itself is missing/unparseable.
+  - **Safety rationale:** The overlap is real, but the merge crosses GraphQL/REST semantics and must preserve the current fail-open behavior on GraphQL transport/parsing failure.
+  - **Downstream signal:** Verify on merged PR fixtures that GraphQL `pullRequest.title/body` exactly matches `GET /pulls/{n}` for empty-body, markdown, and UTF-8 cases; only then remove the REST fetch from the successful-empty-GraphQL path.
+
+- **ID:** MERGE-003
+  - **Safety tag:** RISKY_SKIP
+  - **File path and line ranges:** `scripts/orchestrate_poll_process.sh:3837-3840`, `scripts/orchestrate_poll_process.sh:3875-3876`, `scripts/orchestrate_poll_process.sh:3930-3932`, `scripts/orchestrate_poll_process.sh:3981-3983`
+  - **Current call count:** 8 `GET /repos/{repo}/pulls/{final_pr}` reads in one `finalize_integration_merge_if_needed()` pass
+  - **Proposed call count:** 3 if reduced to one full PR fetch per checkpoint
+  - **Endpoint(s):** `GET /repos/{repo}/pulls/{final_pr}`
+  - **Evidence:**
+    ```bash
+    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ...
+    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+    pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ```
+  - **Proposed fix:** If this path is ever refactored manually, fetch the full PR JSON once per checkpoint and derive `state`, `mergeable`, and `merged_at` from that local payload instead of issuing scalar reads.
+  - **Safety rationale:** This sits inside `scripts/orchestrate_poll_process.sh` in the final-merge race-defense/self-healing path, which the policy explicitly treats as `RISKY_SKIP`.
+  - **Downstream signal:** Do not auto-implement; manual review must prove unchanged final-merge race handling, unchanged log keys, and unchanged behavior for `mergeable=null/false/true` plus post-merge recheck paths.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** REUSE-001
+  - **Safety tag:** NEEDS_VERIFICATION
+  - **File path and line ranges:** `.github/workflows/review_autofix.yml:171-179`, `.github/workflows/review_autofix.yml:237-246`
+  - **Current call count:** 1 live `GET /repos/{repo}/pulls/{pr_number}` per PR-backed gate run
+  - **Proposed call count:** 0 on `pull_request`-backed runs; unchanged 1 on `workflow_dispatch` / no-PR paths
+  - **Endpoint(s):** `GET /repos/{repo}/pulls/{pr_number}`
+  - **Evidence:**
+    ```bash
+    PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+    PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    ...
+    if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // ""), ((.labels // []) | map(.name) | join(",")), (.additions // 0), (.deletions // 0)] | @tsv')"; then
+    ```
+  - **Proposed fix:** In `review_autofix.yml`’s `Evaluate review gate` step, prefer `github.event.pull_request` scalars (`state`, `merged`, `head.ref`, label names, `additions`, `deletions`) when the run is pull-request-backed, and keep the existing `gh api /pulls/{n}` fallback for `workflow_dispatch` and the no-PR claude branch mode.
+  - **Safety rationale:** The data is probably already present in the event payload, but this needs verification because reusable-workflow event context and event-time freshness must match the live pull read closely enough for skip/merge gating.
+  - **Downstream signal:** Capture one sample payload for each supported PR event (`opened`, `synchronize`, `reopened`, `ready_for_review`, `closed`) and diff `state`, `merged`, `head.ref`, label names, `additions`, and `deletions` against the current `gh api /pulls/{n}` output; keep the API fallback for any missing/mismatched field.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: NEEDS_VERIFICATION — expanding the opening GraphQL query is the right direction, but verify the larger response still preserves “first usable linked issue” selection and null `body`/`labels` handling before deleting the per-issue REST fallback.
+- API-001: NEEDS_VERIFICATION — cache the pre-branch `/pulls/{n}` read, but retain explicit live refreshes inside the mergeability polls and the merged-after-judge guard.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | MERGE-001 |
+| NEEDS_VERIFICATION | 2 | MERGE-002, REUSE-001 |
+| RISKY_SKIP | 1 | MERGE-003 |
+
+### Implement-Stage Handoff
+
+- MERGE-001
