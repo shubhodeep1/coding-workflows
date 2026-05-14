@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef: `orchestrator/project-2578` @ `a8fa5aa49e73d0f642403d6f68126471a16b6178`  \nClarification mapping: no `Q1/Q2/...` were asked; `/answer [auto-answered-by-orchestrator]` just confirmed direct continuation.\n\nAssumptions / missing context\n- Treat `analysis/recommendation-triage.md` as the canonical list of docs that were actually processed for this project.\n- The repo does **not** include GitHub-state for the downstream local issues, so the final report should classify \u201cactioned\u201d vs \u201cskipped/deferred\u201d from the **final repo state**, not from intent alone.\n\n1. Files likely to change\n- **Create:** `analysis/recommendation-processing-report.md`\n- **Delete:** `analysis/recommendation-triage.md` once its contents are folded into the final report\n- **Delete:** the 66 processed source docs listed in `analysis/recommendation-triage.md`\u2019s **Source-doc inventory**  \n  - currently: 64 `analysis/workflow-optimization-*.md` files\n  - plus `analysis/plan-workflow-log-analysis.md`\n  - plus `analysis/e2e-smoke-failure-25126757724.md`\n- **Must keep unchanged:**  \n  - `analysis/validation-selftest-status.json`\n  - `analysis/last_collection_timestamp.txt`\n- Safe-scope rule: if a newer `analysis/workflow-optimization-*.md` appears later and is **not** in the triage inventory, leave it in place.\n\n2. Functions or modules to implement\nNo runtime code module is needed; this is a documentation-consolidation pass. The implementation work is:\n\n- Build the final report from:\n  - the 66-file inventory in `analysis/recommendation-triage.md`\n  - the 20 deduped recommendation entries in that ledger\n- Re-check the five downstream local IDs against current repo files before calling them \u201cactioned\u201d:\n\n  - `apply-safe-e2e-smoke-cleanups`  \n    - recommendation: `capture-issue-url-from-create-response`  \n    - verify in: `.github/workflows/test-and-mark-stable.yml`\n\n  - `apply-safe-issue-pr-status-cleanups`  \n    - recommendation: `collapse-duplicate-linked-issue-graphql-read`  \n    - verify in: `.github/workflows/issue_pr_status.yml`\n\n  - `apply-safe-internal-review-cleanups`  \n    - recommendation: `internal-review-lazy-default-branch-lookup`  \n    - verify in: `.github/workflows/internal-review.yml`\n\n  - `apply-safe-implement-diagnose-cleanups`  \n    - recommendation: `implement-diagnose-single-issue-cache-miss-fetch`  \n    - verify in: `scripts/implement_diagnose_post_codex_failure.sh`\n\n  - `apply-safe-orchestrate-poll-cleanups`  \n    - recommendation: `internal-wrapper-stop-passing-deprecated-caller-workflow`  \n    - verify in: `.github/workflows/internal-orchestrate-poll.yml`\n\n- Write the final report first, then delete the superseded analysis docs.\n\n3. Data structures affected\nThe new `analysis/recommendation-processing-report.md` should carry:\n- a **processed source docs** section listing the 66 reviewed docs\n- an **actioned recommendations** table:\n  - recommendation\n  - local issue ID\n  - concrete file(s) changed\n  - concrete behavior changed\n- a **skipped/deferred recommendations** table:\n  - recommendation\n  - status/reason (`already satisfied`, `obsolete`, `risky`, etc.)\n- optional **conflicts/assumptions** notes for anything that could not be confirmed from repo state\n\nUse plain file-path listings/code ticks, not markdown links to docs being deleted.\n\n4. API or interface changes\n- No new API/interface change is planned for this issue itself.\n- This issue should not modify the workflow/script files above; it should only **document** whatever previous issues already changed there.\n\n5. Potential risks / edge cases\n- **Codebase conflict:** on this planning ref, the five `safe_to_apply` items still appear unlanded in their target files, so the final report must **not** assume they were actioned.\n- **Operational conflict:** `.github/workflows/comprehensive-test-and-release.yml` currently errors if zero `analysis/workflow-optimization-*.md` files exist. If the inventory-driven deletion would remove every dated report on the final ref, sequence this cleanup carefully or record that risk explicitly; workflow edits are not in scope here.\n- Do **not** delete by blind glob alone; use the triage inventory so a newer, untriaged report is not removed accidentally.\n- Preserve the two machine-maintained files exactly.\n- Current delete set is large but markdown-only (67 delete candidates including the triage ledger), so verify nothing outside the intended analysis docs is staged.\n\n6. Testing considerations\n- Verify `analysis/recommendation-processing-report.md` exists.\n- Verify `analysis/validation-selftest-status.json` and `analysis/last_collection_timestamp.txt` still exist and are unchanged.\n- Verify the 66 inventory docs plus `analysis/recommendation-triage.md` are the only removals.\n- Sanity-check report completeness against current ledger counts:\n  - 66 processed source docs\n  - 20 triaged recommendations\n  - 5 downstream local IDs\n- Run `git diff --stat -- analysis` before finalizing.\n- If no `workflow-optimization-*.md` remains after cleanup, explicitly validate/document the release-workflow dependency before merge.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0472ca74210de8fae74e2e8637c050cdfda6640c6a9a4f590b4936d8dc4f45e2",
+  "lineage": {
+    "issue_number": 2589,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25861710627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25861710627",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2589"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260514131531_36b338a039",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2589,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25861710627"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2589",
+  "timestamps": {
+    "created_at": "2026-05-14T13:15:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
