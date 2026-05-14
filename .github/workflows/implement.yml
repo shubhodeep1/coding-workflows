@@ -2598,10 +2598,12 @@ jobs:
 
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
             echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
-          elif git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
-            if [ -n "$(git status --porcelain .github/workflows)" ]; then
-              echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
-              git restore --source=HEAD --staged --worktree .github/workflows || true
+          elif git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]; then
+            if git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
+              if [ -n "$(git status --porcelain .github/workflows)" ]; then
+                echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
+                git restore --source=HEAD --staged --worktree .github/workflows || true
+              fi
             fi
             git clean -fd -- .github/workflows
           fi

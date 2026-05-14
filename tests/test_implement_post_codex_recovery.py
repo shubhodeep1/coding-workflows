@@ -846,6 +846,7 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 	assert "destructive_commit_blocked=canonical-source" in commit_block
 
 	protect_block = _step_block_text("Protect workflow files from implementation edits")
+	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]' in protect_block
 	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1' in protect_block
 	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
 	assert "git clean -fd -- .github/workflows" in protect_block
@@ -874,6 +875,28 @@ def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
 			text=True,
 		).stdout.strip()
 		assert workflow_status == "", "restored workflow tree should leave no pending .github/workflows changes"
+
+
+def test_protect_workflow_files_cleans_untracked_workflow_directory_when_head_lacks_it() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_head_absent_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
+		workflow_file.parent.mkdir(parents=True, exist_ok=True)
+		workflow_file.write_text("name: sample\n", encoding="utf-8")
+
+		script = _render_github_expressions(_extract_run_script("Protect workflow files from implementation edits"))
+		proc = _run_shell_script(script, cwd=repo_dir, env={**os.environ.copy(), "ALLOW_WORKFLOW_EDITS": "false"})
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert not workflow_file.exists(), "workflow protection must clean untracked workflow files when HEAD has no tracked .github/workflows tree"
+		workflow_status = subprocess.run(
+			["git", "status", "--porcelain", ".github/workflows"],
+			cwd=str(repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert workflow_status == "", "untracked workflow tree should be removed cleanly when HEAD has no tracked workflows"
 
 
 def test_successful_repair_path_still_flows_into_commit_gated_push_and_pr_steps() -> None:
