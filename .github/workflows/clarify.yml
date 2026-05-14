@@ -11,6 +11,9 @@ name: AI Clarify (Reusable)
       TG_BOT_SECRET:
         required: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   clarify:
     if: >-

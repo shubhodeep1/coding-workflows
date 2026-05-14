@@ -10,6 +10,9 @@ on:
       TG_BOT_SECRET:
         required: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   plan:
     if: >-

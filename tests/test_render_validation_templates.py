@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -81,6 +82,14 @@ def _snapshot_directory(root: Path) -> tuple[list[str], str]:
 		hasher.update(payload)
 		hasher.update(b"\0")
 	return files, hasher.hexdigest()
+
+
+def _directory_file_map(root: Path) -> dict[str, str]:
+	return {
+		path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+		for path in sorted(root.rglob("*"))
+		if path.is_file()
+	}
 
 
 def test_renderer_happy_path_creates_expected_files() -> None:
@@ -404,8 +413,8 @@ def test_renderer_deterministic_output_for_same_manifest() -> None:
 	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
 		temp_root = Path(td)
 		manifest_path = temp_root / "validate.yml"
-		out_a = temp_root / "out-a"
-		out_b = temp_root / "out-b"
+		out_a = temp_root / "first-parent" / "validation"
+		out_b = temp_root / "second-parent" / "validation"
 		_write_yaml(manifest_path, _manifest_payload("python-mongo-flask"))
 
 		first = _run_renderer(manifest_path, out_a)
@@ -417,6 +426,48 @@ def test_renderer_deterministic_output_for_same_manifest() -> None:
 		files_b, hash_b = _snapshot_directory(out_b)
 		assert files_a == files_b
 		assert hash_a == hash_b
+
+
+def test_renderer_output_root_basename_only_affects_expected_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		out_a = temp_root / "out-a"
+		out_b = temp_root / "out-b"
+		_write_yaml(manifest_path, _manifest_payload("python-mongo-flask"))
+
+		first = _run_renderer(manifest_path, out_a)
+		second = _run_renderer(manifest_path, out_b)
+		assert first.returncode == 0, first.stderr
+		assert second.returncode == 0, second.stderr
+
+		files_a = _directory_file_map(out_a)
+		files_b = _directory_file_map(out_b)
+		assert sorted(files_a) == sorted(files_b)
+
+		expected_differing_files = {
+			"docker-compose.test.yml",
+			"tests/20_import_audit.sh",
+			"tests/30_graceful_shutdown.sh",
+			"tests/_lib/graceful_shutdown.py",
+		}
+		differing_files = {
+			rel for rel in files_a if files_a[rel] != files_b[rel]
+		}
+		assert not differing_files - expected_differing_files, (
+			f"unexpected basename-sensitive files: {differing_files - expected_differing_files}"
+		)
+		assert not expected_differing_files - differing_files, (
+			f"expected basename-sensitive files missing: {expected_differing_files - differing_files}"
+		)
+
+		for rel_path in differing_files:
+			assert "out-a" in files_a[rel_path], f"expected out-a reference in {rel_path}"
+			assert "out-b" in files_b[rel_path], f"expected out-b reference in {rel_path}"
+			assert (
+				re.sub(r"(?<![A-Za-z0-9_])out-a(?=/)", "out-b", files_a[rel_path])
+				== files_b[rel_path]
+			)
 
 
 def main() -> int:

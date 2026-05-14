@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -29,7 +31,15 @@ def http_ok(url: str, host_header: str) -> bool:
 	try:
 		with urllib.request.urlopen(req, timeout=3) as resp:
 			return 200 <= int(resp.status) < 400
-	except (urllib.error.HTTPError, urllib.error.URLError):
+	except (
+		urllib.error.HTTPError,
+		urllib.error.URLError,
+		ConnectionRefusedError,
+		ConnectionResetError,
+		TimeoutError,
+		socket.timeout,
+		http.client.RemoteDisconnected,
+	):
 		return False
 
 
