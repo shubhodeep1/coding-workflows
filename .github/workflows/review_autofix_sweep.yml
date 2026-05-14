@@ -98,6 +98,46 @@ jobs:
           skipped_skip_ai=0
           failures=0
 
+          # Snapshot active review-family runs once per workflow, then do
+          # per-PR lookups locally so the sweep avoids N×2 workflow-run API
+          # fanout while preserving the existing active-run skip semantics.
+          declare -A active_review_runs=()
+
+          snapshot_active_review_runs() {
+            local workflow="$1"
+            local snapshot_json='{}'
+
+            # `gh api --paginate` emits one page object at a time here, so
+            # slurp the pages and reduce over their `.workflow_runs[]` items
+            # rather than attempting to merge raw page objects.
+            if snapshot_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -f per_page=100 \
+              2>/dev/null \
+              | jq -c -s '
+                  reduce (
+                    .[]
+                    | .workflow_runs[]?
+                    | select((.status // "") == "in_progress" or (.status // "") == "queued")
+                    | (.head_branch // empty)
+                  ) as $head_ref ({};
+                    .[$head_ref] = ((.[$head_ref] // 0) + 1)
+                  )
+                ' 2>/dev/null)"; then
+              :
+            else
+              snapshot_json='{}'
+            fi
+
+            while IFS=$'\t' read -r cached_head_ref cached_count; do
+              [ -n "${cached_head_ref}" ] || continue
+              active_review_runs["${workflow}:${cached_head_ref}"]="${cached_count}"
+            done < <(printf '%s' "${snapshot_json}" | jq -r '. | to_entries[]? | [.key, (.value | tostring)] | @tsv' 2>/dev/null || true)
+          }
+
+          for wf in internal-review.yml review_autofix.yml; do
+            snapshot_active_review_runs "${wf}"
+          done
+
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
 
@@ -127,10 +167,7 @@ jobs:
             # synchronize-fired run that is mid-edit.
             active=0
             for wf in internal-review.yml review_autofix.yml; do
-              count="$(gh api -X GET "repos/${REPOSITORY}/actions/workflows/${wf}/runs" \
-                -f branch="${head_ref}" -f per_page=10 \
-                --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' \
-                2>/dev/null || echo "0")"
+              count="${active_review_runs["${wf}:${head_ref}"]:-0}"
               if [ "${count:-0}" -gt 0 ]; then
                 echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_run workflow=${wf} count=${count} head_ref=${head_ref}"
                 active=1
