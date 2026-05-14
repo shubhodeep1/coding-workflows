@@ -2058,7 +2058,7 @@ jobs:
           # Align with the later workflow-protection step so preflight does
           # not count workflow-file deletions that will be restored before the
           # real commit path when workflow edits are disallowed.
-          if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && [ -d .github/workflows ]; then
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
             git reset -q HEAD -- .github/workflows 2>/dev/null || true
           fi
 
@@ -2598,7 +2598,7 @@ jobs:
 
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
             echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
-          elif [ -d .github/workflows ]; then
+          elif git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
             if [ -n "$(git status --porcelain .github/workflows)" ]; then
               echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
               git restore --source=HEAD --staged --worktree .github/workflows || true

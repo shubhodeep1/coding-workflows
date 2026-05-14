@@ -714,7 +714,7 @@ def test_preflight_destructive_guard_runs_before_validation_with_temp_index_cont
 		"Preflight destructive guard must project the would-be staged set from a temporary HEAD-seeded index"
 	)
 	assert 'git add -u -- "${add_u_excludes[@]}"' in preflight_block
-	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && [ -d .github/workflows ]; then' in preflight_block
+	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then' in preflight_block
 	assert 'git reset -q HEAD -- .github/workflows' in preflight_block
 	assert 'git diff --cached --diff-filter=D --name-only' in preflight_block
 	assert 'destructive_commit_blocked=canonical-source' in preflight_block
@@ -846,8 +846,34 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 	assert "destructive_commit_blocked=canonical-source" in commit_block
 
 	protect_block = _step_block_text("Protect workflow files from implementation edits")
+	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1' in protect_block
 	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
 	assert "git clean -fd -- .github/workflows" in protect_block
+
+
+def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
+		workflow_file.parent.mkdir(parents=True, exist_ok=True)
+		workflow_file.write_text("name: sample\n", encoding="utf-8")
+		_git(["git", "add", ".github/workflows/sample.yml"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add workflow"], cwd=repo_dir)
+		shutil.rmtree(workflow_file.parent)
+
+		script = _render_github_expressions(_extract_run_script("Protect workflow files from implementation edits"))
+		proc = _run_shell_script(script, cwd=repo_dir, env={**os.environ.copy(), "ALLOW_WORKFLOW_EDITS": "false"})
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert workflow_file.exists(), "workflow protection must restore tracked workflow files even when the directory was deleted"
+		workflow_status = subprocess.run(
+			["git", "status", "--porcelain", ".github/workflows"],
+			cwd=str(repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert workflow_status == "", "restored workflow tree should leave no pending .github/workflows changes"
 
 
 def test_successful_repair_path_still_flows_into_commit_gated_push_and_pr_steps() -> None:
