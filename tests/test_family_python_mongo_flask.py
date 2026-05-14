@@ -136,7 +136,9 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 		assert 'APP_SERVICE="${APP_SERVICE:-app}"' in import_audit_shell
 		assert 'docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c' in import_audit_shell
 		assert '/workspace/validation/tests/_lib/import_audit.py' in import_audit_shell
+		assert "printf '%s\\n' \"${audit_output}\" | sed 's/^/# /'" in import_audit_shell
 		assert 'python3 "${SCRIPT_DIR}/_lib/import_audit.py"' not in import_audit_shell
+		assert 'done <<EOF' not in import_audit_shell
 		assert "subprocess.run" in import_audit_text
 		assert "sys.executable" in import_audit_text
 		assert '"-c", code' in import_audit_text

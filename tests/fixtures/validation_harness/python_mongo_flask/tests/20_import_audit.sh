@@ -18,11 +18,7 @@ set -e
 if [ "${audit_rc}" -ne 0 ]; then
 	tap_not_ok 1 "import audit subprocess isolation"
 	if [ -n "${audit_output}" ]; then
-		while IFS= read -r line; do
-			echo "# ${line}"
-		done <<EOF
-${audit_output}
-EOF
+		printf '%s\n' "${audit_output}" | sed 's/^/# /'
 	fi
 	echo "# import audit failed inside app container"
 	exit 1
