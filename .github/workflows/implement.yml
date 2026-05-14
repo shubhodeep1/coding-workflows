@@ -12,6 +12,7 @@ name: AI Implement
         required: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
@@ -1934,6 +1935,197 @@ jobs:
           fi
           git checkout -B "${TARGET_BRANCH}"
 
+      - name: Preflight destructive-commit guard
+        # Fail fast on obviously blocked mass/canonical deletions before we
+        # spend time on syntax validation and the rest of the commit tail.
+        # Use a temporary index seeded from HEAD so the projected staged
+        # deletion set matches the late commit-time guard after the same
+        # cleanup/exclusion rules, without mutating the real index/worktree.
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: preflight_destructive_guard
+        run: |
+          set -euo pipefail
+
+          TEMP_INDEX_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-index.XXXXXX")"
+          VIRTUAL_CLEANUP_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-cleanup.XXXXXX")"
+          cleanup() {
+            rm -f "${TEMP_INDEX_FILE}" "${VIRTUAL_CLEANUP_FILE}"
+          }
+          trap cleanup EXIT
+          rm -f "${TEMP_INDEX_FILE}"
+
+          export GIT_INDEX_FILE="${TEMP_INDEX_FILE}"
+          git read-tree HEAD
+
+          : > "${VIRTUAL_CLEANUP_FILE}"
+          drop_bootstrap_serena="false"
+
+          add_virtual_cleanup_path() {
+            local cleanup_path="${1#./}"
+            [ -n "${cleanup_path}" ] || return 0
+            printf '%s\n' "${cleanup_path}" >> "${VIRTUAL_CLEANUP_FILE}"
+            git rm -r -q --cached --ignore-unmatch -- "${cleanup_path}" 2>/dev/null || true
+          }
+
+          is_virtual_cleanup_path() {
+            local candidate="${1#./}"
+            if grep -Fqx -- "${candidate}" "${VIRTUAL_CLEANUP_FILE}" 2>/dev/null; then
+              return 0
+            fi
+            if [ "${drop_bootstrap_serena}" = "true" ]; then
+              case "${candidate}" in
+                .serena|.serena/*)
+                  return 0
+                  ;;
+              esac
+            fi
+            return 1
+          }
+
+          add_virtual_cleanup_path "pre_assembled_static.txt"
+          if [ -n "${FETCHED_MANIFEST:-}" ] && [ -f "${FETCHED_MANIFEST}" ]; then
+            while IFS= read -r fetched_file; do
+              [ -n "${fetched_file}" ] || continue
+              add_virtual_cleanup_path "${fetched_file}"
+            done < "${FETCHED_MANIFEST}"
+          fi
+
+          if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
+            current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+            if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+              if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then
+                drop_bootstrap_serena="true"
+              fi
+            fi
+          fi
+
+          git rm -r --cached node_modules 2>/dev/null || true
+          # Template-owned paths (prompts/, .github/prompts/,
+          # .github/scripts/) are fetched from coding-workflows at runtime in
+          # consumer repos, and must NOT be committed there — any edit to them
+          # in a consumer wrapper would either be a no-op (overwritten next run)
+          # or leak a stale copy back into the caller's tree.  In the canonical
+          # `*/coding-workflows` repository these paths ARE the source of truth
+          # and must be editable, so the excludes are dropped.
+          #
+          # NOTE: scripts/ is NOT blanket-excluded here. Runtime-fetched
+          # infrastructure helpers are filtered separately so consumer repos can
+          # still commit their own scripts/ changes when required.
+          is_self_repo="false"
+          if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
+            is_self_repo="true"
+          fi
+          add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+          add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+          if [ "${is_self_repo}" = "false" ]; then
+            # Build per-file exclusions from the runtime-generated scripts/.gitignore
+            # instead of a blanket ':!scripts'.  The blanket exclusion previously
+            # blocked ALL consumer-repo-owned files under scripts/ (e.g.
+            # scripts/security/check-npm-audit.js), causing silent no-op commits.
+            # The .gitignore lists exactly the fetched coding-workflows helper
+            # scripts that must NOT be committed to consumer repos.
+            if [ -f scripts/.gitignore ]; then
+              while IFS= read -r _ign_entry; do
+                [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+                add_u_excludes+=(":!scripts/${_ign_entry}")
+                add_o_excludes+=(":!scripts/${_ign_entry}")
+              done < scripts/.gitignore
+            else
+              # Fallback: if .gitignore was not created (bootstrap failure), use
+              # blanket exclusion for safety — same as the legacy behaviour.
+              add_u_excludes+=(':!scripts')
+              add_o_excludes+=(':!scripts')
+            fi
+            # Keep runtime artifact paths out of consumer-repo commits for
+            # both tracked updates (-u) and untracked additions.
+            add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+            add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+          fi
+          git add -u -- "${add_u_excludes[@]}"
+          while IFS= read -r -d '' untracked_candidate; do
+            [ -n "${untracked_candidate}" ] || continue
+            if is_virtual_cleanup_path "${untracked_candidate}"; then
+              continue
+            fi
+            git add -- "${untracked_candidate}"
+          done < <(git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}")
+          if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
+            while IFS= read -r fetched_script; do
+              case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
+              git reset -q HEAD -- "scripts/${fetched_script}" 2>/dev/null || true
+            done < scripts/.gitignore
+          fi
+          # Align with the later workflow-protection step so preflight does
+          # not count workflow-file deletions that will be restored before the
+          # real commit path when workflow edits are disallowed.
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
+            git reset -q HEAD -- .github/workflows 2>/dev/null || true
+          fi
+
+          deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
+          if [ -n "${deleted_staged}" ]; then
+            canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
+              | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
+              || true)"
+            total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
+            # Count non-.md deletions to decide whether the lenient
+            # markdown-only threshold applies. Case-insensitive match so
+            # .MD / .Md are treated the same as .md.
+            non_md_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | grep -ivE '\.md$' || true)"
+            non_md_count="$(printf '%s\n' "${non_md_deletions}" | sed '/^$/d' | wc -l | tr -d ' ')"
+            threshold="${BULK_DELETE_THRESHOLD:-3}"
+            if ! [[ "${threshold}" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Invalid BULK_DELETE_THRESHOLD='${threshold}'; defaulting to 3."
+              threshold=3
+            fi
+            md_threshold="${BULK_DELETE_THRESHOLD_MD:-100}"
+            if ! [[ "${md_threshold}" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Invalid BULK_DELETE_THRESHOLD_MD='${md_threshold}'; defaulting to 100."
+              md_threshold=100
+            fi
+            # When every staged deletion is a .md file, apply the
+            # lenient markdown-only threshold; otherwise fall back to
+            # the strict mixed-content threshold so any source-file
+            # deletion still trips at the original limit.
+            if [ "${non_md_count}" -eq 0 ]; then
+              effective_threshold="${md_threshold}"
+              threshold_label="BULK_DELETE_THRESHOLD_MD"
+            else
+              effective_threshold="${threshold}"
+              threshold_label="BULK_DELETE_THRESHOLD"
+            fi
+
+            if [ -n "${canonical_deletions}" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
+              echo "::error::Refusing to commit: ${total_deletions} staged deletion(s) include canonical workflow-source files and ALLOW_WORKFLOW_EDITS is not 'true'."
+              echo "Canonical-source deletions blocked:"
+              printf '%s\n' "${canonical_deletions}" | sed 's/^/  - /'
+              {
+                echo "destructive_commit_blocked=canonical-source"
+                echo "destructive_commit_count=${total_deletions}"
+                echo 'destructive_commit_deletions<<__DCD_EOF__'
+                printf '%s\n' "${deleted_staged}"
+                echo '__DCD_EOF__'
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+              echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
+              echo "Deletions blocked by bulk-delete threshold:"
+              printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
+              {
+                echo "destructive_commit_blocked=bulk-delete"
+                echo "destructive_commit_count=${total_deletions}"
+                echo "destructive_commit_threshold_label=${threshold_label}"
+                echo "destructive_commit_effective_threshold=${effective_threshold}"
+                echo 'destructive_commit_deletions<<__DCD_EOF__'
+                printf '%s\n' "${deleted_staged}"
+                echo '__DCD_EOF__'
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
+
       - name: Validate syntax of changed files
         if: env.SKIP_IMPLEMENT != 'true'
         id: validate_syntax_changed_files
@@ -2406,10 +2598,12 @@ jobs:
 
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
             echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
-          elif [ -d .github/workflows ]; then
-            if [ -n "$(git status --porcelain .github/workflows)" ]; then
-              echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
-              git restore --source=HEAD --staged --worktree .github/workflows || true
+          elif git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]; then
+            if git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
+              if [ -n "$(git status --porcelain .github/workflows)" ]; then
+                echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
+                git restore --source=HEAD --staged --worktree .github/workflows || true
+              fi
             fi
             git clean -fd -- .github/workflows
           fi
@@ -2693,8 +2887,8 @@ jobs:
           echo "did_commit=true" >> "$GITHUB_OUTPUT"
 
       - name: Destructive-commit guard — label + alert on rejection
-        # Runs ONLY when the commit step exited non-zero AND emitted the
-        # destructive_commit_blocked output. This is the P3 circuit
+        # Runs ONLY when the early preflight or commit step exited non-zero
+        # AND emitted the destructive_commit_blocked output. This is the P3 circuit
         # breaker from PRs #917/#931: latch ai:destructive-blocked on
         # the issue so any future redispatch attempt is refused by the
         # Validate approval phase step, post a visible comment, and
@@ -2706,16 +2900,16 @@ jobs:
         # sourcing label_helpers.sh / tg_helpers.sh, because the
         # fetched-manifest cleanup earlier in the commit step may have
         # already removed those helper scripts in consumer-repo runs.
-        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked != ''
+        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          DCB_REASON: ${{ steps.commit_changes.outputs.destructive_commit_blocked }}
-          DCB_COUNT: ${{ steps.commit_changes.outputs.destructive_commit_count }}
-          DCB_THRESHOLD_LABEL: ${{ steps.commit_changes.outputs.destructive_commit_threshold_label }}
-          DCB_EFFECTIVE_THRESHOLD: ${{ steps.commit_changes.outputs.destructive_commit_effective_threshold }}
-          DCB_DELETIONS: ${{ steps.commit_changes.outputs.destructive_commit_deletions }}
+          DCB_REASON: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_blocked || steps.commit_changes.outputs.destructive_commit_blocked }}
+          DCB_COUNT: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_count || steps.commit_changes.outputs.destructive_commit_count }}
+          DCB_THRESHOLD_LABEL: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_threshold_label || steps.commit_changes.outputs.destructive_commit_threshold_label }}
+          DCB_EFFECTIVE_THRESHOLD: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_effective_threshold || steps.commit_changes.outputs.destructive_commit_effective_threshold }}
+          DCB_DELETIONS: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_deletions || steps.commit_changes.outputs.destructive_commit_deletions }}
         run: |
           set -euo pipefail
 
@@ -2810,7 +3004,7 @@ jobs:
           exit 1
 
       - name: Handle no-op implementation
-        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -3645,7 +3839,7 @@ jobs:
             --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Capture post-Codex validation errors
-        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         id: capture_post_codex_validation_errors
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3741,7 +3935,7 @@ jobs:
           fi
 
       - name: Diagnose post-Codex failure and create fix-up issues
-        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         id: diagnose_post_codex_failure
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3762,7 +3956,7 @@ jobs:
           bash scripts/implement_diagnose_post_codex_failure.sh
 
       - name: Comment on issue failure
-        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3796,7 +3990,7 @@ jobs:
             -f body="${REASON}"
 
       - name: Telegram failure notification
-        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

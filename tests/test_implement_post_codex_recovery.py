@@ -683,6 +683,7 @@ def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
 	wf = _workflow_text()
 	assert (
 		"if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' "
+		"&& steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' "
 		"&& steps.commit_changes.outputs.destructive_commit_blocked == ''"
 	) in wf, (
 		"Handle no-op implementation must be skipped when destructive_commit_blocked is set "
@@ -693,11 +694,75 @@ def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
 def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
 	wf = _workflow_text()
 	assert (
-		"if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''"
+		"if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' "
+		"&& steps.commit_changes.outputs.destructive_commit_blocked == ''"
 	) in wf, (
 		"Generic failure comment flow must be disabled for destructive-blocked runs to avoid "
 		"re-adding ai:awaiting-approval"
 	)
+
+
+def test_preflight_destructive_guard_runs_before_validation_with_temp_index_contract() -> None:
+	wf = _workflow_text()
+	assert "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true" in wf
+	assert -1 < wf.find("- name: Create implementation branch") < wf.find("- name: Preflight destructive-commit guard") < wf.find("- name: Validate syntax of changed files"), (
+		"Destructive-delete preflight must run after branch creation and before syntax-validation tail work"
+	)
+
+	preflight_block = _step_block_text("Preflight destructive-commit guard")
+	assert 'git read-tree HEAD' in preflight_block, (
+		"Preflight destructive guard must project the would-be staged set from a temporary HEAD-seeded index"
+	)
+	assert 'git add -u -- "${add_u_excludes[@]}"' in preflight_block
+	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then' in preflight_block
+	assert 'git reset -q HEAD -- .github/workflows' in preflight_block
+	assert 'git diff --cached --diff-filter=D --name-only' in preflight_block
+	assert 'destructive_commit_blocked=canonical-source' in preflight_block
+	assert 'destructive_commit_blocked=bulk-delete' in preflight_block
+
+
+def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_preflight_destructive_guard_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "agents.md").write_text("canonical\n", encoding="utf-8")
+		_git(["git", "add", "agents.md"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add canonical source"], cwd=repo_dir)
+		(repo_dir / "agents.md").unlink()
+
+		script = _render_github_expressions(_extract_run_script("Preflight destructive-commit guard"))
+		github_output = repo_dir / "github_output.txt"
+		fetched_manifest = repo_dir / "fetched_manifest.txt"
+		fetched_manifest.write_text("", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_RUN_ID": "777",
+				"FETCHED_MANIFEST": str(fetched_manifest),
+				"ALLOW_WORKFLOW_EDITS": "false",
+				"ALLOW_BULK_DELETE": "false",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, "canonical-source deletions must fail fast in the preflight guard"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "destructive_commit_blocked=canonical-source" in output_text
+		assert "destructive_commit_count=1" in output_text
+		assert "agents.md" in output_text
+
+		cached = subprocess.run(
+			["git", "diff", "--cached", "--name-only"],
+			cwd=str(repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert cached == "", "preflight guard must not dirty the real git index when it rejects"
 
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
@@ -734,7 +799,7 @@ def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
 
 def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 	telegram_block = _step_block_text("Telegram failure notification")
-	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
 		"Post-failure Telegram flow must be skipped for destructive-blocked runs; only the dedicated "
 		"destructive-guard CRITICAL alert should fire"
 	)
@@ -743,6 +808,12 @@ def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow() -> None:
 	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
 	lowered = destructive_block.lower()
+	assert "steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != ''" in destructive_block, (
+		"Dedicated destructive guard handler must trigger for both early preflight and late commit rejections"
+	)
+	assert "steps.preflight_destructive_guard.outputs.destructive_commit_blocked || steps.commit_changes.outputs.destructive_commit_blocked" in destructive_block, (
+		"Dedicated destructive guard handler must source its reason from either the preflight or commit guard output"
+	)
 	assert "--add-label 'ai:destructive-blocked'" in destructive_block, (
 		"Destructive guard must preserve ai:destructive-blocked human-halt signaling"
 	)
@@ -754,12 +825,12 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 	)
 
 	capture_block = _step_block_text("Capture post-Codex validation errors")
-	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in capture_block, (
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in capture_block, (
 		"Captured validation diagnostics must not run for destructive-blocked failures"
 	)
 
 	diagnose_block = _step_block_text("Diagnose post-Codex failure and create fix-up issues")
-	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in diagnose_block, (
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in diagnose_block, (
 		"Diagnose/fix-up automation must be skipped for destructive-blocked runs"
 	)
 
@@ -775,8 +846,57 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 	assert "destructive_commit_blocked=canonical-source" in commit_block
 
 	protect_block = _step_block_text("Protect workflow files from implementation edits")
+	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]' in protect_block
+	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1' in protect_block
 	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
 	assert "git clean -fd -- .github/workflows" in protect_block
+
+
+def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
+		workflow_file.parent.mkdir(parents=True, exist_ok=True)
+		workflow_file.write_text("name: sample\n", encoding="utf-8")
+		_git(["git", "add", ".github/workflows/sample.yml"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add workflow"], cwd=repo_dir)
+		shutil.rmtree(workflow_file.parent)
+
+		script = _render_github_expressions(_extract_run_script("Protect workflow files from implementation edits"))
+		proc = _run_shell_script(script, cwd=repo_dir, env={**os.environ.copy(), "ALLOW_WORKFLOW_EDITS": "false"})
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert workflow_file.exists(), "workflow protection must restore tracked workflow files even when the directory was deleted"
+		workflow_status = subprocess.run(
+			["git", "status", "--porcelain", ".github/workflows"],
+			cwd=str(repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert workflow_status == "", "restored workflow tree should leave no pending .github/workflows changes"
+
+
+def test_protect_workflow_files_cleans_untracked_workflow_directory_when_head_lacks_it() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_head_absent_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
+		workflow_file.parent.mkdir(parents=True, exist_ok=True)
+		workflow_file.write_text("name: sample\n", encoding="utf-8")
+
+		script = _render_github_expressions(_extract_run_script("Protect workflow files from implementation edits"))
+		proc = _run_shell_script(script, cwd=repo_dir, env={**os.environ.copy(), "ALLOW_WORKFLOW_EDITS": "false"})
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert not workflow_file.exists(), "workflow protection must clean untracked workflow files when HEAD has no tracked .github/workflows tree"
+		workflow_status = subprocess.run(
+			["git", "status", "--porcelain", ".github/workflows"],
+			cwd=str(repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert workflow_status == "", "untracked workflow tree should be removed cleanly when HEAD has no tracked workflows"
 
 
 def test_successful_repair_path_still_flows_into_commit_gated_push_and_pr_steps() -> None:
@@ -1036,7 +1156,7 @@ def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
 	wf = _workflow_text()
 	assert "--add-label 'ai:implementation-failed'" in wf
 	assert "--remove-label 'ai:awaiting-approval'" in wf
-	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
 
 
 def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label():
