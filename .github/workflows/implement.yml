@@ -2055,6 +2055,12 @@ jobs:
               git reset -q HEAD -- "scripts/${fetched_script}" 2>/dev/null || true
             done < scripts/.gitignore
           fi
+          # Align with the later workflow-protection step so preflight does
+          # not count workflow-file deletions that will be restored before the
+          # real commit path when workflow edits are disallowed.
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && [ -d .github/workflows ]; then
+            git reset -q HEAD -- .github/workflows 2>/dev/null || true
+          fi
 
           deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
           if [ -n "${deleted_staged}" ]; then

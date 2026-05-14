@@ -705,7 +705,7 @@ def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
 def test_preflight_destructive_guard_runs_before_validation_with_temp_index_contract() -> None:
 	wf = _workflow_text()
 	assert "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true" in wf
-	assert wf.find("- name: Create implementation branch") < wf.find("- name: Preflight destructive-commit guard") < wf.find("- name: Validate syntax of changed files"), (
+	assert -1 < wf.find("- name: Create implementation branch") < wf.find("- name: Preflight destructive-commit guard") < wf.find("- name: Validate syntax of changed files"), (
 		"Destructive-delete preflight must run after branch creation and before syntax-validation tail work"
 	)
 
@@ -714,6 +714,8 @@ def test_preflight_destructive_guard_runs_before_validation_with_temp_index_cont
 		"Preflight destructive guard must project the would-be staged set from a temporary HEAD-seeded index"
 	)
 	assert 'git add -u -- "${add_u_excludes[@]}"' in preflight_block
+	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && [ -d .github/workflows ]; then' in preflight_block
+	assert 'git reset -q HEAD -- .github/workflows' in preflight_block
 	assert 'git diff --cached --diff-filter=D --name-only' in preflight_block
 	assert 'destructive_commit_blocked=canonical-source' in preflight_block
 	assert 'destructive_commit_blocked=bulk-delete' in preflight_block
@@ -736,6 +738,8 @@ def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> 
 		env.update(
 			{
 				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_RUN_ID": "777",
 				"FETCHED_MANIFEST": str(fetched_manifest),
 				"ALLOW_WORKFLOW_EDITS": "false",
 				"ALLOW_BULK_DELETE": "false",
