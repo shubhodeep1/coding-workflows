@@ -131,6 +131,12 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 		assert 'headers={"Host": args.host_header' in http_smoke_py
 
 		import_audit_text = (output_root / "tests" / "_lib" / "import_audit.py").read_text(encoding="utf-8")
+		import_audit_shell = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"' in import_audit_shell
+		assert 'APP_SERVICE="${APP_SERVICE:-app}"' in import_audit_shell
+		assert 'docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c' in import_audit_shell
+		assert '/workspace/validation/tests/_lib/import_audit.py' in import_audit_shell
+		assert 'python3 "${SCRIPT_DIR}/_lib/import_audit.py"' not in import_audit_shell
 		assert "subprocess.run" in import_audit_text
 		assert "sys.executable" in import_audit_text
 		assert '"-c", code' in import_audit_text
@@ -143,6 +149,8 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 		assert 'docker compose -f "${COMPOSE_FILE}" exec -T app' in shutdown_shell
 		assert 'compose_file,' in shutdown_py
 		assert '"exec",' in shutdown_py
+		assert "ConnectionResetError" in shutdown_py
+		assert "RemoteDisconnected" in shutdown_py
 		assert '"logs", "--no-color", "app"' in shutdown_py
 		assert "tail = bounded_compose_logs_tail" in shutdown_py
 		assert "timeout_waiting_for_shutdown" in shutdown_py

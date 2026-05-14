@@ -3,10 +3,10 @@
 	"private": true,
 	"version": "1.0.0",
 	"scripts": {
-		"test": "hardhat test --network localhost"
+		"test": "hardhat test"
 	},
 	"devDependencies": {
-		"hardhat": "2.22.15",
+		"hardhat": "2.28.6",
 		"@nomicfoundation/hardhat-toolbox": "5.0.0"
 	}
 }

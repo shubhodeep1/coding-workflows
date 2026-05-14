@@ -1,6 +1,9 @@
 type: node-hardhat-solidity
 entry: hardhat.config.ts
 port: 8545
+env_overrides:
+  HARDHAT_NETWORK: hardhat
+  HARDHAT_TEST_CMD: npx hardhat test
 slots:
   project_name: nightly-selftest-node-hardhat
   canary_tools:
