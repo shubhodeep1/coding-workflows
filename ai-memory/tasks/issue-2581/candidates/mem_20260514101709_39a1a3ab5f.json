@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken: inspected the current destructive-guard flow in `.github/workflows/implement.yml`, the existing implement workflow contract tests in `tests/test_implement_post_codex_recovery.py`, and the current optimization report entry in `analysis/workflow-optimization-2026-05-14.md`.\n\nPlanning ref: `e6eb960354538468537fee582590722c8f231d17` on `orchestrator/project-2578`  \nIntegration branch metadata matches the checked-out ref.\n\nClarification mapping:\n- No `Q1`/`Q2` items were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` therefore just confirms there is no unresolved clarification blocker.\n\nRepresentative pattern inspected:\n- Current late guard in `.github/workflows/implement.yml`:\n  - `Commit changes`\n  - `Destructive-commit guard \u2014 label + alert on rejection`\n  - `Precheck approval phase label` (existing `ai:destructive-blocked` latch)\n- Existing contract coverage: `tests/test_implement_post_codex_recovery.py`\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `tests/test_implement_post_codex_recovery.py`\n\nNo new files/scripts should be necessary for the scoped fix.\n\n2. Functions / modules / workflow sections to implement\n- Add an early destructive-delete preflight step in `.github/workflows/implement.yml` at the first safe point after Codex has produced candidate edits (preferably immediately after `Create implementation branch`, before `Validate syntax of changed files`).\n- Make that preflight compute the same effective candidate deletion set that the current `Commit changes` step uses after its cleanup/exclusion logic, so the early decision matches the late guard instead of inspecting raw worktree noise.\n- Preserve both existing reason classes in the early path:\n  - `canonical-source`\n  - `bulk-delete`\n- Preserve the current late guard inside `Commit changes` unchanged as defense in depth.\n- Reuse the existing rejection handling intent for early failures too:\n  - same `ai:destructive-blocked` latch\n  - same visible issue comment intent\n  - same CRITICAL Telegram alert intent\n- Update the downstream failure-routing conditions that currently only check `steps.commit_changes.outputs.destructive_commit_blocked` so early destructive rejections do not fall into generic failure comments, diagnose/fix-up flow, or other non-destructive handlers.\n- Add `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` to the workflow\u2019s top-level `env:` block to match the repo\u2019s existing bridge pattern.\n\n3. Data structures affected\n- New early-preflight step outputs should mirror the existing destructive-guard contract fields, so downstream handling can stay aligned:\n  - blocked reason\n  - deletion count\n  - deletion list\n  - threshold label/value for bulk-delete\n- Existing repo vars remain the policy source of truth:\n  - `ALLOW_WORKFLOW_EDITS`\n  - `ALLOW_BULK_DELETE`\n  - `BULK_DELETE_THRESHOLD`\n  - `BULK_DELETE_THRESHOLD_MD`\n- No new labels, workflow_call inputs, secrets, or operator knobs are needed.\n\n4. API / interface changes\n- No external workflow interface changes.\n- Behavioral change only: obviously destructive implement runs fail earlier in the job, but preserve the same operator-visible semantics and the same late commit-time circuit breaker.\n\n5. Potential risks / edge cases / conflicts\n- Current code does not have an earlier real staged diff; staging only happens inside `Commit changes`. So the preflight must synthesize the would-be staged set earlier (temporary index/equivalent), not assume one already exists.\n- The analysis report says \u201cbulk-delete guard,\u201d but the current workflow guard also enforces `canonical-source`; the issue explicitly requires both reason classes to remain.\n- The same report also mentions a narrower cleanup override idea, but this issue explicitly scopes that out. Do not add new override paths or relax thresholds.\n- The preflight must respect the same filtering rules the commit step uses, including:\n  - fetched-manifest cleanup\n  - bootstrap-owned `.serena` cleanup/noise handling\n  - self-repo vs consumer-repo path exclusions\n  - `scripts/.gitignore`-driven exclusions\n  - `.github/prompts` / `.github/scripts` exclusion behavior\n  - markdown-only threshold selection\n- Early destructive rejection must skip generic post-failure comment/diagnose flows exactly like the current late destructive rejection path.\n- Keep operator-facing wording unchanged unless a very small tweak is required to clarify that the rejection happened at preflight rather than during commit.\n\n6. Testing considerations\n- Extend `tests/test_implement_post_codex_recovery.py` only; keep coverage scoped to the new early-exit contract.\n- Add/adjust assertions to pin:\n  - presence and placement of the new preflight step before syntax-validation/commit-tail work\n  - preservation of the same destructive reason/output contract\n  - continued presence of the late `Commit changes` guard\n  - destructive-path skip conditions routing both early and late rejections away from generic failure/diagnose handlers\n  - reuse of the existing dedicated destructive rejection handler semantics\n- No broader Node24-specific contract expansion is needed unless it is the smallest way to pin the workflow text change.\n\nAssumptions:\n- Minimal-change path: keep the implementation local to `implement.yml` plus existing implement workflow tests, without introducing a new helper script.\n- The current destructive comment/alert wording can likely be reused unchanged because \u201ccommit not created / not pushed\u201d remains true for an early preflight rejection.\n\nMissing-context notes:\n- Repo inspection found no existing shared helper for the destructive-delete policy; today the logic is embedded in `Commit changes`, so the early-preflight path will need explicit wiring rather than plugging into an existing reusable module.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "975bdceb80bf1ea205e5d1822f3eee230883dc5c9339fdc2dcf25a6240b9fcea",
+  "lineage": {
+    "issue_number": 2581,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25854361326",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25854361326",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2581"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260514101709_39a1a3ab5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2581,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25854361326"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2581",
+  "timestamps": {
+    "created_at": "2026-05-14T10:17:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
