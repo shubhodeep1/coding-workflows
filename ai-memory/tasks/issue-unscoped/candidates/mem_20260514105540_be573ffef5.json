@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py:entire file (mode 100755 \u2192 100644) | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Last run modified file outside issue #2583 scope.\n  WHY: The change is mode-only and unrelated to the five listed .github/workflows/*.yml files, so it is unnecessary scope creep.\n- scripts/serena_stats_emit.py:entire file (mode 100755 \u2192 100644) | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Last run modified file outside issue #2583 scope.\n  WHY: The change is mode-only and unrelated to the five listed .github/workflows/*.yml files, so it is unnecessary scope creep.\n- scripts/setup_serena.sh:entire file (mode 100755 \u2192 100644) | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Last run modified file outside issue #2583 scope.\n  WHY: The change is mode-only and unrelated to the five listed .github/workflows/*.yml files, so it is unnecessary scope creep.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- File: scripts/mcp_handshake_probe.py\n  Code: entire file (mode 100755 \u2192 100644)\n  Problem: Last run modified file outside issue #2583 scope (limited to 5 listed .github/workflows/*.yml files).\n  Runtime impact: None (mode-only revert, 0 content lines changed per last_run_diff_stat.txt), but unnecessary scope creep touches unrelated script.\n  ISSUE_CONFIDENCE: 5\n- File: scripts/serena_stats_emit.py\n  Code: entire file (mode 100755 \u2192 100644)\n  Problem: Last run modified file outside issue #2583 scope (limited to 5 listed .github/workflows/*.yml files).\n  Runtime impact: None (mode-only revert, 0 content lines changed), but unnecessary scope creep.\n  ISSUE_CONFIDENCE: 5\n- File: scripts/setup_serena.sh\n  Code: entire file (mode 100755 \u2192 100644)\n  Problem: Last run modified file outside issue #2583 scope (limited to 5 listed .github/workflows/*.yml files).\n  Runtime impact: None (mode-only revert, 0 content lines changed), but unnecessary scope creep.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4d2135bbaeb3eb279f2d8543db37b39e24d5f2dd9a18ec1dd262f18326f0983f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2585,
+    "run_id": "25855477897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25855477897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514105540_be573ffef5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2585,
+    "run_id": "25855477897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-14T10:55:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
