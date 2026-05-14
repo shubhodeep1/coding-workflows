@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nActions taken:\n- Validated the planning ref: `54380707b3dc1c4deb6d9f0c0cba5d57e974f8d8` on `orchestrator/project-2578`; integration metadata matches.\n- Interpreted the clarification state: no `Q1`/`Q2` batch existed, and `/answer [auto-answered-by-orchestrator]` only confirms continuation.\n- Reviewed the three source-doc shapes this issue must normalize: a workflow-optimization report, `analysis/plan-workflow-log-analysis.md`, and `analysis/e2e-smoke-failure-25126757724.md`. Also verified current-repo evidence for the known \u201calready satisfied\u201d examples.\n\n## Files likely to change\n- `analysis/recommendation-triage.md` **(new file; only planned repo edit)**\n\nScope guard:\n- Do **not** edit workflow/runtime files in this issue.\n- Do **not** rename/delete any existing `analysis/` source docs.\n- `files_touched` should stay limited to `analysis/recommendation-triage.md`.\n\n## What to implement\nCreate `analysis/recommendation-triage.md` as a single handoff ledger with a stable, append-only structure:\n\n1. **Status legend**\n   - `already_satisfied`\n   - `safe_to_apply`\n   - `risky_defer`\n   - `obsolete`\n\n2. **Source-doc inventory**\n   - List every currently required source doc on this ref:\n     - all `analysis/workflow-optimization-*.md` (**64 files**)\n     - `analysis/plan-workflow-log-analysis.md`\n     - `analysis/e2e-smoke-failure-25126757724.md`\n   - Keep the inventory deterministic (sorted/glob order).\n\n3. **Downstream local issue IDs**\n   Define the local IDs that `safe_to_apply` items will map to:\n   - `apply-safe-review-autofix-cleanups`\n   - `apply-safe-e2e-smoke-cleanups`\n   - `apply-safe-issue-pr-status-cleanups`\n   - `apply-safe-orchestrate-poll-cleanups`\n   - `apply-safe-internal-review-cleanups`\n   - `apply-safe-implement-diagnose-cleanups`\n   - `apply-safe-shared-helper-cleanups`\n   - `apply-safe-plan-clarify-cleanups`\n   - `apply-safe-misc-cleanups`\n\n4. **Deduplicated recommendations grouped by subsystem**\n   Use stable subsystem headings, then one canonical entry per deduped recommendation. Each entry should include:\n   - short recommendation slug/title\n   - canonical summary\n   - source docs that raised it\n   - status\n   - current-repo evidence for `already_satisfied`\n   - downstream local ID(s) for `safe_to_apply`\n   - short rationale for `risky_defer` or `obsolete`\n\n## Recommended grouping / normalization rules\n- Normalize the corpus into subsystem buckets driven by current repo paths/contracts, not by report title or original severity.\n- Use the three archetypes as normalization references:\n  - workflow-optimization reports\n  - `analysis/plan-workflow-log-analysis.md`\n  - `analysis/e2e-smoke-failure-25126757724.md`\n- Deduplicate by **underlying change contract**, not by report ID. Example: repeated \u201cremove dead `COMMITS_AFTER` fetch\u201d findings should collapse into one e2e-cleanup entry.\n\n## Current-repo evidence that should prevent re-opening known fixed items\nThese should be verified and then triaged as `already_satisfied` unless a newer source doc proves otherwise:\n- `.github/workflows/review_autofix_sweep.yml` already uses paginated `jq -s 'add // []'` merging for PR sweep data.\n- `.github/workflows/plan.yml` already forbids progress/status chatter in plan output.\n- `.github/workflows/review_autofix.yml` already gates the merge-conflict path on `EDITOR_NOOP_SUSPICIOUS != 'true'`.\n- `.github/workflows/test-and-mark-stable.yml` already short-circuits the empty-editor smoke-test path when the noop marker appears in the live log and gates Phase 4b on clean review completion.\n\n## Data structures affected\nOnly the new markdown ledger structure:\n- source inventory list\n- local-ID mapping list\n- per-subsystem recommendation records with status/evidence/mapping fields\n\nNo runtime data structures should change.\n\n## API / interface changes\n- No workflow/API/runtime interface changes in this issue.\n- The only new \u201cinterface\u201d is the human-facing handoff contract in `analysis/recommendation-triage.md`.\n\n## Risks / edge cases / conflicts\n- `analysis/recommendation-triage.md` does not exist yet; creating it is expected.\n- The source corpus is large (**66 docs total**) and repetitive; many findings will overlap with drifted wording, IDs, and historical line numbers.\n- Some reports\u2019 `Implement-Stage Handoff` sections are sparse or ID-only, so the implementation cannot rely on that section alone.\n- Older reports reference retired models, older action versions, and moved line ranges; statuses must be based on **current repo truth**, not historical wording.\n- Any item that would change retry behavior, batching fallbacks, label semantics, mergeability/race handling, or other contract-sensitive workflow behavior should be marked `risky_defer`, not forced into `safe_to_apply`.\n- If a recommendation is superseded by current architecture rather than merely fixed, mark it `obsolete` with a short note.\n\n## Testing considerations\nBecause this issue only adds an analysis artifact, verification should be content-based:\n- Confirm the inventory count matches the live glob results on this ref (**66 docs**).\n- Confirm `git diff --stat` only shows `analysis/recommendation-triage.md`.\n- Confirm every recommendation entry has exactly one allowed status.\n- Confirm every `already_satisfied` entry includes current repo evidence: file path + short note.\n- Confirm every `safe_to_apply` entry maps to at least one local ID from this plan.\n- Spot-check the three user-called examples (`jq -s` sweep fix, plan no-progress-status rule, empty-editor E2E shortcut) are not re-opened as actionable.\n\n## Assumptions\n- Future downstream GitHub issue numbers are not available yet, so this plan uses local IDs only.\n- \u201cAppend-only and concise\u201d means creating a stable ledger format now and adding notes beneath stable entries later, not rewriting or reflowing the full file each pass.\n\n## Missing-context notes\n- No preassigned downstream local IDs were provided in the issue, so the plan defines them above.\n- No blocking repo-state conflicts were found beyond the expected absence of the new ledger file.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0a5a8a5218e10319390734b98c1024e08c0fa748e202532a4d823bb937fbf84b",
+  "lineage": {
+    "issue_number": 2579,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25852214975",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25852214975",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2579"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260514092749_09878bd144",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2579,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25852214975"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2579",
+  "timestamps": {
+    "created_at": "2026-05-14T09:27:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
