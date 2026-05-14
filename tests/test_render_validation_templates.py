@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -444,20 +445,29 @@ def test_renderer_output_root_basename_only_affects_expected_files() -> None:
 		files_b = _directory_file_map(out_b)
 		assert sorted(files_a) == sorted(files_b)
 
-		differing_files = {
-			rel for rel in files_a if files_a[rel] != files_b[rel]
-		}
-		assert differing_files == {
+		expected_differing_files = {
 			"docker-compose.test.yml",
 			"tests/20_import_audit.sh",
 			"tests/30_graceful_shutdown.sh",
 			"tests/_lib/graceful_shutdown.py",
 		}
+		differing_files = {
+			rel for rel in files_a if files_a[rel] != files_b[rel]
+		}
+		assert not differing_files - expected_differing_files, (
+			f"unexpected basename-sensitive files: {differing_files - expected_differing_files}"
+		)
+		assert not expected_differing_files - differing_files, (
+			f"expected basename-sensitive files missing: {expected_differing_files - differing_files}"
+		)
 
 		for rel_path in differing_files:
 			assert "out-a" in files_a[rel_path], f"expected out-a reference in {rel_path}"
 			assert "out-b" in files_b[rel_path], f"expected out-b reference in {rel_path}"
-			assert files_a[rel_path].replace("out-a", "out-b") == files_b[rel_path]
+			assert (
+				re.sub(r"(?<![A-Za-z0-9_])out-a(?=/)", "out-b", files_a[rel_path])
+				== files_b[rel_path]
+			)
 
 
 def main() -> int:
