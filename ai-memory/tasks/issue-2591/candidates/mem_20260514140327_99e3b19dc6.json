@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2578` @ `1aa33640a8df58ddd1185689f84951fdcc4d7d57`  \nClarification status: `/answer [auto-answered-by-orchestrator]` means proceed with the issue as written.  \nIntegration branch check: matched (`orchestrator/project-2578`).\n\nRepresentative existing contract to follow:\n- `tests/test_family_python_mongo_flask.py::test_python_mongo_flask_compose_dockerfile_tracks_output_root_name`\n- `tests/test_render_validation_templates_node_hardhat_regressions.py::test_compose_dockerfile_path_tracks_output_root_name`\n\nImplementation plan\n\n1. Files likely to change\n- `tests/test_render_validation_templates.py` \u2014 primary fix site; update `test_renderer_deterministic_output_for_same_manifest` and any local helper needed for snapshot/comparison.\n- Possibly `tests/test_family_python_mongo_flask.py` only if shared helper/assertion extraction forces a small realignment.\n- Production files are not expected to change unless investigation disproves the current contract:\n  - `scripts/render_validation_templates.py`\n  - `workflow-templates/validation-harness/**` output-root-aware templates\n\n2. Functions/modules to implement\n- In `tests/test_render_validation_templates.py`, replace the stale \u201cdifferent basename must hash identically\u201d assertion with a supported-contract check:\n  - preferred: render into different parent directories that share the same output-root basename, then keep the byte-for-byte determinism assertion; and\n  - if needed, add a focused regression for basename changes that asserts only the known output-root-aware artifacts vary (`docker-compose.test.yml`, `tests/20_import_audit.sh`, `tests/30_graceful_shutdown.sh`, `tests/_lib/graceful_shutdown.py`).\n- Leave `scripts/render_validation_templates.py::main()` behavior intact unless new evidence shows `context[\"output_root_name\"]` was accidental.\n\n3. Data structures affected\n- Test-local directory snapshot data (`files`, hash, and possibly per-file content maps if the test becomes more granular).\n- Render context key `output_root_name` remains part of the template context.\n- No manifest schema or fixture format change is expected.\n\n4. API/interface changes\n- No public API, CLI, or schema change planned.\n- `--output-root` should continue to influence `output_root_name`; the fix is to align tests with that contract, not to remove it.\n\n5. Risks and edge cases\n- Do not weaken the determinism test so much that real nondeterminism slips through.\n- Prefer same-basename/different-parent comparison over a broad ignore-list, so the generic test does not need to track every family-specific `output_root_name` use.\n- If an allowlist of basename-sensitive files is introduced, keep it synced with current template usage; `output_root_name` is already referenced in multiple families (`python-repo-checks`, `python-mongo-repo-checks`, `python-mongo-flask`, `node-hardhat-solidity`).\n- Avoid \u201cfixing\u201d this by backing out renderer/template behavior unless investigation proves the current behavior unintended; existing regressions already depend on it.\n\n6. Testing considerations\n- Required:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_validation_templates.py`\n  - `bash scripts/run_validation_repo_checks.sh`\n- If shared assertions or family-specific coverage are touched:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_python_mongo_flask.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_validation_templates_node_hardhat_regressions.py`\n\nConflicts noted\n- No issue-to-codebase ref mismatch on this branch.\n- Confirmed internal contract conflict: `tests/test_render_validation_templates.py::test_renderer_deterministic_output_for_same_manifest` assumes basename-independent output, while current templates and existing family regressions intentionally embed `output_root_name`.\n\nEstimated implementation budget: 20\u201335 minutes.\n\nActions taken\n- Inspected the current test, renderer, and representative template/regression files.\n- Reproduced the failure with:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_validation_templates.py`\n  - `bash scripts/run_validation_repo_checks.sh`\n\nAssumptions\n- `output_root_name` is an intentional renderer contract and should remain.\n- The minimal safe fix is test-only unless new evidence contradicts that.\n\nMissing-context notes\n- I did not inspect the nightly validation self-test workflow because the local repo-check failure is already isolated to the stale determinism assertion.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "50f00f80ef72ea28d059b4f4984d8eba3de4ed60516544ec02e905193790d729",
+  "lineage": {
+    "issue_number": 2591,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25864168270",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25864168270",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2591"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260514140327_99e3b19dc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2591,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25864168270"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2591",
+  "timestamps": {
+    "created_at": "2026-05-14T14:03:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
