@@ -5,13 +5,33 @@
   "entry_id": "processed_command_2584_4449792246_approved",
   "issue_number": 2584,
   "metadata": {
+    "branch": "ai/issue-2584",
+    "changed_files": [
+      "scripts/mcp_handshake_probe.py",
+      "scripts/serena_stats_emit.py",
+      "scripts/setup_serena.sh",
+      "tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml",
+      "tests/fixtures/selftest/node-hardhat-solidity/package-lock.json",
+      "tests/fixtures/selftest/node-hardhat-solidity/package.json",
+      "tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json",
+      "tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh",
+      "tests/fixtures/validation_harness/python_mongo_flask/tests/_lib/graceful_shutdown.py",
+      "tests/test_family_python_mongo_flask.py",
+      "workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2",
+      "workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2"
+    ],
+    "issue_number": 2584,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2584",
+    "pr_number": 2588,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2588",
+    "run_attempt": "1",
+    "run_id": "25854817949",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25854817949"
   },
   "run_attempt": 1,
   "run_id": "25854817949",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-14T10:22:28Z",
+  "status": "completed",
+  "timestamp": "2026-05-14T10:37:58Z",
   "workflow": "implement"
 }
