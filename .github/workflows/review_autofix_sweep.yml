@@ -117,9 +117,12 @@ jobs:
                   2>/dev/null || true
               done | jq -c -s '
                   reduce (
-                    .[]
-                    | .workflow_runs[]?
-                    | select((.head_branch // "") != "")
+                    [
+                      .[]
+                      | .workflow_runs[]?
+                      | select((.head_branch // "") != "")
+                    ]
+                    | unique_by(.id)[]
                     | .head_branch
                   ) as $head_ref ({};
                     .[$head_ref] = ((.[$head_ref] // 0) + 1)
