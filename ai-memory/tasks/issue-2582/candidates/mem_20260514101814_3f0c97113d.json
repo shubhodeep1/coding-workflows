@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `e6eb960354538468537fee582590722c8f231d17` on `orchestrator/project-2578` (integration metadata matches; no branch blocker).\n\nActions taken\n- Reviewed `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/review_autofix.yml`, `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `analysis/recommendation-triage.md`, `analysis/workflow-optimization-2026-05-14.md`, and `.github/workflows/ci.yml`.\n\nClarification mapping\n- No `Q1`/`Q2` clarification questions were issued.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the issue as written,\u201d with no scope change.\n\nConflict / context notes\n- `analysis/recommendation-triage.md` still says `apply-safe-review-autofix-cleanups` is reserved/no review-autofix-only cleanup survived conservative triage, so the actionable basis for this issue is the newer hotspot documented in `analysis/workflow-optimization-2026-05-14.md`.\n- The already-fixed paginated PR merge in `review_autofix_sweep.yml` is present and should not be reopened.\n\nRepresentative patterns to follow\n- `scripts/gh_helpers.sh::autofix_retrigger_has_inflight_peer()` for \u201csingle fetch + client-side filtering.\u201d\n- `.github/workflows/update_workflows.yml` / `.github/workflows/ci.yml` for workflow-level `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`.\n\n1. Files likely to change\n- `.github/workflows/review_autofix_sweep.yml`\n- `.github/workflows/review_autofix.yml`\n\n2. Functions or modules to implement\n- In `.github/workflows/review_autofix_sweep.yml`, update the `Enumerate open PRs and dispatch internal-review.yml` run block to:\n  - keep the existing open-PR snapshot and counters;\n  - add a pre-loop active-run cache for the review family, preferably one cached snapshot per workflow (`internal-review.yml` and `review_autofix.yml`) fetched once per sweep;\n  - build a local lookup keyed by workflow + head branch for `queued` / `in_progress` runs;\n  - replace the inner-loop per-PR `gh api ... actions/workflows/${wf}/runs` calls with cache lookups;\n  - preserve current behavior for head-ref filtering, `[skip ai]`, fail-open handling, dispatch target (`internal-review.yml`), and all existing `AUTOFIX_SWEEP_*` log lines.\n- In `.github/workflows/review_autofix.yml`, add `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` to the existing top-level `env:` block, matching the repo\u2019s existing bridge pattern.\n\n3. Data structures affected\n- Keep `prs_json` unchanged.\n- Add a new in-step active-runs cache (JSON blob, reduced array, or bash associative maps) keyed effectively by workflow and branch.\n- Keep existing counters unchanged: `dispatched`, `skipped_active`, `skipped_filter`, `skipped_skip_ai`, `failures`.\n\n4. API or interface changes\n- No user-facing workflow inputs, outputs, labels, reviewer/editor counts, deterministic-skip policy, merge rules, or dispatch target change.\n- Internal GitHub API usage should move from per-PR workflow-run reads to a pre-loop snapshot strategy. GitHub\u2019s \u201clist workflow runs for a workflow\u201d endpoint allows the workflow file name in `workflow_id` and supports `branch`, `status`, and `per_page` (max 100), so fetching each review-family workflow once per sweep and filtering locally is a valid low-risk contract. Because branch filtering moves client-side, the sweep should raise the snapshot page size from `10` to `100` and paginate correctly if needed; if pagination is used, merge the `.workflow_runs` arrays across pages rather than merging raw page objects. ([docs.github.com](https://docs.github.com/rest/actions/workflow-runs/))\n\n5. Potential risks or edge cases\n- Preserve fail-open semantics: if a snapshot fetch or parse fails, degrade to an empty cache for that workflow instead of failing the sweep.\n- Do not reintroduce the already-fixed pagination bug while normalizing workflow-run pages.\n- Preserve active-run detection for both `internal-review.yml` and `review_autofix.yml`, and keep the active-run skip log shape intact (`workflow=... count=... head_ref=...`).\n- Keep the current ordering: head-ref filter first, `[skip ai]` next, active-run preflight after that.\n- Head refs can contain slashes; any branch-keyed cache must quote keys safely.\n- The GitHub indexing/visibility delay race still exists; this issue should reduce API fanout only, not change concurrency semantics.\n- Prefer an inline sweep-local cache over importing `_load_actions_runs_cached()`; the orchestrator cache is broader, memory-backed, and higher-risk than this narrow workflow-only change.\n\n6. Testing considerations\n- Run existing workflow lint gates: `yamllint` and `actionlint` via `.github/workflows/ci.yml`.\n- Exercise `review_autofix_sweep.yml` via `workflow_dispatch` with `dry_run=true` (and optionally a narrow `head_ref_filter`) to verify unchanged `AUTOFIX_SWEEP_START`, `AUTOFIX_SWEEP_DRY_RUN`, and `AUTOFIX_SWEEP_END` behavior.\n- Validate at least one branch with an existing `queued`/`in_progress` `internal-review.yml` or `review_autofix.yml` run still emits the same `AUTOFIX_SWEEP_SKIP ... reason=active_run workflow=...` line and increments `skipped_active`.\n- Confirm `review_autofix.yml` still parses as a reusable workflow after the Node24 bridge addition and that no workflow-call schema changed.\n\nAssumptions\n- Because no clarification questions were issued, the auto-answer only authorizes continuation; it does not widen scope.\n- Because the issue says to stay inside `files_touched` but does not explicitly enumerate them, I\u2019m treating the intended change set as exactly the two workflow files above.\n\nMissing-context notes\n- There does not appear to be a dedicated automated test for `review_autofix_sweep.yml`, so verification will rely mostly on workflow linting plus a dry-run/manual sweep execution.\n- The triage file has not yet been updated to name this exact sweep optimization as a safe-to-apply item; the concrete evidence is in `analysis/workflow-optimization-2026-05-14.md`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8d3bce48cb317a7bfe6b0c08a588e7352f93a032dce077beb48c3971452de2ee",
+  "lineage": {
+    "issue_number": 2582,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25854360497",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25854360497",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2582"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260514101814_3f0c97113d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2582,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25854360497"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2582",
+  "timestamps": {
+    "created_at": "2026-05-14T10:18:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
