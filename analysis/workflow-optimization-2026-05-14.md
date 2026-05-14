@@ -341,3 +341,140 @@ No HTTP 429s, secondary rate-limit events, or retry storms were observed in the 
 | Total token totals | not emitted |
 | Cache creation/read token totals | probes present, but all values `na` |
 | Per-model costable usage totals | not derivable from sampled logs |
+
+## Deep Audit — Workflows & Scripts (2026-05-14)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID**: BUG-001
+  - **File path**: `scripts/tg_helpers.sh:296-356,365-427`
+  - **Severity**: Medium
+  - **Category tag**: `bug`
+  - **Description**: `tg_cleanup_phase_msgs` and `tg_cleanup_msgs` page forward through `/issues/{n}/comments` and delete matching comments before incrementing `page`. Because GitHub comment pagination is page-indexed, deleting page-1 items can shift later matching comments onto already-consumed pages; those comments are then skipped when an issue has >100 comments or many TG marker comments.
+  - **Recommended fix**: First collect all matching comment IDs across pages, then delete in a second pass; or re-read `page=1` until no matching markers remain. Keep the read side on `curl_gh_api` so failures stay rate-limit aware.
+
+- **ID**: BUG-002
+  - **File path**: `.github/workflows/review_autofix.yml:519-529,4420-4426,4542-4547,5294-5301; scripts/review_rb_judge.sh:242-245; .github/workflows/issue_pr_status.yml:200-210`
+  - **Severity**: Medium
+  - **Category tag**: `bug`
+  - **Description**: `issue_pr_status.yml` explicitly tightened PR-text fallback parsing so bare prose mentions like `issue #N` or `issues/N` do **not** count as linked issues after the `#1469` false-match regression, but `review_autofix.yml` and `review_rb_judge.sh` still use the older broad regex. In those paths, an incidental prose reference can still trigger validate dispatches or phase-label mutations on unrelated issues.
+  - **Recommended fix**: Replace the broad fallback regexes with one shared strict extractor that matches the `issue_pr_status.yml` policy (`close|fix|resolve` keywords or full repo-scoped issue URLs/paths). Only allow broader parsing behind an explicit opt-in flag and caller-specific comment.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+_Note: I did not duplicate the already-documented `review_autofix_sweep.yml` per-PR `/actions/workflows/*/runs` hotspot from the current report._
+
+- **ID**: BATCH-001
+  - **File path**: `scripts/review_rb_judge.sh:235-273`
+  - **Severity**: Medium
+  - **Category tag**: `api-batching`
+  - **Description**: `review_rb_judge.sh` first does 1 GraphQL call to fetch only linked-issue numbers, then loops with per-issue REST reads to recover `body` and `labels` for the first usable issue. Current call count is `1 + N` (`1` GraphQL + up to `N` `GET /issues/{n}` calls; e.g. 6 calls for 5 linked issues). The needed fields are available in GraphQL already.
+  - **Recommended fix**: Extend the initial `closingIssuesReferences` query to request `body` and `labels(first: 50) { nodes { name } }`, or reuse the aliased-issue batching pattern from `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql`. Proposed call count: `1`.
+
+- **ID**: API-001
+  - **File path**: `scripts/review_rb_judge.sh:210-212,243-245,654-655,723-734,782-785,993-1012`
+  - **Severity**: Medium
+  - **Category tag**: `api-redundancy`
+  - **Description**: The same PR payload is re-fetched multiple times in one judge run: early merged guard, PR-text fallback, post-judge merged guard, merge branch poll, final-fix merge check, and merge-with-followup poll. Fixed pre-branch cost is already 2-3 `GET /pulls/{n}` reads before any action-specific polling starts, and action branches then do another 1-6 reads. This duplicates data that is already partially staged in `PR_META_FILE`.
+  - **Recommended fix**: Introduce one cached `PR_LIVE_META_JSON` fetch near the top of the script, refresh it only inside the chosen action’s mergeability poll, and thread that JSON through the guard/fallback branches. Extend the existing `gh_pr_with_all_comments` / `PRELOADED_PR_META` pattern in `scripts/gh_helpers.sh`. Proposed fixed call count: `1` pre-branch `GET /pulls/{n}` instead of `2-3`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID**: DUP-001
+  - **File path**: `.github/workflows/review_autofix.yml:519-529,4420-4426,4542-4547,5294-5301; scripts/review_rb_judge.sh:242-245; .github/workflows/issue_pr_status.yml:200-210`
+  - **Severity**: Medium
+  - **Category tag**: `duplication`
+  - **Description**: PR-text linked-issue extraction is duplicated across five call sites, and two different regex policies are now in use. This duplication is what let the stricter `issue_pr_status.yml` fix diverge from `review_autofix.yml` and `review_rb_judge.sh`.
+  - **Recommended fix**: Move the logic into `scripts/gh_helpers.sh` or a new `scripts/issue_link_helpers.sh` helper, e.g. `extract_linked_issue_numbers_from_pr_text <repo> <text> [strict=true]`. Update callers in `issue_pr_status.yml`, `review_autofix.yml`, and `review_rb_judge.sh` to use the same helper and policy.
+
+- **ID**: DUP-002
+  - **File path**: `.github/workflows/test-and-mark-stable.yml:3369-3435,3545-3580,3608-3645,3667-3704,3779-3814,4015-4057`
+  - **Severity**: Medium
+  - **Category tag**: `duplication`
+  - **Description**: `test-and-mark-stable.yml` repeats the same “dispatch workflow → wait for a new run ID → poll `/actions/runs/{id}` until completion” shell block at least six times. The copies already drift in deadline, accepted conclusions, and error wording, which raises maintenance and audit cost.
+  - **Recommended fix**: Extract a shared helper into `scripts/gh_helpers.sh` or a new `scripts/watch_workflow_run.sh`, e.g. `gh_wait_for_dispatched_workflow_run <repo> <workflow_file> <pre_run_id> <deadline_secs> <poll_secs> <accepted_conclusions_csv>`. Update the `workflow-log-analysis`, `validation-refresh`, `update_workflows`, `memory-maintenance`, `orchestrate`, and `internal-validate` smoke steps to call it.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID**: EXPR-001
+  - **File path**: `.github/workflows/orchestrate_clarify_respond.yml:840-1122`
+  - **Severity**: Medium
+  - **Category tag**: `expression-limit`
+  - **Description**: The `Parse and post answer` step has an estimated interpolated `run:` body size of **15,140** characters, leaving about **5,860** characters of headroom against GitHub’s 21,000-character expression limit. The block mixes loop-guard logic, memory writes, label edits, and comment posting in one interpolated shell body. [NEEDS VERIFICATION]
+  - **Recommended fix**: Extract the loop-guard / post-answer logic to a dedicated script under `scripts/` and keep the workflow step to env wiring plus one script call.
+
+- **ID**: EXPR-002
+  - **File path**: `.github/workflows/review_autofix.yml:893-1125`
+  - **Severity**: Medium
+  - **Category tag**: `expression-limit`
+  - **Description**: The `Stage workflow support files` step is estimated at **15,230** interpolated characters, leaving about **5,770** characters of headroom. It is a long bootstrap block with many `${{ }}` references and file-copy branches, so ordinary rollout edits can push it into the hard limit. [NEEDS VERIFICATION]
+  - **Recommended fix**: Move the bootstrap logic into a shared script or composite action, ideally one that `validate.yml` can also reuse.
+
+- **ID**: EXPR-003
+  - **File path**: `.github/workflows/review_autofix.yml:1418-1806`
+  - **Severity**: High
+  - **Category tag**: `expression-limit`
+  - **Description**: The `Collect PR metadata` step is estimated at **21,048** interpolated characters, about **48** characters over the nominal 21,000-character ceiling. This is an additional high-risk block beyond the older `review_autofix` expression-limit incidents already noted elsewhere in repo analysis. [NEEDS VERIFICATION]
+  - **Recommended fix**: Split the step into smaller phases (`collect_pr_payload`, `collect_comments`, `normalize_context`) or move the whole collector into `scripts/collect_pr_review_context.sh`.
+
+- **ID**: EXPR-004
+  - **File path**: `.github/workflows/test-and-mark-stable.yml:1204-1587`
+  - **Severity**: High
+  - **Category tag**: `expression-limit`
+  - **Description**: The `Phase 4: Wait for review & autofix to complete` step is estimated at **23,499** interpolated characters, leaving about **-2,499** characters of headroom. The polling loop, live-log probing, and retry logic are all embedded directly in one interpolated `run:` body. [NEEDS VERIFICATION]
+  - **Recommended fix**: Extract the wait loop into a script (or composite action) and pass repo / PR / timeout values as env vars or arguments.
+
+- **ID**: EXPR-005
+  - **File path**: `.github/workflows/test-and-mark-stable.yml:1674-2078`
+  - **Severity**: High
+  - **Category tag**: `expression-limit`
+  - **Description**: The `Phase 4b: Verify editor restored canary (pytest + retry)` step is estimated at **21,288** interpolated characters, leaving about **-288** characters of headroom. The step includes install fallback, retry polling, fetch helpers, and pytest classification in one interpolated shell block. [NEEDS VERIFICATION]
+  - **Recommended fix**: Move the verify-and-retry flow into a script such as `scripts/verify_e2e_canary.sh`, keeping the workflow step as a thin wrapper.
+
+- **ID**: EXPR-006
+  - **File path**: `.github/workflows/validate.yml:205-577`
+  - **Severity**: High
+  - **Category tag**: `expression-limit`
+  - **Description**: The `Fetch workflow support files` step is estimated at **20,816** interpolated characters, leaving only about **184** characters of headroom. This is a near-limit bootstrap block, so even small support-file or env additions can make the workflow unloadable. [NEEDS VERIFICATION]
+  - **Recommended fix**: Extract support-file bootstrap to a shared script/composite action and split optional feature fetches (Semble, Serena, self-heal) into separate smaller steps.
+
+_No workflow file exceeds 800 KB. The largest current workflow is `.github/workflows/review_autofix.yml` at 322,997 characters._
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID**: CONSIST-001
+  - **File path**: `scripts/tg_helpers.sh:175-205,246-276,346-350,417-421`
+  - **Severity**: Low
+  - **Category tag**: `consistency`
+  - **Description**: `tg_helpers.sh` uses `curl_gh_api` for GitHub **reads**, but its paired POST/PATCH/DELETE writes use raw `curl`. That bypasses the repo’s standard retry/backoff/rate-limit alert path in `scripts/gh_helpers.sh`, so write-side failures are quieter and behave differently from read-side failures.
+  - **Recommended fix**: Route GitHub writes through `curl_gh_api` too, or add a small `_curl_gh_json <method> <url> <jq_body>` wrapper in `scripts/tg_helpers.sh` that delegates to `curl_gh_api`.
+
+- **ID**: DEAD-001
+  - **File path**: `scripts/ai_context_utils.py:80-207,325-603`
+  - **Severity**: Low
+  - **Category tag**: `dead-code`
+  - **Description**: Multiple top-level envelope / attachment helpers (`build_issue_envelope`, `build_pull_request_envelope`, `build_pull_request_reviews_envelope`, `build_review_comment_local_context`, `build_attachment_bundle_section`, `ingest_attachments`, `build_prompt_parts`, `append_structured_context_to_file`) have no in-repo callers; a repo-wide symbol search only returns their definitions. That leaves a sizeable dormant surface in a production repo.
+  - **Recommended fix**: Either wire these helpers into an actual prompt-building path with tests, or remove/archive them until the attachment-context feature is live.
+
+_No actionable TODO/FIXME/HACK markers surfaced in scope; the earlier `XXXXXX` grep hits were `mktemp` templates, not debt markers._
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 4 | EXPR-003, EXPR-004, EXPR-005, EXPR-006 |
+| Medium | 8 | BUG-001, BUG-002, BATCH-001, API-001, DUP-001, DUP-002, EXPR-001, EXPR-002 |
+| Low | 2 | CONSIST-001, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2 | Medium |
+| Code modularization | 5 | Medium |
+| Expression size reduction | 5 | Large |
+| Medium/Low fixes | 4 | Medium |
