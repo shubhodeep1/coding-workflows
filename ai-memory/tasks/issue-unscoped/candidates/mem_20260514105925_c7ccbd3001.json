@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:20-30 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: The `<<EOF` loop can truncate or garble import-audit diagnostics if a line equals `EOF` or starts with `-`.\n  WHY: Both reviewers reported the same low-severity diagnostic-formatting fragility in the import-audit failure path; deepseek marked it low severity and x-ai reported the same issue with confidence 5.\n- workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2:20-30 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: The `<<EOF` loop can truncate or garble import-audit diagnostics if a line equals `EOF` or starts with `-`.\n  WHY: Both reviewers reported the same low-severity diagnostic-formatting fragility in the template copy of the import-audit failure path; deepseek marked it low severity and x-ai reported the same issue with confidence 5.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json:13\n  PROBLEM: `ignoreDeprecations` inside `compilerOptions` was flagged as an unknown compiler option.\n  WHY: Reviewer concluded this is a false positive because the option is valid in TypeScript 5.0+ and correctly suppresses deprecation warnings.\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:21-26 | severity=low\n  PROBLEM: The heredoc-based audit-output loop can terminate early or misformat diagnostics.\n  WHY: Reviewer said the `<<EOF` block is fragile if `audit_output` contains a line exactly equal to `EOF`, and `echo \"# ${line}\"` can misbehave for dash-prefixed lines.\n- workflow-templates/validation-harness/python_mongo_flask/tests/20_import_audit.sh.j2:21-26 | severity=low\n  PROBLEM: The template copy has the same heredoc-based audit-output loop fragility.\n  WHY: Reviewer said the template inherits the same `<<EOF` / `echo` diagnostic-formatting issue as the rendered fixture.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh\n  PROBLEM: Only executable-bit changes (644\u2192755); no content modifications.\n  WHY: Reviewer judged these changes harmless scope creep with no functional impact.\n- tests/fixtures/selftest/node-hardhat-solidity/package.json:6\n  PROBLEM: `--network localhost` was removed from the hardhat test script.\n  WHY: Reviewer concluded `hardhat test` correctly uses the built-in in-memory network and that the change is intentional.\n- tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml:4-6\n  PROBLEM: `HARDHAT_NETWORK: hardhat` is set as an env override.\n  WHY: Reviewer said this is inconclusive/no-op because hardhat already defaults to the `hardhat` network.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json:@@ -0,0 +1,21 @@ | confidence=5\n  PROBLEM: `ignoreDeprecations: \"6.0\"` is nested under `compilerOptions`, making it an unrecognized compiler option.\n  WHY: TypeScript compilation in the hardhat selftest fixture would fail with TS5023 \"Unknown compiler option 'ignoreDeprecations'\", preventing the nightly self-test validation from reaching runtime testing.\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:20-30 | confidence=5\n  PROBLEM: The `<<EOF` heredoc loop can terminate prematurely if `audit_output` contains a line exactly matching `EOF`, and `echo \"# ${line}\"` mishandles lines starting with `-`.\n  WHY: When import audit fails inside the app container and outputs `EOF` or `-error`, diagnostics truncate or garble and hide the failure cause despite the test failure.\n- workflow-templates/validation-harness/python_mongo_flask/tests/20_import_audit.sh.j2:20-30 | confidence=5\n  PROBLEM: The template has the same heredoc fragility as the rendered fixture.\n  WHY: Every consumer repo's rendered validation harness would inherit truncated or malformed import-audit diagnostics on failure.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh | confidence=5\n  PROBLEM: Only executable mode changes (644\u2192755); no content modifications.\n  WHY: The change is unrelated to the nightly selftest fix and introduces scope creep with no functional change.\n- tests/fixtures/selftest/node-hardhat-solidity/package.json:6 | confidence=4\n  PROBLEM: The test script changed from `hardhat test --network localhost` to `hardhat test`.\n  WHY: The hardhat config likely expects localhost-specific forking/network behavior, so running without it can fail tests (e.g. no anvil RPC).\n- tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml:4-6 | confidence=4\n  PROBLEM: The validation override assumes the `hardhat` network and sets `HARDHAT_TEST_CMD: npx hardhat test`.\n  WHY: If the config lacks a `hardhat` network, `npx hardhat test` would fail with an unknown-network error.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===",
+  "fingerprint": "7a8473c8c0eddb12565166942cbf3038ca6db29787559673772cd0b304638fac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2588,
+    "run_id": "25855490686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25855490686",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514105925_c7ccbd3001",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2588,
+    "run_id": "25855490686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T10:59:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
