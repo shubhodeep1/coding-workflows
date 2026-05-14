@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_render_validation_templates.py:462-465 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The `\"out-a\" in files_a[rel_path]` sanity check can succeed on embedded substrings instead of a true path-segment match.\n  WHY: Both reviewers flagged that the containment check is not boundary-aware and can mask unexpected content patterns.\n- tests/test_render_validation_templates.py:469-472 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The negative lookbehind `(?<![A-Za-z0-9_])` is ASCII-only, so Unicode-adjacent path content is not handled by the intended boundary check.\n  WHY: Both reviewers flagged the same Unicode boundary limitation in the regex substitution.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_render_validation_templates.py:464-465\n  PROBLEM: The substring check `\"out-a\" in content` could match partial tokens like `Xout-a` or `out-aX`, potentially masking unexpected content patterns.\n  WHY: The issue is that the containment check lacks boundary isolation and can be satisfied without a true standalone `out-a/` path segment.\n- tests/test_render_validation_templates.py:469\n  PROBLEM: The ASCII-only negative lookbehind `(?<![A-Za-z0-9_])` would match `\"out-a\"` when preceded by Unicode characters, which could cause incorrect substitutions if future template content includes Unicode paths.\n  WHY: The regex boundary is limited to ASCII word characters, so non-ASCII preceding characters are not treated as part of the boundary.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_render_validation_templates.py:462-464 | confidence=2\n  PROBLEM: Substring containment check (`\"out-a\" in content`) accepts false positives where `\"out-a\"` appears embedded within a larger identifier, such as `\"out-apple/\"` or `\"count-a\"`.\n  WHY: The test claims presence of basename reference but passes even if `\"out-a\"` is not a path segment, misleading diagnostics when combined with regex normalization expecting isolated `\"out-a/\"`.\n- tests/test_render_validation_templates.py:470-472 | confidence=2\n  PROBLEM: Negative lookbehind uses ASCII-only character class `[A-Za-z0-9_]`, failing to isolate word boundaries for Unicode characters in `output_root_name`.\n  WHY: If basename contains Unicode letters (e.g., `caf\u00e9-out`), prior non-ASCII char skips replacement, leaving mismatch after sub while `files_b` normalizes correctly, test falsely fails.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "57e83247f51d1d4a1cb122272b87faeb49eadc7b1a4ad7868c32ed242ec541ef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2592,
+    "run_id": "25866011825",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25866011825",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514144620_396c9a5963",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2592,
+    "run_id": "25866011825"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T14:46:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
