@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix_sweep.yml:~110-120 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `snapshot_active_review_runs()` paginates queued/in_progress workflow runs without any `created` time bound, so stale active runs can cause unnecessary deep pagination.\n  WHY: The status filters already restrict results to active runs, but the query still has no age cap, so a backlog of stuck runs can waste API quota/time; reviewers described this as a low-severity hardening issue.\n- .github/workflows/review_autofix.yml:127 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The paginated active-run query has no `created` time bound, so stale queued runs can make the snapshot walk more pages than necessary.\n  WHY: The reviewer described this as a low-confidence hardening suggestion that does not affect correctness under normal GitHub Actions behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix_sweep.yml:~113-118 | severity=low | confidence=2\n  PROBLEM: `snapshot_active_review_runs()` uses `gh api --paginate` for queued/in_progress runs without any `created` time bound, so a deep backlog of stale active runs can cause unnecessary pagination.\n  WHY: The `status` filter already narrows to active runs, but the query can still walk old pages and waste API/time budget; the reviewer described this as defense-in-depth only.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix_sweep.yml:~113-120 | severity=low | confidence=3\n  PROBLEM: The active-run snapshot paginates queued/in_progress workflow runs without a `created` time bound, which can force extra history walks on repositories with a deep stale backlog.\n  WHY: The reviewer called it a valid concern but low practical impact because the status filters already restrict results to active runs.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:127 | severity=low | confidence=2\n  PROBLEM: The paginated active-run query has no `created` time bound, so stale queued runs can make the snapshot walk more pages than necessary.\n  WHY: The reviewer described this as a low-confidence hardening suggestion that does not affect correctness under normal GitHub Actions behavior.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix_sweep.yml:~110-120 | severity=low | confidence=4\n  PROBLEM: The two `gh api --paginate` calls fetch queued/in_progress runs without a `created` time bound, so stale active-run history can force deep pagination.\n  WHY: The reviewer warned this can burn API quota/time per sweep and potentially fall back to an empty snapshot on 429/timeout/partial failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix_sweep.yml:113-117\n  PROBLEM: The active-run snapshot paginates queued/in_progress runs without any time bound, which can make the query walk more historical pages than needed.\n  WHY: The reviewer said the new snapshot is correct and the missing bound is only a hardening suggestion.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e47b7670583f7a2d79e25e2d62b48a497569b285cf6a819a083bacae5410eae9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2586,
+    "run_id": "25857713328",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25857713328",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514115009_05b76333c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2586,
+    "run_id": "25857713328"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T11:50:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
