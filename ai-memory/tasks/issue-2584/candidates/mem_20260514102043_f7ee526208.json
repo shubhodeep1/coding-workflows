@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `e6eb960354538468537fee582590722c8f231d17` on `orchestrator/project-2578` (matches orchestrator integration metadata).\n\nClarification mapping: no `Q1/Q2/...` were issued; `/answer [auto-answered-by-orchestrator]` adds no extra requirements beyond the issue body.\n\nActions taken:\n- Reviewed the nightly self-test workflow, matrix/status scripts, the failing selftest fixtures, and the closest passing runtime-template pattern.\n- Reproduced the failure on this ref with the real runtime command: `fixtures=3 passed=1 failed=2`.\n- Confirmed the failing runtime paths are:\n  - `node-hardhat-solidity`: runtime `dependency_resolution` fails during npm install with a Hardhat/toolbox peer-dependency conflict.\n  - `python-mongo-flask`: runtime fails in `20_import_audit.sh` (Flask import is being checked in the wrong Python environment) and `30_graceful_shutdown.sh` / `_lib/graceful_shutdown.py` (post-SIGTERM `ConnectionResetError` is treated as fatal).\n  - `python-repo-checks-bootstrap` passes.\n- No factual issue/code conflict found; the repo reproduces the issue as described.\n\nImplementation plan\n\n1. Files likely to change\n\nPrimary fix path:\n- `tests/fixtures/selftest/node-hardhat-solidity/package.json`\n- `tests/fixtures/selftest/node-hardhat-solidity/package-lock.json` (new, if deterministic npm resolution is the safest repair)\n- `workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2`\n- `tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh`\n- `tests/fixtures/validation_harness/python_mongo_flask/tests/_lib/graceful_shutdown.py`\n- `tests/test_family_python_mongo_flask.py`\n\nLikely test/contract follow-up:\n- `tests/test_validation_selftest_runner.py` (if adding a lightweight contract around repaired fixture metadata or any new summary semantics)\n\nFallback-only if a single fixture must be quarantined:\n- `scripts/validation_selftest_matrix.py`\n- `.github/workflows/nightly-validation-selftest.yml`\n- `scripts/validation_selftest_status.py`\n- `tests/test_nightly_validation_selftest_workflow_contract.py`\n- `tests/test_validation_selftest_status.py`\n\n2. Functions or modules to implement\n\n- **Node selftest fixture dependency repair**\n  - Keep the fix fixture-local.\n  - Align the checked-in Hardhat/toolbox dependency set so runtime `dependency_resolution` is deterministic again.\n  - Prefer a lockfile-backed fix if possible, because the node validation Dockerfile already switches to `npm ci` when `package-lock.json` exists.\n\n- **`python-mongo-flask` import audit wrapper**\n  - Change `tests/20_import_audit.sh` to execute `_lib/import_audit.py` inside the `app` container, not with the GitHub runner\u2019s host Python.\n  - Keep wrapper TAP stable (avoid helper-level output being counted as extra TAP lines).\n\n- **`python-mongo-flask` graceful shutdown helper**\n  - Update `http_ok` in `tests/_lib/graceful_shutdown.py` so transport-level disconnects/refusals after SIGTERM are treated as expected readiness loss, not uncaught failure.\n  - Preserve the existing pre-SIGTERM health check.\n\n- **Reference pattern**\n  - Use the passing `python-repo-checks` graceful-shutdown helper/template as the nearest existing runtime-stage pattern.\n  - Avoid broad `validate_driver.sh` refactors unless the localized fixture/template repair proves impossible.\n\n3. Data structures affected\n\n- Checked-in selftest fixture workspace contents (`package.json`, possibly `package-lock.json`).\n- Generated python-mongo-flask validation-harness scripts in the golden fixture tree.\n- Primary fix path should leave the `validation-selftest-summary.json` schema and workflow-generated `analysis/validation-selftest-status.json` contract unchanged.\n- Only if quarantine is required: add explicit per-fixture quarantine metadata/text without removing artifact upload or status generation.\n\n4. API or interface changes\n\n- No external API change is needed.\n- No workflow input/output contract change is needed for the primary repair.\n- Internal runtime behavior changes only:\n  - import audit runs against the containerized app environment,\n  - graceful-shutdown probing tolerates expected post-SIGTERM socket errors.\n\n5. Potential risks or edge cases\n\n- A node fix that still depends on floating registry resolution will likely drift again; deterministic lockfile resolution is safer.\n- The python import-audit fix must still satisfy `validation_lint.py`\u2019s safety rules and must not \u201cfix\u201d the issue by installing Flask/PyMongo on the runner.\n- The graceful-shutdown change must only relax post-SIGTERM behavior; it must still fail if the service was never healthy first.\n- Preserve the existing fail-open path: artifact upload and workflow-generated status updates must continue, and `analysis/validation-selftest-status.json` must not be edited manually.\n- If one fixture truly cannot be stabilized with a narrow local fix, quarantine only that fixture and make the quarantine explicit in logs/summary instead of silently counting it as green.\n\n6. Testing considerations\n\n- Re-render/update the python-mongo-flask golden fixture snapshot and run:\n  - `python3 tests/test_family_python_mongo_flask.py`\n- Run the existing selftest contract tests:\n  - `python3 tests/test_validation_selftest_runner.py`\n  - `python3 tests/test_nightly_validation_selftest_workflow_contract.py`\n- Run `python3 tests/test_validation_selftest_status.py` only if quarantine/status handling changes.\n- Re-run the real matrix locally with `bash scripts/validate_driver.sh` and expect `3/3` fixtures passing; only accept a non-`3/3` result if exactly one fixture is explicitly quarantined and surfaced.\n\nAssumptions\n- Repairing both failing fixtures appears feasible with localized fixture/template changes, so quarantine is fallback-only.\n- The intended scope is the nightly selftest workflow/script/test surface plus the affected fixtures/templates, not a broader validation-framework redesign.\n\nMissing-context notes\n- This plan is based on the checked-in repo state plus a local reproduction on this ref; I did not rely on any private/nightly artifact beyond that reproduction.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d64ef3edde181d748593e7f4c74c46129a17bdb823e2ce9f170214072523aa19",
+  "lineage": {
+    "issue_number": 2584,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25854367607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25854367607",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2584"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260514102043_f7ee526208",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2584,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25854367607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2584",
+  "timestamps": {
+    "created_at": "2026-05-14T10:20:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
