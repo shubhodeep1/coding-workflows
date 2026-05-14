@@ -22,6 +22,9 @@ name: "Internal: AI Review Autofix Sweep"
 #     the PR's head ref, skip the dispatch. This collapses the
 #     dispatch-vs-synchronize parallel-write window from "indefinite" to
 #     "GitHub API visibility delay" (~few seconds).
+#   - The active-run snapshot intentionally has no fixed `created` cutoff:
+#     older still-queued / still-in_progress runs must keep suppressing a
+#     duplicate sweep dispatch for the same head ref.
 #   - Sweep-vs-sweep is bounded by the workflow-level concurrency group
 #     below (`review-autofix-sweep`), which serialises sweep ticks.
 #
