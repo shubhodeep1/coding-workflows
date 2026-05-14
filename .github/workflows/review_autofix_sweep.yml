@@ -105,24 +105,27 @@ jobs:
 
           snapshot_active_review_runs() {
             local workflow="$1"
-            local snapshot_json='{}'
+            local status snapshot_json='{}' cached_head_ref cached_count
 
-            # `gh api --paginate` emits one page object at a time here, so
-            # slurp the pages and reduce over their `.workflow_runs[]` items
-            # rather than attempting to merge raw page objects.
-            if snapshot_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
-              -f per_page=100 \
-              2>/dev/null \
-              | jq -c -s '
+            # Fetch only active statuses for this workflow, then slurp the
+            # page objects and reduce over their `.workflow_runs[]` entries.
+            if snapshot_json="$(
+              for status in queued in_progress; do
+                gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -f status="${status}" \
+                  -f per_page=100 \
+                  2>/dev/null || true
+              done | jq -c -s '
                   reduce (
                     .[]
                     | .workflow_runs[]?
-                    | select((.status // "") == "in_progress" or (.status // "") == "queued")
-                    | (.head_branch // empty)
+                    | select((.head_branch // "") != "")
+                    | .head_branch
                   ) as $head_ref ({};
                     .[$head_ref] = ((.[$head_ref] // 0) + 1)
                   )
-                ' 2>/dev/null)"; then
+                ' 2>/dev/null
+            )"; then
               :
             else
               snapshot_json='{}'
