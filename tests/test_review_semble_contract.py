@@ -16,6 +16,7 @@ CONFLICT_RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 CONFLICT_PROMPT = REPO_ROOT / "prompts" / "conflict-resolver.txt"
 INTEGRATION_CONFLICT_PROMPT = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt"
 INTEGRATION_RETRY_PRELUDE = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver-retry-prelude.txt"
+REVIEWER_CHECKLIST_PROMPT = REPO_ROOT / "prompts" / "review-reviewer-checklist.txt"
 
 
 def _read(path: Path) -> str:
@@ -128,6 +129,52 @@ def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_ser
 	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor")
 
 
+def test_reviewer_checklist_prompt_contract_and_gate() -> None:
+	checklist = _read(REVIEWER_CHECKLIST_PROMPT)
+	reviewers = _read(REVIEWERS)
+	helper_start = reviewers.index("append_reviewer_checklist_block()")
+	helper_end = reviewers.index("# Assemble the base reviewer prompt", helper_start)
+	helper_block = reviewers[helper_start:helper_end]
+	assemble_start = reviewers.index("assemble_reviewer_prompt()")
+	assemble_end = reviewers.index("# Assemble the default", assemble_start)
+	assemble_block = reviewers[assemble_start:assemble_end]
+
+	expected_headings = [
+		"SECURITY & INPUT VALIDATION",
+		"CORRECTNESS & LOGIC",
+		"CONCURRENCY / RACES / IDEMPOTENCY",
+		"ERROR PATHS & EDGE CASES",
+		"PERFORMANCE & RESOURCE USE",
+		"INDEX-CONTRACT / DB RULES",
+		"NAMING / BACKWARD COMPATIBILITY",
+	]
+	last_index = -1
+	for heading in expected_headings:
+		idx = checklist.index(heading)
+		assert idx > last_index
+		last_index = idx
+
+	assert "literal word NONE" in checklist
+	assert "File:" in checklist
+	assert "Line or code reference:" in checklist
+	assert "Problem:" in checklist
+	assert "Why it fails at runtime:" in checklist
+	assert "ISSUE_CONFIDENCE:" in checklist
+	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"' in reviewers
+	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_ROOT_DIR:-.}/prompts/review-reviewer-checklist.txt"' in reviewers
+	assert 'REVIEWER_CHECKLIST_ENABLED=false' in reviewers
+	assert '"${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}"' in reviewers
+	assert '1|true|yes|on) REVIEWER_CHECKLIST_ENABLED=true ;;' in reviewers
+	assert 'REVIEWER_CHECKLIST_PROMPT_AVAILABLE=false' in reviewers
+	assert 'if [ "${REVIEWER_CHECKLIST_ENABLED}" = "true" ] && [ "${REVIEWER_CHECKLIST_PROMPT_AVAILABLE}" != "true" ]; then' in reviewers
+	assert 'if [ "${REVIEWER_CHECKLIST_ENABLED}" != "true" ] || [ "${REVIEWER_CHECKLIST_PROMPT_AVAILABLE}" != "true" ]; then' in helper_block
+	assert 'cat "${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}"' in helper_block
+	assert 'append_reviewer_checklist_block' in assemble_block
+	assert assemble_block.index('cat "${extra_context_file}"') < assemble_block.index('append_reviewer_checklist_block')
+	assert 'assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"' in reviewers
+	assert 'assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"' in reviewers
+
+
 def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> None:
 	apply_fixes = _read(APPLY_FIXES)
 
@@ -191,6 +238,7 @@ def main() -> int:
 	test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena()
 	test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps()
 	test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena()
+	test_reviewer_checklist_prompt_contract_and_gate()
 	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
 	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
 	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()

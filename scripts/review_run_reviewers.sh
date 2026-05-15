@@ -768,6 +768,32 @@ if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
     > "${REVIEWER_SEMBLE_CONTEXT_FILE}" || true
 fi
 
+REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"
+if [ ! -f "${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}" ] && [ -f "${SUPPORT_ROOT_DIR:-.}/prompts/review-reviewer-checklist.txt" ]; then
+  REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_ROOT_DIR:-.}/prompts/review-reviewer-checklist.txt"
+fi
+
+REVIEWER_CHECKLIST_ENABLED=false
+case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) REVIEWER_CHECKLIST_ENABLED=true ;;
+esac
+
+REVIEWER_CHECKLIST_PROMPT_AVAILABLE=false
+if [ -s "${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}" ]; then
+  REVIEWER_CHECKLIST_PROMPT_AVAILABLE=true
+fi
+if [ "${REVIEWER_CHECKLIST_ENABLED}" = "true" ] && [ "${REVIEWER_CHECKLIST_PROMPT_AVAILABLE}" != "true" ]; then
+  echo "::warning::Reviewer checklist prompt unavailable at ${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}; leaving reviewer prompts unchanged." >&2
+fi
+
+append_reviewer_checklist_block() {
+  if [ "${REVIEWER_CHECKLIST_ENABLED}" != "true" ] || [ "${REVIEWER_CHECKLIST_PROMPT_AVAILABLE}" != "true" ]; then
+    return 0
+  fi
+  echo
+  cat "${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}"
+}
+
 # Assemble the base reviewer prompt (used by both passes in two-pass mode,
 # or as the sole prompt in single-pass mode).
 assemble_reviewer_prompt() {
@@ -802,6 +828,7 @@ assemble_reviewer_prompt() {
       echo
       cat "${extra_context_file}"
     fi
+    append_reviewer_checklist_block
   } > "${target_file}"
 }
 
