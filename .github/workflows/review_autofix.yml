@@ -138,6 +138,7 @@ env:
   # to disable inlining entirely. Default matches implement.yml.
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
+  REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
@@ -744,7 +745,21 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      # Review-pipeline knobs: mirror the landed script defaults so repo-var
+      # overrides are honored without changing current branch behaviour.
+      REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}
+      REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}
+      REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}
+      REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.4' }}
+      REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'xhigh' }}
+      REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}
+      REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}
+      REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
+      REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
+      REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
+      REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
+      REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
@@ -1074,6 +1089,18 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
+            src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/review-reviewer-checklist.txt" ]; then
+              src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+            else
+              echo "::warning::review-reviewer-checklist.txt not found in checked-out support sources for ${SCRIPT_REF}; reviewer prompts will keep the checklist disabled even when REVIEW_REVIEWER_CHECKLIST_ENABLED=true."
+              rm -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+            fi
           fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
             src=".codex-workflow-src/prompts/conflict-resolver.txt"
@@ -2772,6 +2799,9 @@ jobs:
           check_soft_file "${SUPPORT_AGENTS_FILE}"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
+          esac
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
@@ -5583,6 +5613,167 @@ jobs:
           fi
 
           PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/serena_stats_emit.py" "${serena_stat_args[@]}"
+
+      - name: Append review pipeline iteration summary
+        if: always() && env.RUNTIME_DIR != '' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        env:
+          AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
+        run: |
+          set -euo pipefail
+
+          count_nonempty_lines()
+          {
+            local path="$1"
+            if [ ! -f "${path}" ]; then
+              echo 0
+              return
+            fi
+            awk 'NF { c++ } END { print c + 0 }' "${path}" 2>/dev/null || echo 0
+          }
+
+          file_bytes()
+          {
+            local path="$1"
+            if [ ! -f "${path}" ]; then
+              echo 0
+              return
+            fi
+            wc -c < "${path}" 2>/dev/null | tr -d '[:space:]' || echo 0
+          }
+
+          stat_value()
+          {
+            local path="$1"
+            local key="$2"
+            local value=""
+            if [ -f "${path}" ]; then
+              value="$(awk -F= -v key="${key}" '$1 == key { print $2; exit }' "${path}" 2>/dev/null | tr -d '[:space:]' || true)"
+            fi
+            if [[ "${value}" =~ ^[0-9]+$ ]]; then
+              echo "${value}"
+            else
+              echo 0
+            fi
+          }
+
+          ledger_state_count()
+          {
+            local path="$1"
+            local state="$2"
+            if [ ! -f "${path}" ]; then
+              echo 0
+              return
+            fi
+            awk -F $'\t' -v state="${state}" '$2 == state { c++ } END { print c + 0 }' "${path}" 2>/dev/null || echo 0
+          }
+
+          iteration_label="${AUTOFIX_ITERATION_METRIC:-unknown}"
+          [ -n "${iteration_label}" ] || iteration_label="unknown"
+
+          reviewers_run="${REVIEWERS_SUCCESSFUL:-0}"
+          if ! [[ "${reviewers_run}" =~ ^[0-9]+$ ]]; then
+            reviewers_run=0
+          fi
+
+          reviewer_scope_label="full-diff"
+          reviewer_scope_note="- Reviewer flags: checklist=${REVIEW_REVIEWER_CHECKLIST_ENABLED:-1}, iteration_scoping=${REVIEW_REVIEWER_ITERATION_SCOPING:-1} (plumbed only on this branch; reviewer scope remains full-diff)."
+
+          reviewer_bundle_file="${RUNTIME_DIR}/reviewer_bundle.txt"
+          floor_tags_file="${RUNTIME_DIR}/floor_tags.txt"
+          consolidator_raw_file="${RUNTIME_DIR}/consolidator_raw.txt"
+          parser_stats_file="${RUNTIME_DIR}/parser_stats.txt"
+          ledger_status_file="${RUNTIME_DIR}/ledger_status.txt"
+
+          bundle_bytes="$(file_bytes "${reviewer_bundle_file}")"
+          floor_tag_count="$(count_nonempty_lines "${floor_tags_file}")"
+          consolidator_output_bytes="$(file_bytes "${consolidator_raw_file}")"
+          consolidator_invoked="unknown"
+          if [ "${REVIEW_CONSOLIDATOR_ENABLED:-1}" = "0" ]; then
+            consolidator_invoked="no"
+          elif [ -f "${consolidator_raw_file}" ]; then
+            if [ "${consolidator_output_bytes}" -gt 0 ]; then
+              consolidator_invoked="yes"
+            else
+              consolidator_invoked="failed"
+            fi
+          fi
+
+          parsed_blocks="$(stat_value "${parser_stats_file}" parsed_blocks)"
+          passthrough_blocks="$(stat_value "${parser_stats_file}" passthrough_blocks)"
+          line_unverified="$(stat_value "${parser_stats_file}" line_unverified)"
+
+          ledger_total="$(count_nonempty_lines "${ledger_status_file}")"
+          ledger_new="$(ledger_state_count "${ledger_status_file}" NEW)"
+          ledger_persisting="$(ledger_state_count "${ledger_status_file}" PERSISTING)"
+          ledger_fixed="$(ledger_state_count "${ledger_status_file}" FIXED)"
+          ledger_resurgent="$(ledger_state_count "${ledger_status_file}" RESURGENT)"
+          ledger_accepted_residual="$(ledger_state_count "${ledger_status_file}" accepted-residual)"
+
+          editor_invoked="no"
+          if [ -s "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
+            editor_invoked="yes"
+          elif [ -d "${PREVIOUS_REVIEWS_DIR:-}" ] && \
+            { compgen -G "${PREVIOUS_REVIEWS_DIR}/editor_attempt_*.txt" >/dev/null || compgen -G "${PREVIOUS_REVIEWS_DIR}/editor_attempt_*.err" >/dev/null; }; then
+            editor_invoked="yes"
+          fi
+
+          override_count=0
+          if [ -f "${EDITOR_SUMMARY_FILE:-/dev/null}" ]; then
+            override_count="$(grep -c 'CONSOLIDATOR_OVERRIDDEN:' "${EDITOR_SUMMARY_FILE}" 2>/dev/null || true)"
+          fi
+          if ! [[ "${override_count}" =~ ^[0-9]+$ ]]; then
+            override_count=0
+          fi
+
+          editor_commit_produced="${EDITOR_COMMIT_PRODUCED:-}"
+          case "${editor_commit_produced}" in
+            true)
+              editor_commit_produced="yes"
+              ;;
+            false|'')
+              editor_commit_produced="no"
+              ;;
+            *)
+              editor_commit_produced="unknown"
+              ;;
+          esac
+
+          {
+            echo "### Review Pipeline — Iteration ${iteration_label}"
+            echo
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Reviewers run | ${reviewers_run} |"
+            echo "| Reviewer scope | ${reviewer_scope_label} |"
+            echo "| Raw bundle size (bytes) | ${bundle_bytes} |"
+            echo "| Floor tags | ${floor_tag_count} |"
+            echo "| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4} |"
+            echo "| Consolidator invoked | ${consolidator_invoked} |"
+            echo "| Consolidator output bytes | ${consolidator_output_bytes} |"
+            echo "| Parsed issue blocks | ${parsed_blocks} |"
+            echo "| Passthrough blocks | ${passthrough_blocks} |"
+            echo "| Line-unverified blocks | ${line_unverified} |"
+            echo "| Ledger entries total | ${ledger_total} |"
+            echo "| NEW | ${ledger_new} |"
+            echo "| PERSISTING | ${ledger_persisting} |"
+            echo "| FIXED | ${ledger_fixed} |"
+            echo "| RESURGENT | ${ledger_resurgent} |"
+            echo "| accepted-residual | ${ledger_accepted_residual} |"
+            echo "| Editor invoked | ${editor_invoked} |"
+            echo "| CONSOLIDATOR_OVERRIDDEN count | ${override_count} |"
+            echo "| Editor commit produced | ${editor_commit_produced} |"
+            echo
+            echo "**Acceptance deltas vs prior iteration:**"
+            echo "${reviewer_scope_note}"
+            if [ "${consolidator_invoked}" = "failed" ]; then
+              echo "- Consolidator output was empty while REVIEW_CONSOLIDATOR_ENABLED=${REVIEW_CONSOLIDATOR_ENABLED:-1}; downstream parser/editor stayed fail-open on local artifacts."
+            else
+              echo "- none"
+            fi
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Cleanup temporary artifacts
         if: always()

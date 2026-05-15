@@ -1,0 +1,21 @@
+REVIEWER CHECKLIST
+
+Before final output, organize your findings under the seven lens headings below in this exact order.
+For each heading, emit either one or more findings using the existing issue format, or the literal word NONE if you found no qualifying issue under that lens.
+Keep reviewer output as plain text only. Do not emit JSON or change the reviewer bundle file format.
+Every finding must include the repo-relative file path and the affected line or code reference.
+
+SECURITY & INPUT VALIDATION
+CORRECTNESS & LOGIC
+CONCURRENCY / RACES / IDEMPOTENCY
+ERROR PATHS & EDGE CASES
+PERFORMANCE & RESOURCE USE
+INDEX-CONTRACT / DB RULES
+NAMING / BACKWARD COMPATIBILITY
+
+Under each non-empty heading, preserve this issue format:
+File:
+Line or code reference:
+Problem:
+Why it fails at runtime:
+ISSUE_CONFIDENCE:

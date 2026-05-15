@@ -574,7 +574,10 @@ Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be
 Treat ${RUNTIME_DIR}/ledger_status.txt as retry history for issue persistence across iterations.
 For issues marked PERSISTING or RESURGENT, prior fix attempts failed: use a materially different approach or explicitly accept residual risk with rationale.
 When you intentionally diverge from consolidator guidance, include a summary line in this exact format:
-CONSOLIDATOR_OVERRIDDEN: <reason>
+- CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>
+Place that bullet inside "Ignored suggestions (with short reason):" so it stays inside the existing summary schema.
+If the advisory issue has no parsed issue_id, fail open with:
+- CONSOLIDATOR_OVERRIDDEN: no-issue-id — <reason>
 
 ADDITIONAL REVIEWER CONTEXT (PASS-1 — OPTIONAL, CONSULT ON DEMAND)
 The two-pass reviewer pipeline also retained pass-1 (broad-sweep) artifacts.
@@ -848,6 +851,7 @@ Under PR comment audit: include one bullet per bot PR review/review_comment entr
 - path and line (if available)
 - disposition: applied / already satisfied / ignored
 - short reason for the disposition
+Under Ignored suggestions (with short reason): when you intentionally override parsed consolidator guidance, include a bullet with the exact grep-friendly prefix `CONSOLIDATOR_OVERRIDDEN:` and the format `- CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>` (use `no-issue-id` when the advisory issue lacks a parsed issue_id).
 Under Change status: emit exactly one bullet whose value is one of:
 - edited
 - not-edited
