@@ -61,6 +61,7 @@ SYSTEM_PROMPT = (
 	"- Notable warnings (deprecation, cache invalidation, secondary rate limit)\n"
 	"- Token usage / model usage lines (e.g. tokens_used=..., model=openai/...)\n"
 	"- AI_MEMORY_TELEMETRY: lines (preserve verbatim, max 3)\n"
+	"- `SEMBLE_*` / `SERENA_*` lines (preserve verbatim, max 3 per prefix family; include `target=`, `bytes=` / `response_bytes=`, `reason=`, `result=`, and `tool=` values when present)\n"
 	"- GH API call hot-spots (high call counts, HTTP 429, secondary rate limit)\n"
 	"- Retry/backoff events with attempt counts\n"
 	"- Performance outliers (single steps that dominate runtime)\n"
