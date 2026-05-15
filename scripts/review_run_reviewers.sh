@@ -218,7 +218,7 @@ REVIEWER_SCOPE_PATHS_FILE="${RUNTIME_DIR}/reviewer_scope_paths.txt"
 REVIEWER_SCOPE_SUMMARY_FILE="${RUNTIME_DIR}/reviewer_scope_summary.txt"
 REVIEWER_SCOPED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/reviewer_scoped_files_context.txt"
 REVIEWER_SCOPE_QUERY_SEED_FILE="${RUNTIME_DIR}/reviewer_scope_query_seed.txt"
-TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
+TARGETED_FILE_CONTEXT_SCRIPT="${TARGETED_FILE_CONTEXT_SCRIPT:-${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py}"
 
 # ── Reviewer iteration-scoping helpers ───────────────────────────────
 write_reviewer_scope_summary() {

@@ -432,7 +432,7 @@ def test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts() -> None:
 
 def test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels() -> None:
 	reviewers = _reviewers_text()
-	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"' in reviewers
+	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${TARGETED_FILE_CONTEXT_SCRIPT:-${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py}"' in reviewers
 	assert 'python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers
 	assert '--paths-file "${REVIEWER_SCOPE_PATHS_FILE}"' in reviewers
 	assert 'Scoped reviewer focus summary:' in reviewers
@@ -473,6 +473,38 @@ def test_reviewer_iteration_scope_prepare_path_accepts_root_level_actionable_fil
 	assert "--- FILE: .gitignore" in result["scope_context"]
 
 
+def test_reviewer_iteration_scope_prepare_path_trims_trailing_parenthesis_from_root_level_actionable_files() -> None:
+	ledger_text = "\n".join([
+		"issue-1\tNEW\t0\tLICENSE):3\tCORRECTNESS & LOGIC\t[]",
+		"issue-2\tPERSISTING\t1\tgo.mod):2\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tRESURGENT\t0\t.gitignore):1\tCORRECTNESS & LOGIC\t[]",
+	]) + "\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+		workspace_files={
+			"scripts/review_run_reviewers.sh": "scoped shell target\n",
+			"LICENSE": "test license\n",
+			"go.mod": "module example.com/test\n",
+			".gitignore": "__pycache__/\n",
+		},
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		"scripts/review_run_reviewers.sh",
+		"LICENSE",
+		"go.mod",
+		".gitignore",
+	]
+	assert "- LICENSE [ledger:NEW]" in result["scope_summary"]
+	assert "- go.mod [ledger:PERSISTING]" in result["scope_summary"]
+	assert "- .gitignore [ledger:RESURGENT]" in result["scope_summary"]
+	assert "--- FILE: LICENSE" in result["scope_context"]
+	assert "--- FILE: go.mod" in result["scope_context"]
+	assert "--- FILE: .gitignore" in result["scope_context"]
+
+
 def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper() -> None:
 	ledger_text = "issue-1\tNEW\t0\tscripts/review_run_reviewers.sh:3\tCORRECTNESS & LOGIC\t[]\n"
 	result = _run_prepare_reviewer_scope_harness(
@@ -497,6 +529,7 @@ def main() -> int:
 	test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts()
 	test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels()
 	test_reviewer_iteration_scope_prepare_path_accepts_root_level_actionable_files()
+	test_reviewer_iteration_scope_prepare_path_trims_trailing_parenthesis_from_root_level_actionable_files()
 	test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0

@@ -156,10 +156,10 @@ def _log_semble_event(prefix: str, **fields: object) -> None:
 
 def _trim_path_candidate(value: str) -> str:
 	value = value.strip()
-	dotfile_candidate = value.rstrip(".,;:")
+	dotfile_candidate = value.rstrip(".,;:)")
 	if ROOT_LEVEL_DOTFILE_RE.fullmatch(dotfile_candidate) is not None:
 		return dotfile_candidate
-	return value.strip(".,;:")
+	return value.strip(".,;:)")
 
 
 def is_probable_root_level_path(value: str) -> bool:
