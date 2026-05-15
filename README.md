@@ -429,6 +429,57 @@ jobs:
 > (`DID_COMMIT=true`) still fires so the ledger lands on the PR branch
 > and cross-iteration ledger continuity is preserved there as well.
 
+### Consolidator, ledger, and floor rules
+
+Between the parallel reviewer panel and the editor, `review_apply_fixes.sh`
+runs a four-stage chain that organises reviewer findings, surfaces a
+non-skippable floor of critical issues, and tracks issue identity across
+autofix iterations.
+
+The stages, in fixed order:
+
+1. **Floor rules** (`scripts/review_floor_rules.sh`) — deterministic, no
+   LLM. Tags `(file, line)` anchors that ≥2 reviewers agreed on, that
+   match a severity keyword, or that a reviewer flagged at
+   `ISSUE_CONFIDENCE: 5`. Output: `floor_tags.txt` — every line must be
+   addressed, rejected with reason, or deferred with reason by the
+   editor.
+2. **Consolidator** (`scripts/review_consolidate.sh`) — cheap-model
+   advisory pass. Reads the raw reviewer bundle and re-emits it as
+   marker-delimited issue blocks (`=== ISSUE NNN ===`) grouped by the
+   seven reviewer lenses. The consolidator never gates issues; the
+   editor still sees the raw reviewer bundle and can override any
+   recommendation by emitting a `CONSOLIDATOR_OVERRIDDEN: <issue_id>
+   — <reason>` line.
+3. **Parser** (`scripts/review_parse_consolidator.sh`) — pure shell.
+   Extracts blocks, verifies file paths exist at HEAD, line ranges
+   resolve, and reviewer-name attributions are present; passes anything
+   garbled through as raw passthrough blocks so no anchor is silently
+   dropped. Output: `review_issues.txt` (advisory only).
+4. **Ledger** (`scripts/review_issue_ledger.sh`) — computes a stable
+   `issue_id` per finding and tracks `NEW` / `PERSISTING` / `FIXED` /
+   `RESURGENT` across autofix iterations. After
+   `REVIEW_LEDGER_PERSIST_LIMIT` failed attempts (default `2`) an issue
+   transitions to `accepted-residual` and stops driving editor retries
+   — unless the same anchor also carries a floor tag, in which case the
+   floor wins. Output: `ledger_status.txt`, plus an updated
+   `.ai/review_issue_ledger/pr-<PR_NUMBER>.txt` carried across
+   iterations via `actions/cache`.
+
+Every stage is fail-open: a missing artefact, a model timeout, or a
+parser error reduces the pipeline to today's "raw reviewer bundle goes
+to editor" behaviour rather than blocking the run. Each stage carries
+its own `REVIEW_*_ENABLED` kill switch (see env var table above). The
+per-iteration metrics summary appended to `$GITHUB_STEP_SUMMARY` (table
+header `### Review Pipeline — Iteration <N>`) is the primary feedback
+surface for tuning `REVIEW_LEDGER_PERSIST_LIMIT`,
+`REVIEW_CONSOLIDATOR_MODEL`, and the floor-rule keyword list.
+
+See [`docs/review-pipeline-improvements.md`](docs/review-pipeline-improvements.md)
+for the full design — output template, parser rules, ledger schema,
+floor-rule keyword catalogue, failure-mode table, and acceptance
+criteria.
+
 ### Local replay helper for review artifacts
 
 Use `scripts/dev/replay_review_pipeline.sh` to replay the review artifact chain locally without dispatching any GitHub workflow.
@@ -918,6 +969,15 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `REVIEW_LEDGER_ENABLED` | `1` | Enable (`1`) or disable (`0`) review-issue ledger lifecycle tracking in `scripts/review_issue_ledger.sh`; when disabled, `ledger_status.txt` is emitted empty and no ledger file is updated. |
 | `REVIEW_LEDGER_PERSIST_LIMIT` | `2` | Persist-count threshold for transitioning a still-present issue to `accepted-residual` after increment (>= threshold). |
 | `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` | Runtime ledger file path used by `scripts/review_issue_ledger.sh`. Per-PR filename isolates concurrent PRs so they never share a file (no cross-PR merge conflicts on main). Gitignored by default; cross-iteration persistence is provided by `actions/cache` restore/save steps in `review_autofix.yml` keyed on `review-ledger-<repo>-pr-<N>-`. Explicit overrides are honored verbatim (legacy single-file path still supported). Malformed prior ledgers fail-open with `ledger_reset=1` and state reset semantics. |
+| `REVIEW_CONSOLIDATOR_ENABLED` | `1` | Master switch for the cheap-model consolidator stage in `scripts/review_consolidate.sh`. Set to `0` to skip the LLM call; the parser still runs and emits an empty `review_issues.txt`, so the editor falls back to the raw reviewer bundle (fail-open). See `docs/review-pipeline-improvements.md`. |
+| `REVIEW_CONSOLIDATOR_MODEL` | `openai/gpt-5.4` | OpenAI-compatible model identifier passed to the codex CLI for the consolidator. Operators may downgrade to `openai/gpt-5.4-mini` to reduce cost or upgrade if the `CONSOLIDATOR_OVERRIDDEN` rate stays high. |
+| `REVIEW_CONSOLIDATOR_REASONING` | `xhigh` | Codex CLI reasoning level for the consolidator. Accepts `xhigh`, `high`, `medium`, `low`, `none`; invalid values fall back to `xhigh` with a warning. |
+| `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | `300` | Hard wall-clock cap for the consolidator codex invocation. On timeout the script kills the CLI and fails open (empty `consolidator_raw.txt`). |
+| `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Output cap (bytes) for the consolidator. Output above the cap is truncated with a `TRUNCATED_BY_OUTPUT_CAP` marker; the parser tolerates the truncation cleanly. |
+| `REVIEW_FLOOR_RULES_ENABLED` | `1` | Master switch for the deterministic floor-rule scanner (`scripts/review_floor_rules.sh`). Set to `0` to suppress `floor_tags.txt`; the editor then sees no floor signal (fail-open). |
+| `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | Append the seven-lens reviewer checklist block from `prompts/review-reviewer-checklist.txt` into both pass-1 and pass-2 reviewer prompts. Set to `0` to revert to the homogeneous prompt. |
+| `REVIEW_REVIEWER_ITERATION_SCOPING` | `1` | On iteration N>1, narrow the reviewer's focus to the union of (files touched by the last `[ai-autofix]` commit) ∪ (files anchoring open ledger entries). Iteration 1 always sees the full diff. Set to `0` to keep today's full-diff behaviour every iteration. |
+| `REVIEW_PARSER_FAILOPEN` | `1` | When `1` (default), parser errors in `scripts/review_parse_consolidator.sh` emit an empty `review_issues.txt` plus `parser_stats.txt` containing `parse_failed=1`, and the editor proceeds with the raw bundle. Set to `0` for debug — the parser then exits non-zero and surfaces the failure in workflow logs. |
 | `MAX_CODEX_ATTEMPTS` | `3` | Shared Codex retry cap for validate/workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `3` with a warning. |
 | `CODEX_RETRY_BACKOFF_BASE_SECS` | `10` | Exponential retry backoff base (seconds) used with `MAX_CODEX_ATTEMPTS` (`base * 2^(attempt-1)`) for validate/workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `10` with a warning. |
 | `ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS` | `3000` | Per-attempt wall-time timeout (seconds) for a single decomposer `codex exec` invocation in the `Run Codex (decomposer)` step of `.github/workflows/orchestrate.yml`. The codex call is wrapped in `timeout --signal=TERM --kill-after=30s -- ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}` so a runaway first attempt cannot exhaust the full 240-min job budget (raised from 60 min after run 25742821278 was SIGKILLed at the 60-min cap while still inside attempt 1/3, making the 3-attempt retry loop structurally meaningless). 3 × 50-min attempts = 150 min fits inside the 240-min job cap with ~90 min headroom for prompt assembly, JSON validation, tracking-issue / branch / Wave-1 setup, and post steps. Default + validation + clamp run **once before the retry loop**, normalising the value to `3000` when unset / non-numeric / above the upper bound, so the value enforced by the `timeout` wrapper is constant across iterations. Override (in seconds) only for dispatches that need shorter attempts (e.g. forcing earlier retries on a known-small decomposition); values above `3000s` would consume the post-codex headroom and are clamped down with a `::warning::`. Exit `124` is always classified as `codex timeout 124`; exit `137` is classified as timeout only when the elapsed wall clock reached the configured budget (the `timeout --kill-after=30s` backstop), otherwise it is surfaced as a non-timeout `codex exit 137` so likely OOM / external SIGKILL is not misreported. When the too-few-issues retry path appends corrective feedback, it rebuilds the prompt from the snapshotted base first so retry feedback does not accumulate across re-prompts. |

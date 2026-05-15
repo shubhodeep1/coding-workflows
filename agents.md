@@ -158,6 +158,91 @@ into poller reconciliation.
 
 ---
 
+## Review pipeline consolidator + ledger contract
+
+The four-stage chain inserted between the reviewer panel and the editor in
+`scripts/review_apply_fixes.sh` — floor rules, consolidator, parser, ledger
+— operates under the following invariants. Full design lives in
+`docs/review-pipeline-improvements.md`; the rules below are the load-bearing
+ones that downstream code and humans tuning the pipeline depend on.
+
+- **Fail-open at every stage.** A missing artefact, a model timeout, a
+  parser error, or any `REVIEW_*_ENABLED=0` flip reduces the pipeline to
+  today's "raw reviewer bundle goes to the editor" behaviour. No new
+  stage may make the pipeline strictly worse than baseline.
+- **The consolidator never gates.** `reviewer_bundle.txt` is the
+  authoritative input to the editor. `review_issues.txt` (consolidator
+  output, parsed) is advisory only. The editor reads the raw bundle in
+  full and may override any consolidator recommendation by emitting a
+  line of the form `CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>` in
+  its summary. The metrics step greps this line and reports the override
+  count — a stable contract; the prefix `CONSOLIDATOR_OVERRIDDEN:` is
+  covered by CLAUDE.md §6 and must not be renamed without an alongside
+  shim.
+- **Floor tags are non-skippable.** `floor_tags.txt` lists findings that
+  hit any of three deterministic rules: ≥2-reviewer agreement on the
+  same `(file, line)` anchor, a severity-keyword match, or a
+  `ISSUE_CONFIDENCE: 5` reviewer signal. The editor prompt instructs the
+  editor that every line must be addressed, rejected with reason, or
+  deferred with reason. Floor tags override `non-actionable`
+  classifications from the consolidator and survive the ledger's
+  `accepted-residual` promotion.
+- **Ledger `issue_id` is content-anchored, not line-anchored.** The
+  stable identifier is `iss_<16-hex>` derived from `SHA-256(file path
+  || anchor-line ±2 normalised code || lens || severity-keyword
+  category)`. Whitespace / comment churn near the anchor does not
+  change the hash; a genuine code edit at the anchor does, at which
+  point the prior id is marked `FIXED` and any new finding gets a fresh
+  id. Collisions are disambiguated with a `:<n>` suffix and logged via
+  `hash_collision=1`.
+- **`PERSIST_LIMIT → accepted-residual` is the retry brake.** After
+  `REVIEW_LEDGER_PERSIST_LIMIT` (default `2`) iterations of unsuccessful
+  editor attempts on the same `issue_id`, the ledger marks it
+  `accepted-residual` and strips it from the editor's `review_issues.txt`
+  input. The same anchor in `floor_tags.txt` still flows through —
+  giving up on retry never overrides the floor.
+- **Per-PR ledger isolation.** `.ai/review_issue_ledger/pr-<N>.txt` is
+  the canonical path. The file is gitignored; cross-iteration persistence
+  is via `actions/cache` keyed on `review-ledger-<repo>-pr-<N>-`. No
+  concurrent PR writes to the same file. Legacy single-file overrides
+  are still honoured if `REVIEW_LEDGER_PATH` is set explicitly.
+- **Iteration scoping is a soft narrow, not a hard filter.** When
+  `REVIEW_REVIEWER_ITERATION_SCOPING=1` and the iteration is N>1, the
+  reviewer prompt receives an additional "ITERATION SCOPE FILES" block
+  listing (a) files touched by the last `[ai-autofix]` commit and (b)
+  files anchoring open ledger entries. Reviewers may still consult code
+  outside the list to understand interactions; the block only directs
+  effort allocation. Iteration 1 always sees the full diff. An empty
+  union or a missing ledger drops the block entirely (fail-open).
+- **Reviewer checklist preserves the seven-lens structure.** When
+  `REVIEW_REVIEWER_CHECKLIST_ENABLED=1`, every reviewer files findings
+  under seven explicit lens headings: `SECURITY & INPUT VALIDATION`,
+  `CORRECTNESS & LOGIC`, `CONCURRENCY / RACES / IDEMPOTENCY`, `ERROR
+  PATHS & EDGE CASES`, `PERFORMANCE & RESOURCE USE`, `INDEX-CONTRACT /
+  DB RULES`, `NAMING / BACKWARD COMPATIBILITY`. Empty lenses emit
+  `NONE` literally so consolidator / floor-rules can see the gap. The
+  `ISSUE_CONFIDENCE: 1–5` scale is preserved exactly.
+
+### Env var contract (review pipeline)
+
+| Variable | Default | Description |
+|---|---|---|
+| `REVIEW_CONSOLIDATOR_ENABLED` | `1` | Master switch for the consolidator stage. |
+| `REVIEW_CONSOLIDATOR_MODEL` | `openai/gpt-5.4` | OpenAI-compatible model id. |
+| `REVIEW_CONSOLIDATOR_REASONING` | `xhigh` | Codex reasoning level (`xhigh`/`high`/`medium`/`low`/`none`). |
+| `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | `300` | Hard wall-clock on the codex call. |
+| `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Output byte cap; truncation marker is parser-safe. |
+| `REVIEW_PARSER_FAILOPEN` | `1` | When `1`, parser errors yield empty `review_issues.txt` and proceed; `0` for debug. |
+| `REVIEW_FLOOR_RULES_ENABLED` | `1` | Master switch for the floor-rule scanner. |
+| `REVIEW_FLOOR_KEYWORDS_FILE` | (built-in) | Optional override of the built-in keyword catalogue. |
+| `REVIEW_LEDGER_ENABLED` | `1` | Master switch for ledger lifecycle tracking. |
+| `REVIEW_LEDGER_PERSIST_LIMIT` | `2` | Persist count before `accepted-residual` transition. |
+| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` | Per-PR ledger path; per-iteration via `actions/cache`. |
+| `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | Append seven-lens checklist to reviewer prompts. |
+| `REVIEW_REVIEWER_ITERATION_SCOPING` | `1` | Soft-narrow reviewer focus on iteration N>1. |
+
+---
+
 ## Reference
 
 Operator runbooks (env var reference, autofix retrigger/dedup internals,
