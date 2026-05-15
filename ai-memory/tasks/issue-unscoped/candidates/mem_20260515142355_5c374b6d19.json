@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2785-2793 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The preflight check duplicates the earlier staging logic and only adds redundant soft warnings without enforcement.\n  WHY: No runtime failure \u2014 check_soft_file is advisory, so enabled runs emit redundant warnings while proceeding identically.\n- .github/workflows/review_autofix.yml:2786 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Lowercasing the env var before matching means values like TRUEFOO or YESBAR do not count as truthy and skip the preflight.\n  WHY: A malformed copy-pasted value with a truthy prefix would still fail the pattern match, leaving the check disabled despite apparent intent.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:2785-2793 | confidence=3\n  PROBLEM: Preflight check duplicates the earlier staging logic (lines 1076-1093) which already copies the checklist prompt (with warning/rm if missing from support sources) without adding failure-mode enforcement or unique signal.\n  WHY: No runtime failure \u2014 check_soft_file is advisory (::warning if absent) so enabled runs get redundant noise (staging warning + preflight warning) but proceed identically; disabled runs stay silent as intended.\n- .github/workflows/review_autofix.yml:2786 | confidence=2\n  PROBLEM: Entire env var value is lowercased before pattern match, so non-prefix values like 'TRUEFOO' lower to 'truefoo' (no match) or 'YESBAR' to 'yesbar' (no match) despite containing truthy prefixes.\n  WHY: Operator sets malformed truthy like 'TRUE' (ok, matches) but 'TRUEX' skips check despite intent; common copy-paste error leaves preflight dead.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0921e0b1cbb45e3b687b8de3845d193ee1ed5f3a2359aaf30a26e1c518122ef3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2620,
+    "run_id": "25922209202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25922209202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515142355_5c374b6d19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2620,
+    "run_id": "25922209202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-15T14:23:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
