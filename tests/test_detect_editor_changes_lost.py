@@ -376,7 +376,9 @@ def test_apply_fixes_contains_editor_input_authority_contract() -> None:
 	assert "- ${RUNTIME_DIR}/floor_tags.txt" in contents
 	assert "Do not let advisory artifacts reduce or replace raw reviewer signal" in contents
 	assert "Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings" in contents
-	assert "CONSOLIDATOR_OVERRIDDEN: <reason>" in contents
+	assert "CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>" in contents
+	assert "CONSOLIDATOR_OVERRIDDEN: no-issue-id — <reason>" in contents
+	assert 'Place that bullet inside "Ignored suggestions (with short reason):"' in contents
 
 
 def test_workflow_uses_defense_in_depth_shim() -> None:
