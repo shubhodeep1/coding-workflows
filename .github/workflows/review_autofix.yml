@@ -2785,6 +2785,9 @@ jobs:
           check_soft_file "${SUPPORT_AGENTS_FILE}"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
+          esac
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
