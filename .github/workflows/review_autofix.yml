@@ -5624,7 +5624,7 @@ jobs:
               echo 0
               return
             fi
-            wc -c < "${path}" | tr -d '[:space:]'
+            wc -c < "${path}" 2>/dev/null | tr -d '[:space:]' || echo 0
           }
 
           stat_value()
