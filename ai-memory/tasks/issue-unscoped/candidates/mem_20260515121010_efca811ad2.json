@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:976, agents.md:234 | confidence=5\n  flagged_by: [qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` is documented as a byte cap, but `scripts/review_consolidate.sh` treats it as a token count and multiplies it by 4.\n  WHY: An operator following the docs can set a truncation threshold that is effectively 4x different from what they intended.\n- .github/workflows/review_autofix.yml:3448-3462 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `consolidator_state=\"invoked (empty / failed)\"` conflates an intentionally disabled consolidator with a real empty/failure case.\n  WHY: The metrics summary cannot distinguish `REVIEW_CONSOLIDATOR_ENABLED=0` from an actual consolidator failure.\n- .github/workflows/review_autofix.yml:3471-3473 | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `override_count=\"$(grep -cE '^CONSOLIDATOR_OVERRIDDEN:' ... || echo 0)\"` relies on a fragile double-echo/trim interaction to produce the final count.\n  WHY: The current value is only correct because later trimming discards the extra `0`, which is brittle and easy to break.\n- .github/workflows/review_autofix.yml:3473 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `grep -cE '^CONSOLIDATOR_OVERRIDDEN:'` depends on an exact line-start format, so any leading whitespace or format change makes the override count read as zero.\n  WHY: Editor override usage would be undercounted in metrics.\n- scripts/review_run_reviewers.sh:319 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `awk '$2 ~ /^(NEW|PERSISTING|RESURGENT)$/'` uses a regex match on the status field instead of an exact comparison.\n  WHY: Future status strings that merely start with one of those tokens would be treated as active and expand reviewer scope.\n- scripts/review_run_reviewers.sh:317-318 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `LC_ALL=C sort -u -o ... || true` swallows sort failures.\n  WHY: I/O or permission errors can silently fall back to malformed scope handling without diagnostics.\n- scripts/review_run_reviewers.sh:305-310 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `grep -vE '^(No previous AI autofix|Initial run \u2014 no previous commit)'` only filters the exact placeholder strings.\n  WHY: Any upstream wording change would leak placeholder text into the reviewer scope file.\n- .github/workflows/review_autofix.yml:3467-3472 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_ledger_count` rescans `ledger_status.txt` five times to compute the per-state counts.\n  WHY: The repeated passes add avoidable I/O that a single awk pass could eliminate.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- README.md:976, agents.md:234 | confidence=4\n  PROBLEM: `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` is documented as \"Output cap (bytes)\" / \"Output byte cap\", but `scripts/review_consolidate.sh` interprets it as a token count and multiplies by 4.\n  WHY: An operator setting `16000` based on the docs gets a much larger effective cap than intended.\n- .github/workflows/review_autofix.yml:3448-3456 | confidence=3\n  PROBLEM: `consolidator_state=\"invoked (empty / failed)\"` conflates an intentionally disabled consolidator with a real empty/failure case.\n  WHY: The metrics table cannot distinguish `REVIEW_CONSOLIDATOR_ENABLED=0` from an actual consolidator failure.\n- .github/workflows/review_autofix.yml:3471-3473 | confidence=2\n  PROBLEM: `override_count=\"$(grep -cE '^CONSOLIDATOR_OVERRIDDEN:' ... || echo 0)\"` relies on a fragile double-echo/trim interaction to produce the final count.\n  WHY: The current value is only correct because later trimming discards the extra `0`, which is brittle and easy to break.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:3456-3462 | confidence=4\n  PROBLEM: `consolidator_state=\"invoked (empty / failed)\"` is used when the consolidator file exists but is empty, which also happens when `REVIEW_CONSOLIDATOR_ENABLED=0`.\n  WHY: The metrics table mislabels an intentionally disabled consolidator as a failure.\n- scripts/review_run_reviewers.sh:319 | confidence=3\n  PROBLEM: `awk '$2 ~ /^(NEW|PERSISTING|RESURGENT)$/'` uses regex matching on the status field instead of exact comparison.\n  WHY: Future status strings that merely start with one of those tokens would be treated as active and expand reviewer scope.\n- .github/workflows/review_autofix.yml:3473 | confidence=3\n  PROBLEM: `grep -cE '^CONSOLIDATOR_OVERRIDDEN:'` depends on an exact line-start format, so leading whitespace or a future format change makes the override count read as zero.\n  WHY: Editor override usage would be undercounted in metrics.\n- scripts/review_run_reviewers.sh:317-318 | confidence=4\n  PROBLEM: `LC_ALL=C sort -u -o ... || true` swallows sort errors.\n  WHY: I/O or permission failures can silently fall back to malformed scope handling without diagnostics.\n- scripts/review_run_reviewers.sh:305-310 | confidence=3\n  PROBLEM: `grep -vE '^(No previous AI autofix|Initial run \u2014 no previous commit)'` only filters the exact placeholder strings.\n  WHY: Any upstream wording change would leak placeholder text into the reviewer scope file.\n- .github/workflows/review_autofix.yml:3467-3472 | confidence=2\n  PROBLEM: `_ledger_count` rescans `ledger_status.txt` five times to compute the per-state counts.\n  WHY: The repeated passes add avoidable I/O that a single awk pass could eliminate.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- README.md line 976, agents.md line 234 | confidence=5\n  PROBLEM: `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` is documented as an output cap in bytes, but `scripts/review_consolidate.sh` treats it as tokens and multiplies by 4.\n  WHY: Operators can set the wrong truncation threshold and get a cap that is 4x different from what the docs imply.\n- .github/workflows/review_autofix.yml lines 3448-3456 | confidence=4\n  PROBLEM: `consolidator_state=\"invoked (empty / failed)\"` does not distinguish an intentionally disabled consolidator from a real failure.\n  WHY: The metrics summary misreports `REVIEW_CONSOLIDATOR_ENABLED=0` as a failure state.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6c4f353aee06396e094649493f79d307e3310996b7da2a8886c4643c9dcdaa6b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2615,
+    "run_id": "25916401478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25916401478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515121010_efca811ad2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2615,
+    "run_id": "25916401478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 8 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-15T12:10:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
