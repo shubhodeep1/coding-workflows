@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:40-45 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The helper depends on the exact `# Assemble the default` marker, so the block extraction is brittle and can fail before the subprocess test runs.\n  WHY: Moonshot described this as a minor brittleness issue and x-ai reported that the marker is absent, causing `ValueError` during `reviewers.index(...)`.\n- tests/test_review_semble_contract.py:70-90 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The extracted shell block does not include the `assemble_reviewer_prompt()` definition, so the subprocess call can fail with `command not found`.\n  WHY: x-ai reported that `reviewers[start:end]` only captures the checklist setup and `append_reviewer_checklist_block()` body, not the later function definition.\n- .github/workflows/review_autofix.yml:1086-1088 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The warning message references `${SCRIPT_REF}` even though that variable is not defined in the step context, so the log message prints an empty ref.\n  WHY: Moonshot reported the warning becomes confusing because it cannot name the checked-out support source.\n- .github/workflows/review_autofix.yml:~line 2787\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The newly staged `review-reviewer-checklist.txt` lacks a `check_soft_file` entry, so there is no preflight diagnostic if staging silently fails.\n  WHY: The reviewer noted other optional staged prompt files have the same check, which would catch a broken staging path earlier.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_semble_contract.py:40-45 | confidence=2\n  PROBLEM: The test extracts a block from the shell script using string searches for start/end markers, so it is brittle if the `# Assemble the default` marker changes.\n  WHY: A fixed comment-based end marker can break the helper before it reaches the subprocess-based prompt rendering assertions.\n- .github/workflows/review_autofix.yml:1086-1088 | confidence=4\n  PROBLEM: The warning message references `${SCRIPT_REF}` but that variable is not defined in the \"Stage workflow support files\" step context.\n  WHY: The warning will print an empty string for SCRIPT_REF, making the log message confusing.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_review_semble_contract.py:40-45 | confidence=5\n  PROBLEM: The end index uses `reviewers.index(\"# Assemble the default\", start)` but `scripts/review_run_reviewers.sh` contains no matching comment string.\n  WHY: `ValueError` on missing substring during `test_reviewer_checklist_prompt_contract_and_gate()`; the test crashes before extracting the bash block or running `subprocess.run()`. (2 related items)\n- tests/test_review_semble_contract.py:70-90 | confidence=5\n  PROBLEM: `reviewers[start:end]` includes only checklist setup vars and `append_reviewer_checklist_block()`, but not the `assemble_reviewer_prompt()` definition.\n  WHY: `bash: assemble_reviewer_prompt: command not found`; `subprocess.run(check=True)` raises `CalledProcessError` before prompt-rendering assertions.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:~line 2787\n  PROBLEM: The newly staged `review-reviewer-checklist.txt` lacks a `check_soft_file` entry, while other optional staged prompt files have one.\n  WHY: If the staging silently fails, there is no preflight diagnostic at this checkpoint; the reviewer suggested adding the same check used for the other optional prompt files.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9d89a9854ea512700122a3c049b6dae38e92d543a8fb3ae47596ae0e40d9854f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2620,
+    "run_id": "25920641397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25920641397",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515135749_6b0286fd4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2620,
+    "run_id": "25920641397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-15T13:57:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
