@@ -231,7 +231,7 @@ ones that downstream code and humans tuning the pipeline depend on.
 | `REVIEW_CONSOLIDATOR_MODEL` | `openai/gpt-5.4` | OpenAI-compatible model id. |
 | `REVIEW_CONSOLIDATOR_REASONING` | `xhigh` | Codex reasoning level (`xhigh`/`high`/`medium`/`low`/`none`). |
 | `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | `300` | Hard wall-clock on the codex call. |
-| `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Output byte cap; truncation marker is parser-safe. |
+| `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Output token cap (internally multiplied by ~4 to derive the byte truncation limit); truncation marker is parser-safe. |
 | `REVIEW_PARSER_FAILOPEN` | `1` | When `1`, parser errors yield empty `review_issues.txt` and proceed; `0` for debug. |
 | `REVIEW_FLOOR_RULES_ENABLED` | `1` | Master switch for the floor-rule scanner. |
 | `REVIEW_FLOOR_KEYWORDS_FILE` | (built-in) | Optional override of the built-in keyword catalogue. |

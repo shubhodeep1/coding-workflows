@@ -147,6 +147,23 @@ env:
   XPOLL_SUMMARISER_LINES_PER_REVIEWER: ${{ vars.XPOLL_SUMMARISER_LINES_PER_REVIEWER || '160' }}
   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '2400' }}
   XPOLL_SUMMARISER_MAX_INPUT_LINES: ${{ vars.XPOLL_SUMMARISER_MAX_INPUT_LINES || '3000' }}
+  # Review-pipeline shell scripts read these REVIEW_* flags directly. Export
+  # the repo vars here so operator overrides reach review_run_reviewers.sh,
+  # review_consolidate.sh, review_floor_rules.sh, review_parse_consolidator.sh,
+  # and review_issue_ledger.sh instead of silently falling back to script
+  # defaults.
+  REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}
+  REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.4' }}
+  REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'xhigh' }}
+  REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}
+  REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}
+  REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
+  REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}
+  REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}
+  REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
+  REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
+  REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
+  REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
   # CI/lint check-run autofix context: when enabled (default), the workflow
   # snapshots failing/incomplete check-runs on the PR head SHA into
   # ${PR_CHECK_RUNS_CONTEXT_FILE} and feeds the file to reviewers + editor so
@@ -3446,7 +3463,9 @@ jobs:
           fi
           consolidator_bytes=0
           consolidator_state="not invoked"
-          if [ -f "${consolidator_raw}" ]; then
+          if [ "${REVIEW_CONSOLIDATOR_ENABLED:-1}" = "0" ]; then
+            consolidator_state="disabled"
+          elif [ -f "${consolidator_raw}" ]; then
             consolidator_bytes="$(wc -c < "${consolidator_raw}" | tr -d '[:space:]')"
             if [ "${consolidator_bytes}" -gt 0 ]; then
               consolidator_state="invoked"
@@ -3467,8 +3486,7 @@ jobs:
           ledger_residual="$(_ledger_count accepted-residual)"
           override_count=0
           if [ -s "${editor_summary}" ]; then
-            override_count="$(grep -cE '^CONSOLIDATOR_OVERRIDDEN:' "${editor_summary}" 2>/dev/null || echo 0)"
-            override_count="${override_count%%[!0-9]*}"
+            override_count="$(awk '/^[[:space:]]*CONSOLIDATOR_OVERRIDDEN:/ { n++ } END { print n+0 }' "${editor_summary}" 2>/dev/null)"
             : "${override_count:=0}"
           fi
           editor_invoked="no"
@@ -3492,7 +3510,7 @@ jobs:
             echo "| Reviewer scope | ${scope_mode} |"
             echo "| Raw bundle size (bytes) | ${raw_bytes} |"
             echo "| Floor tags | ${floor_count} |"
-            echo "| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-default} |"
+            echo "| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4} |"
             echo "| Consolidator invoked | ${consolidator_state} |"
             echo "| Consolidator output bytes | ${consolidator_bytes} |"
             echo "| Parsed issue blocks | ${parsed_blocks} |"
