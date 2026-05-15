@@ -228,6 +228,8 @@ def parse_log(log: str) -> dict:
         elif SERENA_PROBE_RE.search(line):
             target = _extract_log_field(line, "target") or "unknown"
             result = (_extract_log_field(line, "result") or "unknown").lower()
+            # Keep malformed probe results in the existing skipped bucket so
+            # the public JSON/markdown contract stays at three probe states.
             bucket = result if result in ("ok", "failed", "skipped") else "skipped"
             out[f"serena_probe_{bucket}"] += 1
             out["serena_targets"][target][f"probe_{bucket}"] += 1
@@ -259,6 +261,8 @@ def parse_log(log: str) -> dict:
                     result = (_extract_log_field(line, "result") or "unknown").lower()
                     bucket = result if result in ("ok", "failed", "skipped") else "skipped"
                     out["other_mcp"][server][f"probe_{bucket}"] += 1
+                # Keep the generic catch-all bounded to one match per line;
+                # known SEMBLE/SERENA prefixes are handled above.
                 break
 
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
