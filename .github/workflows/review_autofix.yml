@@ -2998,6 +2998,7 @@ jobs:
 
       - name: Upload per-reviewer logs (always)
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: reviewer-logs-${{ github.run_id }}-${{ github.run_attempt }}
