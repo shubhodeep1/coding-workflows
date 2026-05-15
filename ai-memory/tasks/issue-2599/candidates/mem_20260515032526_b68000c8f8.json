@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan (planning ref: `6bbd515c5efc90a411f92828f1511738a4493066` on `orchestrator/project-2597`)\n\nClarification mapping\n- No `Q1`/`Q2` clarification batch was needed for this issue.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirms continuation, so the issue body is the planning source of truth.\n\nActions taken\n- Inspected the current telemetry-related sections in `prompts/mode-workflow-analysis.txt`.\n- Inspected the module-level `SYSTEM_PROMPT` block in `scripts/summarize_unselected_runs.py`.\n- Checked the existing summarizer test harness entrypoint in `tests/test_summarize_unselected_runs.py` for validation planning.\n\nCodebase check / conflicts\n- No integration-branch mismatch: checked-out ref and metadata both point to `orchestrator/project-2597`.\n- No factual conflicts found. The current repo state matches the issue description:\n  - `prompts/mode-workflow-analysis.txt` currently names `SEMBLE_QUERY` / `SEMBLE_FALLBACK` but not `SERENA_*`.\n  - `scripts/summarize_unselected_runs.py` currently has the `AI_MEMORY_TELEMETRY` preservation bullet but no Semble/Serena preservation bullet.\n\n1. Files likely to change\n- `prompts/mode-workflow-analysis.txt`\n  - Edit the existing telemetry input bullet near line 8.\n  - Edit the existing `## Cost Optimizations` sentence near line 46.\n  - Edit the existing `## Reliability Improvements` sentence near line 47.\n  - Edit the existing `## Metrics Appendix` minimum-set sentence near line 54.\n  - Edit the existing first-class-evidence rule near line 62.\n  - Insert one new sentence immediately after that rule for generic `<NAME>_QUERY` / `<NAME>_FALLBACK` / `<NAME>_PROBE` handling.\n- `scripts/summarize_unselected_runs.py`\n  - Update only the module-level `SYSTEM_PROMPT` required-signals list near lines 54-63 by inserting one bullet immediately after the `AI_MEMORY_TELEMETRY` bullet.\n\n2. Functions or modules to implement\n- `prompts/mode-workflow-analysis.txt`\n  - Extend the prompt contract so workflow-log analysis explicitly treats Semble, Serena, and unknown-MCP telemetry as evidence-grade.\n  - Planned sentence-level changes:\n    - input bullet: add `SERENA_QUERY`, `SERENA_FALLBACK`, `SERENA_PROBE`\n    - Cost section: discuss Serena tool-call replacement vs noisy low-value response bytes\n    - Reliability section: distinguish probe failures from runtime fallbacks\n    - Metrics Appendix: require Serena query/fallback/probe totals plus per-target availability rows\n    - first-class-evidence rule: explicitly name `SERENA_*`\n    - new follow-on sentence: generic guidance for unknown MCP servers using `<NAME>_QUERY` / `<NAME>_FALLBACK` / `<NAME>_PROBE`\n- `scripts/summarize_unselected_runs.py`\n  - Modify only `SYSTEM_PROMPT` so unselected-run summaries preserve `SEMBLE_*` / `SERENA_*` log lines verbatim, capped at 3 per prefix family, including `target=`, `bytes=` / `response_bytes=`, `reason=`, `result=`, and `tool=` when present.\n  - Leave model selection, token budget, request flow, and fail-open behavior unchanged.\n\n3. Data structures affected\n- No schema, JSON shape, or telemetry-emitter changes.\n- Analyst-facing prompt expectations change for:\n  - deep-dive log excerpts\n  - `analysis_context.json` run rows\u2019 `log_summary` content\n- Existing `log_summary` remains a string field, but summaries may now retain capped verbatim Semble/Serena telemetry lines for downstream analysis.\n\n4. API or interface changes\n- No public API, CLI, workflow YAML, or collector interface changes.\n- Observable behavior change is prompt/output behavior only:\n  - workflow-analysis reports should surface Serena telemetry alongside Semble\n  - reports should separate probe availability failures from runtime fallbacks\n  - metrics tables should include Serena totals and per-target availability\n  - unselected-run summaries should retain key Semble/Serena evidence lines\n\n5. Potential risks or edge cases\n- Keep edits sentence-local only; acceptance explicitly forbids new headings and unrelated prose churn.\n- Do not accidentally normalize `SERENA_PROBE` into the same category as `SERENA_FALLBACK`; probe failures indicate availability/discovery issues, not necessarily runtime degradation.\n- The generic unknown-MCP guidance must be additive and must not weaken the explicit Semble/Serena rules.\n- The summarizer bullet should mention both `bytes=` and `response_bytes=` so it covers current log variants without implying one canonical field name.\n- Stay inside the issue\u2019s `files_touched` scope; do not modify emitters, workflow YAML, `agents.md`, collectors/analyzers, docs, or tests.\n\n6. Testing considerations\n- Verify the diff touches only:\n  - `prompts/mode-workflow-analysis.txt`\n  - `scripts/summarize_unselected_runs.py`\n- Run `python3 -m coverage run tests/test_summarize_unselected_runs.py` as a regression check that the summarizer module still imports and existing fail-open behavior remains intact.\n- Manually inspect the prompt diff to confirm:\n  - exactly the six planned sentence-level edits landed in `mode-workflow-analysis.txt`\n  - exactly one new required-signals bullet was added in `SYSTEM_PROMPT`\n  - no heading renames, model-setting changes, or unrelated prompt reflow occurred\n\nAssumptions\n- The issue body is the source of truth for the exact scope; no widening beyond the two scoped files is intended.\n- Serena telemetry already exists in logs; this task only fixes analyst-surface prompt coverage.\n\nMissing-context notes\n- No sample Serena or unknown-MCP log excerpts were provided here, so the wording should stay generic and anchored to the concrete fields named in the issue (`target`, `bytes`/`response_bytes`, `reason`, `result`, `tool`).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ef81e0361ff6452da3b75af7806eda88285e3210cf57ed8b8520959553c8a5a7",
+  "lineage": {
+    "issue_number": 2599,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25898402748",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25898402748",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2599"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260515032526_b68000c8f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2599,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25898402748"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2599",
+  "timestamps": {
+    "created_at": "2026-05-15T03:25:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
