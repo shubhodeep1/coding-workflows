@@ -3386,6 +3386,129 @@ jobs:
             ${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # Per-iteration metrics summary for the review pipeline.  Reads the
+      # transient artefacts written by floor_rules / consolidator / parser /
+      # ledger inside review_apply_fixes.sh and appends a markdown table to
+      # $GITHUB_STEP_SUMMARY so operators can tune REVIEW_LEDGER_PERSIST_LIMIT,
+      # REVIEW_CONSOLIDATOR_MODEL, and the floor-rule keyword list from
+      # observed numbers (see docs/review-pipeline-improvements.md →
+      # "Metrics — Workflow Summary Schema").  Pure shell/awk: no `gh api`,
+      # no LLM (CLAUDE.md §15).  Fails open — missing artefacts render as
+      # zeros or "n/a", never abort the run.
+      - name: Append review pipeline metrics
+        if: always() && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          : "${GITHUB_STEP_SUMMARY:=/dev/null}"
+          : "${RUNTIME_DIR:=}"
+          if [ -z "${RUNTIME_DIR}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
+            echo "::notice::Skipping review pipeline metrics — RUNTIME_DIR unavailable."
+            exit 0
+          fi
+          iteration="${AUTOFIX_ITERATION:-${REVIEW_ITERATION:-unknown}}"
+          reviewer_bundle="${RUNTIME_DIR}/reviewer_bundle.txt"
+          floor_tags="${RUNTIME_DIR}/floor_tags.txt"
+          parser_stats="${RUNTIME_DIR}/parser_stats.txt"
+          ledger_status="${RUNTIME_DIR}/ledger_status.txt"
+          consolidator_raw="${RUNTIME_DIR}/consolidator_raw.txt"
+          editor_summary="${EDITOR_SUMMARY_FILE:-${RUNTIME_DIR}/editor_summary.txt}"
+
+          _count_lines() {
+            local p="$1"
+            if [ -s "${p}" ]; then
+              awk 'NF>0' "${p}" 2>/dev/null | wc -l | tr -d '[:space:]'
+            else
+              echo 0
+            fi
+          }
+          _stat_value() {
+            local key="$1"
+            if [ -s "${parser_stats}" ]; then
+              awk -F= -v k="${key}" '$1==k { v=$2 } END { print (v==""?"0":v) }' "${parser_stats}" 2>/dev/null
+            else
+              echo 0
+            fi
+          }
+          _ledger_count() {
+            local pattern="$1"
+            if [ -s "${ledger_status}" ]; then
+              awk -F'\t' -v p="${pattern}" '$2==p { n++ } END { print n+0 }' "${ledger_status}" 2>/dev/null
+            else
+              echo 0
+            fi
+          }
+
+          raw_bytes=0
+          if [ -s "${reviewer_bundle}" ]; then
+            raw_bytes="$(wc -c < "${reviewer_bundle}" | tr -d '[:space:]')"
+          fi
+          consolidator_bytes=0
+          consolidator_state="not invoked"
+          if [ -f "${consolidator_raw}" ]; then
+            consolidator_bytes="$(wc -c < "${consolidator_raw}" | tr -d '[:space:]')"
+            if [ "${consolidator_bytes}" -gt 0 ]; then
+              consolidator_state="invoked"
+            else
+              consolidator_state="invoked (empty / failed)"
+            fi
+          fi
+          floor_count="$(_count_lines "${floor_tags}")"
+          parsed_blocks="$(_stat_value parsed_blocks)"
+          passthrough_blocks="$(_stat_value passthrough_blocks)"
+          line_unverified="$(_stat_value line_unverified)"
+          parse_failed="$(_stat_value parse_failed)"
+          ledger_total="$(_count_lines "${ledger_status}")"
+          ledger_new="$(_ledger_count NEW)"
+          ledger_persist="$(_ledger_count PERSISTING)"
+          ledger_fixed="$(_ledger_count FIXED)"
+          ledger_resurgent="$(_ledger_count RESURGENT)"
+          ledger_residual="$(_ledger_count accepted-residual)"
+          override_count=0
+          if [ -s "${editor_summary}" ]; then
+            override_count="$(grep -cE '^CONSOLIDATOR_OVERRIDDEN:' "${editor_summary}" 2>/dev/null || echo 0)"
+            override_count="${override_count%%[!0-9]*}"
+            : "${override_count:=0}"
+          fi
+          editor_invoked="no"
+          editor_committed="no"
+          if [ -s "${editor_summary}" ]; then
+            editor_invoked="yes"
+          fi
+          if [ -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
+            editor_committed="yes"
+          fi
+          scope_mode="full-diff"
+          if [ -s "${RUNTIME_DIR}/reviewer_iteration_scope.txt" ]; then
+            scope_mode="scoped"
+          fi
+          {
+            echo ""
+            echo "### Review Pipeline — Iteration ${iteration}"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Reviewer scope | ${scope_mode} |"
+            echo "| Raw bundle size (bytes) | ${raw_bytes} |"
+            echo "| Floor tags | ${floor_count} |"
+            echo "| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-default} |"
+            echo "| Consolidator invoked | ${consolidator_state} |"
+            echo "| Consolidator output bytes | ${consolidator_bytes} |"
+            echo "| Parsed issue blocks | ${parsed_blocks} |"
+            echo "| Passthrough blocks | ${passthrough_blocks} |"
+            echo "| Line-unverified blocks | ${line_unverified} |"
+            echo "| Parser failed (1=yes) | ${parse_failed} |"
+            echo "| Ledger entries total | ${ledger_total} |"
+            echo "| NEW | ${ledger_new} |"
+            echo "| PERSISTING | ${ledger_persist} |"
+            echo "| FIXED | ${ledger_fixed} |"
+            echo "| RESURGENT | ${ledger_resurgent} |"
+            echo "| accepted-residual | ${ledger_residual} |"
+            echo "| Editor invoked | ${editor_invoked} |"
+            echo "| CONSOLIDATOR_OVERRIDDEN count | ${override_count} |"
+            echo "| Editor commit produced | ${editor_committed} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Log token usage
         if: always()
         run: |
