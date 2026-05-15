@@ -119,6 +119,10 @@ ROOT_LEVEL_BARE_FILENAMES = {"COPYING", "LICENCE", "LICENSE", "NOTICE", "README"
 ROOT_LEVEL_DOTTED_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9][A-Za-z0-9._-]*$")
 ROOT_LEVEL_DOTFILE_RE = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
 ROOT_LEVEL_FILESTYLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*file(?:\.[A-Za-z0-9][A-Za-z0-9._-]*)*$", re.I)
+# Preserve literal trailing . , ; : on root-level filenames; a trailing ) is
+# handled separately because reviewer ledger anchors commonly pick it up from
+# surrounding prose / markdown formatting.
+ROOT_LEVEL_LITERAL_TRAILING_PUNCTUATION = ".,;:"
 
 DEFAULT_HEADER_TEXT = (
 	"The approved plan / autofix-finding / conflict-marker scan named these "
@@ -154,23 +158,35 @@ def _log_semble_event(prefix: str, **fields: object) -> None:
 	print(" ".join(parts), file=sys.stderr)
 
 
-def _trim_path_candidate(value: str) -> str:
-	value = value.strip()
-	dotfile_candidate = value.rstrip(".,;:)")
-	if ROOT_LEVEL_DOTFILE_RE.fullmatch(dotfile_candidate) is not None:
-		return dotfile_candidate
-	return value.strip(".,;:)")
-
-
-def is_probable_root_level_path(value: str) -> bool:
-	if "/" in value:
-		return False
+def _is_probable_root_level_path_core(value: str) -> bool:
 	return (
 		value in ROOT_LEVEL_BARE_FILENAMES
 		or ROOT_LEVEL_DOTFILE_RE.fullmatch(value) is not None
 		or ROOT_LEVEL_DOTTED_NAME_RE.fullmatch(value) is not None
 		or ROOT_LEVEL_FILESTYLE_RE.fullmatch(value) is not None
 	)
+
+
+def _trim_path_candidate(value: str) -> str:
+	value = value.strip()
+	if is_probable_root_level_path(value):
+		return value
+	if value.endswith(")") and is_probable_root_level_path(value[:-1]):
+		return value[:-1]
+	return value.rstrip(".,;:)")
+
+
+def is_probable_root_level_path(value: str) -> bool:
+	if "/" in value:
+		return False
+	if _is_probable_root_level_path_core(value):
+		return True
+	candidate = value
+	while candidate and candidate[-1] in ROOT_LEVEL_LITERAL_TRAILING_PUNCTUATION:
+		candidate = candidate[:-1]
+		if _is_probable_root_level_path_core(candidate):
+			return True
+	return False
 
 
 def is_probable_path(value: str) -> bool:

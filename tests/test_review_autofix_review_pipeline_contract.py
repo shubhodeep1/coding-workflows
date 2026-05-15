@@ -505,6 +505,60 @@ def test_reviewer_iteration_scope_prepare_path_trims_trailing_parenthesis_from_r
 	assert "--- FILE: .gitignore" in result["scope_context"]
 
 
+def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trailing_punctuation() -> None:
+	ledger_text = "\n".join([
+		"issue-1\tNEW\t0\tREADME.:3\tCORRECTNESS & LOGIC\t[]",
+		"issue-2\tPERSISTING\t1\tgo.mod.:2\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tRESURGENT\t0\t.env.:1\tCORRECTNESS & LOGIC\t[]",
+	]) + "\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+		workspace_files={
+			"scripts/review_run_reviewers.sh": "scoped shell target\n",
+			"README.": "literal trailing dot\n",
+			"go.mod.": "module example.com/literal\n",
+			".env.": "TOKEN=test\n",
+		},
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		"scripts/review_run_reviewers.sh",
+		"README.",
+		"go.mod.",
+		".env.",
+	]
+	assert "- README. [ledger:NEW]" in result["scope_summary"]
+	assert "- go.mod. [ledger:PERSISTING]" in result["scope_summary"]
+	assert "- .env. [ledger:RESURGENT]" in result["scope_summary"]
+	assert "--- FILE: README." in result["scope_context"]
+	assert "--- FILE: go.mod." in result["scope_context"]
+	assert "--- FILE: .env." in result["scope_context"]
+
+
+def test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes() -> None:
+	ledger_text = "issue-1\tNEW\t0\t.github/workflows/review_autofix.yml:3\tCORRECTNESS & LOGIC\t[]\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text=".github/workflows/review_autofix.yml\n.config/tool.toml\n",
+		ledger_text=ledger_text,
+		workspace_files={
+			".github/workflows/review_autofix.yml": "name: review\n",
+			".config/tool.toml": "enabled = true\n",
+		},
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		".github/workflows/review_autofix.yml",
+		".config/tool.toml",
+	]
+	assert "- .github/workflows/review_autofix.yml [last-run-changed, ledger:NEW]" in result["scope_summary"]
+	assert "- .config/tool.toml [last-run-changed]" in result["scope_summary"]
+	assert "--- FILE: .github/workflows/review_autofix.yml" in result["scope_context"]
+	assert "--- FILE: .config/tool.toml" in result["scope_context"]
+
+
 def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper() -> None:
 	ledger_text = "issue-1\tNEW\t0\tscripts/review_run_reviewers.sh:3\tCORRECTNESS & LOGIC\t[]\n"
 	result = _run_prepare_reviewer_scope_harness(
@@ -530,6 +584,8 @@ def main() -> int:
 	test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels()
 	test_reviewer_iteration_scope_prepare_path_accepts_root_level_actionable_files()
 	test_reviewer_iteration_scope_prepare_path_trims_trailing_parenthesis_from_root_level_actionable_files()
+	test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trailing_punctuation()
+	test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes()
 	test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
