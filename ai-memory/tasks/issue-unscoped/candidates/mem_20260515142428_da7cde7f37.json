@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:217-223 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `tests/test_review_autofix_review_pipeline_contract.py` was added inline to a multi-line `run:` block instead of as a dedicated `- name:` step.\n  WHY: Keeping it inside the larger block reduces CI failure attribution granularity, so a failure appears as part of a shared step rather than an isolated test.\n- .github/workflows/test-and-mark-stable.yml:3206-3212 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `tests/test_review_autofix_review_pipeline_contract.py` was added inline to a multi-line `run:` block instead of as a dedicated `- name:` step.\n  WHY: Keeping it inside the larger block reduces CI failure attribution granularity, so a failure appears as part of a shared step rather than an isolated test.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- File: .github/workflows/mark-stable.yml\n  Lines: 217-223\n  Problem: New test `tests/test_review_autofix_review_pipeline_contract.py` added inline to multi-line `run:` block without dedicated `- name:` step (unlike ci.yml lines 202-212).\n  Why it fails at runtime: Test runs correctly under `set -euo pipefail` but failure attribution loses granularity in CI logs/step summary; multi-test block emits single undifferentiated failure without step isolation.\n- File: .github/workflows/test-and-mark-stable.yml\n  Lines: 3206-3212\n  Problem: New test `tests/test_review_autofix_review_pipeline_contract.py` added inline to multi-line `run:` block without dedicated `- name:` step (unlike ci.yml lines 202-212).\n  Why it fails at runtime: Test runs correctly under `set -euo pipefail` but failure attribution loses granularity in extended release-gate logs/step summary; multi-test block emits single undifferentiated failure without step isolation.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "74ca4a475436fa5500e53363f63749622bfeab9837da0a17f9a2a35290567b95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2621,
+    "run_id": "25922245267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25922245267",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515142428_da7cde7f37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2621,
+    "run_id": "25922245267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-15T14:24:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
