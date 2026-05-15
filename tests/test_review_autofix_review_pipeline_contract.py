@@ -8,15 +8,23 @@ remain unchanged.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 
 
 def _workflow_text() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
+
+
+def _reviewers_text() -> str:
+	return REVIEWERS.read_text(encoding="utf-8")
 
 
 def _step_block(step_name: str) -> str:
@@ -36,6 +44,119 @@ def _step_block(step_name: str) -> str:
 					break
 		return "\n".join(lines[idx:end])
 	raise AssertionError(f"Step not found in workflow: {step_name}")
+
+
+def _reviewer_iteration_scope_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer iteration-scoping helpers")
+	end = text.index("# ── End reviewer iteration-scoping helpers", start)
+	return text[start:end]
+
+
+def _run_reviewer_scope_harness(*, scope_mode: str, last_run_changed_text: str, ledger_text: str) -> dict[str, str]:
+	helper_block = _reviewer_iteration_scope_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-iteration-scope-") as td:
+		tmp = Path(td)
+		files = {
+			"last_run_changed": tmp / "last_run_changed_files.txt",
+			"ledger": tmp / "ledger_status.txt",
+			"scope_paths": tmp / "reviewer_scope_paths.txt",
+			"scope_summary": tmp / "reviewer_scope_summary.txt",
+			"scope_context": tmp / "reviewer_scoped_files_context.txt",
+			"scope_context_source": tmp / "scope_context_source.txt",
+			"semble_query": tmp / "reviewer_semble_query.txt",
+			"context_sections": tmp / "context_sections.txt",
+			"scoped_active": tmp / "scoped_active.txt",
+			"symbol_diff": tmp / "symbol_diff_summary.txt",
+			"original_pr_diff": tmp / "original_pr_diff.patch",
+			"last_run_diff": tmp / "last_run_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"last_run_diff_stat": tmp / "last_run_diff_stat.txt",
+			"last_commit_stat": tmp / "last_commit_stat.txt",
+			"comments": tmp / "comments.txt",
+			"checks": tmp / "checks.txt",
+			"pr_diff": tmp / "pr_diff.patch",
+		}
+		files["last_run_changed"].write_text(last_run_changed_text, encoding="utf-8")
+		files["ledger"].write_text(ledger_text, encoding="utf-8")
+		files["scope_paths"].write_text("", encoding="utf-8")
+		files["scope_summary"].write_text("", encoding="utf-8")
+		files["scope_context"].write_text("", encoding="utf-8")
+		files["scope_context_source"].write_text(
+			"=== TARGETED FILE CONTEXT ===\nScoped reviewer file context sentinel\n",
+			encoding="utf-8",
+		)
+		files["symbol_diff"].write_text("symbol diff sentinel\n", encoding="utf-8")
+		files["original_pr_diff"].write_text("original pr diff sentinel\n", encoding="utf-8")
+		files["last_run_diff"].write_text("last run diff sentinel\n", encoding="utf-8")
+		files["pr_changed"].write_text("scripts/review_run_reviewers.sh\nextra/pr_scope.py\n", encoding="utf-8")
+		files["last_run_diff_stat"].write_text("1 file changed\n", encoding="utf-8")
+		files["last_commit_stat"].write_text("commit stat sentinel\n", encoding="utf-8")
+		files["comments"].write_text("comments sentinel\n", encoding="utf-8")
+		files["checks"].write_text("checks sentinel\n", encoding="utf-8")
+		files["pr_diff"].write_text("full pr diff sentinel\n", encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"LAST_RUN_CHANGED_FILES_FILE": str(files["last_run_changed"]),
+			"LEDGER_STATUS_FILE": str(files["ledger"]),
+			"REVIEWER_SCOPE_PATHS_FILE": str(files["scope_paths"]),
+			"REVIEWER_SCOPE_SUMMARY_FILE": str(files["scope_summary"]),
+			"REVIEWER_SCOPED_FILES_CONTEXT_FILE": str(files["scope_context"]),
+			"SCOPE_CONTEXT_SOURCE_FILE": str(files["scope_context_source"]),
+			"REVIEWER_SEMBLE_QUERY_FILE": str(files["semble_query"]),
+			"OUTPUT_CONTEXT_FILE": str(files["context_sections"]),
+			"SCOPED_ACTIVE_FILE": str(files["scoped_active"]),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(files["symbol_diff"]),
+			"ORIGINAL_PR_DIFF_FILE": str(files["original_pr_diff"]),
+			"LAST_RUN_DIFF_FILE": str(files["last_run_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"LAST_RUN_DIFF_STAT_FILE": str(files["last_run_diff_stat"]),
+			"LAST_COMMIT_STAT_FILE": str(files["last_commit_stat"]),
+			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments"]),
+			"PR_CHECK_RUNS_CONTEXT_FILE": str(files["checks"]),
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"SEMBLE_INDEX_AVAILABLE": "false",
+			"SCOPE_MODE": scope_mode,
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"_embed_input_file() { local _p=\"${1:-}\"; if [ -z \"${_p}\" ] || [ ! -e \"${_p}\" ]; then printf '(missing)\\n'; return 0; fi; if [ ! -s \"${_p}\" ]; then printf '(empty)\\n'; return 0; fi; cat \"${_p}\"; }\n"
+				f"{helper_block}\n"
+				"if [ \"${SCOPE_MODE}\" = \"auto\" ]; then\n"
+				"\tREVIEWER_SCOPED_CONTEXT_ACTIVE=false\n"
+				"\tif build_reviewer_iteration_scope_artifacts \"${LAST_RUN_CHANGED_FILES_FILE}\" \"${LEDGER_STATUS_FILE}\" \"${REVIEWER_SCOPE_PATHS_FILE}\" \"${REVIEWER_SCOPE_SUMMARY_FILE}\"; then\n"
+				"\t\tREVIEWER_SCOPED_CONTEXT_ACTIVE=true\n"
+				"\t\tcp \"${SCOPE_CONTEXT_SOURCE_FILE}\" \"${REVIEWER_SCOPED_FILES_CONTEXT_FILE}\"\n"
+				"\tfi\n"
+				"else\n"
+				"\tREVIEWER_SCOPED_CONTEXT_ACTIVE=false\n"
+				"\twrite_reviewer_scope_summary \"full-diff\" \"first iteration — keep full PR context\"\n"
+				"fi\n"
+				"emit_reviewer_prompt_context_sections > \"${OUTPUT_CONTEXT_FILE}\"\n"
+				"build_reviewer_semble_query\n"
+				"printf '%s\\n' \"${REVIEWER_SCOPED_CONTEXT_ACTIVE}\" > \"${SCOPED_ACTIVE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"context_sections": files["context_sections"].read_text(encoding="utf-8"),
+			"scope_summary": files["scope_summary"].read_text(encoding="utf-8"),
+			"scope_paths": files["scope_paths"].read_text(encoding="utf-8"),
+			"semble_query": files["semble_query"].read_text(encoding="utf-8"),
+			"scoped_active": files["scoped_active"].read_text(encoding="utf-8").strip(),
+		}
 
 
 def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
@@ -102,9 +223,90 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 	assert "curl https://api.github.com" not in block
 
 
+def test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context() -> None:
+	result = _run_reviewer_scope_harness(
+		scope_mode="full",
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text="",
+	)
+
+	assert result["scoped_active"] == "false"
+	assert "full change set of the pull request" in result["context_sections"]
+	assert "full PR patch; secondary context" in result["context_sections"]
+	assert "scoped reviewer focus derived from latest autofix changes" not in result["context_sections"]
+	assert "PR changed files:" in result["semble_query"]
+	assert "Scoped reviewer focus files:" not in result["semble_query"]
+
+
+def test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files() -> None:
+	ledger_text = "\n".join([
+		"issue-1\tPERSISTING\t1\tscripts/review_run_reviewers.sh:10\tCORRECTNESS & LOGIC\t[]",
+		"issue-2\tNEW\t0\ttests/test_review_autofix_review_pipeline_contract.py:20\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tFIXED\t0\tignored/fixed.py:30\tCORRECTNESS & LOGIC\t[]",
+		"issue-4\taccepted-residual\t0\tignored/residual.py:40\tCORRECTNESS & LOGIC\t[]",
+		"issue-5\tRESURGENT\t0\ttests/test_review_autofix_review_pipeline_contract.py:22\tCORRECTNESS & LOGIC\t[]",
+	]) + "\n"
+	result = _run_reviewer_scope_harness(
+		scope_mode="auto",
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		"scripts/review_run_reviewers.sh",
+		"tests/test_review_autofix_review_pipeline_contract.py",
+	]
+	assert "ignored/fixed.py" not in result["scope_paths"]
+	assert "ignored/residual.py" not in result["scope_paths"]
+	assert "Reviewer iteration scoping mode: scoped" in result["scope_summary"]
+	assert "Actionable statuses: NEW, PERSISTING, RESURGENT" in result["scope_summary"]
+	assert "ledger:PERSISTING" in result["scope_summary"]
+	assert "ledger:NEW, ledger:RESURGENT" in result["scope_summary"]
+	assert "scoped reviewer focus derived from latest autofix changes + still-actionable ledger rows" in result["context_sections"]
+	assert "current contents of the scoped reviewer focus files" in result["context_sections"]
+	assert "full change set of the pull request" not in result["context_sections"]
+	assert "full PR patch; secondary context" not in result["context_sections"]
+	assert "Scoped reviewer focus summary:" in result["semble_query"]
+	assert "Scoped reviewer focus files:" in result["semble_query"]
+	assert "PR changed files:" not in result["semble_query"]
+
+
+def test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts() -> None:
+	result = _run_reviewer_scope_harness(
+		scope_mode="auto",
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text="",
+	)
+
+	assert result["scoped_active"] == "false"
+	assert "Reviewer iteration scoping mode: full-diff" in result["scope_summary"]
+	assert "Reason: empty LEDGER_STATUS_FILE" in result["scope_summary"]
+	assert result["scope_paths"] == ""
+	assert "full change set of the pull request" in result["context_sections"]
+	assert "full PR patch; secondary context" in result["context_sections"]
+	assert "scoped reviewer focus derived from latest autofix changes" not in result["context_sections"]
+	assert "PR changed files:" in result["semble_query"]
+	assert "Scoped reviewer focus files:" not in result["semble_query"]
+
+
+def test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels() -> None:
+	reviewers = _reviewers_text()
+	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"' in reviewers
+	assert 'python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers
+	assert '--paths-file "${REVIEWER_SCOPE_PATHS_FILE}"' in reviewers
+	assert 'Scoped reviewer focus summary:' in reviewers
+	assert 'Scoped reviewer focus files:' in reviewers
+	assert 'SCOPED REVIEWER FOCUS SUMMARY / FILE LIST / TARGETED FILE CONTEXT' in reviewers
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
+	test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context()
+	test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files()
+	test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts()
+	test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
