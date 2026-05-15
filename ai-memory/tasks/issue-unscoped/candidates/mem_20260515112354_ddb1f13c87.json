@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CHANGELOG.md:[Unreleased] block, entries describing \"Serena MCP integration across all workflows\" and the \"Pre-flight MCP handshake probe\" text | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The deleted Serena plan's recommendation to remove aspirational CHANGELOG entries was not reconciled, so the unreleased notes may still read as if planned work is pending.\n  WHY: The plans were removed after shipping, but if those entries remain they will confuse readers about shipped versus planned state.\n- probably_unnecessary_but_read_if_stuck.md:Sections describing Semble index lifecycle and Serena bootstrap/probe lifecycle | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The operational reference sections that the plans said should exist may now be orphaned from their source plans or may never have been written.\n  WHY: Once the plan docs are deleted, that file becomes the only in-repo source of those operational details, so missing or stale sections would leave a runbook gap.\n- commit message (34500372a4c0fb66285d4ab888528fc93f5ef835):\"Both plans shipped in v1.10.0 on stable.\" | confidence=5\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The commit message cites a version that does not exist in the repository history.\n  WHY: The repository has no v1.10.0 tag, so the release provenance claim is factually inaccurate even though the diff itself is clean.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- CHANGELOG.md:[Unreleased] block, entries describing \"Serena MCP integration across all workflows\" and the \"Pre-flight MCP handshake probe\" text | confidence=3\n  PROBLEM: The deleted serena-integration-plan.md recommendation to remove aspirational CHANGELOG entries was not reconciled, so the unreleased notes may still read as if planned work is pending.\n  WHY: If those entries remain, readers will see aspirational descriptions alongside the shipped state, creating confusion about what is planned versus what has merged.\n- probably_unnecessary_but_read_if_stuck.md:Sections describing Semble index lifecycle and Serena bootstrap/probe lifecycle | confidence=2\n  PROBLEM: The operational reference sections that the plans said should exist may now be orphaned from their source plans or may never have been written.\n  WHY: Once the plan docs are deleted, that file becomes the only in-repo source of those operational details, so missing or stale sections would leave a runbook gap.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- commit message (34500372a4c0fb66285d4ab888528fc93f5ef835):\"Both plans shipped in v1.10.0 on stable.\" | confidence=5\n  PROBLEM: The repository has no v1.10.0 tag, so the release provenance claim is factually inaccurate.\n  WHY: `git tag -l` returns empty and the latest release in CHANGELOG is v1.1.0, making the commit message's version claim misleading.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5847a7f0ca73e44677ea69bbe4ab9ace1243dc2bf0b9d06f48a883bc6a09978a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25914812373",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25914812373",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515112354_ddb1f13c87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25914812373"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-15T11:23:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
