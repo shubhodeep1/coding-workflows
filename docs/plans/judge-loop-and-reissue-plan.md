@@ -22,10 +22,11 @@ drifted file/line references with searchable anchors, and folds in the
 architectural fact that the autofix "round" is a per-workflow-run notion,
 not an in-workflow loop.
 
-The plan is a sibling to `docs/review-pipeline-improvements.md`
-(consolidator + ledger + floor rules). The two share file paths but
+The plan is a sibling to the canonical review-pipeline docs now carried in
+`README.md` (operator-facing behaviour/defaults) and `agents.md`
+(consolidator + ledger + floor-rule contract). The two share file paths but
 never the same line ranges; phases here can ship independently of that
-plan.
+documentation set.
 
 **Source-doc retirement.** Per the user's election (Q3, this plan's
 clarification batch), `docs/judge-loop-and-reissue-improvements.md` is
@@ -1362,8 +1363,10 @@ Remaining open questions for the implementer:
 
 - Source design doc (retired with this plan PR):
   `docs/judge-loop-and-reissue-improvements.md`
-- Sibling plan (consolidator + ledger + floor rules):
-  `docs/review-pipeline-improvements.md`
+- Canonical review-pipeline behaviour/defaults:
+  `README.md`
+- Canonical review-pipeline contract/invariants:
+  `agents.md`
 - Existing related plan style:
   `docs/plans/complete-squad-improvements-plan.md`
 - Project rules: `CLAUDE.md` (§1, §6, §10, §13, §14, §15)
