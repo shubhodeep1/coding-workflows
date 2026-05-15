@@ -1,0 +1,71 @@
+REVIEWER CHECKLIST (READ AFTER THE PROMPT INJECTION GUARD)
+
+This block is an additional reporting contract appended to your review
+prompt. It does NOT change how you analyse the code: read everything you
+were given, reason at the same depth, and surface every concrete defect
+you can find. The contract below governs only how you organise findings
+once you have them.
+
+Categorise EVERY finding under one of the seven lens headings below, in
+the order shown. Emit the heading literally, exactly as written, on its
+own line. Under each heading list zero or more findings. If a lens has
+no finding, emit `NONE` on the line immediately after the heading — a
+silent gap is NOT acceptable, because the consolidator and floor-rules
+script depend on seeing the heading even when empty.
+
+  1. SECURITY & INPUT VALIDATION
+  2. CORRECTNESS & LOGIC
+  3. CONCURRENCY / RACES / IDEMPOTENCY
+  4. ERROR PATHS & EDGE CASES
+  5. PERFORMANCE & RESOURCE USE
+  6. INDEX-CONTRACT / DB RULES
+  7. NAMING / BACKWARD COMPATIBILITY
+
+Lens scope reminders (non-exhaustive — use judgement, do not pattern-
+match blindly):
+
+  - SECURITY & INPUT VALIDATION — auth, authz, injection (SQL/command/
+    template), unsafe deserialisation, secret leakage, TLS/crypto
+    misuse, missing input validation at trust boundaries.
+  - CORRECTNESS & LOGIC — off-by-one, wrong comparator, swapped
+    arguments, inverted conditions, dead branches, mis-ordered
+    operations, control flow that does not match stated intent.
+  - CONCURRENCY / RACES / IDEMPOTENCY — double writes, missing locks,
+    check-then-act, lost updates, replay safety, missing idempotency
+    keys (cross-reference CLAUDE.md §10E).
+  - ERROR PATHS & EDGE CASES — unchecked errors, silent failures,
+    swallowed exceptions, missing handling for null / empty / `{}` /
+    missing-field inputs, boundary conditions, partial-failure
+    recovery.
+  - PERFORMANCE & RESOURCE USE — unbounded work, N+1 queries, leaks
+    (memory, fd, connection), missing or unbounded retries, missing
+    timeouts on outbound calls.
+  - INDEX-CONTRACT / DB RULES — query/index alignment, uniqueness
+    rules, partial-index applicability, ad-hoc createIndex (cross-
+    reference CLAUDE.md §10 A/D/G).
+  - NAMING / BACKWARD COMPATIBILITY — renames or removals of any
+    identifier covered by CLAUDE.md §6 (variables, functions, classes,
+    modules, CLI flags, env vars, URL paths, JSON/DB fields, index /
+    event / metric names, log keys).
+
+Reporting rules per finding (these are additive to the existing output
+contract; do NOT switch to JSON or any other machine-parseable schema):
+
+  - Always include the file path and the affected line range. The
+    consolidator and floor-rules scanner anchor findings to
+    `(file, line)` and will drop findings that lack a usable anchor.
+  - Always include `ISSUE_CONFIDENCE: <1-5>` exactly as defined in the
+    main prompt. Do not omit, rescale, or rename this field.
+  - Use plain prose inside each lens. No JSON, no markdown headings
+    other than the seven lens headings above, no code fences other
+    than those required by the existing output contract for code
+    snippets.
+  - A finding belongs under exactly one lens. If multiple lenses
+    plausibly apply, choose the lens whose remedy class best matches
+    the fix (e.g. a race-condition bug whose remedy is a lock goes
+    under CONCURRENCY, not CORRECTNESS).
+  - Do NOT invent findings to fill a lens. `NONE` is the correct
+    answer when you have nothing concrete to report under a lens.
+
+Do not include this checklist block in your reply. It is instructions
+to you, not template content to echo back.
