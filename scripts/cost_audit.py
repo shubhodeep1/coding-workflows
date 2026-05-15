@@ -2,7 +2,7 @@
 """cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
 
 Pulls the last N runs per workflow via `gh`, fetches each run's log, and
-aggregates token usage per workflow. Three patterns are recognised:
+aggregates token usage per workflow. Four patterns are recognised:
 
   1. Codex CLI ("tokens used\\n<N>") — emitted by clarify, plan, implement,
      validate, orchestrate*, orchestrate_clarify_respond.
@@ -13,6 +13,9 @@ aggregates token usage per workflow. Three patterns are recognised:
   3. Semble telemetry (`SEMBLE_QUERY ... bytes=N` and
      `SEMBLE_FALLBACK ...`) — emitted by Semble-backed prompt-context
      helpers.
+  4. Serena / generic MCP telemetry (`SERENA_QUERY`, `SERENA_FALLBACK`,
+     `SERENA_PROBE`, plus `<NAME>_QUERY|FALLBACK|PROBE` for other MCP
+     servers).
 
 Output: stdout markdown table + per-run JSON file.
 
@@ -73,6 +76,20 @@ OPENROUTER_RE = re.compile(
 
 SEMBLE_QUERY_RE = re.compile(r"(?:^|\s)SEMBLE_QUERY(?:\s|$)")
 SEMBLE_FALLBACK_RE = re.compile(r"(?:^|\s)SEMBLE_FALLBACK(?:\s|$)")
+SERENA_QUERY_RE = re.compile(r"(?:^|\s)SERENA_QUERY(?:\s|$)")
+SERENA_FALLBACK_RE = re.compile(r"(?:^|\s)SERENA_FALLBACK(?:\s|$)")
+SERENA_PROBE_RE = re.compile(r"(?:^|\s)SERENA_PROBE(?:\s|$)")
+MCP_QUERY_GENERIC_RE = re.compile(
+    r"(?:^|\s)(?P<server>[A-Z][A-Z0-9_]*)_QUERY(?:\s|$)"
+)
+MCP_FALLBACK_GENERIC_RE = re.compile(
+    r"(?:^|\s)(?P<server>[A-Z][A-Z0-9_]*)_FALLBACK(?:\s|$)"
+)
+MCP_PROBE_GENERIC_RE = re.compile(
+    r"(?:^|\s)(?P<server>[A-Z][A-Z0-9_]*)_PROBE(?:\s|$)"
+)
+
+KNOWN_MCP_SERVERS = frozenset({"SEMBLE", "SERENA"})
 
 
 def _extract_log_field(line: str, field: str) -> Optional[str]:
@@ -131,6 +148,17 @@ def parse_log(log: str) -> dict:
         "semble_query_bytes": 0,
         "semble_fallbacks": 0,
         "semble_targets": defaultdict(lambda: defaultdict(int)),
+        "serena_query_calls": 0,
+        "serena_query_response_bytes": 0,
+        "serena_query_tool_calls": 0,
+        "serena_query_ms": 0,
+        "serena_fallbacks": 0,
+        "serena_probe_ok": 0,
+        "serena_probe_failed": 0,
+        "serena_probe_skipped": 0,
+        "serena_targets": defaultdict(lambda: defaultdict(int)),
+        "serena_tools": defaultdict(lambda: defaultdict(int)),
+        "other_mcp": defaultdict(lambda: defaultdict(int)),
     }
 
     for m in CODEX_TOKENS_RE.finditer(log):
@@ -176,9 +204,68 @@ def parse_log(log: str) -> dict:
             target = _extract_log_field(line, "target") or "unknown"
             out["semble_fallbacks"] += 1
             out["semble_targets"][target]["fallbacks"] += 1
+        elif SERENA_QUERY_RE.search(line):
+            target = _extract_log_field(line, "target") or "unknown"
+            tool = _extract_log_field(line, "tool") or "unknown"
+            response_bytes = _to_int(_extract_log_field(line, "response_bytes") or "0")
+            tool_calls = _to_int(_extract_log_field(line, "calls") or "0")
+            ms = _to_int(_extract_log_field(line, "ms") or "0")
+            out["serena_query_calls"] += 1
+            out["serena_query_response_bytes"] += response_bytes
+            out["serena_query_tool_calls"] += tool_calls
+            out["serena_query_ms"] += ms
+            out["serena_targets"][target]["query_calls"] += 1
+            out["serena_targets"][target]["response_bytes"] += response_bytes
+            out["serena_targets"][target]["tool_calls"] += tool_calls
+            out["serena_targets"][target]["ms"] += ms
+            out["serena_tools"][tool]["calls"] += tool_calls
+            out["serena_tools"][tool]["response_bytes"] += response_bytes
+            out["serena_tools"][tool]["ms"] += ms
+        elif SERENA_FALLBACK_RE.search(line):
+            target = _extract_log_field(line, "target") or "unknown"
+            out["serena_fallbacks"] += 1
+            out["serena_targets"][target]["fallbacks"] += 1
+        elif SERENA_PROBE_RE.search(line):
+            target = _extract_log_field(line, "target") or "unknown"
+            result = (_extract_log_field(line, "result") or "unknown").lower()
+            bucket = result if result in ("ok", "failed", "skipped") else "skipped"
+            out[f"serena_probe_{bucket}"] += 1
+            out["serena_targets"][target][f"probe_{bucket}"] += 1
+        else:
+            for regex, kind in (
+                (MCP_QUERY_GENERIC_RE, "query"),
+                (MCP_FALLBACK_GENERIC_RE, "fallback"),
+                (MCP_PROBE_GENERIC_RE, "probe"),
+            ):
+                m = regex.search(line)
+                if not m:
+                    continue
+                server = m.group("server")
+                if server in KNOWN_MCP_SERVERS:
+                    continue
+                if kind == "query":
+                    out["other_mcp"][server]["query_calls"] += 1
+                    bytes_value = _extract_log_field(line, "bytes")
+                    if bytes_value is not None:
+                        out["other_mcp"][server]["query_bytes"] += _to_int(bytes_value)
+                    response_bytes = _extract_log_field(line, "response_bytes")
+                    if response_bytes is not None:
+                        out["other_mcp"][server]["query_response_bytes"] += _to_int(
+                            response_bytes
+                        )
+                elif kind == "fallback":
+                    out["other_mcp"][server]["fallbacks"] += 1
+                elif kind == "probe":
+                    result = (_extract_log_field(line, "result") or "unknown").lower()
+                    bucket = result if result in ("ok", "failed", "skipped") else "skipped"
+                    out["other_mcp"][server][f"probe_{bucket}"] += 1
+                break
 
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
     out["semble_targets"] = {p: dict(v) for p, v in out["semble_targets"].items()}
+    out["serena_targets"] = {p: dict(v) for p, v in out["serena_targets"].items()}
+    out["serena_tools"] = {p: dict(v) for p, v in out["serena_tools"].items()}
+    out["other_mcp"] = {s: dict(v) for s, v in out["other_mcp"].items()}
     return out
 
 
@@ -224,6 +311,17 @@ def main() -> int:
             "semble_query_bytes": 0,
             "semble_fallbacks": 0,
             "semble_targets": defaultdict(lambda: defaultdict(int)),
+            "serena_query_calls": 0,
+            "serena_query_response_bytes": 0,
+            "serena_query_tool_calls": 0,
+            "serena_query_ms": 0,
+            "serena_fallbacks": 0,
+            "serena_probe_ok": 0,
+            "serena_probe_failed": 0,
+            "serena_probe_skipped": 0,
+            "serena_targets": defaultdict(lambda: defaultdict(int)),
+            "serena_tools": defaultdict(lambda: defaultdict(int)),
+            "other_mcp": defaultdict(lambda: defaultdict(int)),
         }
 
         for i, r in enumerate(runs, 1):
@@ -243,13 +341,23 @@ def main() -> int:
                 or parsed["or_calls"]
                 or parsed["semble_query_calls"]
                 or parsed["semble_fallbacks"]
+                or parsed["serena_query_calls"]
+                or parsed["serena_fallbacks"]
+                or parsed["serena_probe_ok"]
+                or parsed["serena_probe_failed"]
+                or parsed["serena_probe_skipped"]
+                or parsed["other_mcp"]
             ):
                 agg["runs_with_data"] += 1
             for k in ("codex_tokens_used", "codex_calls", "or_prompt_tokens",
                       "or_completion_tokens", "or_total_tokens",
                       "or_cache_write_tokens", "or_cache_read_tokens",
                       "or_calls", "semble_query_calls",
-                      "semble_query_bytes", "semble_fallbacks"):
+                      "semble_query_bytes", "semble_fallbacks",
+                      "serena_query_calls", "serena_query_response_bytes",
+                      "serena_query_tool_calls", "serena_query_ms",
+                      "serena_fallbacks", "serena_probe_ok",
+                      "serena_probe_failed", "serena_probe_skipped"):
                 agg[k] += parsed[k]
             for phase, vals in parsed["or_phases"].items():
                 for k, v in vals.items():
@@ -257,6 +365,15 @@ def main() -> int:
             for target, vals in parsed["semble_targets"].items():
                 for k, v in vals.items():
                     agg["semble_targets"][target][k] += v
+            for target, vals in parsed["serena_targets"].items():
+                for k, v in vals.items():
+                    agg["serena_targets"][target][k] += v
+            for tool, vals in parsed["serena_tools"].items():
+                for k, v in vals.items():
+                    agg["serena_tools"][tool][k] += v
+            for server, vals in parsed["other_mcp"].items():
+                for k, v in vals.items():
+                    agg["other_mcp"][server][k] += v
             per_run.append({
                 "workflow": wf,
                 "run_id": rid,
@@ -268,19 +385,33 @@ def main() -> int:
                     "or_completion_tokens", "or_total_tokens",
                     "or_cache_write_tokens", "or_cache_read_tokens", "or_calls",
                     "semble_query_calls", "semble_query_bytes", "semble_fallbacks",
+                    "serena_query_calls", "serena_query_response_bytes",
+                    "serena_query_tool_calls", "serena_query_ms",
+                    "serena_fallbacks", "serena_probe_ok",
+                    "serena_probe_failed", "serena_probe_skipped",
                 )},
                 "semble_targets": parsed["semble_targets"],
+                "serena_targets": parsed["serena_targets"],
+                "serena_tools": parsed["serena_tools"],
+                "other_mcp": parsed["other_mcp"],
             })
             sys.stderr.write(
                 f"codex={fmt(parsed['codex_tokens_used'])} "
                 f"or_total={fmt(parsed['or_total_tokens'])} "
                 f"or_calls={parsed['or_calls']} "
                 f"semble_bytes={fmt(parsed['semble_query_bytes'])} "
-                f"semble_fallbacks={fmt(parsed['semble_fallbacks'])}\n"
+                f"semble_fallbacks={fmt(parsed['semble_fallbacks'])} "
+                f"serena_calls={fmt(parsed['serena_query_calls'])} "
+                f"serena_fallbacks={fmt(parsed['serena_fallbacks'])} "
+                f"serena_probe_failed={fmt(parsed['serena_probe_failed'])} "
+                f"other_mcp={len(parsed['other_mcp'])}\n"
             )
 
         agg["or_phases"] = {p: dict(v) for p, v in agg["or_phases"].items()}
         agg["semble_targets"] = {p: dict(v) for p, v in agg["semble_targets"].items()}
+        agg["serena_targets"] = {p: dict(v) for p, v in agg["serena_targets"].items()}
+        agg["serena_tools"] = {p: dict(v) for p, v in agg["serena_tools"].items()}
+        agg["other_mcp"] = {s: dict(v) for s, v in agg["other_mcp"].items()}
         per_wf[wf] = agg
 
     # Markdown summary on stdout
@@ -359,6 +490,114 @@ def main() -> int:
                     f"{fmt(vals.get('fallbacks', 0))} |"
                 )
             print()
+
+    serena_workflows = [
+        wf for wf, a in per_wf.items()
+        if (
+            a["serena_query_calls"]
+            or a["serena_fallbacks"]
+            or a["serena_probe_ok"]
+            or a["serena_probe_failed"]
+            or a["serena_probe_skipped"]
+        )
+    ]
+    if serena_workflows:
+        print("\n## Serena telemetry breakdown\n")
+        print("| Workflow | query_calls | response_bytes | tool_calls | ms | "
+              "fallbacks | probe_ok | probe_failed | probe_skipped |")
+        print("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for wf in serena_workflows:
+            a = per_wf[wf]
+            print(
+                f"| {wf} | {fmt(a['serena_query_calls'])} | "
+                f"{fmt(a['serena_query_response_bytes'])} | "
+                f"{fmt(a['serena_query_tool_calls'])} | "
+                f"{fmt(a['serena_query_ms'])} | "
+                f"{fmt(a['serena_fallbacks'])} | "
+                f"{fmt(a['serena_probe_ok'])} | "
+                f"{fmt(a['serena_probe_failed'])} | "
+                f"{fmt(a['serena_probe_skipped'])} |"
+            )
+
+        print()
+        for wf in serena_workflows:
+            targets = per_wf[wf]["serena_targets"]
+            tools = per_wf[wf]["serena_tools"]
+            print(f"### {wf}\n")
+            print("| target | query_calls | response_bytes | tool_calls | ms | fallbacks | "
+                  "probe_ok | probe_failed | probe_skipped |")
+            print("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+            ordered_targets = sorted(
+                targets,
+                key=lambda t: (
+                    -targets[t].get("response_bytes", 0),
+                    -targets[t].get("query_calls", 0),
+                    t,
+                ),
+            )
+            for target in ordered_targets:
+                vals = targets[target]
+                print(
+                    f"| {target} | {fmt(vals.get('query_calls', 0))} | "
+                    f"{fmt(vals.get('response_bytes', 0))} | "
+                    f"{fmt(vals.get('tool_calls', 0))} | "
+                    f"{fmt(vals.get('ms', 0))} | "
+                    f"{fmt(vals.get('fallbacks', 0))} | "
+                    f"{fmt(vals.get('probe_ok', 0))} | "
+                    f"{fmt(vals.get('probe_failed', 0))} | "
+                    f"{fmt(vals.get('probe_skipped', 0))} |"
+                )
+
+            if tools:
+                print()
+                print("#### tools\n")
+                print("| tool | calls | response_bytes | ms |")
+                print("|---|---:|---:|---:|")
+                ordered_tools = sorted(
+                    tools,
+                    key=lambda t: (
+                        -tools[t].get("response_bytes", 0),
+                        -tools[t].get("calls", 0),
+                        t,
+                    ),
+                )
+                for tool in ordered_tools:
+                    vals = tools[tool]
+                    print(
+                        f"| {tool} | {fmt(vals.get('calls', 0))} | "
+                        f"{fmt(vals.get('response_bytes', 0))} | "
+                        f"{fmt(vals.get('ms', 0))} |"
+                    )
+            print()
+
+    other_mcp_workflows = [wf for wf, a in per_wf.items() if a["other_mcp"]]
+    if other_mcp_workflows:
+        print("\n## Other MCP servers observed\n")
+        print("| Workflow | Server | query_calls | query_bytes | query_response_bytes | "
+              "fallbacks | probe_ok | probe_failed | probe_skipped |")
+        print("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+        for wf in other_mcp_workflows:
+            servers = per_wf[wf]["other_mcp"]
+            ordered_servers = sorted(
+                servers,
+                key=lambda s: (
+                    -servers[s].get("query_response_bytes", 0),
+                    -servers[s].get("query_bytes", 0),
+                    -servers[s].get("query_calls", 0),
+                    s,
+                ),
+            )
+            for server in ordered_servers:
+                vals = servers[server]
+                print(
+                    f"| {wf} | {server} | {fmt(vals.get('query_calls', 0))} | "
+                    f"{fmt(vals.get('query_bytes', 0))} | "
+                    f"{fmt(vals.get('query_response_bytes', 0))} | "
+                    f"{fmt(vals.get('fallbacks', 0))} | "
+                    f"{fmt(vals.get('probe_ok', 0))} | "
+                    f"{fmt(vals.get('probe_failed', 0))} | "
+                    f"{fmt(vals.get('probe_skipped', 0))} |"
+                )
 
     payload = {
         "repo": args.repo,
