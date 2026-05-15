@@ -1,0 +1,167 @@
+Take a software task described in `$ARGUMENTS`, clarify every ambiguity with the user via CLAUDE.md §2-style Q1/Q2 multiple-choice questions, then write a detailed implementation plan to `docs/plans/<slug>-plan.md` and open a PR. `$ARGUMENTS` is **free-form prose** describing the task. It may contain optional references — issue / PR URLs, `#1234` refs, Actions run URLs, commit SHAs, file paths, related prior plans — but they are not required.
+
+$ARGUMENTS
+
+## Procedure
+
+1. **Parse `$ARGUMENTS`.** Capture the free-form task description verbatim. Extract any references mentioned (URLs, file paths, issue numbers, SHAs) and note them for the clarification + research steps. If `$ARGUMENTS` is empty, contains no actionable description, or is so vague that no slug can be derived, **stop and ask the user to describe the task** before proceeding. Do not silently default to a guessed topic.
+
+2. **Read project context.** Always read `README.md`, `agents.md`, and `CLAUDE.md` at the repo root before drafting. If the task plausibly touches a MongoDB collection, also read every relevant `/db/contracts/*.yml` (per CLAUDE.md §10). If references in `$ARGUMENTS` point at issues / PRs / files / prior plans, fetch and read them in full — use `mcp__github__*` tools or the `gh` CLI for GitHub reads (see [Tool Access](#tool-access)), the `Read` tool for local files, and `Grep` / `Glob` to locate related code. Do not guess at code, env vars, or workflow inputs — read the source.
+
+3. **Clarify.** Identify every ambiguity the task introduces — scope, behavior, edge cases, interfaces, data model, operational concerns, success criteria, propagation / consumer impact, rollout. Batch every blocking question in a single round using the [Clarification Format](#clarification-format) below. **Always include a question proposing the slug** (used for the filename and the branch name). Wait for the user's answers. If answers introduce new ambiguity, ask a follow-up batch — but never silently default. The whole point of this command is to converge on a plan with zero hidden assumptions.
+
+4. **Draft the plan.** Write a markdown plan to `docs/plans/<slug>-plan.md` following the structure in [Plan Structure](#plan-structure) below. Cite project constraints by section number where relevant (e.g. "§6 — renames are breaking unless the old name is preserved as an alias"). Surface every assumption you made, every open question that wasn't resolved during clarification, and every risk you spotted. Create the `docs/plans/` directory if it does not yet exist.
+
+5. **Sanity check.** Re-read the plan as if you were the reviewer. Does it answer: what is changing, why, how, what could break, what is verified, what is rolled out? If any of those is hand-wavy, fix it before pushing. No commit-and-iterate cycle on the plan itself.
+
+6. **Branch, commit, push, open PR.** Create a new branch `claude/write-plan-<slug>` (append `-2`, `-3`, … if a branch with that exact name already exists on the remote). Commit the new plan file with message `docs: plan for <topic>`. Push with `git push -u origin <branch>` (retry up to 4 times with exponential backoff on transient network errors per the project's git policy). Open a PR via `mcp__github__create_pull_request`:
+   - **Base:** the repo's default branch, resolved with `gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`. Do NOT hardcode `main`.
+   - **Title:** `docs: plan for <topic>`
+   - **Body:** the [PR Body Template](#pr-body-template) below.
+   - **Draft:** `false` (ready for review).
+
+7. **Report.** Emit the [Output Format](#output-format) in chat — short summary, file path, branch, PR URL, top open questions.
+
+## Clarification Format
+
+Follow CLAUDE.md §2 exactly. Stable IDs `Q1`, `Q2`, …; letter-only answers (`A`, `B`, `C`, or `A+C`); mark at least one option `(RECOMMENDED)`; one decision per Q-ID; multi-select allowed only when stated explicitly. Never use numeric (1, 2, 3) prefixes — only Q-IDs.
+
+Common questions to consider in the first batch (skip any already unambiguously answered in `$ARGUMENTS`):
+
+- **Slug confirmation** — propose 2–3 slug candidates derived from the topic. Used for both `docs/plans/<slug>-plan.md` and the branch `claude/write-plan-<slug>`.
+- **Scope** — which repo / module / service / runtime; prod vs staging vs dev.
+- **Backward compatibility** — does any existing identifier get renamed or removed? Per §6, those are breaking unless aliased.
+- **Data model** — collections touched, index changes, contract updates per §10.
+- **Interfaces** — API / CLI / env vars / log keys affected; observability impact.
+- **Success criteria** — what is the done condition; how is correctness verified.
+- **Rollout** — feature flag, dark launch, gradual ramp, instant cutover, rollback path.
+- **Out-of-scope explicitly** — what is NOT being planned here.
+- **Propagation** — if the change must reach consumer repos per `.github/ai/consumer_repos.json` (CLAUDE.md §14), how.
+- **GitHub API hygiene** — if the plan adds new `gh api` / MCP calls, how they batch / reuse existing calls per §15.
+
+Add task-specific questions as needed. Skip empty rounds — if `$ARGUMENTS` is already exhaustive, ask only for slug confirmation and proceed.
+
+Example shape:
+
+```
+**Q1: Which slug should this plan use?**
+
+Choices:
+- **A** — `rate-limit-api` — short, action-focused (RECOMMENDED)
+- **B** — `add-rate-limiting-to-public-endpoints` — fully descriptive
+- **C** — User-supplied — reply with your own slug
+
+Reply: `Q1: A`
+```
+
+## Plan Structure
+
+Default sections (drop any that are genuinely N/A; never add filler):
+
+```
+# <Title — usually identical to PR title without the `docs: plan for ` prefix>
+
+## Summary
+1–2 sentences. What is being built, why now.
+
+## Context
+What in the codebase / product motivates this. Link prior work, issues, related plans, design docs. Quote constraints from CLAUDE.md by section number where they bind the design.
+
+## Goals
+Bulleted, verifiable. Each goal must be falsifiable on review.
+
+## Non-goals
+What this plan deliberately does NOT cover. Out-of-scope work goes here, not as a footnote.
+
+## Constraints
+Project rules that bind this work: §6 naming immutability, §10 MongoDB rules, §14 consumer-repo registry, §15 GitHub API hygiene, security, performance, backward compatibility. Cite by section.
+
+## Approach
+The chosen design at a high level. If multiple designs were considered, briefly note the alternatives and why this one won.
+
+## Implementation Steps
+Numbered. Each step lists the files touched (with line ranges if known), the change in one sentence, and any preconditions / ordering constraints. Steps should be small enough to land as individual commits.
+
+## Files & Modules
+Bulleted list of every file the implementation will create, edit, or delete. Mark new files with `[new]`, deletions with `[del]`.
+
+## Data Model / Index Changes
+Only if applicable. Per §10: name every collection touched, every index added / changed / removed, and link to the matching `/db/contracts/<collection>.yml` update.
+
+## Tests
+What new tests; what existing tests need updating; how the plan is verified end-to-end. Distinguish unit / integration / e2e / manual.
+
+## Risks & Mitigations
+Bulleted. Each risk gets a one-line mitigation or `ACCEPTED — <why>`.
+
+## Rollout
+Feature flag? Dark launch? Migration order? Rollback procedure? Consumer-repo propagation timing if §14 applies?
+
+## Open Questions
+Anything that survived the clarification loop unresolved. Each entry is a question the reviewer must answer before implementation starts. `None.` is a valid value.
+
+## References
+Links to related issues, PRs, prior plans, external docs, RFCs.
+```
+
+## PR Body Template
+
+```
+## Summary
+<1–2 sentences — same wording as the plan's Summary section.>
+
+## What this plan covers
+- <one bullet per major section: Goals, Approach, Implementation Steps, Tests, Rollout>
+
+## Open questions
+- <one bullet per unresolved item; `None.` if all closed during clarification>
+
+## Plan file
+[`docs/plans/<slug>-plan.md`](./docs/plans/<slug>-plan.md)
+```
+
+The body does NOT need to duplicate the full plan — the PR diff shows it.
+
+## Output Format
+
+After the PR is open, emit in chat:
+
+```
+Plan: <topic>
+File: docs/plans/<slug>-plan.md
+Branch: claude/write-plan-<slug>
+PR: <url>
+
+Summary: <1–2 lines from the plan's Summary section>
+
+Open questions:
+- <q1>
+- <q2>
+```
+
+Omit `Open questions` if none. No prose padding. A bare "Plan written, see PR #X" is not acceptable — the user wants summary + file + branch + PR + open questions in chat.
+
+## Tool Access
+
+Same surface as `/investigate-issue` and `/analyze-log` — pick whichever is exposed in the session:
+
+- **`mcp__github__*` MCP tools** — always available. Use `mcp__github__create_pull_request` for opening the PR. Use `mcp__github__get_file_contents`, `mcp__github__pull_request_read`, `mcp__github__issue_read`, `mcp__github__search_code`, `mcp__github__list_branches` for research and branch-collision checks.
+- **`gh` CLI** — available when `GH_TOKEN` or `GITHUB_TOKEN` is set in the session environment. Verify auth state directly with `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status` (nounset-safe) — don't infer it from the SessionStart log. Use for default-branch detection (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`) and any read that is awkward via MCP.
+- **`-R <owner>/<repo>` is mandatory** on `gh` calls that need repo context. In Claude Code Web sessions the only git remote points at a local proxy, so `gh` cannot auto-detect the GitHub repo from `git remote -v`; bare `gh repo view …` fails with `failed to determine base repo`. The SessionStart hook prints the resolved slug — use that value.
+
+Local file reads use `Read`. Local code search uses `Grep` / `Glob`. Git operations use `Bash`.
+
+## Rules
+
+- **No code changes — plan only.** This command produces a markdown plan and a PR containing only that plan file. Do not edit source files, configs, workflows, scripts, schemas, or contracts during a `/write-plan` invocation. Implementation comes later, via `/investigate-issue` or direct work.
+- **Always open the PR.** Do not stop at "plan committed locally." The deliverable is a reviewable plan-PR, not a local file.
+- **Mandatory pre-task reads.** Per CLAUDE.md, read `README.md`, `agents.md`, and `CLAUDE.md` before drafting. For MongoDB-touching tasks, also read every relevant `/db/contracts/*.yml`. Missing or unclear context is a hard stop — surface it as a clarification question, do not paper over it.
+- **Honor §6 (naming immutability).** If the planned work renames or removes any identifier (variable, function, class, module, CLI flag, env var, URL path, JSON/DB field, index/event/metric name, log key), the plan MUST explicitly flag this as a breaking change and propose an alias / backward-compat path.
+- **Honor §10 (MongoDB).** Any collection / index / contract impact MUST be enumerated in the plan with the corresponding `/db/contracts/*` update path.
+- **Honor §14 (consumer repos).** If the planned change reaches workflow templates or `.claude/` assets that propagate to consumer repos, the plan MUST state which consumers are affected and reference `.github/ai/consumer_repos.json`.
+- **Honor §15 (GitHub API hygiene).** Plans that add `gh api` / MCP calls MUST justify the new call surface and explain how it batches / reuses existing calls.
+- **Clarify aggressively; never default silently.** Per §0 + §2 — when in doubt, ask. If the answers to the first batch open new ambiguities, ask a follow-up batch. The user provided "ask clarifying questions until its completely clear" as the contract — honor that.
+- **Slug rules.** Lowercase ASCII alphanumeric + hyphens, ≤ 60 chars, derived from the task topic. Always confirm the slug in the clarification batch — never auto-pick.
+- **Branch collision.** If `claude/write-plan-<slug>` already exists on the remote (check via `mcp__github__list_branches` or `git ls-remote --heads origin claude/write-plan-<slug>`), append `-2`, `-3`, … to the slug. Never force-push.
+- **Default branch.** Resolve dynamically via `gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`. Do not hardcode `main` — some consumer repos use a different default branch.
+- **Final chat reply.** Always emit the [Output Format](#output-format) — even when the PR is open and linked. The PR alone is not the user-facing report.
