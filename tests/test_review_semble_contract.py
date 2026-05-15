@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -31,6 +34,55 @@ def _step_block(text: str, step_name: str) -> str:
 	if next_step == -1:
 		return text[start:]
 	return text[start:next_step]
+
+
+def _render_reviewer_prompt_with_checklist(*, checklist_enabled: str, prompt_available: bool) -> tuple[str, str]:
+	reviewers = _read(REVIEWERS)
+	start = reviewers.index('REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"')
+	end = reviewers.index("# Assemble the default", start)
+	block = reviewers[start:end]
+
+	with tempfile.TemporaryDirectory(prefix="reviewer-checklist-") as tmp:
+		tmp_p = Path(tmp)
+		support_prompts_dir = tmp_p / "prompts"
+		support_prompts_dir.mkdir()
+		(tmp_p / "pre_assembled_static.txt").write_text("STATIC SENTINEL\n", encoding="utf-8")
+		prompt_body_file = tmp_p / "prompt_body.txt"
+		prompt_body_file.write_text("PROMPT BODY SENTINEL\n", encoding="utf-8")
+		memory_context_file = tmp_p / "memory_context.txt"
+		memory_context_file.write_text("MEMORY SENTINEL\n", encoding="utf-8")
+		if prompt_available:
+			(support_prompts_dir / "review-reviewer-checklist.txt").write_text(
+				_read(REVIEWER_CHECKLIST_PROMPT),
+				encoding="utf-8",
+			)
+		assembled_prompt_file = tmp_p / "assembled_prompt.txt"
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_PROMPTS_DIR": str(support_prompts_dir),
+			"SUPPORT_ROOT_DIR": str(tmp_p / "support-root"),
+			"REVIEW_REVIEWER_CHECKLIST_ENABLED": checklist_enabled,
+			"PROMPT_ARTIFACT_PATH_HINT": "ARTIFACT PATH HINT",
+			"PROMPT_RUNTIME_CONTEXT_HINT": "RUNTIME CONTEXT HINT",
+			"MEMORY_CONTEXT_FILE": str(memory_context_file),
+			"OUTPUT_FILE": str(assembled_prompt_file),
+			"PROMPT_BODY_FILE": str(prompt_body_file),
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'assemble_reviewer_prompt "${OUTPUT_FILE}" "${PROMPT_BODY_FILE}"\n',
+			],
+			cwd=str(tmp_p),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return assembled_prompt_file.read_text(encoding="utf-8"), result.stderr
 
 
 def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
@@ -130,14 +182,28 @@ def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_ser
 
 
 def test_reviewer_checklist_prompt_contract_and_gate() -> None:
+	workflow = _read(WORKFLOW)
 	checklist = _read(REVIEWER_CHECKLIST_PROMPT)
 	reviewers = _read(REVIEWERS)
+	stage_block = _step_block(workflow, "Stage workflow support files")
 	helper_start = reviewers.index("append_reviewer_checklist_block()")
 	helper_end = reviewers.index("# Assemble the base reviewer prompt", helper_start)
 	helper_block = reviewers[helper_start:helper_end]
 	assemble_start = reviewers.index("assemble_reviewer_prompt()")
 	assemble_end = reviewers.index("# Assemble the default", assemble_start)
 	assemble_block = reviewers[assemble_start:assemble_end]
+	enabled_prompt, enabled_stderr = _render_reviewer_prompt_with_checklist(
+		checklist_enabled="1",
+		prompt_available=True,
+	)
+	disabled_prompt, disabled_stderr = _render_reviewer_prompt_with_checklist(
+		checklist_enabled="0",
+		prompt_available=True,
+	)
+	missing_prompt, missing_stderr = _render_reviewer_prompt_with_checklist(
+		checklist_enabled="1",
+		prompt_available=False,
+	)
 
 	expected_headings = [
 		"SECURITY & INPUT VALIDATION",
@@ -160,6 +226,12 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert "Problem:" in checklist
 	assert "Why it fails at runtime:" in checklist
 	assert "ISSUE_CONFIDENCE:" in checklist
+	assert "REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}" in workflow
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then' in stage_block
+	assert 'src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"' in stage_block
+	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' in stage_block
+	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"' in stage_block
+	assert 'review-reviewer-checklist.txt not found in checked-out support sources' in stage_block
 	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"' in reviewers
 	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_ROOT_DIR:-.}/prompts/review-reviewer-checklist.txt"' in reviewers
 	assert 'REVIEWER_CHECKLIST_ENABLED=false' in reviewers
@@ -173,6 +245,13 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert assemble_block.index('cat "${extra_context_file}"') < assemble_block.index('append_reviewer_checklist_block')
 	assert 'assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"' in reviewers
 	assert 'assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"' in reviewers
+	assert enabled_prompt.index("PROMPT BODY SENTINEL") < enabled_prompt.index("REVIEWER CHECKLIST")
+	for heading in expected_headings:
+		assert heading in enabled_prompt
+	assert "REVIEWER CHECKLIST" not in disabled_prompt
+	assert disabled_stderr.strip() == ""
+	assert "REVIEWER CHECKLIST" not in missing_prompt
+	assert "Reviewer checklist prompt unavailable" in missing_stderr
 
 
 def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> None:
