@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `orchestrator/project-2617` at `c0240b4754d2b99f508e71a0436a13391a62d078`\n\nClarification mapping\n- No `Q1`/`Q2` batch was issued in clarify.\n- `/answer [auto-answered-by-orchestrator]` adds no new requirements; it only confirms continuation.\n\nRepresentative pattern to follow\n- Reuse the editor-side targeted-context pattern in `scripts/review_apply_fixes.sh` + `scripts/targeted_file_context.py`: local artifact inputs, read-only repo inspection, fail-open behavior, no GitHub API expansion.\n\n1. Files likely to change\n- `scripts/review_run_reviewers.sh`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n\n2. Functions/modules to implement\n- In `scripts/review_run_reviewers.sh`:\n  - Activate `REVIEW_REVIEWER_ITERATION_SCOPING` parsing/gating.\n  - Add a helper that derives reviewer focus files for iteration > 1 from:\n    - `LAST_RUN_CHANGED_FILES_FILE`\n    - actionable rows in `LEDGER_STATUS_FILE` with status `NEW`, `PERSISTING`, or `RESURGENT`\n  - Exclude `FIXED` and `accepted-residual` ledger rows.\n  - Dedupe focus files while preserving first-seen order.\n  - Fail open to today\u2019s full-diff path when scoped inputs are missing, empty, or malformed.\n  - Keep first-iteration detection on the existing `LAST_RUN_DIFF_FILE` sentinel logic.\n  - Change prompt construction so:\n    - iteration 1 keeps the current full-diff/full-context prompt\n    - later iterations inline the latest autofix diff plus scoped file context instead of always inlining the full PR context\n  - Align the reviewer Semble query/context with the scoped file set so overflow retrieval does not silently broaden back to full-PR scope.\n- In `tests/test_review_autofix_review_pipeline_contract.py`:\n  - Extend the existing contract coverage to exercise:\n    - first iteration => full-diff/full-context\n    - later iteration with valid scope artifacts => scoped reviewer context\n    - missing/empty/malformed scope artifacts => fail-open full-diff behavior\n\n3. Data structures affected\n- `LAST_RUN_CHANGED_FILES_FILE`: newline-delimited paths from the latest autofix run.\n- `LEDGER_STATUS_FILE`: 6-column tab-separated rows; scoping should read status from column 2 and file+line anchor from column 4.\n- Reviewer runtime prompt artifacts:\n  - `reviewer_prompt_body.txt`\n  - `reviewer_prompt_pass1.txt`\n  - `reviewer_prompt_pass2.txt`\n  - reviewer Semble query/context files\n- No change to reviewer bundle format or pass-1/pass-2 output naming.\n\n4. API or interface changes\n- No external API changes.\n- No new GitHub API calls.\n- No new reviewer permissions; reviewer remains no-web/no-write.\n- Existing env knob `REVIEW_REVIEWER_ITERATION_SCOPING` becomes behaviorally active.\n- Two-pass architecture, watchdog logic, and reviewer bundle contract remain unchanged.\n\n5. Potential risks / edge cases\n- `LAST_RUN_CHANGED_FILES_FILE` may contain placeholder text rather than paths; treat that as non-parseable and fail open.\n- `LEDGER_STATUS_FILE` may be absent, empty, or malformed; do not under-scope on bad input.\n- If ledger parsing succeeds but yields no actionable rows, scope should still at least respect the latest autofix change set.\n- If scoped prompt sections change but Semble query still uses full PR files, later passes may regain full-PR breadth indirectly.\n- Keep pass-2 cross-pollination isolated; scoped context should not disturb the consensus-ledger flow.\n- Conflict to note: `.github/workflows/review_autofix.yml` still hardcodes the iteration-summary note as `full-diff` / \u201cplumbed only\u201d. If workflow edits are truly out of scope here, runtime summary text may remain stale after the reviewer prompt behavior is fixed.\n\n6. Testing considerations\n- Primary: `tests/test_review_autofix_review_pipeline_contract.py`\n- Regression check: `tests/test_review_semble_contract.py` because reviewer prompt assembly / Semble query ordering is nearby and should remain intact.\n- Verify both prompt modes explicitly:\n  - first iteration uses current full PR sections\n  - subsequent iteration uses scoped focus from latest autofix files + actionable ledger files\n  - malformed or missing artifacts revert to full-diff behavior\n- Confirm no changes to:\n  - pass-1/pass-2 prompt filenames\n  - reviewer manifest/bundle shape\n  - watchdog/retry flow\n\nAssumptions\n- The issue body did not include any additional editable-file list beyond the explicitly named script and existing reviewer contract test, so this plan keeps repo-file edits limited to those paths unless scope is later expanded.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fa0b1737c57b625eb295bd00407b43545977367bf1ea47f2dd058e16ef592059",
+  "lineage": {
+    "issue_number": 2622,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25926326081",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25926326081",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2622"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260515153701_030959642d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2622,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25926326081"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2622",
+  "timestamps": {
+    "created_at": "2026-05-15T15:37:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
