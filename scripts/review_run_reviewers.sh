@@ -316,7 +316,7 @@ if [ "${_iteration_scoping_enabled}" = "true" ] && [ "${IS_FIRST_ITERATION}" = "
   # not surfaced for re-review.)
   _ledger_status_file="${RUNTIME_DIR}/ledger_status.txt"
   if [ -s "${_ledger_status_file}" ]; then
-    awk -F'\t' '$2 ~ /^(NEW|PERSISTING|RESURGENT)$/ { split($4, a, ":"); if (a[1] != "") print a[1] }' \
+    awk -F'\t' '$2 ~ /^(NEW|PERSISTING|RESURGENT)$/ { anchor=$4; sub(/:[^:]*$/, "", anchor); if (anchor != "") print anchor }' \
       "${_ledger_status_file}" 2>/dev/null \
       >> "${ITERATION_SCOPE_FILE}" || true
   fi
@@ -897,7 +897,7 @@ assemble_reviewer_prompt() {
     fi
     # Reviewer checklist block (REVIEW_REVIEWER_CHECKLIST_ENABLED). Appended
     # last so the seven-lens reporting contract is the final instruction the
-    # reviewer reads before the cross-pollination context (if any). Empty
+    # reviewer reads after any cross-pollination context. Empty
     # when the feature is disabled or the prompt file is missing — fail-open
     # to today's homogeneous reviewer prompt.
     if [ -n "${REVIEWER_CHECKLIST_BLOCK:-}" ]; then

@@ -2390,6 +2390,7 @@ jobs:
 
           echo "Consecutive autofix commits: ${autofix_count} (max: ${effective_max_iterations})"
           echo "autofix_iteration=${autofix_count}" >> "$GITHUB_OUTPUT"
+          echo "AUTOFIX_ITERATION=$((autofix_count + 1))" >> "$GITHUB_ENV"
 
           # skip_judge is retained as a step output for backward compat with
           # downstream gate expressions (e.g. the rb_judge step's
