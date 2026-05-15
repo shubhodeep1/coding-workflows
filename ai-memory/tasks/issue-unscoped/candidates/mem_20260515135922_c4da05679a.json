@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:219-222 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The new contract test `tests/test_review_autofix_review_pipeline_contract.py` is not registered in the mark-stable.yml release-gate allowlist.\n  WHY: mark-stable.yml runs only its explicit test allowlist, so omitting this contract test lets env-wiring or summary-step regressions pass stable tagging undetected.\n- .github/workflows/test-and-mark-stable.yml:3208-3209 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The new contract test `tests/test_review_autofix_review_pipeline_contract.py` is not registered in the test-and-mark-stable.yml release-gate allowlist.\n  WHY: test-and-mark-stable.yml also runs only its explicit test allowlist, so omitting this contract test lets the same release-gate regression escape detection.\n- .github/workflows/review_autofix.yml:5624-5627 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `file_bytes()` may still yield empty or non-numeric output in edge cases, so the new hardening is not fully validated.\n  WHY: Two reviewers reported that the `|| echo 0` fallback only covers some failure modes, while two others judged the existing guard sufficient; the output-validation behavior remains disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/mark-stable.yml:219-222 | confidence=4\n  PROBLEM: The contract test `test_review_autofix_review_pipeline_contract.py` is registered in ci.yml but missing from the mark-stable.yml test allowlist.\n  WHY: The mark-stable release gate runs only its explicit test allowlist, so a future regression in the env-wiring or summary-step contract could pass the stable release gate undetected.\n- .github/workflows/test-and-mark-stable.yml:3208-3209 | confidence=4\n  PROBLEM: The same contract test is missing from the test-and-mark-stable.yml allowlist.\n  WHY: The e2e release gate runs its own separate test allowlist, so a contract regression could pass the e2e gate undetected.\n- .github/workflows/review_autofix.yml:5627 | confidence=1\n  PROBLEM: The concern that the `|| echo 0` fallback in `file_bytes()` may not fire is unfounded.\n  WHY: Under `set -o pipefail`, when `wc -c < \"${path}\"` fails to open the file, the pipeline exit status is non-zero and `|| echo 0` fires correctly; direct shell testing confirmed a missing file produces `0`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/mark-stable.yml:219-222 and .github/workflows/test-and-mark-stable.yml:3208-3209 | confidence=4\n  PROBLEM: The contract test `test_review_autofix_review_pipeline_contract.py` is still missing from the release-workflow allowlists.\n  WHY: The last run only added it to ci.yml, so both release gates can still miss env-wiring or summary-step regressions.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `.github/workflows/mark-stable.yml` | confidence=5\n  PROBLEM: The new contract test `test_review_autofix_review_pipeline_contract.py` is registered in `ci.yml` but missing from the release gate workflows.\n  WHY: The `mark-stable.yml` workflow explicitly runs tests via allowlist, so unlisted tests are skipped during stable tagging.\n- `.github/workflows/test-and-mark-stable.yml` | confidence=5\n  PROBLEM: The new contract test `test_review_autofix_review_pipeline_contract.py` is missing from the extended `test-and-mark-stable` release workflow.\n  WHY: The release-gate workflow explicitly runs tests via allowlist, so unlisted tests are skipped during stable tagging.\n- `.github/workflows/review_autofix.yml` | confidence=3\n  PROBLEM: The `file_bytes()` fallback may not behave as intended for edge cases.\n  WHY: The `|| echo 0` fallback only fires if the pipeline returns non-zero, so if `wc -c` produces empty output but exits 0, the function can return an empty string instead of `\"0\"`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/mark-stable.yml and .github/workflows/test-and-mark-stable.yml:219 / 3208 | confidence=4\n  PROBLEM: The new contract test `tests/test_review_autofix_review_pipeline_contract.py` is registered in `.github/workflows/ci.yml` but is missing from the release-gate workflow test allowlists.\n  WHY: Both `mark-stable.yml` and `test-and-mark-stable.yml` use explicit `python3 tests/<file>.py` invocations, so the new test must be added to both Unit tests steps to keep stable release gates from skipping it.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/ci.yml:202-212 | confidence=5\n  PROBLEM: The new contract test `tests/test_review_autofix_review_pipeline_contract.py` was added to ci.yml but is absent from the release workflows `mark-stable.yml` and `test-and-mark-stable.yml`.\n  WHY: The release gates execute only listed tests, so env-wiring or summary-contract regressions could pass tagging despite PR CI detection.\n- .github/workflows/review_autofix.yml:5624 | confidence=3\n  PROBLEM: `file_bytes()` hardening still lacks validation of numeric output.\n  WHY: `|| echo 0` only guards a non-zero pipeline exit; partial or corrupt stdout can still be silently coerced downstream, underreporting step-summary sizes.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/mark-stable.yml and .github/workflows/test-and-mark-stable.yml:219 / 3208 | confidence=3\n  PROBLEM: The new contract test `tests/test_review_autofix_review_pipeline_contract.py` is not registered in the release-gate workflows.\n  WHY: The release-gate workflows run only their explicit test lists, so the missing test could let a stable-tagged regression slip through, although this may be intentional scoping.\n- .github/workflows/review_autofix.yml:5624-5627 | confidence=1\n  PROBLEM: The `file_bytes()` hardening is correct for the actual failure modes.\n  WHY: `wc -c` on an existing readable file always emits a numeric count, and the `2>/dev/null || echo 0` path already covers the missing/read-error case; the theoretical empty-output path is not reachable.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d89dee38387a33a3fd9a7b11b5d5e630390085a8e4d675519fad997fd892a856",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2621,
+    "run_id": "25921115297",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25921115297",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515135922_c4da05679a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2621,
+    "run_id": "25921115297"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-15T13:59:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
