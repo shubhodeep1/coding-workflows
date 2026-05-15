@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Implement MCP usage monitoring parity for Serena and generic MCP\",\"issues\":[{\"id\":\"cost-audit-serena-generic-mcp\",\"title\":\"Add Serena and generic MCP telemetry parsing to cost_audit.py\",\"priority\":1},{\"id\":\"analysis-prompts-mcp-telemetry-parity\",\"title\":\"Teach workflow-analysis prompts to preserve Serena and MCP telemetry\",\"priority\":2}],\"dependency_edges\":[]}",
+  "fingerprint": "303cb10a3ceb944508000679adea54845da58e1075341f7737a35a77d524264f",
+  "lineage": {
+    "issue_number": 2597,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25898224963",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25898224963",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260515032041_0f9da50341",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2597,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25898224963"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Implement MCP usage monitoring parity for Serena and generic MCP' into 2 issues (tracking #2597)",
+  "timestamps": {
+    "created_at": "2026-05-15T03:20:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
