@@ -354,7 +354,11 @@ append_semble_query_section() {
 }
 
 prepare_reviewer_scoped_context() {
-  [ -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ] || return 1
+  if [ ! -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ]; then
+    write_reviewer_scope_summary "full-diff" "missing targeted_file_context.py"
+    return 1
+  fi
+  : > "${REVIEWER_SCOPE_SUMMARY_FILE}"
   : > "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}"
   : > "${REVIEWER_SCOPE_QUERY_SEED_FILE}"
 
@@ -566,13 +570,14 @@ elif grep -qE '^(No previous AI autofix|Initial run — no previous commit)' "${
 fi
 
 REVIEWER_ITERATION_SCOPING_ENABLED=false
-case "$(printf '%s' "${REVIEW_REVIEWER_ITERATION_SCOPING:-0}" | tr '[:upper:]' '[:lower:]')" in
+case "$(printf '%s' "${REVIEW_REVIEWER_ITERATION_SCOPING:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
   1|true|yes|on) REVIEWER_ITERATION_SCOPING_ENABLED=true ;;
 esac
 
 REVIEWER_SCOPED_CONTEXT_ACTIVE=false
 REVIEWER_SCOPE_REASON="first iteration — keep full PR context"
 : > "${REVIEWER_SCOPE_PATHS_FILE}"
+: > "${REVIEWER_SCOPE_SUMMARY_FILE}"
 : > "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}"
 if [ "${IS_FIRST_ITERATION}" = "true" ]; then
   write_reviewer_scope_summary "full-diff" "${REVIEWER_SCOPE_REASON}"
@@ -1144,6 +1149,7 @@ Output plain text only.
 No JSON
 No markdown
 No code blocks
+No scripts
 __REVIEWER_PROMPT__
 } > "${REVIEWER_PROMPT_BODY_FILE}"
 # Remove the per-process budget state file now that the heredoc has

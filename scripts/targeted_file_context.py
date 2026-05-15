@@ -115,6 +115,10 @@ SAFE_EXTENSIONS = {
 	".jsx", ".kt", ".md", ".py", ".rb", ".rs", ".sh", ".sol", ".sql",
 	".svelte", ".toml", ".ts", ".tsx", ".txt", ".vue", ".xml", ".yaml", ".yml",
 }
+ROOT_LEVEL_BARE_FILENAMES = {"COPYING", "LICENCE", "LICENSE", "NOTICE", "README"}
+ROOT_LEVEL_DOTTED_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9][A-Za-z0-9._-]*$")
+ROOT_LEVEL_DOTFILE_RE = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
+ROOT_LEVEL_FILESTYLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*file(?:\.[A-Za-z0-9][A-Za-z0-9._-]*)*$", re.I)
 
 DEFAULT_HEADER_TEXT = (
 	"The approved plan / autofix-finding / conflict-marker scan named these "
@@ -150,8 +154,27 @@ def _log_semble_event(prefix: str, **fields: object) -> None:
 	print(" ".join(parts), file=sys.stderr)
 
 
+def _trim_path_candidate(value: str) -> str:
+	value = value.strip()
+	dotfile_candidate = value.rstrip(".,;:")
+	if ROOT_LEVEL_DOTFILE_RE.fullmatch(dotfile_candidate) is not None:
+		return dotfile_candidate
+	return value.strip(".,;:")
+
+
+def is_probable_root_level_path(value: str) -> bool:
+	if "/" in value:
+		return False
+	return (
+		value in ROOT_LEVEL_BARE_FILENAMES
+		or ROOT_LEVEL_DOTFILE_RE.fullmatch(value) is not None
+		or ROOT_LEVEL_DOTTED_NAME_RE.fullmatch(value) is not None
+		or ROOT_LEVEL_FILESTYLE_RE.fullmatch(value) is not None
+	)
+
+
 def is_probable_path(value: str) -> bool:
-	value = value.strip().strip(".,;:")
+	value = _trim_path_candidate(value)
 	if not value or value.startswith(("http://", "https://", "#")):
 		return False
 	if any(part in {"", ".", ".."} for part in value.split("/")):
@@ -159,11 +182,11 @@ def is_probable_path(value: str) -> bool:
 	if value.startswith(("/", "~")) or "\x00" in value:
 		return False
 	suffix = Path(value).suffix.lower()
-	return "/" in value or suffix in SAFE_EXTENSIONS or value in {"Dockerfile", "Makefile", "Procfile"}
+	return "/" in value or suffix in SAFE_EXTENSIONS or is_probable_root_level_path(value)
 
 
 def normalize_path(value: str) -> str | None:
-	value = value.strip().strip(".,;:")
+	value = _trim_path_candidate(value)
 	if not is_probable_path(value):
 		return None
 	return value
