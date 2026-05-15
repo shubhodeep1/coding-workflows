@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/cost_audit.py:228-230 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Malformed SERENA_PROBE result= values fall into probe_skipped without distinct observability, which can mask emitter bugs from operator audits.\n  WHY: Malformed SERENA_PROBE lines accumulate in probe_skipped while probe_failed stays 0, so a bad emitter format can be detected only as a skipped spike.\n- scripts/cost_audit.py:259-261 | severity=medium | confidence=[2]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The one-match-per-line break silently drops subsequent unknown-server prefixes on multi-prefix log lines.\n  WHY: A line like \"SERENA_QUERY ... FOO_QUERY ...\" counts SERENA correctly but discards FOO_QUERY without fallback parsing or logging, undercounting generic telemetry.\n- tests/test_cost_audit_serena_metrics.py:1-262 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new Serena/MCP test file is absent from the listed CI allowlists, so regressions in this parsing surface can evade the release gate.\n  WHY: If the test file is not executed by the workflow allowlists, parser bugs can pass CI undetected until a manual operator run.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/cost_audit.py:228-230 | severity=medium | confidence=[3]\n  PROBLEM: Added comment correctly states the three-state JSON/markdown contract preservation intent, but does not flag that this fail-open silently inflates probe_skipped with unparseable result= values, masking potential emitter bugs from operator audits.\n  WHY: Malformed SERENA_PROBE lines (e.g., missing result= or garbage) accumulate in probe_skipped without distinct observability; if an emitter starts emitting bad result= formats, probe_failed stays 0 while skipped spikes, delaying root-cause detection in cost audits.\n- scripts/cost_audit.py:259-261 | severity=medium | confidence=[2]\n  PROBLEM: Added comment accurately justifies the one-match-per-line break for known-server guards, but omits that it drops subsequent unknown-server prefixes on multi-prefix lines without fallback parsing or logging.\n  WHY: Rare multi-prefix lines like \"SERENA_QUERY ... FOO_QUERY ...\" count SERENA correctly but silently discard FOO_QUERY; other_mcp misses future MCP signals appended to known-server lines, undercounting generic telemetry in audits.\n- tests/test_cost_audit_serena_metrics.py:1-262 | severity=high | confidence=[5]\n  PROBLEM: New test file verifies scoped parse_log cases but is absent from CI allowlists in .github/workflows/ci.yml (python3 tests/test_*.py lines ~150-160), mark-stable.yml (~200), test-and-mark-stable.yml (~300); regressions in Serena/MCP parsing evade CI.\n  WHY: cost_audit.py parser bugs (e.g., new emitter formats) pass CI undetected until manual operator run; Semble parity incomplete as new tests never execute in release gate.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "479aac612520e7ed4707007e1922a7b221fdf41afc091a14bbbe3bb5e5ca0bf9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2604,
+    "run_id": "25899757104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25899757104",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515042555_9375082ad0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2604,
+    "run_id": "25899757104"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-15T04:25:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
