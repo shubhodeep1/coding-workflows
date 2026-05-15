@@ -2998,6 +2998,7 @@ jobs:
 
       - name: Upload per-reviewer logs (always)
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: reviewer-logs-${{ github.run_id }}-${{ github.run_attempt }}
@@ -5546,6 +5547,7 @@ jobs:
 
       - name: Upload codex logs (failure or empty-editor)
         if: always() && env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR != ''
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: codex-review-autofix-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}
