@@ -608,10 +608,10 @@ if [ -z "${JUDGE_JSON:-}" ]; then
   exit 0
 fi
 
-RB_ACTION="$(echo "${JUDGE_JSON}" | jq -r '.action')"
-RB_JUSTIFICATION="$(echo "${JUDGE_JSON}" | jq -r '.justification // "no justification"')"
-RB_FIX_DESC="$(echo "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
-RB_REMAINING="$(echo "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
+RB_ACTION="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.action')"
+RB_JUSTIFICATION="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.justification // "no justification"')"
+RB_FIX_DESC="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
+RB_REMAINING="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
 
 echo "Judge decision: ${RB_ACTION}"
 echo "Justification: ${RB_JUSTIFICATION}"
@@ -944,8 +944,8 @@ ${RB_FIX_DESC}"
     # no tracking issue, defeating the purpose. Refuse the action so
     # the review-blocked fallback path (or the next judge retry) takes
     # over instead of papering over the omission.
-    FOLLOWUP_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
-    FOLLOWUP_BODY="$(echo "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
+    FOLLOWUP_TITLE="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
+    FOLLOWUP_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
     if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
       echo "::error::Judge chose merge_with_followup but provided no follow-up issue details (followup_issue.title or .body empty). Refusing the action — leaving linked issues in ai:review-blocked for retry/fallback so the deferred gap is not lost."
       # Emit structured outputs so downstream log analysis can

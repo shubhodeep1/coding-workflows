@@ -928,7 +928,12 @@ def _extract_merge_with_followup_branch() -> str:
 	return match.group("branch")
 
 
-def _build_merge_with_followup_harness(branch: str, github_output: Path) -> str:
+def _build_merge_with_followup_harness(
+	branch: str,
+	github_output: Path,
+	*,
+	enable_xpg_echo: bool = False,
+) -> str:
 	"""Wrap the extracted merge_with_followup branch in a self-contained
 	bash harness with stubs for the helpers it depends on.
 
@@ -940,10 +945,11 @@ def _build_merge_with_followup_harness(branch: str, github_output: Path) -> str:
 	  - `sleep` is no-op'd so the mergeability-poll backoff (which the
 	    real script measures in seconds) doesn't slow tests.
 	"""
+	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
-gh_retry() {{ "$@"; }}
+{xpg_echo_line}gh_retry() {{ "$@"; }}
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
@@ -970,6 +976,7 @@ def _run_merge_with_followup(
 	enable_auto_merge: str = "true",
 	issue_create_should_fail: bool = False,
 	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
+	enable_xpg_echo: bool = False,
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
 	state and judge JSON.  Returns the captured gh-mock state plus the
@@ -1051,7 +1058,11 @@ def _run_merge_with_followup(
 
 		script_path = runtime_dir / "rb_branch_harness.sh"
 		script_path.write_text(
-			_build_merge_with_followup_harness(branch, github_output),
+			_build_merge_with_followup_harness(
+				branch,
+				github_output,
+				enable_xpg_echo=enable_xpg_echo,
+			),
 			encoding="utf-8",
 		)
 		script_path.chmod(0o755)
@@ -1388,6 +1399,35 @@ def test_merge_with_followup_does_not_advance_when_issue_create_fails() -> None:
 		f"ai:ready-to-merge must NOT be ensured when issue create failed "
 		f"(label swap is gated on issue-create success). Got: {ensure_labels}"
 	)
+
+
+def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None:
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		followup_title='Follow-up: handle "quoted" wiring',
+		followup_body='First line keeps "quotes" intact.\nSecond line stays attached.',
+		enable_xpg_echo=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		"merge_with_followup must still create the follow-up issue when bash xpg_echo is enabled"
+	)
+	args = creates[0]
+	title = args[args.index("--title") + 1]
+	body = args[args.index("--body") + 1]
+	assert title == 'Follow-up: handle "quoted" wiring'
+	assert body.startswith('First line keeps "quotes" intact.\nSecond line stays attached.')
+
+
+def test_review_blocked_preamble_uses_printf_for_judge_json_extraction() -> None:
+	src = _rb_judge_text()
+
+	assert """RB_ACTION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.action')"
+RB_JUSTIFICATION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.justification // "no justification"')"
+RB_FIX_DESC="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
+RB_REMAINING="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')""" in src
+	assert 'RB_ACTION="$(echo "${JUDGE_JSON}" | jq -r' not in src
 
 
 # =============================================================================
