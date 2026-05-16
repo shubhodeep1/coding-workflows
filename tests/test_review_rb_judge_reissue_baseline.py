@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
@@ -16,7 +19,7 @@ IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 VALID_PR_NUMBER = "41"
 VALID_SHA_PREFIX = "acdeff123456"
 VALID_HEAD_OID = VALID_SHA_PREFIX + "7890abcdef1234567890abcdef12"
-VALID_BRANCH = f"ai/reissue-pr-{VALID_PR_NUMBER}-baseline-{VALID_SHA_PREFIX}"
+VALID_BRANCH = f"ai/reissue-baseline/pr-{VALID_PR_NUMBER}-{VALID_SHA_PREFIX}-777-1"
 
 
 def _workflow_text() -> str:
@@ -168,17 +171,26 @@ def _valid_issue_body(*, branch: str = VALID_BRANCH, pr_number: str = VALID_PR_N
 		f"""\
 		Fix the remaining trust-boundary gap.
 
-		prior_pr_baseline_branch: {branch}
-		files_touched:
-		  - .github/workflows/implement.yml
-		  - tests/test_review_rb_judge_reissue_baseline.py
-
 		---
 		**Review-blocked reissue metadata**
 		- Replaces: #2629 (PR #{pr_number} closed \u2014 approach rework)
 		- Type: review-blocked-reissue
+		- prior_pr_baseline_branch: {branch}
+		- files_touched:
+		  - .github/workflows/implement.yml
+		  - tests/test_review_rb_judge_reissue_baseline.py
 		"""
 	)
+
+
+def _load_label_propagation_module():
+	sys.dont_write_bytecode = True
+	module_path = REPO_ROOT / "tests" / "test_review_rb_judge_label_propagation.py"
+	spec = importlib.util.spec_from_file_location("test_review_rb_judge_label_propagation", module_path)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
 
 
 def _run_baseline_resolver(
@@ -255,8 +267,9 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "ISSUE_BODY: ${{ github.event.issue.body || '' }}" in resolver_step
 	assert "ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}" in resolver_step
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in resolver_step
-	assert 're.fullmatch(r"ai/reissue-pr-(\\d+)-baseline-([0-9a-f]{12})", branch)' in resolver_script
+	assert 're.fullmatch(r"ai/reissue-baseline/pr-(\\d+)-([0-9a-f]{12})-\\d+-\\d+", branch)' in resolver_script
 	assert "issue author association is not trusted for review-blocked baseline reuse" in resolver_script
+	assert "review-blocked reissue metadata footer does not contain exactly one prior_pr_baseline_branch entry" in resolver_script
 	assert "files_touched metadata is missing or empty" in resolver_script
 	assert "timeout=30" in resolver_script
 	assert "subprocess.SubprocessError" in resolver_script
@@ -268,11 +281,12 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "continue-on-error: true" in baseline_checkout_step
 	assert "ref: ${{ steps.baseline_refctx.outputs.sha || steps.baseline_refctx.outputs.branch }}" in baseline_checkout_step
 	assert "steps.baseline_refctx.outputs.branch == '' || steps.checkout_baseline.outcome != 'success'" in fallback_checkout_step
-	assert "ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
+	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
+	assert "steps.checkout_ref.outputs.ref" not in fallback_checkout_step
 	assert 'baseline_status="${{ steps.baseline_refctx.outputs.status }}"' in log_step
 	assert "Baseline override: ignored (${baseline_status})" in log_step
 	assert "Baseline override: fallback to resolved ref after checkout failure for" in log_step
-	assert "Resolved fallback ref:" in log_step
+	assert "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in log_step
 
 
 def test_resolver_accepts_valid_machine_generated_reissue_branch() -> None:
@@ -286,6 +300,51 @@ def test_resolver_accepts_valid_machine_generated_reissue_branch() -> None:
 			["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
 		]
 		assert f"Baseline override accepted: {VALID_BRANCH}" in result.stdout
+
+
+def test_resolver_accepts_real_spot_fix_issue_body_from_review_blocked_judge() -> None:
+	label_propagation = _load_label_propagation_module()
+	judge_state = label_propagation._run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Producer and consumer must share the same baseline contract.",
+			"remaining_issues": [
+				{"file": ".github/workflows/implement.yml", "line_start": 1, "line_end": 2, "symptom": "Resolver mismatch"},
+				{"file": "tests/test_review_rb_judge_reissue_baseline.py", "line_start": 1, "line_end": 2, "symptom": "Regression coverage"},
+			],
+			"new_issue": {
+				"title": "Reissue: align baseline contract",
+				"body": "Keep the trusted baseline footer contract intact.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={
+			".github/workflows/implement.yml": "name: test\n",
+			"tests/test_review_rb_judge_reissue_baseline.py": "print('baseline')\n",
+		},
+	)
+
+	creates = judge_state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	match = re.search(r"^- prior_pr_baseline_branch: ([^\n]+)$", body, re.MULTILINE)
+	assert match is not None, f"expected canonical baseline metadata in body:\n{body}"
+	branch = match.group(1).strip()
+
+	result, outputs, state = _run_baseline_resolver(
+		body,
+		feature_enabled="true",
+		pr_head_oid=str(judge_state["_repo_head_before"]),
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": branch, "sha": str(judge_state["_repo_head_before"]), "status": "accepted"}
+	assert state["calls"] == [
+		["pr", "view", "42", "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{branch}"],
+	]
 
 
 def test_resolver_ignores_valid_body_when_feature_flag_is_disabled() -> None:
@@ -312,8 +371,11 @@ def test_resolver_rejects_untrusted_issue_authorship_without_github_lookup() -> 
 
 def test_resolver_rejects_missing_or_duplicate_baseline_entries_without_github_lookup() -> None:
 	for issue_body in (
-		_valid_issue_body().replace(f"prior_pr_baseline_branch: {VALID_BRANCH}\n", ""),
-		_valid_issue_body() + f"\nprior_pr_baseline_branch: {VALID_BRANCH}\n",
+		_valid_issue_body().replace(f"- prior_pr_baseline_branch: {VALID_BRANCH}\n", ""),
+		_valid_issue_body().replace(
+			f"- prior_pr_baseline_branch: {VALID_BRANCH}\n",
+			f"- prior_pr_baseline_branch: {VALID_BRANCH}\n- prior_pr_baseline_branch: {VALID_BRANCH}\n",
+		),
 	):
 		result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
 
@@ -325,8 +387,8 @@ def test_resolver_rejects_missing_or_duplicate_baseline_entries_without_github_l
 
 def test_resolver_rejects_empty_files_touched_metadata_without_github_lookup() -> None:
 	issue_body = _valid_issue_body().replace(
-		"files_touched:\n  - .github/workflows/implement.yml\n  - tests/test_review_rb_judge_reissue_baseline.py\n",
-		"files_touched:\n",
+		"- files_touched:\n  - .github/workflows/implement.yml\n  - tests/test_review_rb_judge_reissue_baseline.py\n",
+		"- files_touched:\n",
 	)
 	result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
 
@@ -338,7 +400,7 @@ def test_resolver_rejects_empty_files_touched_metadata_without_github_lookup() -
 
 def test_resolver_rejects_missing_reissue_metadata_header_without_github_lookup() -> None:
 	issue_body = _valid_issue_body().replace(
-		"\n---\n**Review-blocked reissue metadata**\n- Replaces: #2629 (PR #41 closed — approach rework)\n- Type: review-blocked-reissue\n",
+		"\n---\n**Review-blocked reissue metadata**\n",
 		"\n---\n",
 	)
 	result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")

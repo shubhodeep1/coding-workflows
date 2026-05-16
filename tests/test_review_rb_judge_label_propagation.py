@@ -41,6 +41,7 @@ import os
 import re
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -562,7 +563,20 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 	assert match, f"expected prior_pr_baseline_branch metadata in body:\n{body}"
 	baseline_branch = match.group(1).strip()
 	assert baseline_branch.startswith("ai/reissue-baseline/pr-42-"), baseline_branch
-	assert "files_touched:" in body, f"expected files_touched metadata in body:\n{body}"
+	expected_footer = textwrap.dedent(
+		f"""\
+		---
+		**Review-blocked reissue metadata**
+		- Replaces: #41 (PR #42 closed — approach rework)
+		- Type: review-blocked-reissue
+		- prior_pr_baseline_branch: {baseline_branch}
+		- files_touched:
+		  - src/app.py
+		  - README.md"""
+	)
+	assert body.rstrip().endswith(expected_footer.rstrip()), (
+		"spot-fix reissue body must emit the canonical footer-scoped baseline metadata contract"
+	)
 	assert body.count("  - src/app.py") == 1, (
 		"spot-fix reissue body must dedupe repeated remaining_issues[].file entries"
 	)

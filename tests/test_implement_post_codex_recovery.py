@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from pathlib import Path
 import tempfile
+import textwrap
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -768,25 +769,37 @@ def test_capture_step_fails_open_on_invalid_jobs_payload() -> None:
 		assert outputs.get("failed_step_name", "") == ""
 
 
-def test_resolve_checkout_ref_prefers_prior_pr_baseline_branch_when_available() -> None:
+def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
 		tmp_path = Path(td)
-		baseline_branch = "ai/reissue-baseline/pr-42-abcdef123456-1710000000"
+		baseline_branch = "ai/reissue-baseline/pr-42-abcdef123456-777-1"
 		proc, state, outputs, files = _run_resolve_checkout_ref_step(
 			tmp_path,
-			issue_body=f"Plan body\n\nprior_pr_baseline_branch: {baseline_branch}\n",
+			issue_body=textwrap.dedent(
+				f"""\
+				Plan body
+
+				---
+				**Review-blocked reissue metadata**
+				- Replaces: #41 (PR #42 closed — approach rework)
+				- Type: review-blocked-reissue
+				- prior_pr_baseline_branch: {baseline_branch}
+				- files_touched:
+				  - src/app.py
+				"""
+			),
 			default_checkout_ref="orchestrator/project-829",
 			branch_exists={baseline_branch: True},
 		)
 
 		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-		assert outputs.get("ref") == baseline_branch
-		assert outputs.get("source") == "prior_pr_baseline_branch"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
 		assert len(state.get("issue_queries", [])) == 1
-		assert baseline_branch in state.get("branch_ref_queries", []), (
-			"Resolve checkout ref must verify prior_pr_baseline_branch under refs/heads before using it"
+		assert state.get("branch_ref_queries", []) == [], (
+			"Resolve checkout ref must not resolve prior_pr_baseline_branch; trusted baseline checkout happens only in baseline_refctx"
 		)
-		assert files["issue_body"].strip().endswith(f"prior_pr_baseline_branch: {baseline_branch}")
+		assert f"prior_pr_baseline_branch: {baseline_branch}" in files["issue_body"]
 
 
 def test_resolve_checkout_ref_falls_back_when_hint_missing() -> None:
@@ -809,20 +822,21 @@ def test_resolve_checkout_ref_falls_back_when_hint_missing() -> None:
 def test_resolve_checkout_ref_retries_issue_metadata_fetch() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
 		tmp_path = Path(td)
-		baseline_branch = "ai/reissue-baseline/pr-42-retried"
 		proc, state, outputs, files = _run_resolve_checkout_ref_step(
 			tmp_path,
-			issue_body=f"prior_pr_baseline_branch: {baseline_branch}\n",
+			issue_body="Plan body with canonical footer metadata.\n",
 			default_checkout_ref="orchestrator/project-829",
-			branch_exists={baseline_branch: True},
 			issue_api_failures_remaining=2,
 		)
 
 		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-		assert outputs.get("ref") == baseline_branch
-		assert outputs.get("source") == "prior_pr_baseline_branch"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
 		assert len(state.get("issue_queries", [])) == 3, (
-			"Resolve checkout ref must retry transient issue metadata fetch failures before falling back"
+			"Resolve checkout ref must retry transient issue metadata fetch failures before returning the integration/default ref"
+		)
+		assert state.get("branch_ref_queries", []) == [], (
+			"Resolve checkout ref must not perform baseline ref lookups after a successful retry"
 		)
 		assert files["issue_meta"], "successful retry path must still cache valid issue metadata"
 
@@ -870,7 +884,7 @@ def test_resolve_checkout_ref_fails_open_on_invalid_issue_metadata_without_cachi
 		assert files["issue_body"] == "", "invalid issue metadata must not populate ISSUE_BODY_FILE"
 
 
-def test_resolve_checkout_ref_rejects_invalid_branch_name_before_api_lookup() -> None:
+def test_resolve_checkout_ref_ignores_untrusted_baseline_hints_without_api_lookup() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
 		tmp_path = Path(td)
 		proc, state, outputs, _ = _run_resolve_checkout_ref_step(
@@ -883,25 +897,35 @@ def test_resolve_checkout_ref_rejects_invalid_branch_name_before_api_lookup() ->
 		assert outputs.get("ref") == "orchestrator/project-829"
 		assert outputs.get("source") == "integration/default"
 		assert state.get("branch_ref_queries", []) == [], (
-			"Invalid prior_pr_baseline_branch values must be rejected before any GitHub ref lookup"
+			"Resolve checkout ref must ignore untrusted prior_pr_baseline_branch hints instead of resolving them"
 		)
 
 
-def test_resolve_checkout_ref_falls_back_when_branch_is_unavailable() -> None:
-	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
-		tmp_path = Path(td)
-		baseline_branch = "ai/reissue-baseline/pr-42-missing"
-		proc, state, outputs, _ = _run_resolve_checkout_ref_step(
-			tmp_path,
-			issue_body=f"- prior_pr_baseline_branch: {baseline_branch}\n",
-			default_checkout_ref="orchestrator/project-829",
-			branch_exists={baseline_branch: False},
-		)
+def test_resolve_checkout_ref_no_longer_performs_baseline_branch_resolution() -> None:
+	checkout_ref_block = _extract_run_script("Resolve checkout ref")
+	assert "/git/ref/heads/" not in checkout_ref_block, (
+		"Resolve checkout ref must not resolve prior_pr_baseline_branch via /git/ref/heads; only baseline_refctx may honor preserved baselines"
+	)
+	assert "source=prior_pr_baseline_branch" not in checkout_ref_block, (
+		"Resolve checkout ref must no longer emit prior_pr_baseline_branch as a checkout source"
+	)
+	assert "Using prior_pr_baseline_branch checkout override" not in checkout_ref_block, (
+		"Resolve checkout ref must not announce an untrusted baseline checkout override"
+	)
 
-		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-		assert outputs.get("ref") == "orchestrator/project-829"
-		assert outputs.get("source") == "integration/default"
-		assert baseline_branch in state.get("branch_ref_queries", [])
+
+def test_checkout_repository_fallback_ignores_checkout_ref_output() -> None:
+	fallback_checkout_step = _step_block_text("Checkout repository")
+	log_step = _step_block_text("Log checkout ref")
+
+	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
+	assert "steps.checkout_ref.outputs.ref" not in fallback_checkout_step, (
+		"Fallback checkout must not depend on checkout_ref.outputs.ref after the trusted baseline guard rejects metadata"
+	)
+	assert "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in log_step
+	assert "steps.checkout_ref.outputs.ref" not in log_step, (
+		"Resolved fallback ref logging must reflect the integration/default checkout path directly"
+	)
 
 
 def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:
