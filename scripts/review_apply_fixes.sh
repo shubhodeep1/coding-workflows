@@ -956,7 +956,7 @@ message; an empty diff is treated as no-actionable-output and the loop
 bails after 3 attempts without a commit. Try apply_patch first; if it
 does not land cleanly on a hunk, switch tools (alternate apply_patch
 shape, printf/heredoc for plain-text targets, or any other write tool)
-and verify with `git diff --stat`. Avoid `sed -i` / `perl -i` / `awk`
+and verify with \`git diff --stat\`. Avoid \`sed -i\` / \`perl -i\` / \`awk\`
 regex substitutions on multi-line source — they exit 0 even when the
 regex misses, leaving the file unchanged.
 </completeness_contract>
@@ -988,7 +988,7 @@ Under PR comment audit: include one bullet per bot PR review/review_comment entr
 - path and line (if available)
 - disposition: applied / already satisfied / ignored
 - short reason for the disposition
-Under Ignored suggestions (with short reason): when you intentionally override parsed consolidator guidance, include a bullet with the exact grep-friendly prefix `CONSOLIDATOR_OVERRIDDEN:` and the format `- CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>` (use `no-issue-id` when the advisory issue lacks a parsed issue_id).
+Under Ignored suggestions (with short reason): when you intentionally override parsed consolidator guidance, include a bullet with the exact grep-friendly prefix \`CONSOLIDATOR_OVERRIDDEN:\` and the format \`- CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>\` (use \`no-issue-id\` when the advisory issue lacks a parsed issue_id).
 Under Change status: emit exactly one bullet whose value is one of:
 - edited
 - not-edited
