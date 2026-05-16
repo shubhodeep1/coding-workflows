@@ -251,6 +251,7 @@ REVIEW_ISSUES_FILE="${RUNTIME_DIR}/review_issues.txt"
 LEDGER_STATUS_FILE="${RUNTIME_DIR}/ledger_status.txt"
 CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 PARSER_STATS_FILE="${RUNTIME_DIR}/parser_stats.txt"
+CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"
 
 find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'review_*.txt' | sort > "${REVIEWER_MANIFEST_FILE}"
 if [ ! -s "${REVIEWER_MANIFEST_FILE}" ]; then
@@ -348,6 +349,15 @@ else
   : > "${REVIEW_ISSUES_FILE}"
   : > "${PARSER_STATS_FILE}"
   echo "::warning::review_parse_consolidator.sh not found; skipping parser stage"
+fi
+
+verify_script=""
+if verify_script="$(resolve_support_script review_reject_verify.sh)"; then
+  if ! bash "${verify_script}"; then
+    echo "::warning::review_reject_verify.sh failed; continuing"
+  fi
+else
+  echo "::warning::review_reject_verify.sh not found; skipping reject verifier stage"
 fi
 
 ledger_script=""

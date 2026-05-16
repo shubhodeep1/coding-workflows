@@ -18,6 +18,9 @@ Required handling rules:
 - `SUGGESTED_APPROACH` must describe what to change and why, not patch text.
 - `EVIDENCE` must quote reviewer text verbatim.
 - If you cannot classify a finding, set `CLASSIFICATION: unclassified`.
+- When `CLASSIFICATION: non-actionable`, also emit `REJECTION_KIND`, exactly one
+  matching typed `EVIDENCE_*` block, and a `NOTES` justification.
+- Do not emit `REVERSAL_REASON`; that field is reserved for the reject verifier.
 
 Optional carry-over input:
 - The prompt may include a `<judge_interim_priors>` block before the reviewer bundle.
@@ -47,7 +50,18 @@ LENS: CORRECTNESS & LOGIC
 SEVERITY: high
 FLAGGED_BY: reviewer_1, reviewer_3, reviewer_4
 CLASSIFICATION: must-fix
+REJECTION_KIND: (required only when CLASSIFICATION: non-actionable)
 MERGED_FROM: (optional; comma-separated prior issue ids on second pass)
+EVIDENCE_DIFF_HUNK:
+  (required only for REJECTION_KIND: already-fixed)
+EVIDENCE_FILES_TOUCHED:
+  (required only for REJECTION_KIND: out-of-scope)
+EVIDENCE_RUNTIME_PATH:
+  (required only for REJECTION_KIND: reviewer-wrong)
+EVIDENCE_SPEC_QUOTE:
+  (required only for REJECTION_KIND: spec-doesnt-support)
+EVIDENCE_PRIOR_ROUND:
+  (required only for REJECTION_KIND: already-rejected-with-evidence)
 EVIDENCE:
   reviewer_1> "verbatim quote from reviewer_1"
   reviewer_3> "verbatim quote from reviewer_3"
@@ -69,4 +83,38 @@ Allowed values:
 - LENS: one of the seven lenses above.
 - SEVERITY: blocker | high | med | low.
 - CLASSIFICATION: must-fix | nice-to-have | unclassified | duplicate-of:<issue_id> | non-actionable.
-- `non-actionable` must include a NOTES justification.
+- `non-actionable` must include a NOTES justification plus exactly one of:
+  - `REJECTION_KIND: already-fixed` + `EVIDENCE_DIFF_HUNK` with `file:` and `lines:`.
+  - `REJECTION_KIND: out-of-scope` + `EVIDENCE_FILES_TOUCHED` with `cited_path:` and `files_touched:`.
+  - `REJECTION_KIND: reviewer-wrong` + `EVIDENCE_RUNTIME_PATH` with `location:` and `rationale:`.
+  - `REJECTION_KIND: spec-doesnt-support` + `EVIDENCE_SPEC_QUOTE` with `source:` and one or more `quote:` lines.
+  - `REJECTION_KIND: already-rejected-with-evidence` + `EVIDENCE_PRIOR_ROUND` with `round:`, `issue_id:`, `rejection_kind:`, and `sticky: true`.
+
+Examples for `CLASSIFICATION: non-actionable`:
+
+REJECTION_KIND: already-fixed
+EVIDENCE_DIFF_HUNK:
+  file: src/module.py
+  lines: 2-3
+
+REJECTION_KIND: out-of-scope
+EVIDENCE_FILES_TOUCHED:
+  cited_path: docs/other.md
+  files_touched: src/module.py, tests/test_module.py
+
+REJECTION_KIND: reviewer-wrong
+EVIDENCE_RUNTIME_PATH:
+  location: process_request:187
+  rationale: Guard clause returns before the reviewer-described call path.
+
+REJECTION_KIND: spec-doesnt-support
+EVIDENCE_SPEC_QUOTE:
+  source: docs/spec.md#validation
+  quote: "The endpoint accepts duplicate idempotency keys for dry-run requests."
+
+REJECTION_KIND: already-rejected-with-evidence
+EVIDENCE_PRIOR_ROUND:
+  round: 2
+  issue_id: 014
+  rejection_kind: already-fixed
+  sticky: true
