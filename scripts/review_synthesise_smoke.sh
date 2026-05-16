@@ -12,6 +12,9 @@ fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/review-synthesise-smoke-${RANDOM}}"
 mkdir -p "${RUNTIME_DIR}"
+# Preserve the step's original stdout so workflow-command annotations can be
+# emitted without being swallowed by command substitutions.
+exec 3>&1
 
 behavioural_smoke_log_ok()
 {
@@ -23,6 +26,16 @@ behavioural_smoke_log_fail()
 {
 	printf 'BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=%s round=%s path=%s\n' \
 		"$1" "$2" "$3"
+}
+
+behavioural_smoke_emit_warning()
+{
+	local message="$1"
+
+	message="${message//%/%25}"
+	message="${message//$'\r'/%0D}"
+	message="${message//$'\n'/%0A}"
+	printf '::warning::%s\n' "${message}" >&3
 }
 
 behavioural_smoke_has_requirements_files()
@@ -43,7 +56,7 @@ detect_behavioural_smoke_language()
 				;;
 			*)
 				if [ -n "${requested_language}" ]; then
-					printf "::warning::Invalid BEHAVIOURAL_SMOKE_LANG '%s'; falling back to repo auto-detection.\n" "${requested_language}" >&2
+					behavioural_smoke_emit_warning "Invalid BEHAVIOURAL_SMOKE_LANG '${requested_language}'; falling back to repo auto-detection."
 				fi
 				;;
 		esac
@@ -402,7 +415,7 @@ if judge_payload is None:
 
 issues = judge_payload['remaining_issues']
 raw = load_raw(src)
-	
+
 validated_items = None
 for candidate in load_candidates(raw):
 	try:
@@ -626,7 +639,7 @@ for cfg in "${smoke_codex_home}/config.toml" "${smoke_codex_home}/.codex/config.
 			if ! sed -i \
 				-e "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*$|model_reasoning_effort = \"${escaped_reasoning}\"|" \
 				"${cfg}" 2>/dev/null; then
-				echo "::warning::Failed to update model_reasoning_effort in ${cfg}; continuing with existing config." >&2
+				behavioural_smoke_emit_warning "Failed to update model_reasoning_effort in ${cfg}; continuing with existing config."
 			fi
 		fi
 	fi

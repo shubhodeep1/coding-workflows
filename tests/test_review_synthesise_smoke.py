@@ -315,7 +315,7 @@ def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> 
 		_write_judge_artifact(workspace, head_sha, [])
 		_install_mock_codex(mock_bin_dir, stdout_text="[]\n")
 		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-		env["BEHAVIOURAL_SMOKE_LANG"] = " pythoon "
+		env["BEHAVIOURAL_SMOKE_LANG"] = " pythoon \n second-line "
 
 		result = subprocess.run(
 			["bash", str(SYNTH_SCRIPT)],
@@ -330,7 +330,8 @@ def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> 
 		assert result.returncode == 0, combined_output
 		payload = json.loads(manifest.read_text(encoding="utf-8"))
 		assert payload["language"] == "python"
-		assert "Invalid BEHAVIOURAL_SMOKE_LANG 'pythoon'" in combined_output
+		assert "::warning::Invalid BEHAVIOURAL_SMOKE_LANG 'pythoon%0Asecond-line'; falling back to repo auto-detection." in result.stdout
+		assert "Invalid BEHAVIOURAL_SMOKE_LANG" not in result.stderr
 		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=0 round=1 language=python" in combined_output
 
 
