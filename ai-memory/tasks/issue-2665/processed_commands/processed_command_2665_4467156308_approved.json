@@ -5,13 +5,27 @@
   "entry_id": "processed_command_2665_4467156308_approved",
   "issue_number": 2665,
   "metadata": {
+    "branch": "ai/issue-2665",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/validate.yml",
+      "prompts/behavioural-smoke-synthesise.txt",
+      "scripts/review_synthesise_smoke.sh",
+      "scripts/validate_driver.sh",
+      "tests/test_review_synthesise_smoke.py"
+    ],
+    "issue_number": 2665,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2665",
+    "pr_number": 2667,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2667",
+    "run_attempt": "1",
+    "run_id": "25964683452",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25964683452"
   },
   "run_attempt": 1,
   "run_id": "25964683452",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-16T14:41:52Z",
+  "status": "completed",
+  "timestamp": "2026-05-16T15:12:40Z",
   "workflow": "implement"
 }
