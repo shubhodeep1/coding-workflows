@@ -15,7 +15,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYNTH_SCRIPT = REPO_ROOT / "scripts" / "review_synthesise_smoke.sh"
 VALIDATE_DRIVER = REPO_ROOT / "scripts" / "validate_driver.sh"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mark-stable.yml"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+TEST_AND_MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 
 
@@ -278,6 +281,35 @@ def test_review_synthesise_smoke_fails_open_on_malformed_output() -> None:
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
 
 
+def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_lang_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		(workspace / "requirements-dev.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+		_write_judge_artifact(workspace, head_sha, [])
+		_install_mock_codex(mock_bin_dir, stdout_text="[]\n")
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["BEHAVIOURAL_SMOKE_LANG"] = " pythoon "
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		payload = json.loads(manifest.read_text(encoding="utf-8"))
+		assert payload["language"] == "python"
+		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=0 round=1 language=python" in combined_output
+
+
 def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() -> None:
 	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_wrappers_") as td:
 		workspace = Path(td)
@@ -350,6 +382,8 @@ def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -
 	validate_workflow = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
 	assert "BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED: ${{ vars.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED || 'false' }}" in workflow
 	assert "BEHAVIOURAL_SMOKE_LANG: ${{ vars.BEHAVIOURAL_SMOKE_LANG || '' }}" in workflow
+	assert "BEHAVIOURAL_SMOKE_MODEL: ${{ vars.BEHAVIOURAL_SMOKE_MODEL || 'openai/gpt-5.4-mini' }}" in workflow
+	assert "BEHAVIOURAL_SMOKE_TIMEOUT_S: ${{ vars.BEHAVIOURAL_SMOKE_TIMEOUT_S || '120' }}" in workflow
 	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in workflow
 	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in validate_workflow
 	bootstrap_line = next(
@@ -370,6 +404,14 @@ def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -
 	step_block = workflow[synth_idx : synth_idx + 600]
 	assert "env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true'" in step_block
 	assert "env.JUDGE_INTERIM_ENABLED == 'true'" in step_block
+	assert 'timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
+	assert '--model "${BEHAVIOURAL_SMOKE_MODEL}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
+
+
+def test_review_synthesise_smoke_is_registered_in_ci_workflows() -> None:
+	for workflow_path in (CI_WORKFLOW, MARK_STABLE_WORKFLOW, TEST_AND_MARK_STABLE_WORKFLOW):
+		workflow = workflow_path.read_text(encoding="utf-8")
+		assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py" in workflow, workflow_path
 
 
 def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:

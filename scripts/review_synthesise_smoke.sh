@@ -25,14 +25,26 @@ behavioural_smoke_log_fail()
 		"$1" "$2" "$3"
 }
 
+behavioural_smoke_has_requirements_files()
+{
+	compgen -G 'requirements*.txt' >/dev/null 2>&1
+}
+
 detect_behavioural_smoke_language()
 {
+	local requested_language=""
+
 	if [ -n "${BEHAVIOURAL_SMOKE_LANG:-}" ]; then
-		printf '%s\n' "$(printf '%s' "${BEHAVIOURAL_SMOKE_LANG}" | tr '[:upper:]' '[:lower:]')"
-		return 0
+		requested_language="$(printf '%s' "${BEHAVIOURAL_SMOKE_LANG}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+		case "${requested_language}" in
+			shell|python|javascript)
+				printf '%s\n' "${requested_language}"
+				return 0
+				;;
+		esac
 	fi
 
-	if [ -f "pyproject.toml" ] || ls requirements*.txt >/dev/null 2>&1; then
+	if [ -f "pyproject.toml" ] || behavioural_smoke_has_requirements_files; then
 		printf '%s\n' 'python'
 		return 0
 	fi
@@ -488,6 +500,12 @@ PROMPT_FILE="${RUNTIME_DIR}/behavioural_smoke_prompt.txt"
 RAW_OUTPUT_FILE="${RUNTIME_DIR}/behavioural_smoke_raw.txt"
 STDERR_FILE="${RUNTIME_DIR}/behavioural_smoke_stderr.txt"
 VALIDATION_ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
+BEHAVIOURAL_SMOKE_MODEL="${BEHAVIOURAL_SMOKE_MODEL:-openai/gpt-5.4-mini}"
+BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_S:-120}"
+
+if ! [[ "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" =~ ^[0-9]+$ ]] || [ "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" -le 0 ]; then
+	BEHAVIOURAL_SMOKE_TIMEOUT_S=120
+fi
 
 if ! CURRENT_ISSUES_COUNT="$(count_remaining_issues "${JUDGE_ARTIFACT}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" 2>/dev/null)"; then
 	behavioural_smoke_log_fail "invalid_judge_artifact" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
@@ -585,8 +603,7 @@ for cfg in "${smoke_codex_home}/config.toml" "${smoke_codex_home}/.codex/config.
 			printf 'model_reasoning_effort = "%s"\n' 'low' >> "${cfg}"
 		else
 			sed -i \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${escaped_reasoning}\"/" \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${escaped_reasoning}\"/" \
+				-e "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*$|model_reasoning_effort = \"${escaped_reasoning}\"|" \
 				"${cfg}" 2>/dev/null || true
 		fi
 	fi
@@ -596,8 +613,8 @@ if [ "${reasoning_config_applied}" -eq 0 ]; then
 fi
 
 if CODEX_HOME="${smoke_codex_home}" \
-	timeout --signal=TERM --kill-after=30s -- 120 \
-	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "openai/gpt-5.4-mini" --sandbox read-only \
+	timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${BEHAVIOURAL_SMOKE_MODEL}" --sandbox read-only \
 	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
 	cmd_rc=0
 else

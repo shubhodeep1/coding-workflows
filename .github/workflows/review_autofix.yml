@@ -765,6 +765,8 @@ jobs:
       JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}
       BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED: ${{ vars.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED || 'false' }}
       BEHAVIOURAL_SMOKE_LANG: ${{ vars.BEHAVIOURAL_SMOKE_LANG || '' }}
+      BEHAVIOURAL_SMOKE_MODEL: ${{ vars.BEHAVIOURAL_SMOKE_MODEL || 'openai/gpt-5.4-mini' }}
+      BEHAVIOURAL_SMOKE_TIMEOUT_S: ${{ vars.BEHAVIOURAL_SMOKE_TIMEOUT_S || '120' }}
       VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
