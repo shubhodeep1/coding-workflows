@@ -377,6 +377,51 @@ def test_review_run_judge_interim_rejects_null_path_fields() -> None:
 		assert "JUDGE_INTERIM_PASS_FAIL reason=json_parse_failed" in combined_output
 
 
+def test_review_run_judge_interim_rejects_boolean_line_numbers() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_bool_lines_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		current_head = _seed_repo_with_autofix_commit(workspace)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				{
+					"round": 1,
+					"head_sha": current_head,
+					"remaining_issues": [
+						{
+							"id": "src/module.py:2:bool-line",
+							"file": "src/module.py",
+							"line_start": True,
+							"line_end": 3,
+							"symptom": "Boolean line numbers must be rejected",
+							"evidence_quote": "return 'autofix'",
+							"severity": "nice-to-have",
+						}
+					],
+				}
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(JUDGE_INTERIM_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		artifact = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "judge_interim.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert not artifact.exists(), combined_output
+		assert "JUDGE_INTERIM_PASS_FAIL reason=json_parse_failed" in combined_output
+
+
 def test_prepare_priors_merges_prior_round_into_consolidator_prompt() -> None:
 	with tempfile.TemporaryDirectory(prefix="judge_interim_priors_") as td:
 		workspace = Path(td)
@@ -489,6 +534,48 @@ def test_prepare_priors_skips_invalid_cached_rows() -> None:
 		assert "JUDGE_INTERIM_PRIORS_MERGED count=0 source=.ai/review_runtime/pr-4242/round-1/judge_interim.json" in result.stdout
 
 
+def test_prepare_priors_skips_boolean_line_numbers() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_bool_prior_") as td:
+		workspace = Path(td)
+		workspace.mkdir(parents=True, exist_ok=True)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		prior_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1"
+		prior_dir.mkdir(parents=True, exist_ok=True)
+		(prior_dir / "judge_interim.json").write_text(
+			json.dumps(
+				{
+					"round": 1,
+					"head_sha": "abc123",
+					"remaining_issues": [
+						{
+							"id": "src/module.py:7:carry-over",
+							"file": "src/module.py",
+							"line_start": True,
+							"line_end": 8,
+							"symptom": "Carry-over issue (src/module.py:7-8)",
+							"evidence_quote": "return stale_value",
+							"severity": "must-fix",
+						}
+					],
+				}
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		result = _run_prepare_priors_function(
+			workspace,
+			runtime_dir,
+			autofix_iteration=2,
+		)
+
+		priors_file = runtime_dir / "judge_interim_priors.txt"
+		assert result.returncode == 0, result.stderr
+		assert not priors_file.exists()
+		assert "JUDGE_INTERIM_PRIORS_MERGED count=0 source=.ai/review_runtime/pr-4242/round-1/judge_interim.json" in result.stdout
+
+
 def test_prepare_priors_is_noop_on_round_one_cache_miss() -> None:
 	with tempfile.TemporaryDirectory(prefix="judge_interim_noop_") as td:
 		workspace = Path(td)
@@ -549,6 +636,14 @@ def test_review_autofix_workflow_skips_interim_judge_on_strict_ledger_only_commi
 	assert "env.LEDGER_ONLY_COMMIT_STRICT != 'true'" in step_block, (
 		"Run interim judge must skip strict ledger-only commits; otherwise a bookkeeping-only "
 		"diff still spends an advisory judge call."
+	)
+
+
+def test_review_run_judge_interim_uses_bounded_timeout() -> None:
+	script = JUDGE_INTERIM_SCRIPT.read_text(encoding="utf-8")
+	assert 'timeout --signal=TERM --kill-after=30s -- "${JUDGE_INTERIM_TIMEOUT_S}"' in script, (
+		"Interim judge must mirror the resolver's bounded timeout so hung codex children "
+		"cannot outlive JUDGE_INTERIM_TIMEOUT_S indefinitely."
 	)
 
 

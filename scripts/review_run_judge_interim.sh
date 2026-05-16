@@ -112,7 +112,7 @@ def validate(candidate):
 			return None
 		line_start = issue.get("line_start")
 		line_end = issue.get("line_end")
-		if not isinstance(line_start, int) or not isinstance(line_end, int):
+		if type(line_start) is not int or type(line_end) is not int:
 			return None
 		if line_start < 1 or line_end < line_start:
 			return None
@@ -316,7 +316,7 @@ if [ "${reasoning_config_applied}" -eq 0 ]; then
 fi
 
 if CODEX_HOME="${judge_codex_home}" \
-	timeout "${JUDGE_INTERIM_TIMEOUT_S}" \
+	timeout --signal=TERM --kill-after=30s -- "${JUDGE_INTERIM_TIMEOUT_S}" \
 	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox read-only \
 	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
 	cmd_rc=0

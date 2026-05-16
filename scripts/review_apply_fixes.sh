@@ -169,7 +169,7 @@ for issue in remaining:
 	line_start = issue.get('line_start')
 	line_end = issue.get('line_end')
 	severity = issue.get('severity')
-	if not isinstance(line_start, int) or not isinstance(line_end, int):
+	if type(line_start) is not int or type(line_end) is not int:
 		sys.exit(1)
 	if line_start < 1 or line_end < line_start:
 		sys.exit(1)
