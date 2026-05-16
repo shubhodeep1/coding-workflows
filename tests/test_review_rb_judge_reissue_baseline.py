@@ -10,8 +10,6 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
@@ -162,6 +160,7 @@ def _run_baseline_resolver(
 	issue_body: str,
 	*,
 	feature_enabled: str,
+	issue_author_association: str = "OWNER",
 	pr_state: str = "CLOSED",
 	pr_head_oid: str = VALID_HEAD_OID,
 	pr_view_exit_code: int = 0,
@@ -200,6 +199,7 @@ def _run_baseline_resolver(
 				"GITHUB_REPOSITORY": repo,
 				"GH_TOKEN": "test-token",
 				"ISSUE_BODY": issue_body,
+				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
 				"REISSUE_PRESERVE_BASELINE_ENABLED": feature_enabled,
 			}
 		)
@@ -220,28 +220,33 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in workflow
 	assert "ISSUE_BODY: ${{ github.event.issue.body || '' }}" in resolver_step
+	assert "ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}" in resolver_step
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in resolver_step
 	assert 're.fullmatch(r"ai/reissue-pr-(\\d+)-baseline-([0-9a-f]{12})", branch)' in resolver_script
+	assert "issue author association is not trusted for review-blocked baseline reuse" in resolver_script
 	assert "files_touched metadata is missing or empty" in resolver_script
 	assert "timeout=30" in resolver_script
+	assert "subprocess.SubprocessError" in resolver_script
 	assert '"gh",' in resolver_script and '"pr",' in resolver_script and '"view",' in resolver_script
 	assert '"state,headRefOid"' in resolver_script
 	assert "continue-on-error: true" in baseline_checkout_step
-	assert "ref: ${{ steps.baseline_refctx.outputs.branch }}" in baseline_checkout_step
+	assert "ref: ${{ steps.baseline_refctx.outputs.sha || steps.baseline_refctx.outputs.branch }}" in baseline_checkout_step
 	assert "steps.baseline_refctx.outputs.branch == '' || steps.checkout_baseline.outcome != 'success'" in fallback_checkout_step
 	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
+	assert 'baseline_status="${{ steps.baseline_refctx.outputs.status }}"' in log_step
+	assert "Baseline override: ignored (${baseline_status})" in log_step
 	assert "Baseline override: fallback to resolved ref after checkout failure for" in log_step
 	assert "Resolved fallback ref:" in log_step
 
 
-@pytest.mark.parametrize("feature_enabled", ("true", "TRUE", "1"))
-def test_resolver_accepts_valid_machine_generated_reissue_branch(feature_enabled: str) -> None:
-	result, outputs, state = _run_baseline_resolver(_valid_issue_body(), feature_enabled=feature_enabled)
+def test_resolver_accepts_valid_machine_generated_reissue_branch() -> None:
+	for feature_enabled in ("true", "TRUE", "1"):
+		result, outputs, state = _run_baseline_resolver(_valid_issue_body(), feature_enabled=feature_enabled)
 
-	assert result.returncode == 0, result.stderr
-	assert outputs == {"branch": VALID_BRANCH, "status": "accepted"}
-	assert state["calls"] == [["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"]]
-	assert f"Baseline override accepted: {VALID_BRANCH}" in result.stdout
+		assert result.returncode == 0, result.stderr
+		assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+		assert state["calls"] == [["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"]]
+		assert f"Baseline override accepted: {VALID_BRANCH}" in result.stdout
 
 
 def test_resolver_ignores_valid_body_when_feature_flag_is_disabled() -> None:
@@ -253,20 +258,30 @@ def test_resolver_ignores_valid_body_when_feature_flag_is_disabled() -> None:
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED is disabled" in result.stdout
 
 
-@pytest.mark.parametrize(
-	"issue_body",
-	(
-		_valid_issue_body().replace(f"prior_pr_baseline_branch: {VALID_BRANCH}\n", ""),
-		_valid_issue_body() + f"\nprior_pr_baseline_branch: {VALID_BRANCH}\n",
-	),
-)
-def test_resolver_rejects_missing_or_duplicate_baseline_entries_without_github_lookup(issue_body: str) -> None:
-	result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
+def test_resolver_rejects_untrusted_issue_authorship_without_github_lookup() -> None:
+	result, outputs, state = _run_baseline_resolver(
+		_valid_issue_body(),
+		feature_enabled="true",
+		issue_author_association="NONE",
+	)
 
 	assert result.returncode == 0, result.stderr
-	assert outputs == {"branch": "", "status": "absent"}
+	assert outputs == {"branch": "", "status": "issue-author-untrusted"}
 	assert state["calls"] == []
-	assert "does not contain exactly one prior_pr_baseline_branch entry" in result.stdout
+	assert "issue author association is not trusted" in result.stdout
+
+
+def test_resolver_rejects_missing_or_duplicate_baseline_entries_without_github_lookup() -> None:
+	for issue_body in (
+		_valid_issue_body().replace(f"prior_pr_baseline_branch: {VALID_BRANCH}\n", ""),
+		_valid_issue_body() + f"\nprior_pr_baseline_branch: {VALID_BRANCH}\n",
+	):
+		result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
+
+		assert result.returncode == 0, result.stderr
+		assert outputs == {"branch": "", "status": "absent"}
+		assert state["calls"] == []
+		assert "does not contain exactly one prior_pr_baseline_branch entry" in result.stdout
 
 
 def test_resolver_rejects_empty_files_touched_metadata_without_github_lookup() -> None:
@@ -320,24 +335,21 @@ def test_resolver_rejects_metadata_injection_outside_footer_without_github_looku
 	assert "review-blocked reissue metadata footer is incomplete" in result.stdout
 
 
-@pytest.mark.parametrize(
-	"manual_ref",
-	(
+def test_resolver_rejects_manual_injected_refs_without_github_lookup() -> None:
+	for manual_ref in (
 		"main",
 		"feature/not-a-review-blocked-baseline",
 		VALID_HEAD_OID,
-	),
-)
-def test_resolver_rejects_manual_injected_refs_without_github_lookup(manual_ref: str) -> None:
-	result, outputs, state = _run_baseline_resolver(
-		_valid_issue_body(branch=manual_ref),
-		feature_enabled="true",
-	)
+	):
+		result, outputs, state = _run_baseline_resolver(
+			_valid_issue_body(branch=manual_ref),
+			feature_enabled="true",
+		)
 
-	assert result.returncode == 0, result.stderr
-	assert outputs == {"branch": "", "status": "untrusted"}
-	assert state["calls"] == []
-	assert "not in the trusted review-blocked format" in result.stdout
+		assert result.returncode == 0, result.stderr
+		assert outputs == {"branch": "", "status": "untrusted"}
+		assert state["calls"] == []
+		assert "not in the trusted review-blocked format" in result.stdout
 
 
 def test_resolver_rejects_mismatched_reissue_footer_without_github_lookup() -> None:
@@ -365,18 +377,18 @@ def test_resolver_rejects_missing_repository_context_without_github_lookup() -> 
 	assert "repository context unavailable for PR validation" in result.stdout
 
 
-@pytest.mark.parametrize("pr_state", ("OPEN", "MERGED"))
-def test_resolver_rejects_non_closed_prior_pr_states_after_lookup(pr_state: str) -> None:
-	result, outputs, state = _run_baseline_resolver(
-		_valid_issue_body(),
-		feature_enabled="true",
-		pr_state=pr_state,
-	)
+def test_resolver_rejects_non_closed_prior_pr_states_after_lookup() -> None:
+	for pr_state in ("OPEN", "MERGED"):
+		result, outputs, state = _run_baseline_resolver(
+			_valid_issue_body(),
+			feature_enabled="true",
+			pr_state=pr_state,
+		)
 
-	assert result.returncode == 0, result.stderr
-	assert outputs == {"branch": "", "status": "pr-open"}
-	assert state["calls"] == [["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"]]
-	assert "not in the closed review-blocked state" in result.stdout
+		assert result.returncode == 0, result.stderr
+		assert outputs == {"branch": "", "status": "pr-open"}
+		assert state["calls"] == [["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"]]
+		assert "not in the closed review-blocked state" in result.stdout
 
 
 def test_resolver_rejects_pr_head_sha_mismatch_after_lookup() -> None:
@@ -417,3 +429,26 @@ def test_resolver_fails_open_on_malformed_github_lookup_response() -> None:
 	assert outputs == {"branch": "", "status": "lookup-failed"}
 	assert state["calls"] == [["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"]]
 	assert "GitHub PR validation response was malformed" in result.stdout
+
+
+def main() -> int:
+	# Direct `python3 tests/<file>.py` entrypoint — CI runs tests via this
+	# pattern, so avoid a pytest-only harness that would silently skip or fail.
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
