@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2629,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2629\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2631\",\"pr_number\":2631,\"branch\":\"ai/issue-2629\",\"run_id\":\"25951414445\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25951414445\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/implement.yml\",\".github/workflows/review_autofix.yml\",\"prompts/mode-judge-review-blocked.txt\",\"scripts/review_rb_judge.sh\",\"tests/test_review_rb_judge_reissue_baseline.py\"]}",
+  "fingerprint": "11da41ae2a35a2e770a349647d712d3b10063cb8b600f4b17203589c7f50803f",
+  "lineage": {
+    "issue_number": 2629,
+    "parent_ids": [],
+    "pr_number": 2631,
+    "run_id": "25951414445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25951414445",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2631"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260516033129_814810be4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2629,
+    "level": "run",
+    "pr_number": 2631,
+    "run_id": "25951414445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2629: https://github.com/shubhodeep1/coding-workflows/pull/2631",
+  "timestamps": {
+    "created_at": "2026-05-16T03:31:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
