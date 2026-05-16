@@ -345,17 +345,46 @@ jobs:
         run: |
           set -euo pipefail
 
+          gh_api_with_retry() {
+            local attempt=1
+            local backoff=2
+            local output=""
+            local cmd_status=0
+
+            while :; do
+              output=""
+              cmd_status=0
+              output="$("$@" 2>/dev/null)" || cmd_status=$?
+              if [ "${cmd_status}" -eq 0 ]; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -ge 3 ]; then
+                return "${cmd_status}"
+              fi
+              sleep "${backoff}"
+              backoff=$((backoff * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
           checkout_ref="${DEFAULT_CHECKOUT_REF:-${{ github.event.repository.default_branch }}}"
           issue_meta_json=""
-          if ! issue_meta_json="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null)"; then
+          if ! issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
             echo "::warning::Failed to fetch issue metadata for checkout override; using ${checkout_ref}."
             echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
             echo "source=integration/default" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          if ! issue_body="$(printf '%s' "${issue_meta_json}" | jq -er '.body // ""' 2>/dev/null)"; then
+            echo "::warning::Ignoring invalid issue metadata for checkout override; using ${checkout_ref}."
+            echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+            echo "source=integration/default" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
-          issue_body="$(printf '%s' "${issue_meta_json}" | jq -r '.body // ""')"
           printf '%s\n' "${issue_body}" > "${ISSUE_BODY_FILE}"
 
           baseline_branch="$(printf '%s\n' "${issue_body}" | python3 -c 'import re, sys; body = sys.stdin.read(); match = re.search(r"^\s*(?:-\s*)?prior_pr_baseline_branch:\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE); print(match.group(1).strip() if match else "")')"
@@ -374,7 +403,7 @@ jobs:
           fi
 
           encoded_ref="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${baseline_branch}")"
-          if gh api "repos/${{ github.repository }}/git/ref/heads/${encoded_ref}" >/dev/null 2>&1; then
+          if gh_api_with_retry gh api "repos/${{ github.repository }}/git/ref/heads/${encoded_ref}" >/dev/null; then
             echo "Using prior_pr_baseline_branch checkout override: ${baseline_branch}"
             echo "ref=${baseline_branch}" >> "$GITHUB_OUTPUT"
             echo "source=prior_pr_baseline_branch" >> "$GITHUB_OUTPUT"

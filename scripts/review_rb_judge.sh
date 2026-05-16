@@ -1266,9 +1266,9 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       }
       trap cleanup_rb_baseline_tmp EXIT
 
-      git cat-file -e "${head_sha}^{commit}" >/dev/null 2>&1
-      git worktree add --detach "${worktree_dir}" "${head_sha}" >/dev/null 2>&1
-      git -C "${worktree_dir}" checkout -b "${baseline_branch}" >/dev/null 2>&1
+      git cat-file -e "${head_sha}^{commit}" >/dev/null 2>&1 || exit 3
+      git worktree add --detach "${worktree_dir}" "${head_sha}" >/dev/null || exit 3
+      git -C "${worktree_dir}" checkout -b "${baseline_branch}" >/dev/null || exit 3
 
       push_attempt=1
       push_backoff=2
@@ -1365,14 +1365,19 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               done
               unset RB_REISSUE_FILE_SEEN
               if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
-                RB_BASELINE_BRANCH="ai/reissue-baseline/pr-${PR_NUMBER}-${RB_HEAD_SHA:0:12}-$(date +%s)"
+                RB_BASELINE_BRANCH="ai/reissue-baseline/pr-${PR_NUMBER}-${RB_HEAD_SHA:0:12}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
                 if _rb_push_reissue_baseline_branch "${RB_HEAD_SHA}" "${RB_BASELINE_BRANCH}"; then
                   RB_FILES_CSV="$(printf '%s,' "${RB_REISSUE_FILES[@]}")"
                   RB_FILES_CSV="${RB_FILES_CSV%,}"
                   echo "REISSUE_BASELINE_PRESERVED branch=${RB_BASELINE_BRANCH} head_sha=${RB_HEAD_SHA} files=${RB_FILES_CSV}"
                 else
+                  rb_baseline_exit=$?
                   RB_EFFECTIVE_REISSUE_MODE="redo"
-                  RB_SPOT_FIX_REASON="baseline_branch_push_failed"
+                  if [ "${rb_baseline_exit}" -eq 3 ]; then
+                    RB_SPOT_FIX_REASON="baseline_branch_setup_failed"
+                  else
+                    RB_SPOT_FIX_REASON="baseline_branch_push_failed"
+                  fi
                   RB_BASELINE_BRANCH=""
                 fi
               elif [ -z "${RB_SPOT_FIX_REASON}" ]; then

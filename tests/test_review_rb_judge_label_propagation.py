@@ -330,6 +330,7 @@ def _run_close_and_reissue(
 	judge_payload: dict | None = None,
 	reissue_preserve_baseline_enabled: str = "false",
 	repo_files: dict[str, str] | None = None,
+	precreate_baseline_branch: bool = False,
 ) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
@@ -352,6 +353,9 @@ def _run_close_and_reissue(
 		if repo_files is not None:
 			run_cwd, repo_head_before, repo_branch_before = _bootstrap_repo_with_remote(tmp_path, repo_files)
 			mock_state["pr_view_head_ref_oid"] = repo_head_before
+			if precreate_baseline_branch:
+				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
+				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		labels_file = runtime_dir / "ensure_labels.txt"
@@ -411,6 +415,7 @@ def _run_close_and_reissue(
 		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
 		state["_ensure_labels"] = labels_file.read_text(encoding="utf-8").strip().splitlines()
 		state["_stdout"] = proc.stdout
+		state["_stderr"] = proc.stderr
 		state["_github_output"] = github_output.read_text(encoding="utf-8")
 		if repo_files is not None:
 			state["_repo_head_before"] = repo_head_before
@@ -625,6 +630,40 @@ def test_close_and_reissue_spot_fix_invalid_remaining_issue_file_falls_back_to_r
 		"unsafe remaining_issues[].file entries must discard the spot-fix baseline and redo instead"
 	)
 	assert "REISSUE_MODE requested_raw=spot-fix effective=redo" in state["_stdout"]
+
+
+def test_close_and_reissue_spot_fix_setup_failure_uses_setup_reason_and_surfaces_git_error() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Baseline creation should fail open when local setup fails.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 1, "line_end": 2, "symptom": "Needs a focused fix"},
+			],
+			"new_issue": {
+				"title": "Reissue: setup failure redo",
+				"body": "Fallback to redo when the baseline branch cannot be prepared locally.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+		precreate_baseline_branch=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	body = creates[0][creates[0].index("--body") + 1]
+	assert "prior_pr_baseline_branch:" not in body
+	assert "files_touched:" not in body
+	assert "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=baseline_branch_setup_failed" in state["_stdout"], (
+		"pre-push baseline setup failures must log the setup-specific discard reason"
+	)
+	assert "baseline_branch_push_failed" not in state["_stdout"]
+	assert "fatal: a branch named" in state["_stderr"], (
+		"git checkout -b setup failures must surface the underlying git error on stderr"
+	)
 
 
 def _run_body_fetch_loop(issue_responses: dict[str, dict], issue_numbers: str) -> dict:
