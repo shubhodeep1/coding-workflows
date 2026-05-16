@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1\nWhich area of this repository should change?\nChoices:\nA. A workflow or automation script \u2014 name the workflow/script/path if known (RECOMMENDED)\nB. Documentation or repository configuration \u2014 name the file/path if known\nC. Another repo area \u2014 name the exact file/path or behavior\nQ2\nWhat is the concrete problem or improvement you want?\nChoices:\nA. Something is broken or regressed \u2014 describe the current behavior and the expected behavior (RECOMMENDED)\nB. It works, but it is unreliable, slow, noisy, or hard to operate \u2014 describe the pain point\nC. It works, but docs/UX/maintainability should be improved \u2014 describe what should be clearer or easier\nQ3\nWhat should count as \u201cdone\u201d for this issue?\nChoices:\nA. A specific scenario or trigger produces a specific result \u2014 provide that example (RECOMMENDED)\nB. A specific observable artifact changes \u2014 name the workflow output, log, label, comment, or PR behavior that should change\nC. Another concrete acceptance criterion \u2014 describe it",
+  "fingerprint": "71209c5273b329e7df23433b9b7c7f543e8ef94f3044cefbdd2398c79567e674",
+  "lineage": {
+    "issue_number": 2638,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25956673079",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25956673079",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260516075642_4a40f0f5b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2638,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25956673079"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2638 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-16T07:56:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
