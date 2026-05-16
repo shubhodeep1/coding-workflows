@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:370-376 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The trusted issue-author gate only excludes external authors, so a trusted collaborator can still hand-craft issue-body metadata that the resolver accepts as machine-generated provenance.\n  WHY: Both reviewers say trusted users can forge the required body format and satisfy the remaining checks without any producer-side provenance signal.\n- tests/test_review_rb_judge_reissue_baseline.py:131-139 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: `_parse_github_output` is brittle because it assumes future `key=value` outputs will never contain `=`.\n  WHY: Both reviewers note the current emitted values avoid `=`, so this is latent now but would misparse future values that include it.\n- .github/workflows/implement.yml:~399-404 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The resolved branch text is written to `GITHUB_OUTPUT` without escaping for `=` or newlines.\n  WHY: The current branch regex prevents such characters in accepted values, so this is not live today but would break downstream parsing if the format ever broadened.\n- .github/workflows/implement.yml:399-413 | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The `files_touched` check only validates the presence of a header and `- ` entries, not that the listed files correspond to real modifications.\n  WHY: The regex is purely structural, so a hand-edited issue body can satisfy it with arbitrary file names.\n- .github/workflows/implement.yml:521-533 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The log step normalizes an empty status into `step-no-output` but still branches on the raw GitHub output expression instead of the normalized shell variable.\n  WHY: The current behavior works, but the conditional logic is inconsistent with the fallback variable and is only a cosmetic correctness issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:370-376 | severity=medium | confidence=4\n  PROBLEM: The trusted issue-author gate (`OWNER`, `MEMBER`, `COLLABORATOR`) validates only the issue author's association, but does not verify that a review-blocked reissue producer actually created the issue.\n  WHY: A trusted collaborator could manually craft an issue body with the exact trusted format and satisfy all checks without any review-blocked producer involvement.\n- tests/test_review_rb_judge_reissue_baseline.py:131-139 | severity=low | confidence=2\n  PROBLEM: The `_parse_github_output` function splits each line on `=` using `line.split(\"=\", 1)`, which only keeps the first part when splitting.\n  WHY: The current test values do not contain `=`, but this is fragile and a future emitted value containing `=` would be parsed incorrectly.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:521-533 | severity=low | confidence=2\n  PROBLEM: The shell sets `baseline_status` from the step output, then handles the empty case, but the conditional logic references `steps.baseline_refctx.outputs.status` directly instead of using the shell variable.\n  WHY: This works today, but it is inconsistent because the fallback value is not what the branch conditions actually test.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/implement.yml:370-376 | severity=medium | confidence=4\n  PROBLEM: The author-association gate (`OWNER`/`MEMBER`/`COLLABORATOR`) rejects only externally authored issues, but any trusted repo member can manually craft an issue body containing the exact trusted-format metadata.\n  WHY: The resolver validates structure and PR state, but never verifies that a trusted producer path actually emitted the metadata.\n- .github/workflows/implement.yml:~399-404 | severity=low | confidence=2\n  PROBLEM: The `prior_pr_baseline_branch` value is written directly into `GITHUB_OUTPUT` without any escaping for `=` or newlines.\n  WHY: The current hex gate prevents those characters in accepted values, so this is latent rather than live, but it would break parsing if the invariant changed.\n- .github/workflows/implement.yml:399-413 | severity=medium | confidence=3\n  PROBLEM: The `files_touched` regex `(?m)^files_touched:\\s*\\n(?:[ \\t]*- [^\\n]+\\n?)+` accepts a block header and list items but does not verify that the listed files correspond to actual modified files.\n  WHY: This is purely structural, so a hand-edited issue body can satisfy the check with arbitrary file names.\n- tests/test_review_rb_judge_reissue_baseline.py:131-139 | severity=low | confidence=2\n  PROBLEM: The `_parse_github_output` helper splits each line on `=`, so future output values containing `=` would be parsed brittlely.\n  WHY: The current emitted values do not contain `=`, but the parser would become fragile if that changed.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "03ced83ec7982b7ec8d6d69d871ff32f7800c3067fd6f35f241d75a409b3980a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2633,
+    "run_id": "25956422495",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25956422495",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516081600_6bc04f8dba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2633,
+    "run_id": "25956422495"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T08:16:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
