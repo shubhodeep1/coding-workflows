@@ -156,7 +156,7 @@ _resilient_phase_swap()
 		return 1
 	fi
 	_rps_cur="${_rps_cur:-[]}"
-	_rps_new="$(echo "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
+	_rps_new="$(printf '%s\n' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
 		'(. - $p) + [$t] | unique')"
 	if printf '{"labels":%s}' "${_rps_new}" | \
 		gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
@@ -208,8 +208,8 @@ fi
 # either field individually; this matches gh_helpers.sh / the
 # orchestrator's `.merged_at != null` pattern.
 _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-_pr_state="$(echo "${_pr_meta}" | jq -r '.state // ""')"
-_pr_merged="$(echo "${_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
+_pr_state="$(printf '%s\n' "${_pr_meta}" | jq -r '.state // ""')"
+_pr_merged="$(printf '%s\n' "${_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
 PR_ALREADY_MERGED="false"
 if [ "${_pr_merged}" = "true" ]; then
   PR_ALREADY_MERGED="true"
@@ -652,7 +652,7 @@ echo "Justification: ${RB_JUSTIFICATION}"
 # same reasons as the early guard: avoids error-JSON contamination
 # of the fallback and survives REST payloads that omit either field.
 _guard_pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-_guard_pr_merged="$(echo "${_guard_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
+_guard_pr_merged="$(printf '%s\n' "${_guard_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
 if [ "${_guard_pr_merged}" = "true" ]; then
   PR_ALREADY_MERGED="true"
 fi
@@ -730,8 +730,8 @@ case "${RB_ACTION}" in
       # `closed` (never `merged` — merged PRs are state=closed +
       # merged=true). Drop the unreachable `merged` alt for clarity;
       # this branch only acts when state=open anyway.
-      PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
-      PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
+      PR_STATE="$(printf '%s\n' "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
+      PR_MERGEABLE="$(printf '%s\n' "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
       # Stop polling as soon as state is terminal or mergeability is known.
       if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
         break
@@ -996,19 +996,19 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # merged=true). Constrain the validator to the actual API
         # vocabulary; the .merged boolean below disambiguates closed-
         # without-merge from merged.
-        PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
-        PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
+        PR_STATE="$(printf '%s\n' "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
+        PR_MERGEABLE="$(printf '%s\n' "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
         # Capture the head SHA so the eventual gh pr merge call can
         # bind the merge to the judged head via --match-head-commit.
         # That closes the TOCTOU race where a concurrent push between
         # the judge's decision and our merge attempt would otherwise
         # land unjudged code.
-        PR_HEAD_SHA="$(echo "${_pr_json}" | jq -r '.head.sha // ""' | grep -xE '[a-f0-9]{7,40}' || echo "")"
+        PR_HEAD_SHA="$(printf '%s\n' "${_pr_json}" | jq -r '.head.sha // ""' | grep -xE '[a-f0-9]{7,40}' || echo "")"
         # Detect merged via `(.merged_at != null) or (.merged == true)`
         # — matches gh_helpers.sh + the orchestrator's `.merged_at !=
         # null` pattern and survives REST payloads that omit either
         # field individually.
-        PR_MERGED="$(echo "${_pr_json}" | jq -r '(.merged_at != null) or (.merged == true)' | grep -xE 'true|false' || echo "false")"
+        PR_MERGED="$(printf '%s\n' "${_pr_json}" | jq -r '(.merged_at != null) or (.merged == true)' | grep -xE 'true|false' || echo "false")"
         if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
           break
         fi

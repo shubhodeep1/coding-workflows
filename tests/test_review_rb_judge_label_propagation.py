@@ -1430,6 +1430,23 @@ RB_REMAINING="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summar
 	assert 'RB_ACTION="$(echo "${JUDGE_JSON}" | jq -r' not in src
 
 
+def test_review_blocked_pr_metadata_parsing_uses_printf_under_xpg_echo() -> None:
+	src = _rb_judge_text()
+
+	assert '_rps_new="$(printf \'%s\\n\' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}"' in src
+	assert '_pr_state="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'.state // ""\')"' in src
+	assert '_pr_merged="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
+	assert '_guard_pr_merged="$(printf \'%s\\n\' "${_guard_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
+	assert 'PR_STATE="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.state // ""\'' in src
+	assert 'PR_MERGEABLE="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.mergeable // ""\'' in src
+	assert 'PR_HEAD_SHA="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.head.sha // ""\'' in src
+	assert 'PR_MERGED="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'(.merged_at != null) or (.merged == true)\'' in src
+	assert 'echo "${_rps_cur}" | jq -c' not in src
+	assert 'echo "${_pr_meta}" | jq -r' not in src
+	assert 'echo "${_guard_pr_meta}" | jq -r' not in src
+	assert 'echo "${_pr_json}" | jq -r' not in src
+
+
 # =============================================================================
 # Merged-PR action guard coverage
 # =============================================================================
