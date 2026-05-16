@@ -375,7 +375,7 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   echo
   echo "=== PR #${PR_NUMBER} METADATA ==="
   echo
-  echo "${PR_META_JSON}" | jq '.'
+  printf '%s\n' "${PR_META_JSON}" | jq '.'
   echo
   echo "=== PR #${PR_NUMBER} DIFF ==="
   echo
@@ -387,11 +387,11 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   echo
   echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
   echo
-  echo "${PR_COMMENTS}" | jq '.'
+  printf '%s\n' "${PR_COMMENTS}" | jq '.'
   echo
   echo "=== PR #${PR_NUMBER} INLINE REVIEW COMMENTS ==="
   echo
-  echo "${PR_REVIEW_COMMENTS}" | jq '.'
+  printf '%s\n' "${PR_REVIEW_COMMENTS}" | jq '.'
   echo
   echo "=== REVIEW-BLOCKED CONTEXT ==="
   echo "Review-blocked judge retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"

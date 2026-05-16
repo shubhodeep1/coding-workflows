@@ -268,7 +268,7 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "continue-on-error: true" in baseline_checkout_step
 	assert "ref: ${{ steps.baseline_refctx.outputs.sha || steps.baseline_refctx.outputs.branch }}" in baseline_checkout_step
 	assert "steps.baseline_refctx.outputs.branch == '' || steps.checkout_baseline.outcome != 'success'" in fallback_checkout_step
-	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
+	assert "ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
 	assert 'baseline_status="${{ steps.baseline_refctx.outputs.status }}"' in log_step
 	assert "Baseline override: ignored (${baseline_status})" in log_step
 	assert "Baseline override: fallback to resolved ref after checkout failure for" in log_step

@@ -82,7 +82,7 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		disallowed_inline_markers = base_disallowed_inline_markers
 		if workflow_name == "implement.yml":
 			checkout_ref = "ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
-			resolved_ref_log = "echo \"Resolved checkout ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			resolved_ref_log = "echo \"Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 			resolved_base_log = "echo \"PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 			checkout_resolver_step = "- name: Resolve checkout ref"
 			checkout_resolver_id = "id: checkout_ref"
