@@ -467,6 +467,48 @@ def test_already_fixed_rejection_supports_when_pr_diff_uses_quoted_paths() -> No
 		assert artifact["results"][0]["verdict"] == "support"
 
 
+def test_already_fixed_rejection_is_inconclusive_for_header_only_diff_entry() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		(runtime / "pr_diff.patch").write_text(
+			"\n".join([
+				"diff --git a/other.txt b/other.txt",
+				"index 1111111..2222222 100644",
+				"--- a/other.txt",
+				"+++ b/other.txt",
+				"@@ -1 +1 @@",
+				"-old",
+				"+new",
+				'diff --git "a/src/module.py" "b/src/module.py"',
+				"index 3333333..4444444 100644",
+				"Binary files a/src/module.py and b/src/module.py differ",
+			])
+			+ "\n",
+			encoding="utf-8",
+		)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py\nlines: 2-3",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		assert "REVERSAL_REASON:" not in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "inconclusive"
+		assert artifact["results"][0]["reason"] == "PR diff touches src/module.py but does not contain verifiable line hunks for the cited diff hunk."
+		assert "CONSOLIDATOR_REJECT_VERIFIER_INCONCLUSIVE issue=001 kind=already-fixed" in verify_result.stdout
+
+
 def test_already_fixed_rejection_supports_with_trailing_whitespace_in_typed_values() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)

@@ -192,6 +192,16 @@ def normalize_patch_path(path: str) -> str | None:
 	return path
 
 
+def parse_diff_git_paths(line: str) -> tuple[str | None, str | None]:
+	try:
+		parts = shlex.split(line)
+	except ValueError:
+		return None, None
+	if len(parts) < 4 or parts[0] != "diff" or parts[1] != "--git":
+		return None, None
+	return normalize_patch_path(parts[2]), normalize_patch_path(parts[3])
+
+
 def parse_patch(text: str) -> tuple[bool, dict[str, dict[str, object]]]:
 	if "diff --git " not in text:
 		return False, {}
@@ -201,43 +211,49 @@ def parse_patch(text: str) -> tuple[bool, dict[str, dict[str, object]]]:
 	current_lines: list[str] = []
 	hunks: list[tuple[int, int]] = []
 	current_deleted = False
+	current_has_file_markers = False
 
 	def flush() -> None:
-		nonlocal current_path, current_old_path, current_lines, hunks, current_deleted
+		nonlocal current_path, current_old_path, current_lines, hunks, current_deleted, current_has_file_markers
 		path = current_path or current_old_path
-		if path is None:
+		if not path:
 			current_path = None
 			current_old_path = None
 			current_lines = []
 			hunks = []
 			current_deleted = False
+			current_has_file_markers = False
 			return
 		files[path] = {
 			"text": "\n".join(current_lines),
 			"hunks": list(hunks),
 			"deleted": current_deleted,
+			"metadata_only": not current_deleted and not hunks and not current_has_file_markers,
 		}
 		current_path = None
 		current_old_path = None
 		current_lines = []
 		hunks = []
 		current_deleted = False
+		current_has_file_markers = False
 
 	for line in text.splitlines():
 		if line.startswith("diff --git "):
 			flush()
 			current_lines = [line]
-			current_old_path = None
-			current_path = None
+			current_old_path, current_path = parse_diff_git_paths(line)
 			current_deleted = False
+			current_has_file_markers = False
 			continue
 		current_lines.append(line)
 		if line.startswith("--- "):
 			current_old_path = normalize_patch_path(line[4:])
+			current_has_file_markers = True
 			continue
 		if line.startswith("+++ "):
 			current_path = normalize_patch_path(line[4:])
 			current_deleted = current_path is None
+			current_has_file_markers = True
 			continue
 		match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
 		if match and (current_path is not None or current_old_path is not None):
@@ -310,6 +326,8 @@ def verify_already_fixed(block: dict[str, object], diff_available: bool, patches
 	patch = patches.get(file_path)
 	if patch is None:
 		return "does-not-support", f"PR diff does not touch {file_path}."
+	if bool(patch.get("metadata_only")) or (not patch.get("deleted") and not patch.get("hunks")):
+		return "inconclusive", f"PR diff touches {file_path} but does not contain verifiable line hunks for the cited diff hunk."
 	if bool(patch.get("deleted")):
 		if excerpt and excerpt not in str(patch.get("text", "")):
 			return "does-not-support", f"PR diff for {file_path} does not contain the cited excerpt."
