@@ -336,11 +336,45 @@ jobs:
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout repository
+      - name: Resolve checkout ref override
         if: env.SKIP_IMPLEMENT != 'true'
+        id: checkout_ref
+        env:
+          DEFAULT_IMPLEMENT_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          ISSUE_BODY_EVENT: ${{ github.event.issue.body || '' }}
+        run: |
+          set -euo pipefail
+          baseline_branch="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import os, re; body = os.environ.get("ISSUE_BODY_EVENT", ""); match = re.search(r"(?mi)^\s*prior_pr_baseline_branch:\s*([A-Za-z0-9._/-]+)\s*$", body); print(match.group(1) if match else "")')"
+
+          echo "checkout_ref=${DEFAULT_IMPLEMENT_REF}" >> "$GITHUB_OUTPUT"
+          if [ -z "${baseline_branch}" ]; then
+            echo "baseline_branch=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! [[ "${baseline_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${baseline_branch}" =~ (^|/)__pycache__(/|$) ]] || [[ "${baseline_branch}" =~ \.pyc$ ]]; then
+            echo "::warning::Ignoring invalid prior_pr_baseline_branch from issue body: ${baseline_branch}"
+            echo "baseline_branch=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "baseline_branch=${baseline_branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout prior PR baseline branch
+        if: env.SKIP_IMPLEMENT != 'true' && steps.checkout_ref.outputs.baseline_branch != ''
+        id: checkout_baseline
+        continue-on-error: true
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          ref: ${{ steps.checkout_ref.outputs.baseline_branch }}
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Checkout repository
+        if: env.SKIP_IMPLEMENT != 'true' && (steps.checkout_ref.outputs.baseline_branch == '' || steps.checkout_baseline.outcome != 'success')
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.checkout_ref.outputs.checkout_ref }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
@@ -358,7 +392,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved ref: ${{ (steps.checkout_baseline.outcome == 'success' && steps.checkout_ref.outputs.baseline_branch) || steps.checkout_ref.outputs.checkout_ref }}"
           echo "HEAD commit: $(git rev-parse HEAD)"
           if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
             echo "HEAD branch: ${branch_name}"

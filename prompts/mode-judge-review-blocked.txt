@@ -53,6 +53,17 @@ Rules:
   just describe what to change — apply the fixes directly using file writes.
 - For option C (close_and_reissue): write a detailed issue body that explains
   what went wrong and provides specific implementation guidance.
+- For option C (close_and_reissue): also choose a `reissue_mode`:
+  - `redo` — default; use when the approach/scope was wrong or you are unsure.
+  - `spot-fix` — use only when the existing PR is mostly correct and the
+    remaining defects are localized to a small set of concrete file/line
+    ranges that can be fixed surgically in a follow-up issue.
+- When choosing `spot-fix`, populate `remaining_issues` with the specific
+  repo-relative files and line ranges that need follow-up work. If the
+  remaining issues are broad, scattered, architectural, or you cannot name a
+  small scoped file set, choose `redo` instead.
+- If `reissue_mode` is omitted, invalid, or `remaining_issues` is empty, the
+  system will fall back to `redo`; prefer `redo` whenever there is doubt.
 - For option C (close_and_reissue): the new issue body's file/line refs will
   point at the closed PR's branch and will NOT exist on the base branch after
   the PR is closed. Either (a) phrase guidance in terms of behaviour and
@@ -129,8 +140,17 @@ Output contract:
 - Schema:
   {
     "action": "merge" | "fix" | "merge_with_followup" | "close_and_reissue",
+    "reissue_mode": "spot-fix" | "redo" | "",
     "justification": "<why this action; what was assessed>",
     "remaining_issues_summary": "<brief list of unresolved issues and their severity>",
+    "remaining_issues": [
+      {
+        "file": "<repo-relative path>",
+        "line_start": <int>,
+        "line_end": <int>,
+        "symptom": "<short string>"
+      }
+    ],
     "fix_description": "<if action=fix: what you changed. else: empty>",
     "new_issue": {
       "title": "<only if action=close_and_reissue>",
@@ -143,7 +163,11 @@ Output contract:
   }
 - new_issue: null unless action is close_and_reissue.
 - followup_issue: null unless action is merge_with_followup.
+- remaining_issues: [] unless action is close_and_reissue with localized,
+  concrete follow-up issues to track.
 - fix_description: empty string unless action is fix.
+- reissue_mode: `redo` or `spot-fix` only when action is close_and_reissue;
+  otherwise empty string. When in doubt, use `redo`.
 - Primary deliverable: this JSON object IS your output. Emit it before
   you exhaust your context window or tool-call budget. An empty
   completion is treated as a workflow failure, not as "no decision."

@@ -1223,7 +1223,160 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
     ;;
 
   close_and_reissue)
+    review_rb_collect_reissue_files()
+    {
+      local judge_json="$1"
+      local raw_files_json="[]"
+      local valid_files=()
+      local file_path=""
+
+      raw_files_json="$(printf '%s' "${judge_json}" | jq -c '[.remaining_issues[]?.file? | strings | gsub("\\r"; "") | sub("^\\./"; "") | select(length > 0)] | unique' 2>/dev/null || echo '[]')"
+      [ -n "${raw_files_json}" ] || raw_files_json='[]'
+
+      while IFS= read -r file_path; do
+        [ -n "${file_path}" ] || continue
+        if [[ "${file_path}" == /* ]] || [[ "${file_path}" =~ (^|/)\.\.(/|$) ]] || [[ "${file_path}" == *$'\n'* ]] || [[ "${file_path}" == *$'\r'* ]]; then
+          echo "::warning::Ignoring invalid review-blocked remaining_issues file path: ${file_path}" >&2
+          continue
+        fi
+        valid_files+=("${file_path}")
+      done < <(printf '%s' "${raw_files_json}" | jq -r '.[]' 2>/dev/null || true)
+
+      if [ "${#valid_files[@]}" -eq 0 ]; then
+        printf '[]\n'
+        return 0
+      fi
+
+      printf '%s\n' "${valid_files[@]}" | jq -R . | jq -cs 'map(select(length > 0)) | unique'
+    }
+
+    review_rb_prepare_baseline_branch()
+    {
+      local pr_head_sha="$1"
+      local baseline_branch="$2"
+      local runtime_dir="$3"
+      local wt="${runtime_dir}/review-rb-reissue-wt-${PR_NUMBER}-$$-${RANDOM:-0}"
+
+      (
+        set -euo pipefail
+
+        cleanup_review_rb_reissue_wt()
+        {
+          git worktree remove --force "${wt}" >/dev/null 2>&1 || rm -rf "${wt}" >/dev/null 2>&1 || true
+        }
+
+        trap cleanup_review_rb_reissue_wt EXIT
+        rm -rf "${wt}" >/dev/null 2>&1 || true
+
+        if ! git cat-file -e "${pr_head_sha}^{commit}" 2>/dev/null; then
+          if ! git fetch --quiet --no-tags --prune origin "${pr_head_sha}" 2>/dev/null; then
+            echo "::warning::Failed to fetch review-blocked baseline commit ${pr_head_sha}." >&2
+            exit 1
+          fi
+        fi
+
+        if ! git worktree add --quiet --detach "${wt}" "${pr_head_sha}" 2>/dev/null; then
+          echo "::warning::Failed to create review-blocked baseline worktree at ${wt}." >&2
+          exit 1
+        fi
+
+        cd "${wt}" || exit 1
+        git config user.name "codex-bot"
+        git config user.email "codex@users.noreply.github.com"
+
+        if ! git checkout --quiet -B "${baseline_branch}" "${pr_head_sha}" 2>/dev/null; then
+          echo "::warning::Failed to create baseline branch ${baseline_branch} from ${pr_head_sha}." >&2
+          exit 1
+        fi
+
+        local attempt sleep_secs local_sha remote_sha
+        for attempt in 1 2 3 4; do
+          if git push -u origin "HEAD:${baseline_branch}" >/dev/null 2>&1; then
+            printf '%s\n' "${baseline_branch}"
+            exit 0
+          fi
+
+          local_sha="$(git rev-parse HEAD 2>/dev/null || echo '')"
+          remote_sha="$(git ls-remote origin "refs/heads/${baseline_branch}" 2>/dev/null | awk '{print $1}' | head -n1)"
+          if [ -n "${local_sha}" ] && [ "${local_sha}" = "${remote_sha}" ]; then
+            printf '%s\n' "${baseline_branch}"
+            exit 0
+          fi
+
+          if [ "${attempt}" -lt 4 ]; then
+            sleep_secs=$((2 ** (attempt - 1)))
+            sleep "${sleep_secs}"
+          fi
+        done
+
+        echo "::warning::Failed to push review-blocked baseline branch ${baseline_branch} after 4 attempts." >&2
+        exit 1
+      )
+    }
+
     echo "Judge says close PR #${PR_NUMBER} and reissue."
+
+    RB_REISSUE_MODE_RAW="$(echo "${JUDGE_JSON}" | jq -r '.reissue_mode // empty')"
+    case "${RB_REISSUE_MODE_RAW}" in
+      spot-fix|redo)
+        RB_REISSUE_MODE="${RB_REISSUE_MODE_RAW}"
+        ;;
+      *)
+        RB_REISSUE_MODE="redo"
+        ;;
+    esac
+    RB_REISSUE_FILES_JSON='[]'
+    RB_REISSUE_BASELINE_BRANCH=''
+    RB_REISSUE_BASELINE_METADATA=''
+    RB_REISSUE_RUNTIME_DIR="${RUNTIME_DIR:-/tmp}"
+
+    if [ "${RB_REISSUE_MODE}" = "spot-fix" ] && [ "${REISSUE_PRESERVE_BASELINE_ENABLED:-false}" != "true" ]; then
+      echo "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=disabled"
+      RB_REISSUE_MODE="redo"
+    fi
+
+    if [ "${RB_REISSUE_MODE}" = "spot-fix" ]; then
+      RB_REISSUE_FILES_JSON="$(review_rb_collect_reissue_files "${JUDGE_JSON}")"
+      if [ -z "${RB_REISSUE_FILES_JSON}" ] || [ "${RB_REISSUE_FILES_JSON}" = "[]" ]; then
+        echo "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=empty_remaining_issues"
+        RB_REISSUE_MODE="redo"
+      else
+        # Re-fetch the PR head SHA immediately before baseline creation.
+        # PR_META_JSON was captured before the judge LLM ran; a fresh
+        # lookup avoids branching from stale head metadata if the PR
+        # moved while the judge was thinking.
+        RB_REISSUE_PR_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null | grep -xE '[a-f0-9]{40}' || echo '')"
+        if [ -z "${RB_REISSUE_PR_HEAD_SHA}" ]; then
+          echo "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=head_sha_missing"
+          RB_REISSUE_MODE="redo"
+        else
+          RB_REISSUE_BASELINE_BRANCH="ai/reissue-pr-${PR_NUMBER}-baseline-${RB_REISSUE_PR_HEAD_SHA:0:12}"
+          if ! [[ "${RB_REISSUE_BASELINE_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${RB_REISSUE_BASELINE_BRANCH}" =~ (^|/)__pycache__(/|$) ]] || [[ "${RB_REISSUE_BASELINE_BRANCH}" =~ \.pyc$ ]]; then
+            echo "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=invalid_branch_name"
+            RB_REISSUE_MODE="redo"
+            RB_REISSUE_BASELINE_BRANCH=''
+          elif RB_REISSUE_PREPARED_BRANCH="$(review_rb_prepare_baseline_branch "${RB_REISSUE_PR_HEAD_SHA}" "${RB_REISSUE_BASELINE_BRANCH}" "${RB_REISSUE_RUNTIME_DIR}")"; then
+            RB_REISSUE_BASELINE_BRANCH="${RB_REISSUE_PREPARED_BRANCH}"
+            RB_REISSUE_BASELINE_METADATA+=$'\n\n'
+            RB_REISSUE_BASELINE_METADATA+="prior_pr_baseline_branch: ${RB_REISSUE_BASELINE_BRANCH}"$'\n'
+            RB_REISSUE_BASELINE_METADATA+="files_touched:"$'\n'
+            while IFS= read -r rb_reissue_file; do
+              [ -n "${rb_reissue_file}" ] || continue
+              RB_REISSUE_BASELINE_METADATA+="- ${rb_reissue_file}"$'\n'
+            done < <(printf '%s' "${RB_REISSUE_FILES_JSON}" | jq -r '.[]' 2>/dev/null || true)
+            RB_REISSUE_BASELINE_METADATA="${RB_REISSUE_BASELINE_METADATA%$'\n'}"
+            echo "REISSUE_BASELINE_PRESERVED branch=${RB_REISSUE_BASELINE_BRANCH} head_sha=${RB_REISSUE_PR_HEAD_SHA:0:12}"
+          else
+            echo "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=baseline_prepare_failed"
+            RB_REISSUE_MODE="redo"
+            RB_REISSUE_BASELINE_BRANCH=''
+            RB_REISSUE_BASELINE_METADATA=''
+          fi
+        fi
+      fi
+    fi
+
+    echo "REISSUE_MODE ${RB_REISSUE_MODE} requested=${RB_REISSUE_MODE_RAW:-missing} enabled=${REISSUE_PRESERVE_BASELINE_ENABLED:-false}"
 
     # Close the PR
     gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
@@ -1241,7 +1394,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
     NEW_ISSUE_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
     NEW_ISSUE_BODY="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
     if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
-      FULL_NEW_BODY="${NEW_ISSUE_BODY}
+      FULL_NEW_BODY="${NEW_ISSUE_BODY}${RB_REISSUE_BASELINE_METADATA}
 
 ---
 **Review-blocked reissue metadata**
