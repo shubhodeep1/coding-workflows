@@ -1263,13 +1263,19 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       local runtime_dir="$3"
       local wt_suffix="${RANDOM:-$(date +%s%N 2>/dev/null || date +%s)}"
       local wt="${runtime_dir}/review-rb-reissue-wt-${PR_NUMBER}-$$-${wt_suffix}"
+      local repo_root=""
+
+      repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
 
       (
         set -euo pipefail
 
         cleanup_review_rb_reissue_wt()
         {
-          git worktree remove --force "${wt}" >/dev/null 2>&1 || rm -rf "${wt}" >/dev/null 2>&1 || true
+	  git -C "${repo_root}" worktree remove --force "${wt}" >/dev/null 2>&1 || {
+	    rm -rf "${wt}" >/dev/null 2>&1 || true
+	    git -C "${repo_root}" worktree prune >/dev/null 2>&1 || true
+	  }
         }
 
         trap cleanup_review_rb_reissue_wt EXIT
