@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The reported `lint` check-run failure on `bd96c4334e1e39edf7f710b4420e584b185fae97` is unrelated to this PR's change.\n  WHY: The lint job in `.github/workflows/ci.yml` only runs yamllint, actionlint, and Python syntax/unit-test checks on fixed domains that exclude `tests/e2e_smoke_canary.txt`, so the failure appears pre-existing or transient.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: The `lint` GitHub Actions check-run failed on HEAD commit `bd96c4334e1e39edf7f710b4420e584b185fae97`.\n  WHY: Every step in the ci.yml lint job excludes `tests/e2e_smoke_canary.txt`, so the failure is pre-existing on the base branch.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:entire file (3 lines) | confidence=4\n  PROBLEM: The reported lint check failure is unrelated to this PR's changes.\n  WHY: The lint job in `.github/workflows/ci.yml` does not check `.txt` files, so the change cannot trigger any lint check; the failure is pre-existing or transient CI infrastructure issue.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:N/A\n  PROBLEM: The lint check-run failure appears to be pre-existing or unrelated to this PR's changes.\n  WHY: The only changed file is a plain-text `.txt` canary, and the check-run provides no summary, title, or log excerpt, so no fix can be determined.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:N/A\n  PROBLEM: The lint check-run failure is unrelated to the last run changes.\n  WHY: The only modified file is a plain-text `.txt` file with three `key: value` lines, so it cannot introduce a lint violation; this is a pre-existing lint failure.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:N/A\n  PROBLEM: The `lint` check-run failure cannot be caused by this PR.\n  WHY: The only changed file is `tests/e2e_smoke_canary.txt`, a plain-text canary with no executable code, no shell syntax, and no Python to lint; the root cause cannot be determined from artifacts alone.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2a14517fc9644a3516b4ad0d1232f040439cc58482f335f200ea3ada012a8616",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2652,
+    "run_id": "25958953159",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25958953159",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516101335_a102ae9d17",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2652,
+    "run_id": "25958953159"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T10:13:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
