@@ -343,6 +343,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ISSUE_BODY: ${{ github.event.issue.body || '' }}
+          REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -350,12 +351,11 @@ jobs:
           import os
           import re
           import subprocess
-          import sys
           from pathlib import Path
 
           output_path = Path(os.environ["GITHUB_OUTPUT"])
           issue_body = os.environ.get("ISSUE_BODY", "").replace("\r\n", "\n")
-          feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "false") == "true"
+          feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
           repo = os.environ.get("GITHUB_REPOSITORY", "")
 
           def emit(*, branch: str = "", status: str) -> None:
@@ -384,14 +384,14 @@ jobs:
               emit(status="untrusted")
               raise SystemExit(0)
 
-          files_touched_match = re.search(r"(?ms)^files_touched:\s*\n(?:[ \t]*- [^\n]+\n?)+", issue_body)
+          files_touched_match = re.search(r"(?m)^files_touched:\s*\n(?:[ \t]*- [^\n]+\n?)+", issue_body)
           if files_touched_match is None:
               notice("Baseline override ignored: files_touched metadata is missing or empty.")
               emit(status="files-missing")
               raise SystemExit(0)
 
           metadata_match = re.search(
-              r"(?ms)^\*\*Review-blocked reissue metadata\*\*\s*\n(?P<block>(?:- .*\n?)*)",
+              r"(?m)^\*\*Review-blocked reissue metadata\*\*\s*\n(?P<block>(?:- [^\n]*\n?)*)",
               issue_body,
           )
           if metadata_match is None:
@@ -422,21 +422,27 @@ jobs:
               emit(status="repo-missing")
               raise SystemExit(0)
 
-          pr_view = subprocess.run(
-              [
-                  "gh",
-                  "pr",
-                  "view",
-                  expected_pr_number,
-                  "--repo",
-                  repo,
-                  "--json",
-                  "state,headRefOid",
-              ],
-              capture_output=True,
-              text=True,
-              check=False,
-          )
+          try:
+              pr_view = subprocess.run(
+                  [
+                      "gh",
+                      "pr",
+                      "view",
+                      expected_pr_number,
+                      "--repo",
+                      repo,
+                      "--json",
+                      "state,headRefOid",
+                  ],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+                  timeout=30,
+              )
+          except (OSError, subprocess.TimeoutExpired):
+              notice("Baseline override ignored: failed to verify prior PR baseline branch against GitHub.")
+              emit(status="lookup-failed")
+              raise SystemExit(0)
           if pr_view.returncode != 0:
               notice("Baseline override ignored: failed to verify prior PR baseline branch against GitHub.")
               emit(status="lookup-failed")
@@ -451,8 +457,10 @@ jobs:
 
           pr_state = str(pr_payload.get("state") or "")
           pr_head_oid = str(pr_payload.get("headRefOid") or "")
+          # Review-blocked reissues are emitted only for PRs closed without
+          # merge ("closed — approach rework"), so MERGED stays untrusted here.
           if pr_state != "CLOSED":
-              notice("Baseline override ignored: referenced PR is not closed.")
+              notice("Baseline override ignored: referenced PR is not in the closed review-blocked state.")
               emit(status="pr-open")
               raise SystemExit(0)
 
@@ -504,7 +512,7 @@ jobs:
           else
             echo "Baseline override: ignored (${{ steps.baseline_refctx.outputs.status }})"
           fi
-          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           echo "HEAD commit: $(git rev-parse HEAD)"
           if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
             echo "HEAD branch: ${branch_name}"
