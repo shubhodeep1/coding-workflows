@@ -550,3 +550,29 @@ def test_review_autofix_workflow_skips_interim_judge_on_strict_ledger_only_commi
 		"Run interim judge must skip strict ledger-only commits; otherwise a bookkeeping-only "
 		"diff still spends an advisory judge call."
 	)
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
