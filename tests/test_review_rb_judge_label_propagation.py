@@ -303,13 +303,20 @@ sys.exit(0)
 	state_file.write_text("{}", encoding="utf-8")
 
 
-def _build_harness(branch: str, runtime_dir: Path, github_output: Path) -> str:
+def _build_harness(
+	branch: str,
+	runtime_dir: Path,
+	github_output: Path,
+	*,
+	enable_xpg_echo: bool = False,
+) -> str:
 	"""Wrap the extracted close_and_reissue branch in a self-contained
 	bash harness with stubs for the helpers it depends on."""
+	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
-gh_retry() {{ "$@"; }}
+{xpg_echo_line}gh_retry() {{ "$@"; }}
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ :; }}
@@ -331,6 +338,7 @@ def _run_close_and_reissue(
 	reissue_preserve_baseline_enabled: str = "false",
 	repo_files: dict[str, str] | None = None,
 	precreate_baseline_branch: bool = False,
+	enable_xpg_echo: bool = False,
 ) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
@@ -365,7 +373,12 @@ def _run_close_and_reissue(
 
 		script_path = runtime_dir / "rb_branch_harness.sh"
 		script_path.write_text(
-			_build_harness(branch, runtime_dir, github_output),
+			_build_harness(
+				branch,
+				runtime_dir,
+				github_output,
+				enable_xpg_echo=enable_xpg_echo,
+			),
 			encoding="utf-8",
 		)
 		script_path.chmod(0o755)
@@ -600,6 +613,32 @@ def test_close_and_reissue_invalid_reissue_mode_falls_back_to_redo() -> None:
 		"invalid reissue_mode must fail open back to redo instead of attempting spot-fix"
 	)
 	assert "REISSUE_BASELINE_PRESERVED" not in state["_stdout"]
+
+
+def test_close_and_reissue_preserves_judge_json_bytes_under_xpg_echo() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "redo",
+			"justification": "Quoted reissues should not be dropped.",
+			"new_issue": {
+				"title": 'Reissue: handle "quoted" follow-up',
+				"body": 'First line keeps "quotes" intact.\nSecond line stays attached.',
+			},
+		},
+		enable_xpg_echo=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		"close_and_reissue must still create the replacement issue when bash xpg_echo is enabled"
+	)
+	args = creates[0]
+	title = args[args.index("--title") + 1]
+	body = args[args.index("--body") + 1]
+	assert title == 'Reissue: handle "quoted" follow-up'
+	assert body.startswith('First line keeps "quotes" intact.\nSecond line stays attached.')
 
 
 def test_close_and_reissue_spot_fix_invalid_remaining_issue_file_falls_back_to_redo() -> None:

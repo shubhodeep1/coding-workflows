@@ -1305,9 +1305,9 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
     done <<< "${ISSUE_NUMBERS}"
 
     # Create replacement issue
-    NEW_ISSUE_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
-    NEW_ISSUE_BODY="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
-    RB_REISSUE_MODE_RAW="$(echo "${JUDGE_JSON}" | jq -r '.reissue_mode // empty')"
+    NEW_ISSUE_TITLE="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
+    NEW_ISSUE_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
+    RB_REISSUE_MODE_RAW="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.reissue_mode // empty')"
     RB_REQUESTED_REISSUE_MODE="$(normalize_rb_reissue_mode "${RB_REISSUE_MODE_RAW}")"
     RB_EFFECTIVE_REISSUE_MODE="${RB_REQUESTED_REISSUE_MODE}"
     RB_SPOT_FIX_REASON=""
