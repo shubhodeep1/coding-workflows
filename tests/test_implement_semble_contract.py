@@ -2,6 +2,8 @@
 """Contract tests for implement-phase Semble workflow wiring."""
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -203,6 +205,25 @@ def test_emit_serena_stats_runs_before_cleanup_and_scans_implement_logs() -> Non
 	assert 'python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"' in stats_block
 	assert "post_codex_repair_log_attempt_*.txt" in stats_block
 	assert workflow.find("- name: Emit Serena stats") < workflow.find("- name: Cleanup temporary artifacts")
+
+
+def test_review_rb_judge_reissue_baseline_module_runs_clean() -> None:
+	baseline_test = REPO_ROOT / "tests" / "test_review_rb_judge_reissue_baseline.py"
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	result = subprocess.run(
+		["python3", str(baseline_test)],
+		cwd=str(REPO_ROOT),
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=120,
+	)
+	assert result.returncode == 0, (
+		"review-blocked baseline regression test failed\n"
+		f"stdout:\n{result.stdout}\n"
+		f"stderr:\n{result.stderr}"
+	)
 
 
 def main() -> int:
