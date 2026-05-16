@@ -482,6 +482,62 @@ jobs:
               emit(status="head-mismatch")
               raise SystemExit(0)
 
+          # The gh pr view call above validates the closed PR head, but it
+          # cannot prove the machine-generated baseline ref actually exists or
+          # still points at that immutable commit. Resolve the exact ref before
+          # honoring the override, then continue to checkout by SHA below.
+          try:
+              ref_view = subprocess.run(
+                  [
+                      "gh",
+                      "api",
+                      f"repos/{repo}/git/matching-refs/heads/{branch}",
+                  ],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+                  timeout=30,
+              )
+          except (OSError, ValueError, subprocess.SubprocessError):
+              notice("Baseline override ignored: failed to verify prior PR baseline ref against GitHub.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+          if ref_view.returncode != 0:
+              notice("Baseline override ignored: failed to verify prior PR baseline ref against GitHub.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+
+          try:
+              ref_payload = json.loads(ref_view.stdout or "[]")
+          except json.JSONDecodeError:
+              notice("Baseline override ignored: GitHub baseline ref validation response was malformed.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+          if not isinstance(ref_payload, list):
+              notice("Baseline override ignored: GitHub baseline ref validation response was malformed.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+
+          exact_refs = [
+              item for item in ref_payload
+              if isinstance(item, dict) and str(item.get("ref") or "") == f"refs/heads/{branch}"
+          ]
+          if len(exact_refs) != 1:
+              notice("Baseline override ignored: prior PR baseline ref is missing on GitHub.")
+              emit(status="ref-missing")
+              raise SystemExit(0)
+
+          ref_object = exact_refs[0].get("object")
+          ref_oid = str(ref_object.get("sha") or "") if isinstance(ref_object, dict) else ""
+          if re.fullmatch(r"[0-9a-f]{40}", ref_oid) is None:
+              notice("Baseline override ignored: prior PR baseline ref did not resolve to a commit SHA.")
+              emit(status="ref-missing")
+              raise SystemExit(0)
+          if ref_oid != pr_head_oid:
+              notice("Baseline override ignored: prior PR baseline ref no longer points at the closed PR head SHA.")
+              emit(status="ref-mismatch")
+              raise SystemExit(0)
+
           notice(f"Baseline override accepted: {branch}")
           emit(branch=branch, sha=pr_head_oid, status="accepted")
           PY

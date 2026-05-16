@@ -119,6 +119,31 @@ if args[:2] == ["pr", "view"]:
 	print(json.dumps(payload))
 	sys.exit(0)
 
+if args[:1] == ["api"]:
+	exit_code = int(state.get("ref_view_exit_code", 0))
+	if exit_code:
+		print(state.get("ref_view_stderr", "gh api failed"), file=sys.stderr)
+		sys.exit(exit_code)
+	stdout_override = state.get("ref_view_stdout")
+	if stdout_override is not None:
+		sys.stdout.write(str(stdout_override))
+		if stdout_override and not str(stdout_override).endswith("\n"):
+			sys.stdout.write("\n")
+		sys.exit(0)
+	endpoint = args[1] if len(args) > 1 else ""
+	branch = endpoint.split("/git/matching-refs/heads/", 1)[1] if "/git/matching-refs/heads/" in endpoint else ""
+	payload = state.get("ref_payload")
+	if payload is None:
+		payload = [{
+			"ref": f"refs/heads/{branch}",
+			"object": {
+				"type": "commit",
+				"sha": state.get("ref_object_sha") or state.get("pr_head_oid", ""),
+			},
+		}]
+	print(json.dumps(payload))
+	sys.exit(0)
+
 print(json.dumps({}))
 '''
 	gh_path = bin_dir / "gh"
@@ -165,6 +190,10 @@ def _run_baseline_resolver(
 	pr_head_oid: str = VALID_HEAD_OID,
 	pr_view_exit_code: int = 0,
 	pr_view_stdout: str | None = None,
+	ref_view_exit_code: int = 0,
+	ref_view_stdout: str | None = None,
+	ref_payload: object | None = None,
+	ref_object_sha: str | None = None,
 	repo: str = "owner/repo",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict[str, object]]:
 	script = _extract_run_script("Resolve trusted prior PR baseline branch")
@@ -183,6 +212,10 @@ def _run_baseline_resolver(
 					"pr_head_oid": pr_head_oid,
 					"pr_view_exit_code": pr_view_exit_code,
 					"pr_view_stdout": pr_view_stdout,
+					"ref_view_exit_code": ref_view_exit_code,
+					"ref_view_stdout": ref_view_stdout,
+					"ref_payload": ref_payload,
+					"ref_object_sha": ref_object_sha,
 				}
 			),
 			encoding="utf-8",
@@ -229,6 +262,9 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "subprocess.SubprocessError" in resolver_script
 	assert '"gh",' in resolver_script and '"pr",' in resolver_script and '"view",' in resolver_script
 	assert '"state,headRefOid"' in resolver_script
+	assert '"api",' in resolver_script and "git/matching-refs/heads/" in resolver_script
+	assert "prior PR baseline ref is missing on GitHub" in resolver_script
+	assert "prior PR baseline ref no longer points at the closed PR head SHA" in resolver_script
 	assert "continue-on-error: true" in baseline_checkout_step
 	assert "ref: ${{ steps.baseline_refctx.outputs.sha || steps.baseline_refctx.outputs.branch }}" in baseline_checkout_step
 	assert "steps.baseline_refctx.outputs.branch == '' || steps.checkout_baseline.outcome != 'success'" in fallback_checkout_step
@@ -245,7 +281,10 @@ def test_resolver_accepts_valid_machine_generated_reissue_branch() -> None:
 
 		assert result.returncode == 0, result.stderr
 		assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
-		assert state["calls"] == [["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"]]
+		assert state["calls"] == [
+			["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+			["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+		]
 		assert f"Baseline override accepted: {VALID_BRANCH}" in result.stdout
 
 
@@ -405,6 +444,39 @@ def test_resolver_rejects_pr_head_sha_mismatch_after_lookup() -> None:
 	assert "does not match the closed PR head SHA" in result.stdout
 
 
+def test_resolver_rejects_missing_baseline_ref_after_lookup() -> None:
+	result, outputs, state = _run_baseline_resolver(
+		_valid_issue_body(),
+		feature_enabled="true",
+		ref_payload=[],
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": "", "status": "ref-missing"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+	assert "baseline ref is missing on GitHub" in result.stdout
+
+
+def test_resolver_rejects_drifted_baseline_ref_after_lookup() -> None:
+	drifted_ref_oid = "cccccc1234567890abcdef1234567890abcdef12"
+	result, outputs, state = _run_baseline_resolver(
+		_valid_issue_body(),
+		feature_enabled="true",
+		ref_object_sha=drifted_ref_oid,
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": "", "status": "ref-mismatch"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+	assert "baseline ref no longer points at the closed PR head SHA" in result.stdout
+
+
 def test_resolver_fails_open_on_github_lookup_failure() -> None:
 	result, outputs, state = _run_baseline_resolver(
 		_valid_issue_body(),
@@ -429,6 +501,38 @@ def test_resolver_fails_open_on_malformed_github_lookup_response() -> None:
 	assert outputs == {"branch": "", "status": "lookup-failed"}
 	assert state["calls"] == [["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"]]
 	assert "GitHub PR validation response was malformed" in result.stdout
+
+
+def test_resolver_fails_open_on_baseline_ref_lookup_failure() -> None:
+	result, outputs, state = _run_baseline_resolver(
+		_valid_issue_body(),
+		feature_enabled="true",
+		ref_view_exit_code=1,
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": "", "status": "ref-lookup-failed"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+	assert "failed to verify prior PR baseline ref against GitHub" in result.stdout
+
+
+def test_resolver_fails_open_on_malformed_baseline_ref_lookup_response() -> None:
+	result, outputs, state = _run_baseline_resolver(
+		_valid_issue_body(),
+		feature_enabled="true",
+		ref_view_stdout="not-json",
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": "", "status": "ref-lookup-failed"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+	assert "GitHub baseline ref validation response was malformed" in result.stdout
 
 
 def main() -> int:
