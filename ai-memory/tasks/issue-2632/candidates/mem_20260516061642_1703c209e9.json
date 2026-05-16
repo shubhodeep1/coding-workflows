@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning against `main` @ `30c55d26fa8e3cc0580d1f7aac321340568fcdb7` (no integration-branch mismatch metadata was present, so no branch mismatch blocker).\n\nInspected for this plan:\n- `.github/workflows/implement.yml` checkout/ref-resolution path\n- `scripts/review_rb_judge.sh` current review-blocked reissue footer shape\n- `tests/test_workflow_checkout_integration_ref_audit.py`\n- `tests/test_implement_post_codex_recovery.py`\n- closed PR `#2631`\u2019s historical `implement.yml` diff and its missing `tests/test_review_rb_judge_reissue_baseline.py`\n\nAssumptions:\n- No clarification is needed; the auto-answer means proceed with the conservative interpretation.\n- This issue should harden the implement-side consumer only; producer-side spot-fix/redo behavior remains out of scope.\n\nConflicts / missing-context notes:\n- Current `main` does **not** contain the Phase E checkout-override step from closed PR `#2631`.\n- `tests/test_review_rb_judge_reissue_baseline.py` is absent on the current ref and will need to be created.\n- Current `main` also does not contain producer-side `prior_pr_baseline_branch` emission, so this work is effectively a safe port/rework of the implement-side subset from the closed PR, not a tiny in-place patch.\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `tests/test_review_rb_judge_reissue_baseline.py` **(create on this ref)**\n\n2. Functions / workflow steps to implement\n- In `implement.yml`, add a workflow-level false-default flag:\n  - `REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}`\n- Add a new pre-checkout resolver step that:\n  - starts with \u201cno baseline override\u201d\n  - reads the issue body from event context (pre-checkout safe)\n  - only considers `prior_pr_baseline_branch:` when **all** trust conditions pass:\n    - feature flag is `true`\n    - body matches the machine-generated review-blocked reissue shape\n    - footer includes `Type: review-blocked-reissue`\n    - footer includes `Replaces: ... (PR #N closed \u2014 approach rework)`\n    - branch matches the strict producer format from PR `#2631`: `ai/reissue-pr-<PR_NUMBER>-baseline-<12 hex>`\n    - raw SHAs / unrelated branch names are rejected\n  - preferably cross-checks the `PR #N` footer against `gh pr view ... --json headRefOid` and requires the 12-hex suffix to match the closed PR head SHA prefix\n  - fails open on any parse/API/validation problem\n- Add an optional `Checkout prior PR baseline branch` step with `continue-on-error: true`.\n- Gate the existing `Checkout repository` step so it only runs when:\n  - no trusted baseline branch was accepted, or\n  - baseline checkout failed.\n- Keep the existing fallback ref expression (`steps.refctx.outputs.ref || github.event.repository.default_branch`) intact so the current checkout-audit test does not need widening.\n- Add/keep explicit notices for \u201cbaseline override accepted/ignored/fallback\u201d without rewriting the audit-pinned resolved-ref log line.\n\n3. Data structures affected\n- Issue-body metadata parsing:\n  - `prior_pr_baseline_branch: ...`\n  - `files_touched:`\n  - `**Review-blocked reissue metadata**`\n  - `Replaces: #... (PR #... closed \u2014 approach rework)`\n  - `Type: review-blocked-reissue`\n- New workflow env flag:\n  - `REISSUE_PRESERVE_BASELINE_ENABLED`\n- Step outputs:\n  - trusted/sanitized baseline branch (or empty)\n\n4. API / interface changes\n- No external product/API changes.\n- Internal workflow behavior change only:\n  - implement honors a baseline ref **only** when the guarded review-blocked baseline format is trusted and the feature flag is on\n  - otherwise it preserves the current integration/default checkout path\n- If the stronger validation is used, add at most one targeted `gh pr view` lookup, and only after a candidate body block passes initial shape checks.\n\n5. Risks / edge cases\n- Hand-written or edited issue bodies that inject `prior_pr_baseline_branch:` must be ignored unless they fully match the trusted reissue format.\n- Reject:\n  - raw commit SHAs\n  - `main` / unrelated branch names\n  - PR-number mismatches\n  - bad SHA-suffix format\n  - malformed or incomplete review-blocked metadata\n- Preserve fail-open behavior for:\n  - field absent\n  - feature flag false\n  - untrusted/malformed metadata\n  - GitHub lookup failure\n  - baseline checkout failure\n- Avoid changing the main checkout/log expressions unnecessarily; otherwise `tests/test_workflow_checkout_integration_ref_audit.py` would also need an out-of-scope update.\n\n6. Testing considerations\nCreate `tests/test_review_rb_judge_reissue_baseline.py` using the extracted-run-block style already used in `tests/test_implement_post_codex_recovery.py`, and cover:\n- static assertions that `implement.yml` now has:\n  - false-default `REISSUE_PRESERVE_BASELINE_ENABLED`\n  - a strict trusted-baseline resolver\n  - fallback checkout condition\n- executable resolver-step cases:\n  1. valid machine-generated reissue body + flag `true` -> trusted baseline branch emitted\n  2. same body + flag `false` -> baseline ignored, default checkout preserved\n  3. manual injected ref (`main`, arbitrary branch, raw SHA) + flag `true` -> ignored\n  4. malformed/mismatched footer or PR-head mismatch -> ignored\n  5. GitHub lookup failure -> fail-open\n- API-hygiene assertions:\n  - no `gh pr view` call when the flag is off\n  - no `gh pr view` call for obviously untrusted candidate refs\n\nRepresentative reference to follow:\n- Port the **consumer-side idea** from closed PR `#2631`\u2019s `implement.yml`, but replace its direct issue-body trust with the stricter guarded parser/validation above.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "597291f9fff2f53e73745ae72d8664cb8cb893678bb03cd21a4523585444085a",
+  "lineage": {
+    "issue_number": 2632,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25954591397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25954591397",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2632"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260516061642_1703c209e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2632,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25954591397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2632",
+  "timestamps": {
+    "created_at": "2026-05-16T06:16:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
