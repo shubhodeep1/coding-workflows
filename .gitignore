@@ -19,6 +19,7 @@ validation/
 # persisted across autofix iterations via actions/cache in
 # review_autofix.yml — never committed to the branch.
 .ai/review_issue_ledger/
+.ai/review_runtime/
 # Kept for backward compat with older consumers that still write the
 # legacy single-file path.
 .ai/review_issue_ledger.txt

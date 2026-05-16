@@ -19,6 +19,13 @@ Required handling rules:
 - `EVIDENCE` must quote reviewer text verbatim.
 - If you cannot classify a finding, set `CLASSIFICATION: unclassified`.
 
+Optional carry-over input:
+- The prompt may include a `<judge_interim_priors>` block before the reviewer bundle.
+- Treat that block as advisory carry-over from the prior round's interim judge, not as a new reviewer source.
+- Do not add `judge_interim` to `FLAGGED_BY`, and do not fabricate reviewer quotes from the priors block.
+- Use priors to keep unresolved issues visible or to merge with matching reviewer findings, but do not let priors suppress reviewer-bundle findings.
+- If a prior has no current reviewer support, mention it only when it materially helps explain ambiguity or persistence.
+
 Use these seven lenses exactly:
 1. SECURITY & INPUT VALIDATION
 2. CORRECTNESS & LOGIC
