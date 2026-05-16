@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 JUDGE_INTERIM_SCRIPT = REPO_ROOT / "scripts" / "review_run_judge_interim.sh"
 REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 CONSOLIDATE_SCRIPT = REPO_ROOT / "scripts" / "review_consolidate.sh"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "review_pipeline"
 
 
@@ -174,6 +175,7 @@ def _run_prepare_priors_function(
 	runtime_dir: Path,
 	*,
 	autofix_iteration: int,
+	enabled: bool = True,
 ) -> subprocess.CompletedProcess[str]:
 	function_text = _extract_shell_function(REVIEW_APPLY_FIXES, "prepare_judge_interim_priors")
 	env = os.environ.copy()
@@ -181,6 +183,7 @@ def _run_prepare_priors_function(
 	env["RUNTIME_DIR"] = str(runtime_dir)
 	env["PR_NUMBER"] = "4242"
 	env["AUTOFIX_ITERATION"] = str(autofix_iteration)
+	env["JUDGE_INTERIM_ENABLED"] = "true" if enabled else "false"
 	env["JUDGE_INTERIM_PRIORS_FILE"] = str(runtime_dir / "judge_interim_priors.txt")
 	return subprocess.run(
 		["bash", "-c", function_text + "\nprepare_judge_interim_priors\n"],
@@ -240,6 +243,44 @@ def test_review_run_judge_interim_writes_round_artifact() -> None:
 		assert "JUDGE_INTERIM_PASS_OK round=1" in combined_output
 
 
+def test_review_run_judge_interim_accepts_extra_top_level_metadata() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_extra_keys_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		current_head = _seed_repo_with_autofix_commit(workspace)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				{
+					"round": 1,
+					"head_sha": current_head,
+					"remaining_issues": [],
+					"notes": "advisory metadata",
+				}
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(JUDGE_INTERIM_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		artifact = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "judge_interim.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert artifact.exists(), combined_output
+		payload = json.loads(artifact.read_text(encoding="utf-8"))
+		assert payload["remaining_issues"] == []
+		assert "notes" not in payload
+
+
 def test_review_run_judge_interim_fails_open_on_malformed_output() -> None:
 	with tempfile.TemporaryDirectory(prefix="judge_interim_failopen_") as td:
 		workspace = Path(td)
@@ -248,6 +289,77 @@ def test_review_run_judge_interim_fails_open_on_malformed_output() -> None:
 		mock_bin_dir = workspace / "mock_bin"
 		_seed_repo_with_autofix_commit(workspace)
 		_install_mock_codex(mock_bin_dir, stdout_text='{"action":"fix"}\n')
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(JUDGE_INTERIM_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		artifact = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "judge_interim.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert not artifact.exists(), combined_output
+		assert "JUDGE_INTERIM_PASS_FAIL reason=json_parse_failed" in combined_output
+
+
+def test_review_run_judge_interim_logs_timeout_reason() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_timeout_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		_seed_repo_with_autofix_commit(workspace)
+		_install_mock_codex(mock_bin_dir)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["MOCK_CODEX_EXIT_CODE"] = "124"
+
+		result = subprocess.run(
+			["bash", str(JUDGE_INTERIM_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		artifact = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "judge_interim.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert not artifact.exists(), combined_output
+		assert "JUDGE_INTERIM_PASS_FAIL reason=timeout" in combined_output
+
+
+def test_review_run_judge_interim_rejects_null_path_fields() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_null_fields_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		current_head = _seed_repo_with_autofix_commit(workspace)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				{
+					"round": 1,
+					"head_sha": current_head,
+					"remaining_issues": [
+						{
+							"id": None,
+							"file": "src/module.py",
+							"line_start": 2,
+							"line_end": 3,
+							"symptom": "Null id should be rejected",
+							"evidence_quote": "return 'autofix'",
+							"severity": "nice-to-have",
+						}
+					],
+				}
+			)
+			+ "\n",
+		)
 		env = _base_env(workspace, runtime_dir, mock_bin_dir)
 
 		result = subprocess.run(
@@ -335,6 +447,48 @@ def test_prepare_priors_merges_prior_round_into_consolidator_prompt() -> None:
 		assert "src/module.py" in prompt_text
 
 
+def test_prepare_priors_skips_invalid_cached_rows() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_invalid_prior_") as td:
+		workspace = Path(td)
+		workspace.mkdir(parents=True, exist_ok=True)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		prior_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1"
+		prior_dir.mkdir(parents=True, exist_ok=True)
+		(prior_dir / "judge_interim.json").write_text(
+			json.dumps(
+				{
+					"round": 1,
+					"head_sha": "abc123",
+					"remaining_issues": [
+						{
+							"id": "src/module.py:7:carry-over",
+							"file": None,
+							"line_start": 7,
+							"line_end": 8,
+							"symptom": "Carry-over issue (src/module.py:7-8)",
+							"evidence_quote": "return stale_value",
+							"severity": "must-fix",
+						}
+					],
+				}
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		result = _run_prepare_priors_function(
+			workspace,
+			runtime_dir,
+			autofix_iteration=2,
+		)
+
+		priors_file = runtime_dir / "judge_interim_priors.txt"
+		assert result.returncode == 0, result.stderr
+		assert not priors_file.exists()
+		assert "JUDGE_INTERIM_PRIORS_MERGED count=0 source=.ai/review_runtime/pr-4242/round-1/judge_interim.json" in result.stdout
+
+
 def test_prepare_priors_is_noop_on_round_one_cache_miss() -> None:
 	with tempfile.TemporaryDirectory(prefix="judge_interim_noop_") as td:
 		workspace = Path(td)
@@ -352,3 +506,47 @@ def test_prepare_priors_is_noop_on_round_one_cache_miss() -> None:
 		assert result.returncode == 0, result.stderr
 		assert not priors_file.exists()
 		assert "JUDGE_INTERIM_PRIORS_MERGED count=0 source=none" in result.stdout
+
+
+def test_prepare_priors_is_inert_when_feature_disabled() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_disabled_") as td:
+		workspace = Path(td)
+		workspace.mkdir(parents=True, exist_ok=True)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		prior_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1"
+		prior_dir.mkdir(parents=True, exist_ok=True)
+		(prior_dir / "judge_interim.json").write_text(
+			json.dumps(
+				{
+					"round": 1,
+					"head_sha": "abc123",
+					"remaining_issues": [],
+				}
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		result = _run_prepare_priors_function(
+			workspace,
+			runtime_dir,
+			autofix_iteration=2,
+			enabled=False,
+		)
+
+		priors_file = runtime_dir / "judge_interim_priors.txt"
+		assert result.returncode == 0, result.stderr
+		assert not priors_file.exists()
+		assert "JUDGE_INTERIM_PRIORS_MERGED count=0 source=disabled" in result.stdout
+
+
+def test_review_autofix_workflow_skips_interim_judge_on_strict_ledger_only_commit() -> None:
+	workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	step_idx = workflow.find("- name: Run interim judge")
+	assert step_idx != -1, "review_autofix.yml missing the Run interim judge step"
+	step_block = workflow[step_idx : step_idx + 400]
+	assert "env.LEDGER_ONLY_COMMIT_STRICT != 'true'" in step_block, (
+		"Run interim judge must skip strict ledger-only commits; otherwise a bookkeeping-only "
+		"diff still spends an advisory judge call."
+	)

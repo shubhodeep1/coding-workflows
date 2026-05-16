@@ -86,8 +86,6 @@ def validate(candidate):
 		candidate = json.loads(candidate)
 	if not isinstance(candidate, dict):
 		return None
-	if set(candidate.keys()) - {"round", "head_sha", "remaining_issues"}:
-		return None
 	if "action" in candidate or "status" in candidate:
 		return None
 	if candidate.get("round") != expected_round:
@@ -121,14 +119,26 @@ def validate(candidate):
 		severity = issue.get("severity")
 		if severity not in {"must-fix", "nice-to-have"}:
 			return None
+		issue_id = issue.get("id")
+		issue_file = issue.get("file")
+		symptom = issue.get("symptom")
+		evidence_quote = issue.get("evidence_quote")
+		if not all(isinstance(value, str) for value in (issue_id, issue_file, symptom, evidence_quote)):
+			return None
+		issue_id = squish(issue_id)
+		issue_file = squish(issue_file)
+		symptom = squish(symptom)
+		evidence_quote = squish(evidence_quote, 200)
+		if not issue_id or not issue_file or not symptom or not evidence_quote:
+			return None
 		normalized.append(
 			{
-				"id": squish(issue.get("id")),
-				"file": squish(issue.get("file")),
+				"id": issue_id,
+				"file": issue_file,
 				"line_start": line_start,
 				"line_end": line_end,
-				"symptom": squish(issue.get("symptom")),
-				"evidence_quote": squish(issue.get("evidence_quote"), 200),
+				"symptom": symptom,
+				"evidence_quote": evidence_quote,
 				"severity": severity,
 			}
 		)
@@ -305,11 +315,12 @@ if [ "${reasoning_config_applied}" -eq 0 ]; then
 	printf 'model_reasoning_effort = "%s"\n' "${JUDGE_INTERIM_REASONING}" > "${judge_codex_home}/config.toml"
 fi
 
-cmd_rc=0
-if ! CODEX_HOME="${judge_codex_home}" \
+if CODEX_HOME="${judge_codex_home}" \
 	timeout "${JUDGE_INTERIM_TIMEOUT_S}" \
 	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox read-only \
 	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
+	cmd_rc=0
+else
 	cmd_rc=$?
 fi
 
@@ -328,8 +339,10 @@ fi
 
 rm -f "${ARTIFACT_PATH}"
 failure_reason="json_parse_failed"
-if [ "${cmd_rc}" -eq 124 ] || [ "${cmd_rc}" -eq 137 ]; then
+if [ "${cmd_rc}" -eq 124 ]; then
 	failure_reason="timeout"
+elif [ "${cmd_rc}" -eq 137 ]; then
+	failure_reason="killed"
 elif [ "${cmd_rc}" -ne 0 ]; then
 	failure_reason="llm_failed"
 fi

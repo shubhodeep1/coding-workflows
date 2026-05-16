@@ -112,6 +112,14 @@ prepare_judge_interim_priors()
 	JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_interim_priors.txt}"
 	rm -f "${JUDGE_INTERIM_PRIORS_FILE}" 2>/dev/null || true
 
+	case "$(printf '%s' "${JUDGE_INTERIM_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) ;;
+		*)
+			echo "JUDGE_INTERIM_PRIORS_MERGED count=0 source=disabled"
+			return 0
+			;;
+	esac
+
 	if [ -z "${PR_NUMBER:-}" ] || ! [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] || [ "${AUTOFIX_ITERATION}" -le 1 ]; then
 		echo "JUDGE_INTERIM_PRIORS_MERGED count=0 source=none"
 		return 0
@@ -167,14 +175,26 @@ for issue in remaining:
 		sys.exit(1)
 	if severity not in {'must-fix', 'nice-to-have'}:
 		sys.exit(1)
+	issue_id = issue.get('id')
+	issue_file = issue.get('file')
+	symptom = issue.get('symptom')
+	evidence_quote = issue.get('evidence_quote')
+	if not all(isinstance(value, str) for value in (issue_id, issue_file, symptom, evidence_quote)):
+		sys.exit(1)
+	issue_id = squish(issue_id)
+	issue_file = squish(issue_file)
+	symptom = squish(symptom)
+	evidence_quote = squish(evidence_quote, 200)
+	if not issue_id or not issue_file or not symptom or not evidence_quote:
+		sys.exit(1)
 	rows.append(
 		{
-			'id': squish(issue.get('id')),
-			'file': squish(issue.get('file')),
+			'id': issue_id,
+			'file': issue_file,
 			'line_start': line_start,
 			'line_end': line_end,
-			'symptom': squish(issue.get('symptom')),
-			'evidence_quote': squish(issue.get('evidence_quote'), 200),
+			'symptom': symptom,
+			'evidence_quote': evidence_quote,
 			'severity': severity,
 		}
 	)
@@ -642,7 +662,11 @@ $(_embed_input_file "${SYMBOL_DIFF_SUMMARY_FILE}" 80000)
 $(_embed_input_file "${RUNTIME_DIR}/floor_tags.txt" 50000)
 === END ${RUNTIME_DIR}/floor_tags.txt ===
 
-$(if [ -s "${JUDGE_INTERIM_PRIORS_FILE:-}" ]; then _embed_input_file "${JUDGE_INTERIM_PRIORS_FILE}" 20000; fi)
+$(if [ -s "${JUDGE_INTERIM_PRIORS_FILE:-}" ]; then
+	printf '=== BEGIN %s (advisory carry-over from the prior round interim judge) ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
+	_embed_input_file "${JUDGE_INTERIM_PRIORS_FILE}" 20000
+	printf '\n=== END %s ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
+fi)
 
 === BEGIN ${RUNTIME_DIR}/review_issues.txt (optional; parsed consolidator findings, advisory only) ===
 $(_embed_input_file "${RUNTIME_DIR}/review_issues.txt" 80000)
