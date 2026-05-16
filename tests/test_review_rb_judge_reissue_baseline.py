@@ -184,13 +184,17 @@ def _valid_issue_body(*, branch: str = VALID_BRANCH, pr_number: str = VALID_PR_N
 
 
 def _load_label_propagation_module():
+	prev_dont_write_bytecode = sys.dont_write_bytecode
 	sys.dont_write_bytecode = True
-	module_path = REPO_ROOT / "tests" / "test_review_rb_judge_label_propagation.py"
-	spec = importlib.util.spec_from_file_location("test_review_rb_judge_label_propagation", module_path)
-	assert spec is not None and spec.loader is not None
-	module = importlib.util.module_from_spec(spec)
-	spec.loader.exec_module(module)
-	return module
+	try:
+		module_path = REPO_ROOT / "tests" / "test_review_rb_judge_label_propagation.py"
+		spec = importlib.util.spec_from_file_location("test_review_rb_judge_label_propagation", module_path)
+		assert spec is not None and spec.loader is not None
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+		return module
+	finally:
+		sys.dont_write_bytecode = prev_dont_write_bytecode
 
 
 def _run_baseline_resolver(
@@ -239,6 +243,7 @@ def _run_baseline_resolver(
 			issue_body_file.write_text(cached_issue_body, encoding="utf-8")
 
 		env = os.environ.copy()
+		env.pop("ISSUE_BODY_FILE", None)
 		env.update(
 			{
 				"PYTHONDONTWRITEBYTECODE": "1",
@@ -274,6 +279,7 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}" in resolver_step
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in resolver_step
 	assert "ISSUE_BODY_FILE" in resolver_script
+	assert "ISSUE_BODY_FILE could not be read; falling back to event body" in resolver_script
 	assert 're.fullmatch(r"ai/reissue-baseline/pr-(\\d+)-([0-9a-f]{12})-\\d+-\\d+", branch)' in resolver_script
 	assert "issue author association is not trusted for review-blocked baseline reuse" in resolver_script
 	assert "review-blocked reissue metadata footer does not contain exactly one prior_pr_baseline_branch entry" in resolver_script
@@ -326,6 +332,44 @@ def test_resolver_prefers_cached_issue_body_file_when_event_body_is_empty() -> N
 	]
 
 
+def test_resolver_prefers_cached_issue_body_file_over_nonempty_event_body() -> None:
+	result, outputs, state = _run_baseline_resolver(
+		"Inline body without trusted footer metadata.\n",
+		feature_enabled="true",
+		cached_issue_body=_valid_issue_body(),
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+
+
+def test_resolver_ignores_inherited_issue_body_file_when_cached_body_not_requested() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		inherited_issue_body_file = Path(td) / "issue_body.txt"
+		inherited_issue_body_file.write_text(_valid_issue_body(), encoding="utf-8")
+		previous_issue_body_file = os.environ.get("ISSUE_BODY_FILE")
+		os.environ["ISSUE_BODY_FILE"] = str(inherited_issue_body_file)
+		try:
+			result, outputs, state = _run_baseline_resolver(
+				"Inline body without trusted footer metadata.\n",
+				feature_enabled="true",
+			)
+		finally:
+			if previous_issue_body_file is None:
+				os.environ.pop("ISSUE_BODY_FILE", None)
+			else:
+				os.environ["ISSUE_BODY_FILE"] = previous_issue_body_file
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": "", "status": "metadata-missing"}
+	assert state["calls"] == []
+	assert "review-blocked reissue metadata header is missing" in result.stdout
+
+
 def test_resolver_accepts_blank_lines_in_metadata_footer() -> None:
 	issue_body = _valid_issue_body().replace(
 		"- Type: review-blocked-reissue\n",
@@ -339,6 +383,32 @@ def test_resolver_accepts_blank_lines_in_metadata_footer() -> None:
 		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
 		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
 	]
+
+
+def test_resolver_accepts_blank_lines_inside_files_touched_block() -> None:
+	issue_body = _valid_issue_body().replace(
+		"- files_touched:\n  - .github/workflows/implement.yml\n",
+		"- files_touched:\n  \n  - .github/workflows/implement.yml\n",
+	)
+	result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+
+
+def test_load_label_propagation_module_restores_dont_write_bytecode() -> None:
+	original_dont_write_bytecode = sys.dont_write_bytecode
+	sys.dont_write_bytecode = False
+	try:
+		module = _load_label_propagation_module()
+		assert module is not None
+		assert sys.dont_write_bytecode is False
+	finally:
+		sys.dont_write_bytecode = original_dont_write_bytecode
 
 
 def test_resolver_accepts_real_spot_fix_issue_body_from_review_blocked_judge() -> None:
