@@ -32,6 +32,11 @@ C) **close_and_reissue** — The PR is fundamentally broken (wrong approach,
    missing critical functionality, build-breaking errors you cannot fix).
    The PR should be closed and a new issue created with more specific
    guidance so the pipeline can start fresh with a better approach.
+   Also choose a `reissue_mode`: use `spot-fix` only when the overall
+   approach is sound and the next implement run should continue from the
+   closed PR's head with a surgical file-scoped fix; use `redo` when the
+   approach was wrong, scope was misunderstood, or you cannot ground a small
+   `remaining_issues[]` file list. Missing/invalid values fail open to `redo`.
 
 D) **merge_with_followup** — Available primarily when retries are
    exhausted (IS_FINAL=true; the prompt-driver tells you when this is the
@@ -53,6 +58,10 @@ Rules:
   just describe what to change — apply the fixes directly using file writes.
 - For option C (close_and_reissue): write a detailed issue body that explains
   what went wrong and provides specific implementation guidance.
+- For option C (close_and_reissue): include grounded `remaining_issues[]`
+  entries only when you can cite specific repo-relative files and line ranges.
+  Keep this list small and surgical. If you cannot ground it, return an empty
+  list and prefer `reissue_mode: "redo"`.
 - For option C (close_and_reissue): the new issue body's file/line refs will
   point at the closed PR's branch and will NOT exist on the base branch after
   the PR is closed. Either (a) phrase guidance in terms of behaviour and
@@ -129,8 +138,17 @@ Output contract:
 - Schema:
   {
     "action": "merge" | "fix" | "merge_with_followup" | "close_and_reissue",
+    "reissue_mode": "spot-fix" | "redo",
     "justification": "<why this action; what was assessed>",
     "remaining_issues_summary": "<brief list of unresolved issues and their severity>",
+    "remaining_issues": [
+      {
+        "file": "<repo-relative path>",
+        "line_start": <integer>,
+        "line_end": <integer>,
+        "symptom": "<brief grounded gap>"
+      }
+    ],
     "fix_description": "<if action=fix: what you changed. else: empty>",
     "new_issue": {
       "title": "<only if action=close_and_reissue>",
@@ -143,6 +161,11 @@ Output contract:
   }
 - new_issue: null unless action is close_and_reissue.
 - followup_issue: null unless action is merge_with_followup.
+- reissue_mode: always include; default to `"redo"`. Use `"spot-fix"` only
+  with action=`close_and_reissue` when the approach is mostly correct and the
+  grounded `remaining_issues[]` list is sufficient to scope a surgical follow-up.
+- remaining_issues: always include; use `[]` when you cannot ground file/line
+  anchors. Never invent paths or line numbers.
 - fix_description: empty string unless action is fix.
 - Primary deliverable: this JSON object IS your output. Emit it before
   you exhaust your context window or tool-call budget. An empty

@@ -1223,6 +1223,73 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
     ;;
 
   close_and_reissue)
+    normalize_rb_reissue_mode() {
+      case "${1:-}" in
+        spot-fix|redo)
+          printf '%s\n' "$1"
+          ;;
+        *)
+          printf 'redo\n'
+          ;;
+      esac
+    }
+
+    _rb_valid_repo_relative_path() {
+      local path="$1"
+      [ -n "${path}" ] || return 1
+      [ "${#path}" -le 512 ] || return 1
+      case "${path}" in
+        /*|./*|../*|*/./*|*/../*|*/..|.|..)
+          return 1
+          ;;
+        *$'\n'*|*$'\r'*|*$'\t'*)
+          return 1
+          ;;
+      esac
+      return 0
+    }
+
+    _rb_push_reissue_baseline_branch() (
+      set -euo pipefail
+
+      local head_sha="$1"
+      local baseline_branch="$2"
+      local temp_root worktree_dir push_log push_attempt push_backoff push_exit
+
+      temp_root="$(mktemp -d "${TMPDIR:-/tmp}/rb-reissue-baseline-${PR_NUMBER}.XXXXXX")"
+      worktree_dir="${temp_root}/worktree"
+      push_log="${temp_root}/push.log"
+
+      cleanup_rb_baseline_tmp() {
+        git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || true
+        rm -rf "${temp_root}" >/dev/null 2>&1 || true
+      }
+      trap cleanup_rb_baseline_tmp EXIT
+
+      git cat-file -e "${head_sha}^{commit}" >/dev/null 2>&1
+      git worktree add --detach "${worktree_dir}" "${head_sha}" >/dev/null 2>&1
+      git -C "${worktree_dir}" checkout -b "${baseline_branch}" >/dev/null 2>&1
+
+      push_attempt=1
+      push_backoff=2
+      while :; do
+        push_exit=0
+        : > "${push_log}"
+        git -C "${worktree_dir}" push -u origin "HEAD:refs/heads/${baseline_branch}" >"${push_log}" 2>&1 || push_exit=$?
+        cat "${push_log}" >&2 || true
+        if [ "${push_exit}" -eq 0 ]; then
+          exit 0
+        fi
+        if [ "${push_attempt}" -ge 4 ]; then
+          exit "${push_exit}"
+        fi
+        echo "::warning::git push failed for baseline branch ${baseline_branch} (attempt ${push_attempt}/4); retrying in ${push_backoff}s."
+        sleep "${push_backoff}"
+        push_backoff=$((push_backoff * 2))
+        push_attempt=$((push_attempt + 1))
+      done
+    )
+
     echo "Judge says close PR #${PR_NUMBER} and reissue."
 
     # Close the PR
@@ -1240,13 +1307,102 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
     # Create replacement issue
     NEW_ISSUE_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
     NEW_ISSUE_BODY="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
+    RB_REISSUE_MODE_RAW="$(echo "${JUDGE_JSON}" | jq -r '.reissue_mode // empty')"
+    RB_REQUESTED_REISSUE_MODE="$(normalize_rb_reissue_mode "${RB_REISSUE_MODE_RAW}")"
+    RB_EFFECTIVE_REISSUE_MODE="${RB_REQUESTED_REISSUE_MODE}"
+    RB_SPOT_FIX_REASON=""
+    RB_HEAD_SHA=""
+    RB_BASELINE_BRANCH=""
+    RB_INVALID_FILE=""
+    RB_FILES_CSV=""
+    RB_REISSUE_FILES=()
+
     if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
+      if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
+        if [ "${REISSUE_PRESERVE_BASELINE_ENABLED:-false}" != "true" ]; then
+          RB_EFFECTIVE_REISSUE_MODE="redo"
+          RB_SPOT_FIX_REASON="feature_flag_disabled"
+        else
+          RB_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)"
+          if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            RB_EFFECTIVE_REISSUE_MODE="redo"
+            RB_SPOT_FIX_REASON="head_ref_unavailable"
+          elif ! git cat-file -e "${RB_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+            RB_EFFECTIVE_REISSUE_MODE="redo"
+            RB_SPOT_FIX_REASON="head_ref_not_in_checkout"
+          else
+            mapfile -t RB_REISSUE_FILE_CANDIDATES < <(
+              printf '%s' "${JUDGE_JSON}" | jq -r '
+                if (.remaining_issues | type) == "array" then
+                  [.remaining_issues[]? | .file? | select(type == "string" and length > 0)] | .[]
+                else
+                  empty
+                end
+              ' 2>/dev/null || true
+            )
+            if [ "${#RB_REISSUE_FILE_CANDIDATES[@]}" -eq 0 ]; then
+              RB_EFFECTIVE_REISSUE_MODE="redo"
+              RB_SPOT_FIX_REASON="remaining_issues_empty"
+            else
+              declare -A RB_REISSUE_FILE_SEEN=()
+              for RB_FILE in "${RB_REISSUE_FILE_CANDIDATES[@]}"; do
+                if ! _rb_valid_repo_relative_path "${RB_FILE}"; then
+                  RB_INVALID_FILE="${RB_FILE}"
+                  RB_EFFECTIVE_REISSUE_MODE="redo"
+                  RB_SPOT_FIX_REASON="invalid_file_path"
+                  break
+                fi
+                if ! git ls-tree -r --name-only "${RB_HEAD_SHA}" -- "${RB_FILE}" 2>/dev/null | grep -Fx -- "${RB_FILE}" >/dev/null 2>&1; then
+                  RB_INVALID_FILE="${RB_FILE}"
+                  RB_EFFECTIVE_REISSUE_MODE="redo"
+                  RB_SPOT_FIX_REASON="missing_file_at_head"
+                  break
+                fi
+                if [ -z "${RB_REISSUE_FILE_SEEN["${RB_FILE}"]+x}" ]; then
+                  RB_REISSUE_FILE_SEEN["${RB_FILE}"]="1"
+                  RB_REISSUE_FILES+=("${RB_FILE}")
+                fi
+              done
+              unset RB_REISSUE_FILE_SEEN
+              if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
+                RB_BASELINE_BRANCH="ai/reissue-baseline/pr-${PR_NUMBER}-${RB_HEAD_SHA:0:12}-$(date +%s)"
+                if _rb_push_reissue_baseline_branch "${RB_HEAD_SHA}" "${RB_BASELINE_BRANCH}"; then
+                  RB_FILES_CSV="$(printf '%s,' "${RB_REISSUE_FILES[@]}")"
+                  RB_FILES_CSV="${RB_FILES_CSV%,}"
+                  echo "REISSUE_BASELINE_PRESERVED branch=${RB_BASELINE_BRANCH} head_sha=${RB_HEAD_SHA} files=${RB_FILES_CSV}"
+                else
+                  RB_EFFECTIVE_REISSUE_MODE="redo"
+                  RB_SPOT_FIX_REASON="baseline_branch_push_failed"
+                  RB_BASELINE_BRANCH=""
+                fi
+              elif [ -z "${RB_SPOT_FIX_REASON}" ]; then
+                RB_EFFECTIVE_REISSUE_MODE="redo"
+                RB_SPOT_FIX_REASON="remaining_issues_empty"
+              fi
+            fi
+          fi
+        fi
+
+        if [ "${RB_EFFECTIVE_REISSUE_MODE}" != "spot-fix" ]; then
+          if [ -n "${RB_INVALID_FILE}" ]; then
+            RB_SPOT_FIX_REASON="${RB_SPOT_FIX_REASON}:${RB_INVALID_FILE}"
+          fi
+          echo "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=${RB_SPOT_FIX_REASON:-unknown}"
+        fi
+      fi
+
       FULL_NEW_BODY="${NEW_ISSUE_BODY}
 
 ---
 **Review-blocked reissue metadata**
 - Replaces: ${FIRST_ISSUE:+#${FIRST_ISSUE} }(PR #${PR_NUMBER} closed — approach rework)
 - Type: review-blocked-reissue"
+      if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ -n "${RB_BASELINE_BRANCH}" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
+        FULL_NEW_BODY="${FULL_NEW_BODY}
+- prior_pr_baseline_branch: ${RB_BASELINE_BRANCH}
+- files_touched:
+$(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
+      fi
 
       # Propagate ai:orchestrator-managed from the parent issue when it
       # carries that label.  Without this, an orchestrator-managed
@@ -1271,8 +1427,15 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
       echo "Created replacement issue: ${NEW_URL}"
     else
+      if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
+        RB_EFFECTIVE_REISSUE_MODE="redo"
+        RB_SPOT_FIX_REASON="missing_issue_details"
+        echo "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=${RB_SPOT_FIX_REASON}"
+      fi
       echo "::warning::Judge chose close_and_reissue but provided no new issue details."
     fi
+
+    echo "REISSUE_MODE requested_raw=${RB_REISSUE_MODE_RAW:-<empty>} effective=${RB_EFFECTIVE_REISSUE_MODE} feature_flag=${REISSUE_PRESERVE_BASELINE_ENABLED:-false}"
 
     echo "judge_handled=true" >> "$GITHUB_OUTPUT"
     echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"

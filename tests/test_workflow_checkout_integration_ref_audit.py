@@ -68,24 +68,40 @@ def test_allowlist_entries_have_rationale() -> None:
 def test_required_workflows_enforce_integration_ref_contract() -> None:
 	resolver_step = "- name: Resolve integration ref"
 	resolver_id = "id: refctx"
-	checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
-	resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 	canonical_stage = "resolver_stage_root=\"${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\""
 	canonical_exec = "bash \"${resolver_script}\""
-	disallowed_inline_markers = (
+	base_disallowed_inline_markers = (
 		"contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}",
 		"base64 --decode >",
 		"sed -nE 's/^- Integration branch:",
 		"grep -Eq '^orchestrator/project-[0-9]+$'",
-		"/git/ref/heads/",
 	)
 
 	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
 		wf = _workflow_text(workflow_name)
+		disallowed_inline_markers = base_disallowed_inline_markers
+		if workflow_name == "implement.yml":
+			checkout_ref = "ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+			resolved_ref_log = "echo \"Resolved checkout ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			resolved_base_log = "echo \"PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			checkout_resolver_step = "- name: Resolve checkout ref"
+			checkout_resolver_id = "id: checkout_ref"
+		else:
+			disallowed_inline_markers = base_disallowed_inline_markers + ("/git/ref/heads/",)
+			checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+			resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			resolved_base_log = ""
+			checkout_resolver_step = ""
+			checkout_resolver_id = ""
+
 		assert resolver_step in wf, f"{workflow_name} missing integration ref resolver step"
 		assert resolver_id in wf, f"{workflow_name} missing resolver step id refctx"
 		assert checkout_ref in wf, f"{workflow_name} checkout is missing refctx/default branch ref"
 		assert resolved_ref_log in wf, f"{workflow_name} missing resolved-ref log output"
+		if resolved_base_log:
+			assert resolved_base_log in wf, f"{workflow_name} missing base-ref log output"
+			assert checkout_resolver_step in wf, f"{workflow_name} missing checkout override resolver step"
+			assert checkout_resolver_id in wf, f"{workflow_name} missing checkout override resolver id"
 		assert "git rev-parse HEAD" in wf, f"{workflow_name} missing HEAD commit log"
 		assert "git symbolic-ref --short HEAD" in wf, f"{workflow_name} missing branch/detached log"
 		assert canonical_stage in wf, f"{workflow_name} missing canonical resolver staging"
@@ -95,10 +111,15 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			assert marker not in wf, f"{workflow_name} still contains inline resolver marker: {marker}"
 
 		resolver_idx = wf.find(resolver_step)
+		checkout_resolver_idx = wf.find(checkout_resolver_step) if checkout_resolver_step else -1
 		checkout_ref_idx = wf.find(checkout_ref)
 		assert resolver_idx != -1 and checkout_ref_idx != -1 and resolver_idx < checkout_ref_idx, (
 			f"{workflow_name} must resolve integration ref before refctx-bound checkout"
 		)
+		if checkout_resolver_step:
+			assert checkout_resolver_idx != -1 and resolver_idx < checkout_resolver_idx < checkout_ref_idx, (
+				f"{workflow_name} must resolve the baseline checkout override after refctx and before checkout"
+			)
 
 
 def main() -> int:

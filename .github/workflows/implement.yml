@@ -336,11 +336,59 @@ jobs:
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve checkout ref
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: checkout_ref
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEFAULT_CHECKOUT_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          checkout_ref="${DEFAULT_CHECKOUT_REF:-${{ github.event.repository.default_branch }}}"
+          issue_meta_json=""
+          if ! issue_meta_json="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null)"; then
+            echo "::warning::Failed to fetch issue metadata for checkout override; using ${checkout_ref}."
+            echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+            echo "source=integration/default" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+          issue_body="$(printf '%s' "${issue_meta_json}" | jq -r '.body // ""')"
+          printf '%s\n' "${issue_body}" > "${ISSUE_BODY_FILE}"
+
+          baseline_branch="$(printf '%s\n' "${issue_body}" | python3 -c 'import re, sys; body = sys.stdin.read(); match = re.search(r"^\s*(?:-\s*)?prior_pr_baseline_branch:\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE); print(match.group(1).strip() if match else "")')"
+
+          if [ -z "${baseline_branch}" ]; then
+            echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+            echo "source=integration/default" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git check-ref-format --branch "${baseline_branch}" >/dev/null 2>&1; then
+            echo "::warning::Ignoring invalid prior_pr_baseline_branch '${baseline_branch}'; using ${checkout_ref}."
+            echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+            echo "source=integration/default" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          encoded_ref="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${baseline_branch}")"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/${encoded_ref}" >/dev/null 2>&1; then
+            echo "Using prior_pr_baseline_branch checkout override: ${baseline_branch}"
+            echo "ref=${baseline_branch}" >> "$GITHUB_OUTPUT"
+            echo "source=prior_pr_baseline_branch" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Ignoring unavailable prior_pr_baseline_branch '${baseline_branch}'; using ${checkout_ref}."
+            echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+            echo "source=integration/default" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         if: env.SKIP_IMPLEMENT != 'true'
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
@@ -358,7 +406,9 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved checkout ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved checkout source: ${{ steps.checkout_ref.outputs.source || 'integration/default' }}"
+          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           echo "HEAD commit: $(git rev-parse HEAD)"
           if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
             echo "HEAD branch: ${branch_name}"
@@ -677,7 +727,9 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          if [ ! -s "${ISSUE_META_FILE}" ]; then
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          fi
 
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
