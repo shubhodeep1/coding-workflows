@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Implement judge-loop and reissue review_autofix improvements\",\"issues\":[{\"id\":\"phase-a-judge-interim\",\"title\":\"Phase A: add per-run judge-interim artifacts and prior-round injection\",\"priority\":1},{\"id\":\"phase-c-rejection-schema\",\"title\":\"Phase C1: enforce typed rejection evidence and script-only reject verification\",\"priority\":2},{\"id\":\"phase-c-llm-reject-verifier\",\"title\":\"Phase C2: add the LLM-backed reject verifier for reviewer-wrong and spec-doesnt-support\",\"priority\":3},{\"id\":\"phase-b-sticky-findings\",\"title\":\"Phase B: annotate sticky repeat findings across autofix rounds\",\"priority\":3},{\"id\":\"phase-e-reissue-baseline\",\"title\":\"Phase E: preserve a spot-fix baseline when review-blocked closes and reissues\",\"priority\":2},{\"id\":\"phase-d-behavioural-smoke\",\"title\":\"Phase D: synthesize behavioural smoke checks from judge-interim findings\",\"priority\":4},{\"id\":\"finalize-judge-loop-rollout\",\"title\":\"Finalize judge-loop rollout with cross-phase integration coverage, permanent docs, and plan-file removal\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"phase-a-judge-interim\",\"to\":\"phase-c-rejection-schema\"},{\"from\":\"phase-a-judge-interim\",\"to\":\"phase-d-behavioural-smoke\"},{\"from\":\"phase-c-rejection-schema\",\"to\":\"phase-c-llm-reject-verifier\"},{\"from\":\"phase-c-rejection-schema\",\"to\":\"phase-b-sticky-findings\"},{\"from\":\"phase-c-llm-reject-verifier\",\"to\":\"finalize-judge-loop-rollout\"},{\"from\":\"phase-b-sticky-findings\",\"to\":\"finalize-judge-loop-rollout\"},{\"from\":\"phase-d-behavioural-smoke\",\"to\":\"finalize-judge-loop-rollout\"},{\"from\":\"phase-e-reissue-baseline\",\"to\":\"finalize-judge-loop-rollout\"}]}",
+  "fingerprint": "f3550ec878082f1dfb0126931e6eae1475b782c72c4e538b7abcc87a2acadef0",
+  "lineage": {
+    "issue_number": 2627,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25951001420",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25951001420",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260516030744_b3bf92817a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2627,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25951001420"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Implement judge-loop and reissue review_autofix improvements' into 7 issues (tracking #2627)",
+  "timestamps": {
+    "created_at": "2026-05-16T03:07:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
