@@ -1262,7 +1262,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       local baseline_branch="$2"
       local runtime_dir="$3"
       local wt_suffix="${RANDOM:-$(date +%s%N 2>/dev/null || date +%s)}"
-      local wt="${runtime_dir}/review-rb-reissue-wt-${PR_NUMBER}-$$-${wt_suffix}"
+      local wt_prefix="${runtime_dir%/}/review-rb-reissue-wt-"
+      local wt="${wt_prefix}${PR_NUMBER}-$$-${wt_suffix}"
       local repo_root=""
 
       repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
@@ -1270,16 +1271,28 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       (
         set -euo pipefail
 
+        review_rb_safe_rm_wt()
+        {
+          case "${wt}" in
+            "${wt_prefix}"*)
+              rm -rf "${wt}" >/dev/null 2>&1 || true
+              ;;
+            *)
+              echo "::warning::Skipping cleanup of unexpected review-blocked worktree path: ${wt}" >&2
+              ;;
+          esac
+        }
+
         cleanup_review_rb_reissue_wt()
         {
-	  git -C "${repo_root}" worktree remove --force "${wt}" >/dev/null 2>&1 || {
-	    rm -rf "${wt}" >/dev/null 2>&1 || true
-	    git -C "${repo_root}" worktree prune >/dev/null 2>&1 || true
-	  }
+          git -C "${repo_root}" worktree remove --force "${wt}" >/dev/null 2>&1 || {
+            review_rb_safe_rm_wt
+            git -C "${repo_root}" worktree prune >/dev/null 2>&1 || true
+          }
         }
 
         trap cleanup_review_rb_reissue_wt EXIT
-        rm -rf "${wt}" >/dev/null 2>&1 || true
+        review_rb_safe_rm_wt
 
         if ! git cat-file -e "${pr_head_sha}^{commit}" 2>/dev/null; then
           if ! git fetch --quiet --no-tags --prune origin "${pr_head_sha}" 2>/dev/null; then
