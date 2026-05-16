@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -79,6 +80,7 @@ MULTILINE_HEADERS = {
 	"CURRENT_CODE",
 	"SUGGESTED_APPROACH",
 	"NOTES",
+	"REVERSAL_REASON",
 	"UNRECOGNISED",
 	*REJECT_EVIDENCE_HEADERS,
 }
@@ -175,6 +177,14 @@ def extract_files_touched(text: str) -> list[str] | None:
 
 def normalize_patch_path(path: str) -> str | None:
 	path = path.strip()
+	if path[:1] in {'"', "'"}:
+		try:
+			parts = shlex.split(path)
+		except ValueError:
+			return None
+		if len(parts) != 1:
+			return None
+		path = parts[0]
 	if path == "/dev/null":
 		return None
 	if path.startswith(("a/", "b/")):
@@ -217,13 +227,8 @@ def parse_patch(text: str) -> tuple[bool, dict[str, dict[str, object]]]:
 		if line.startswith("diff --git "):
 			flush()
 			current_lines = [line]
-			parts = line.split(" ", 3)
-			if len(parts) >= 4:
-				current_old_path = normalize_patch_path(parts[2])
-				current_path = normalize_patch_path(parts[3])
-			else:
-				current_old_path = None
-				current_path = None
+			current_old_path = None
+			current_path = None
 			current_deleted = False
 			continue
 		current_lines.append(line)
@@ -241,7 +246,7 @@ def parse_patch(text: str) -> tuple[bool, dict[str, dict[str, object]]]:
 			end = start if length == 0 else start + length - 1
 			hunks.append((start, end))
 	flush()
-	return True, files
+	return bool(files), files
 
 
 def render_blocks(blocks: list[dict[str, object]]) -> str:
@@ -256,12 +261,16 @@ def render_blocks(blocks: list[dict[str, object]]) -> str:
 			value = fields[header]
 			emitted.add(header)
 			if header in MULTILINE_HEADERS:
-				rendered.append(f"{header}:")
-				if value:
-					for line in value.splitlines():
-						rendered.append(f"  {line}")
+				if header == "REVERSAL_REASON" and "\n" not in value:
+					compact = squish(value)
+					rendered.append(f"{header}: {compact}" if compact else f"{header}:")
 				else:
-					rendered.append("  ")
+					rendered.append(f"{header}:")
+					if value:
+						for line in value.splitlines():
+							rendered.append(f"  {line}")
+					else:
+						rendered.append("  ")
 			else:
 				compact = squish(value)
 				rendered.append(f"{header}: {compact}" if compact else f"{header}:")
@@ -270,12 +279,16 @@ def render_blocks(blocks: list[dict[str, object]]) -> str:
 				continue
 			value = fields[header]
 			if header in MULTILINE_HEADERS:
-				rendered.append(f"{header}:")
-				if value:
-					for line in value.splitlines():
-						rendered.append(f"  {line}")
+				if header == "REVERSAL_REASON" and "\n" not in value:
+					compact = squish(value)
+					rendered.append(f"{header}: {compact}" if compact else f"{header}:")
 				else:
-					rendered.append("  ")
+					rendered.append(f"{header}:")
+					if value:
+						for line in value.splitlines():
+							rendered.append(f"  {line}")
+					else:
+						rendered.append("  ")
 			else:
 				compact = squish(value)
 				rendered.append(f"{header}: {compact}" if compact else f"{header}:")

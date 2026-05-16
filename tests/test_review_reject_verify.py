@@ -67,6 +67,7 @@ def _issue_block(
 	rejection_kind: str | None = None,
 	typed_header: str | None = None,
 	typed_body: str | None = None,
+	reversal_reason: str | None = None,
 	notes: str = "Conservatively rejected with evidence.",
 ) -> str:
 	lines = [
@@ -84,6 +85,13 @@ def _issue_block(
 		lines.append(f"{typed_header}:")
 		for raw_line in (typed_body or "").splitlines():
 			lines.append(f"  {raw_line}")
+	if reversal_reason is not None:
+		if "\n" in reversal_reason:
+			lines.append("REVERSAL_REASON:")
+			for raw_line in reversal_reason.splitlines():
+				lines.append(f"  {raw_line}")
+		else:
+			lines.append(f"REVERSAL_REASON: {reversal_reason}")
 	lines.extend([
 		"EVIDENCE:",
 		'  reviewer_alpha> "saw bug"',
@@ -411,6 +419,54 @@ def test_already_fixed_rejection_supports_when_pr_diff_matches() -> None:
 		assert "CONSOLIDATOR_REJECT_VERIFIED issue=001 kind=already-fixed verdict=support" in verify_result.stdout
 
 
+def test_already_fixed_rejection_supports_when_pr_diff_uses_quoted_paths() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_pr_diff(
+			runtime,
+			workspace,
+			[
+				"def sample(x):",
+				"    if x is None:",
+				"        return None",
+				"    return x",
+				"line5",
+				"line6",
+				"line7",
+				"line8",
+				"line9",
+				"line10",
+			],
+		)
+		diff = (runtime / "pr_diff.patch").read_text(encoding="utf-8")
+		diff = diff.replace(
+			"diff --git a/src/module.py b/src/module.py",
+			'diff --git "a/src/module.py" "b/src/module.py"',
+		)
+		diff = diff.replace("--- a/src/module.py", '--- "a/src/module.py"')
+		diff = diff.replace("+++ b/src/module.py", '+++ "b/src/module.py"')
+		(runtime / "pr_diff.patch").write_text(diff, encoding="utf-8")
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py\nlines: 2-3\nexcerpt: if x is None:",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		assert "REVERSAL_REASON:" not in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "support"
+
+
 def test_already_fixed_rejection_supports_with_trailing_whitespace_in_typed_values() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
@@ -490,6 +546,48 @@ def test_already_fixed_rejection_reverses_when_pr_diff_missing_cited_hunk() -> N
 		artifact = _load_artifact(workspace)
 		assert artifact["results"][0]["verdict"] == "does-not-support"
 		assert "CONSOLIDATOR_REJECT_REVERSED issue=001 kind=already-fixed" in verify_result.stdout
+
+
+def test_verifier_preserves_multiline_reversal_reason_on_round_trip() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_pr_diff(
+			runtime,
+			workspace,
+			[
+				"def sample(x):",
+				"    if x == None:",
+				"        return",
+				"    return x",
+				"line5",
+				"line6",
+				"line7",
+				"line8",
+				"line9 changed",
+				"line10",
+			],
+		)
+		(runtime / "review_issues.txt").write_text(
+			"".join([
+				_issue_block(
+					issue_id="001",
+					rejection_kind="already-fixed",
+					typed_header="EVIDENCE_DIFF_HUNK",
+					typed_body="file: src/module.py\nlines: 2-3\nexcerpt: if x is None:",
+				),
+				_issue_block(
+					issue_id="002",
+					classification="must-fix",
+					reversal_reason="First line.\nSecond line.",
+				),
+			]),
+			encoding="utf-8",
+		)
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		issues = (runtime / "review_issues.txt").read_text(encoding="utf-8")
+		assert "REVERSAL_REASON:\n  First line.\n  Second line." in _extract_issue_block(issues, "002")
 
 
 def test_already_fixed_rejection_supports_when_pr_diff_deletes_file() -> None:
