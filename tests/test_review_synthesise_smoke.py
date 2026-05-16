@@ -54,6 +54,29 @@ def _install_mock_codex(
 	(mock_bin_dir / "codex").chmod(0o755)
 
 
+def _install_mock_timeout(mock_bin_dir: Path) -> Path:
+	mock_bin_dir.mkdir(parents=True, exist_ok=True)
+	timeout_capture = mock_bin_dir / "timeout_duration.txt"
+	(mock_bin_dir / "timeout").write_text(
+		"#!/usr/bin/env bash\n"
+		"set -euo pipefail\n\n"
+		"while [ \"$#\" -gt 0 ]; do\n"
+		"\tcase \"$1\" in\n"
+		"\t\t--signal=*|--kill-after=*) shift ;;\n"
+		"\t\t--) shift; break ;;\n"
+		"\t\t*) break ;;\n"
+		"\tesac\n"
+		"done\n"
+		"duration=\"${1:-}\"\n"
+		"shift || true\n"
+		"printf '%s\\n' \"$duration\" > \"${MOCK_TIMEOUT_DURATION_FILE}\"\n"
+		"exec \"$@\"\n",
+		encoding="utf-8",
+	)
+	(mock_bin_dir / "timeout").chmod(0o755)
+	return timeout_capture
+
+
 def _seed_repo_with_autofix_commit(workspace: Path) -> str:
 	workspace.mkdir(parents=True, exist_ok=True)
 	(workspace / "src").mkdir(parents=True, exist_ok=True)
@@ -307,7 +330,54 @@ def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> 
 		assert result.returncode == 0, combined_output
 		payload = json.loads(manifest.read_text(encoding="utf-8"))
 		assert payload["language"] == "python"
+		assert "Invalid BEHAVIOURAL_SMOKE_LANG 'pythoon'" in combined_output
 		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=0 round=1 language=python" in combined_output
+
+
+def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_timeout_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": "validation/tests/suggested_branch_check.sh",
+						"content": "echo still-present\nexit 1",
+						"expected_to_fail_until_fixed": True,
+					}
+				]
+			)
+			+ "\n",
+		)
+		timeout_capture = _install_mock_timeout(mock_bin_dir)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["BEHAVIOURAL_SMOKE_TIMEOUT_S"] = "99999999999999999999"
+		env["MOCK_TIMEOUT_DURATION_FILE"] = str(timeout_capture)
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert manifest.exists(), combined_output
+		assert timeout_capture.read_text(encoding="utf-8").strip() == "120"
+		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=1 round=1 language=python" in combined_output
 
 
 def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() -> None:

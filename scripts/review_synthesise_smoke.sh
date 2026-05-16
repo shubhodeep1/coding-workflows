@@ -41,6 +41,11 @@ detect_behavioural_smoke_language()
 				printf '%s\n' "${requested_language}"
 				return 0
 				;;
+			*)
+				if [ -n "${requested_language}" ]; then
+					printf "::warning::Invalid BEHAVIOURAL_SMOKE_LANG '%s'; falling back to repo auto-detection.\n" "${requested_language}" >&2
+				fi
+				;;
 		esac
 	fi
 
@@ -501,10 +506,26 @@ RAW_OUTPUT_FILE="${RUNTIME_DIR}/behavioural_smoke_raw.txt"
 STDERR_FILE="${RUNTIME_DIR}/behavioural_smoke_stderr.txt"
 VALIDATION_ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 BEHAVIOURAL_SMOKE_MODEL="${BEHAVIOURAL_SMOKE_MODEL:-openai/gpt-5.4-mini}"
-BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_S:-120}"
+BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT=120
+BEHAVIOURAL_SMOKE_TIMEOUT_MAX=3600
+BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_S:-${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}}"
 
-if ! [[ "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" =~ ^[0-9]+$ ]] || [ "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" -le 0 ]; then
-	BEHAVIOURAL_SMOKE_TIMEOUT_S=120
+if ! [[ "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" =~ ^[0-9]+$ ]]; then
+	BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}"
+else
+	BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL="${BEHAVIOURAL_SMOKE_TIMEOUT_S#"${BEHAVIOURAL_SMOKE_TIMEOUT_S%%[!0]*}"}"
+	BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL="${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL:-0}"
+	if [ "${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" = "0" ] \
+		|| [ "${#BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" -gt "${#BEHAVIOURAL_SMOKE_TIMEOUT_MAX}" ]; then
+		BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}"
+	else
+		# shellcheck disable=SC2071  # same-length digit strings; string compare avoids integer overflow
+		if [ "${#BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" -eq "${#BEHAVIOURAL_SMOKE_TIMEOUT_MAX}" ] && [ "${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" \> "${BEHAVIOURAL_SMOKE_TIMEOUT_MAX}" ]; then
+			BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}"
+		else
+			BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}"
+		fi
+	fi
 fi
 
 if ! CURRENT_ISSUES_COUNT="$(count_remaining_issues "${JUDGE_ARTIFACT}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" 2>/dev/null)"; then
@@ -602,9 +623,11 @@ for cfg in "${smoke_codex_home}/config.toml" "${smoke_codex_home}/.codex/config.
 		if ! grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
 			printf 'model_reasoning_effort = "%s"\n' 'low' >> "${cfg}"
 		else
-			sed -i \
+			if ! sed -i \
 				-e "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*$|model_reasoning_effort = \"${escaped_reasoning}\"|" \
-				"${cfg}" 2>/dev/null || true
+				"${cfg}" 2>/dev/null; then
+				echo "::warning::Failed to update model_reasoning_effort in ${cfg}; continuing with existing config." >&2
+			fi
 		fi
 	fi
 done
