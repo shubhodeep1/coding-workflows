@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1275-1279 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `cleanup_review_rb_reissue_wt()` calls `rm -rf \"${wt}\"` without verifying `${wt}` starts with the expected worktree prefix.\n  WHY: Reviewers characterized this as a defense-in-depth hardening gap rather than a demonstrated runtime bug because `${wt}` is normally built from CI-controlled variables.\n- scripts/review_rb_judge.sh:1275-1279 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The cleanup function body uses tabs for indentation while the surrounding code uses spaces.\n  WHY: Bash treats tabs and spaces equivalently here, so this is a cosmetic style inconsistency only.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:1275-1279 | severity=low | confidence=2\n  PROBLEM: Neither `rm -rf` call verifies that `${wt}` starts with the expected safe prefix before deletion.\n  WHY: The path is normally constructed from CI-internal variables, so the issue was presented as a theoretical hardening gap rather than an observed bug.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:1276 | severity=low | confidence=2\n  PROBLEM: The fallback cleanup path removes `${wt}` without verifying it starts with the expected safe prefix.\n  WHY: `${wt}` is structured from runtime and PR variables, so the finding was framed as a defense-in-depth concern rather than a concrete runtime failure.\n- scripts/review_rb_judge.sh:1275-1278 | severity=low | confidence=5\n  PROBLEM: The cleanup function body uses tabs for indentation while the surrounding code uses spaces.\n  WHY: This is a cosmetic/style issue with no runtime impact.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_rb_judge.sh:1275-1279 | severity=low | confidence=5\n  PROBLEM: The cleanup function body uses tab characters for indentation while the surrounding code uses spaces.\n  WHY: Bash treats tabs and spaces equivalently, so this is a cosmetic inconsistency with the surrounding codebase indentation style.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_rb_judge.sh:1276 | severity=low | confidence=2\n  PROBLEM: The `rm -rf` fallback in `cleanup_review_rb_reissue_wt()` does not verify that `${wt}` starts with the expected prefix before deletion.\n  WHY: `${wt}` is programmatically constructed from `runtime_dir` plus a fixed prefix and CI variables, so this was described as a theoretical hardening concern rather than an observed bug.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0ac20b8c6d292d4937403e33a50b125d9e34be4c9da0ca2564da2d2d05aeb0a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2631,
+    "run_id": "25953947186",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25953947186",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516054728_2b22f0aca8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2631,
+    "run_id": "25953947186"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T05:47:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
