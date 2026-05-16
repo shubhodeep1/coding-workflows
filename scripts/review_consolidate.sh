@@ -26,6 +26,7 @@ PR_CHANGED_FILES_FILE="${PR_CHANGED_FILES_FILE:-${RUNTIME_DIR}/pr_changed_files.
 LAST_RUN_DIFF_STAT_FILE="${LAST_RUN_DIFF_STAT_FILE:-${RUNTIME_DIR}/last_run_diff_stat.txt}"
 CONSOLIDATOR_PROMPT_FILE="${RUNTIME_DIR}/review_consolidator_prompt.txt"
 CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
+JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_interim_priors.txt}"
 
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
@@ -76,6 +77,10 @@ done
 		echo "(no last-run diff stat available)"
 	fi
 	echo
+	if [ -s "${JUDGE_INTERIM_PRIORS_FILE}" ]; then
+		cat "${JUDGE_INTERIM_PRIORS_FILE}"
+		echo
+	fi
 	echo "=== REVIEWER BUNDLE ==="
 	cat "${REVIEWER_BUNDLE_FILE}"
 } > "${CONSOLIDATOR_PROMPT_FILE}"

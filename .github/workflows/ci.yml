@@ -237,6 +237,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
+      - name: Review judge-interim round-trip contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py
+
       - name: Review apply-fixes smoke deterministic contract test
         run: |
           set -euo pipefail
