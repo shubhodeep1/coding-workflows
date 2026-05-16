@@ -926,6 +926,10 @@ def test_checkout_repository_fallback_ignores_checkout_ref_output() -> None:
 	assert "steps.checkout_ref.outputs.ref" not in log_step, (
 		"Resolved fallback ref logging must reflect the integration/default checkout path directly"
 	)
+	assert "steps.checkout_ref.outputs.source" not in log_step, (
+		"Resolved checkout source logging must not read the dead checkout_ref.outputs.source output"
+	)
+	assert 'resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"' in log_step
 
 
 def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:

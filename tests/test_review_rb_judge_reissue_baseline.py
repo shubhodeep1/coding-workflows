@@ -206,6 +206,7 @@ def _run_baseline_resolver(
 	ref_view_stdout: str | None = None,
 	ref_payload: object | None = None,
 	ref_object_sha: str | None = None,
+	cached_issue_body: str | None = None,
 	repo: str = "owner/repo",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict[str, object]]:
 	script = _extract_run_script("Resolve trusted prior PR baseline branch")
@@ -233,6 +234,9 @@ def _run_baseline_resolver(
 			encoding="utf-8",
 		)
 		output_file = tmp / "github_output.txt"
+		issue_body_file = tmp / "issue_body.txt"
+		if cached_issue_body is not None:
+			issue_body_file.write_text(cached_issue_body, encoding="utf-8")
 
 		env = os.environ.copy()
 		env.update(
@@ -248,6 +252,8 @@ def _run_baseline_resolver(
 				"REISSUE_PRESERVE_BASELINE_ENABLED": feature_enabled,
 			}
 		)
+		if cached_issue_body is not None:
+			env["ISSUE_BODY_FILE"] = str(issue_body_file)
 
 		result = _run_shell_script(script, cwd=tmp, env=env)
 		outputs = _parse_github_output(output_file)
@@ -267,6 +273,7 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "ISSUE_BODY: ${{ github.event.issue.body || '' }}" in resolver_step
 	assert "ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}" in resolver_step
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in resolver_step
+	assert "ISSUE_BODY_FILE" in resolver_script
 	assert 're.fullmatch(r"ai/reissue-baseline/pr-(\\d+)-([0-9a-f]{12})-\\d+-\\d+", branch)' in resolver_script
 	assert "issue author association is not trusted for review-blocked baseline reuse" in resolver_script
 	assert "review-blocked reissue metadata footer does not contain exactly one prior_pr_baseline_branch entry" in resolver_script
@@ -284,6 +291,8 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
 	assert "steps.checkout_ref.outputs.ref" not in fallback_checkout_step
 	assert 'baseline_status="${{ steps.baseline_refctx.outputs.status }}"' in log_step
+	assert "steps.checkout_ref.outputs.source" not in log_step
+	assert 'resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"' in log_step
 	assert "Baseline override: ignored (${baseline_status})" in log_step
 	assert "Baseline override: fallback to resolved ref after checkout failure for" in log_step
 	assert "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in log_step
@@ -300,6 +309,36 @@ def test_resolver_accepts_valid_machine_generated_reissue_branch() -> None:
 			["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
 		]
 		assert f"Baseline override accepted: {VALID_BRANCH}" in result.stdout
+
+
+def test_resolver_prefers_cached_issue_body_file_when_event_body_is_empty() -> None:
+	result, outputs, state = _run_baseline_resolver(
+		"",
+		feature_enabled="true",
+		cached_issue_body=_valid_issue_body(),
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+
+
+def test_resolver_accepts_blank_lines_in_metadata_footer() -> None:
+	issue_body = _valid_issue_body().replace(
+		"- Type: review-blocked-reissue\n",
+		"- Type: review-blocked-reissue\n  \n",
+	)
+	result, outputs, state = _run_baseline_resolver(issue_body, feature_enabled="true")
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
 
 
 def test_resolver_accepts_real_spot_fix_issue_body_from_review_blocked_judge() -> None:

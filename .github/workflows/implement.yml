@@ -430,7 +430,14 @@ jobs:
           from pathlib import Path
 
           output_path = Path(os.environ["GITHUB_OUTPUT"])
-          issue_body = os.environ.get("ISSUE_BODY", "").replace("\r\n", "\n")
+          issue_body = os.environ.get("ISSUE_BODY", "")
+          issue_body_file = Path(os.environ.get("ISSUE_BODY_FILE", ""))
+          if issue_body_file.is_file():
+              try:
+                  issue_body = issue_body_file.read_text(encoding="utf-8")
+              except OSError:
+                  pass
+          issue_body = issue_body.replace("\r\n", "\n")
           issue_author_association = os.environ.get("ISSUE_AUTHOR_ASSOCIATION", "").strip().upper()
           feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
           repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -484,10 +491,8 @@ jobs:
           current_key = ""
 
           for line in metadata_lines:
-              if not line:
-                  notice("Baseline override ignored: review-blocked reissue metadata footer is incomplete.")
-                  emit(status="metadata-missing")
-                  raise SystemExit(0)
+              if not line.strip():
+                  continue
 
               if line.startswith("- "):
                   current_key = ""
@@ -712,12 +717,16 @@ jobs:
         run: |
           set -euo pipefail
           echo "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
-          echo "Resolved checkout source: ${{ steps.checkout_ref.outputs.source || 'integration/default' }}"
-          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           baseline_status="${{ steps.baseline_refctx.outputs.status }}"
           if [ -z "${baseline_status}" ]; then
             baseline_status="step-no-output"
           fi
+          resolved_checkout_source="integration/default"
+          if [ "${baseline_status}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
+            resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"
+          fi
+          echo "Resolved checkout source: ${resolved_checkout_source}"
+          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           if [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
             echo "Baseline override: accepted ${{ steps.baseline_refctx.outputs.branch }}"
           elif [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ]; then
