@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-7 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The canary file contains corrupted bait values and extra lines instead of the required three-line payload from issue #2636.\n  WHY: The smoke-test gate expects exactly `status: ok`, `run_id: 25956662404`, and `updated-by: ai-pipeline` with a trailing newline; the reported contents do not match that spec, so validation fails.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-7 | confidence=5\n  PROBLEM: The file at HEAD commit 06c68bb contains 7 lines of intentionally corrupted bait content instead of the 3-line specification required by linked issue #2636.\n  WHY: The E2E smoke test gate reads this canary file to verify the pipeline produced the correct output. With corrupted values, the smoke test will fail \u2014 the `status` field is `BROKEN_BY_E2E_BAIT_25956662404` instead of `ok`, the `run_id` is wrong, and extra lines violate the file format contract. The previous commit 09b8f49 correctly produced the 3-line spec; the subsequent bait commit 06c68bb (`[E2E Smoke Test] inject editor bait line`) deliberately corrupted the file. The issue specification requires exactly three lines with a trailing newline and no additional content.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-7 | confidence=5\n  PROBLEM: The file at HEAD commit 06c68bb contains corrupted bait content that does not match the specification in issue #2636.\n  WHY: The file currently has 6 lines with values \"status: BROKEN_BY_E2E_BAIT_25956662404\", \"run_id: WRONG_VALUE_SHOULD_BE_25956662404\", \"updated-by: e2e-bait-injector\" plus three extra lines (\"extra:\", \"also:\", and a comment). Issue #2636 requires exactly three lines: \"status: ok\", \"run_id: 25956662404\", \"updated-by: ai-pipeline\" with a trailing newline. The extra lines violate the \"exactly three lines\" requirement.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The file contains 6 lines of corrupted bait data instead of the required three-line payload.\n  WHY: Only line 2 (`run_id`) is changed by the PR diff; lines 1, 3, 4, 5, 6 remain corrupted from the bait-injector commit. Issue #2636 specifies the file must be exactly three lines: `status: ok`, `run_id: 25956662404`, `updated-by: ai-pipeline`. The current file has `status: BROKEN_BY_E2E_BAIT_25956662404` on line 1, `run_id: WRONG_VALUE_SHOULD_BE_25956662404` on line 2 (now corrected to `25956662404` by the PR), `updated-by: e2e-bait-injector` on line 3, plus three extra lines (`extra:`, `also:`, a comment line) that violate the spec. The smoke-test gate will read these values and fail because they don't match the expected canary content.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The file content does not match the specification in issue #2636.\n  WHY: The HEAD commit (06c68bb) overwrote the correct 3-line content with 6 lines of corrupted bait values. Issue #2636 requires exactly these three lines with a trailing newline:\n  status: ok\n  run_id: 25956662404\n  updated-by: ai-pipeline\n  Instead, the file at HEAD contains:\n  status: BROKEN_BY_E2E_BAIT_25956662404\n  run_id: WRONG_VALUE_SHOULD_BE_25956662404\n  updated-by: e2e-bait-injector\n  extra: this line violates the issue spec\n  also: another line that must be removed\n  # E2E_EDITOR_BAIT_25956662404: canary corrupted; restore to linked issue spec (smoke gate)\n  Three distinct violations: (1) lines 1-3 have wrong values, (2) lines 4-5 are extra lines not in the spec, (3) line 6 is an extra comment line not in the spec. Any downstream consumer parsing this canary file will read incorrect values and the extra lines may cause parse failures or false negatives.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cbe0694fc34981939c0c93239dff7f819b077c104a7c59396dd44c6a036e12c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2642,
+    "run_id": "25956810951",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25956810951",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516081052_3246d35a62",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2642,
+    "run_id": "25956810951"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T08:10:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
