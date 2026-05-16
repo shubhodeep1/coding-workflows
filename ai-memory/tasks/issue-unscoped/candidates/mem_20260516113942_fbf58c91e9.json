@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/apply-ai-tools-learnings-plan.md: Phase 3 step 1, \"lines ~178\u2013183\" for CLAUDE.md \u00a77 \"In every final response:\" list | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The plan points to the wrong location in CLAUDE.md, so the intended bullet would be inserted into \u00a710 MongoDB Rules instead of \u00a77 Output Requirements.\n  WHY: The referenced lines are inside the MongoDB subsection, not the output-requirements section, so following the plan would place the edit in the wrong part of the file.\n- docs/ai-tools-future-improvements.md: S1 section, \"this would generalise the convention to all 30 phase prompts\" and \"One-time cost is ~2\u20134 hours for the 30 prompt files\" | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5]\n  PROBLEM: The document overstates the number of phase prompts as 30 when the repo has 26 functional phase prompts, inflating the estimated refactor scope.\n  WHY: The quoted count does not match the repository contents, so the effort estimate and scope discussion are both biased upward.\n- docs/plans/apply-ai-tools-learnings-plan.md: Phase 3 step 2, \"append a new 'When to use a subagent' subsection after current line 463\" in CLAUDE.md | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new subagent subsection would overlap with existing CLAUDE.md \u00a716 Task Delegation rules without stating which guidance takes precedence.\n  WHY: The plan adds task-category-based instructions on top of model-tier-based spawn rules, creating conflicting guidance for subagent use.\n- docs/plans/apply-ai-tools-learnings-plan.md: Tests section, \"scripts/codex_prompt_assembler.*\" | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The plan cites a prompt assembler script that does not exist in the repository.\n  WHY: The actual prompt assembly mechanism is scripts/render_prompt.sh and assemble_reviewer_prompt in scripts/review_run_reviewers.sh, so the reference misdirects verification and future changes.\n- docs/ai-tools-future-improvements.md: S1 Con section, \"most phase prompts are already short enough (28\u2013276 lines)\" | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The stated line-count range is incorrect because at least one prompt is far longer than 276 lines.\n  WHY: The repository contains a prompt at 809 lines, so the stated upper bound understates the actual spread and weakens the argument.\n- docs/plans/apply-ai-tools-learnings-plan.md: Phase 5, \"current line 22\" for prompts/review-reviewer-checklist.txt | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The plan points to a non-existent line number in prompts/review-reviewer-checklist.txt.\n  WHY: The file is only 21 lines long, so a tool targeting line 22 would fail even though the intended append-at-EOF edit is clear.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/apply-ai-tools-learnings-plan.md: Phase 3 step 1, \"lines ~178\u2013183\" for CLAUDE.md \u00a77 \"In every final response:\" list | severity=low | confidence=5\n  PROBLEM: The plan points to the wrong location in CLAUDE.md, so the intended bullet would be inserted into \u00a710 MongoDB Rules instead of \u00a77 Output Requirements.\n  WHY: The referenced lines are inside the MongoDB subsection, not the output-requirements section, so following the plan would place the edit in the wrong part of the file.\n- docs/ai-tools-future-improvements.md: S1 section, \"this would generalise the convention to all 30 phase prompts\" and \"One-time cost is ~2\u20134 hours for the 30 prompt files\" | severity=low | confidence=5\n  PROBLEM: The document overstates the number of phase prompts as 30 when the repo has 26 functional phase prompts, inflating the estimated refactor scope.\n  WHY: The quoted count does not match the repository contents, so the effort estimate and scope discussion are both biased upward.\n- docs/plans/apply-ai-tools-learnings-plan.md: Phase 3 step 2, \"append a new 'When to use a subagent' subsection after current line 463\" in CLAUDE.md | severity=medium | confidence=4\n  PROBLEM: The new subagent subsection would overlap with existing CLAUDE.md \u00a716 Task Delegation rules without stating which guidance takes precedence.\n  WHY: The plan adds task-category-based instructions on top of model-tier-based spawn rules, creating conflicting guidance for subagent use.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- docs/plans/apply-ai-tools-learnings-plan.md: Tests section, \"scripts/codex_prompt_assembler.*\" | severity=low | confidence=5\n  PROBLEM: The plan cites a prompt assembler script that does not exist in the repository.\n  WHY: The actual prompt assembly mechanism is scripts/render_prompt.sh and assemble_reviewer_prompt in scripts/review_run_reviewers.sh, so the reference misdirects verification and future changes.\n- docs/ai-tools-future-improvements.md: S1 Con section, \"most phase prompts are already short enough (28\u2013276 lines)\" | severity=low | confidence=4\n  PROBLEM: The stated line-count range is incorrect because at least one prompt is far longer than 276 lines.\n  WHY: The repository contains a prompt at 809 lines, so the stated upper bound understates the actual spread and weakens the argument.\n- docs/ai-tools-future-improvements.md: S1 Estimated cost, \"2\u20134 hours for the 30 prompt files\" | severity=low | confidence=3\n  PROBLEM: The document overstates the number of prompt files as 30 when the repo has 26 functional phase prompts.\n  WHY: The quoted count does not match the repository contents, so the effort estimate is biased upward.\n- docs/plans/apply-ai-tools-learnings-plan.md: Phase 5, \"current line 22\" for prompts/review-reviewer-checklist.txt | severity=low | confidence=3\n  PROBLEM: The plan points to a non-existent line number in prompts/review-reviewer-checklist.txt.\n  WHY: The file is only 21 lines long, so a tool targeting line 22 would fail even though the intended append-at-EOF edit is clear.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5c8690d1e038d82bbd196e776de98351992239b578684571e944dbe170fb8692",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25960715964",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25960715964",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516113942_fbf58c91e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25960715964"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T11:39:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
