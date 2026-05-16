@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -55,15 +54,23 @@ def _rb_judge_text() -> str:
 
 
 def _extract_close_and_reissue_branch() -> str:
-	text = _rb_judge_text()
-	match = re.search(
-		r"  close_and_reissue\)\n(?P<branch>.*?)\n    ;;\n\n  \*\)",
-		text,
-		re.DOTALL,
-	)
-	if not match:
-		raise AssertionError("could not extract close_and_reissue branch from review_rb_judge.sh")
-	return match.group("branch")
+	branch_lines: list[str] = []
+	case_depth = 0
+	inside_branch = False
+	for line in _rb_judge_text().splitlines(keepends=True):
+		stripped = line.strip()
+		if not inside_branch:
+			if stripped == "close_and_reissue)":
+				inside_branch = True
+			continue
+		if stripped.startswith("case ") and stripped.endswith(" in"):
+			case_depth += 1
+		elif stripped == "esac" and case_depth > 0:
+			case_depth -= 1
+		elif stripped == ";;" and case_depth == 0:
+			return "".join(branch_lines)
+		branch_lines.append(line)
+	raise AssertionError("could not extract close_and_reissue branch from review_rb_judge.sh")
 
 
 def _install_mock_gh(bin_dir: Path, state_file: Path) -> None:
@@ -221,6 +228,8 @@ def _create_git_fixture(root: Path) -> dict[str, str]:
 	_run([REAL_GIT, "-C", str(seed), "push", "-u", "origin", "pr-source"])
 
 	_run([REAL_GIT, "clone", str(origin), str(judge)])
+	_run([REAL_GIT, "-C", str(judge), "config", "user.name", "Judge User"])
+	_run([REAL_GIT, "-C", str(judge), "config", "user.email", "judge@example.com"])
 	return {
 		"origin": str(origin),
 		"seed": str(seed),
@@ -300,6 +309,8 @@ def _run_close_and_reissue(
 
 		start_head = _run([REAL_GIT, "-C", str(judge_repo), "rev-parse", "HEAD"]).stdout.strip()
 		start_status = _run([REAL_GIT, "-C", str(judge_repo), "status", "--porcelain"]).stdout
+		start_user_name = _run([REAL_GIT, "-C", str(judge_repo), "config", "user.name"]).stdout.strip()
+		start_user_email = _run([REAL_GIT, "-C", str(judge_repo), "config", "user.email"]).stdout.strip()
 
 		env = os.environ.copy()
 		env.update(
@@ -336,6 +347,8 @@ def _run_close_and_reissue(
 
 		end_head = _run([REAL_GIT, "-C", str(judge_repo), "rev-parse", "HEAD"]).stdout.strip()
 		end_status = _run([REAL_GIT, "-C", str(judge_repo), "status", "--porcelain"]).stdout
+		end_user_name = _run([REAL_GIT, "-C", str(judge_repo), "config", "user.name"]).stdout.strip()
+		end_user_email = _run([REAL_GIT, "-C", str(judge_repo), "config", "user.email"]).stdout.strip()
 		worktree_dirs = sorted(p.name for p in runtime_dir.glob("review-rb-reissue-wt-*"))
 
 		gh_state = json.loads(gh_state_file.read_text(encoding="utf-8"))
@@ -352,6 +365,10 @@ def _run_close_and_reissue(
 			"end_head": end_head,
 			"start_status": start_status,
 			"end_status": end_status,
+			"start_user_name": start_user_name,
+			"end_user_name": end_user_name,
+			"start_user_email": start_user_email,
+			"end_user_email": end_user_email,
 			"worktree_dirs": worktree_dirs,
 			"expected_branch": expected_branch,
 			"origin": origin_repo,
@@ -400,6 +417,9 @@ def test_implement_workflow_has_prior_pr_baseline_branch_checkout_override() -> 
 	assert 'Checkout prior PR baseline branch' in src, (
 		"implement.yml must attempt a baseline-branch checkout before the default checkout"
 	)
+	assert 'matches = re.findall' in src and 'matches[-1] if matches else ""' in src, (
+		"implement.yml must prefer the last prior_pr_baseline_branch match so appended metadata wins"
+	)
 	assert "steps.checkout_ref.outputs.baseline_branch == '' || steps.checkout_baseline.outcome != 'success'" in src, (
 		"implement.yml must fail open to the integration/default checkout when the baseline branch is absent or uncheckoutable"
 	)
@@ -441,6 +461,12 @@ def test_spot_fix_reissue_preserves_baseline_branch_and_cleans_up_worktree() -> 
 	)
 	assert result["start_status"] == result["end_status"] == "", (
 		"spot-fix must leave the caller checkout clean"
+	)
+	assert result["start_user_name"] == result["end_user_name"] == "Judge User", (
+		"spot-fix must not overwrite the caller checkout git user.name"
+	)
+	assert result["start_user_email"] == result["end_user_email"] == "judge@example.com", (
+		"spot-fix must not overwrite the caller checkout git user.email"
 	)
 	assert result["worktree_dirs"] == [], (
 		f"spot-fix must clean up the temporary worktree via EXIT trap; found leftovers: {result['worktree_dirs']}"

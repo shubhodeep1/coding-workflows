@@ -344,7 +344,7 @@ jobs:
           ISSUE_BODY_EVENT: ${{ github.event.issue.body || '' }}
         run: |
           set -euo pipefail
-          baseline_branch="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import os, re; body = os.environ.get("ISSUE_BODY_EVENT", ""); match = re.search(r"(?mi)^\s*prior_pr_baseline_branch:\s*([A-Za-z0-9._/-]+)\s*$", body); print(match.group(1) if match else "")')"
+          baseline_branch="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import os, re; body = os.environ.get("ISSUE_BODY_EVENT", ""); matches = re.findall(r"(?mi)^\s*prior_pr_baseline_branch:\s*([A-Za-z0-9._/-]+)\s*$", body); print(matches[-1] if matches else "")')"
 
           echo "checkout_ref=${DEFAULT_IMPLEMENT_REF}" >> "$GITHUB_OUTPUT"
           if [ -z "${baseline_branch}" ]; then

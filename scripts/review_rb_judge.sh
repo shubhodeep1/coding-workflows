@@ -1230,11 +1230,17 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       local valid_files=()
       local file_path=""
 
-      raw_files_json="$(printf '%s' "${judge_json}" | jq -c '[.remaining_issues[]?.file? | strings | gsub("\\r"; "") | sub("^\\./"; "") | select(length > 0)] | unique' 2>/dev/null || echo '[]')"
+      raw_files_json="$(printf '%s' "${judge_json}" | jq -c '[.remaining_issues[]?.file? | strings | gsub("\\r"; "") | select(length > 0)] | unique' 2>/dev/null || echo '[]')"
       [ -n "${raw_files_json}" ] || raw_files_json='[]'
 
       while IFS= read -r file_path; do
         [ -n "${file_path}" ] || continue
+        while [[ "${file_path}" == ./* ]]; do
+          file_path="${file_path#./}"
+        done
+        while [[ "${file_path}" == *"/./"* ]]; do
+          file_path="${file_path//\/.\//\/}"
+        done
         if [[ "${file_path}" == /* ]] || [[ "${file_path}" =~ (^|/)\.\.(/|$) ]] || [[ "${file_path}" == *$'\n'* ]] || [[ "${file_path}" == *$'\r'* ]]; then
           echo "::warning::Ignoring invalid review-blocked remaining_issues file path: ${file_path}" >&2
           continue
@@ -1255,7 +1261,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       local pr_head_sha="$1"
       local baseline_branch="$2"
       local runtime_dir="$3"
-      local wt="${runtime_dir}/review-rb-reissue-wt-${PR_NUMBER}-$$-${RANDOM:-0}"
+      local wt_suffix="${RANDOM:-$(date +%s%N 2>/dev/null || date +%s)}"
+      local wt="${runtime_dir}/review-rb-reissue-wt-${PR_NUMBER}-$$-${wt_suffix}"
 
       (
         set -euo pipefail
@@ -1281,8 +1288,6 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         fi
 
         cd "${wt}" || exit 1
-        git config user.name "codex-bot"
-        git config user.email "codex@users.noreply.github.com"
 
         if ! git checkout --quiet -B "${baseline_branch}" "${pr_head_sha}" 2>/dev/null; then
           echo "::warning::Failed to create baseline branch ${baseline_branch} from ${pr_head_sha}." >&2
@@ -1297,7 +1302,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           fi
 
           local_sha="$(git rev-parse HEAD 2>/dev/null || echo '')"
-          remote_sha="$(git ls-remote origin "refs/heads/${baseline_branch}" 2>/dev/null | awk '{print $1}' | head -n1)"
+          remote_sha="$(git ls-remote origin "refs/heads/${baseline_branch}" 2>/dev/null | awk '{print $1}' | head -n1)" || remote_sha=''
           if [ -n "${local_sha}" ] && [ "${local_sha}" = "${remote_sha}" ]; then
             printf '%s\n' "${baseline_branch}"
             exit 0
