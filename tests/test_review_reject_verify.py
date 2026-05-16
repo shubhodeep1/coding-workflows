@@ -181,6 +181,18 @@ def _write_pr_diff(runtime_dir: Path, workspace_dir: Path, new_lines: list[str])
 	(runtime_dir / "pr_diff.patch").write_text(diff, encoding="utf-8")
 
 
+def _write_deleted_pr_diff(runtime_dir: Path, workspace_dir: Path) -> None:
+	(workspace_dir / "src" / "module.py").unlink()
+	diff = subprocess.run(
+		["git", "diff", "--", "src/module.py"],
+		cwd=workspace_dir,
+		check=True,
+		capture_output=True,
+		text=True,
+	).stdout
+	(runtime_dir / "pr_diff.patch").write_text(diff, encoding="utf-8")
+
+
 def _write_linked_issue_context(runtime_dir: Path, files_touched: list[str] | None) -> None:
 	if not files_touched:
 		(runtime_dir / "linked_issue_context.txt").write_text("No files_touched block.\n", encoding="utf-8")
@@ -226,6 +238,26 @@ def test_parser_schema_off_preserves_legacy_non_actionable_notes_only() -> None:
 		assert "CONSOLIDATOR_REJECT_EVIDENCE_MALFORMED" not in result.stderr
 
 
+def test_parser_schema_off_skips_typed_reject_marker() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py\nlines: 2-3",
+			),
+			schema_enabled="false",
+		)
+		assert result.returncode == 0, result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		assert "CONSOLIDATOR_REJECT_TYPED" not in result.stderr
+
+
 def test_parser_schema_on_missing_rejection_kind_demotes_to_unclassified() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
@@ -264,10 +296,53 @@ def test_parser_schema_on_malformed_typed_evidence_demotes_to_unclassified() -> 
 		assert "field=EVIDENCE_DIFF_HUNK reason=invalid_diff_hunk_lines" in result.stderr
 
 
+def test_parser_treats_whitespace_padded_schema_flag_as_truthy() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py",
+			),
+			schema_enabled=" true ",
+		)
+		assert result.returncode == 0, result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: unclassified" in block
+		assert "field=EVIDENCE_DIFF_HUNK reason=invalid_diff_hunk_lines" in result.stderr
+
+
+def test_parser_accepts_double_dot_paths_in_typed_rejection_evidence() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="out-of-scope",
+				typed_header="EVIDENCE_FILES_TOUCHED",
+				typed_body="cited_path: docs/backup..2024.md\nfiles_touched: src/module.py",
+			),
+			schema_enabled="true",
+		)
+		assert result.returncode == 0, result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		assert "invalid_cited_path" not in result.stderr
+		assert "CONSOLIDATOR_REJECT_TYPED issue=001 kind=out-of-scope schema_enabled=true" in result.stderr
+
+
 def test_verifier_leaves_llm_only_rejections_inconclusive() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
 		runtime = _seed_repo(workspace)
+		long_quote = "Dry-run requests may reuse duplicate idempotency keys without failing validation. " * 9
+		assert len(long_quote) > 500
 		raw_text = "".join([
 			_issue_block(
 				issue_id="001",
@@ -280,7 +355,7 @@ def test_verifier_leaves_llm_only_rejections_inconclusive() -> None:
 				line_spec="4",
 				rejection_kind="spec-doesnt-support",
 				typed_header="EVIDENCE_SPEC_QUOTE",
-				typed_body='source: docs/spec.md#validation\nquote: "The endpoint accepts duplicate dry-run keys."',
+				typed_body=f'source: docs/spec.md#validation\nquote: "{long_quote.strip()}"',
 			),
 		])
 		parse_result = _run_parser(workspace, runtime, raw_text=raw_text, schema_enabled="true")
@@ -336,6 +411,46 @@ def test_already_fixed_rejection_supports_when_pr_diff_matches() -> None:
 		assert "CONSOLIDATOR_REJECT_VERIFIED issue=001 kind=already-fixed verdict=support" in verify_result.stdout
 
 
+def test_already_fixed_rejection_supports_with_trailing_whitespace_in_typed_values() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_pr_diff(
+			runtime,
+			workspace,
+			[
+				"def sample(x):",
+				"    if x is None:",
+				"        return None",
+				"    return x",
+				"line5",
+				"line6",
+				"line7",
+				"line8",
+				"line9",
+				"line10",
+			],
+		)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py   \nlines: 2-3   \nexcerpt: if x is None:",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		assert "REVERSAL_REASON:" not in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "support"
+
+
 def test_already_fixed_rejection_reverses_when_pr_diff_missing_cited_hunk() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
@@ -375,6 +490,32 @@ def test_already_fixed_rejection_reverses_when_pr_diff_missing_cited_hunk() -> N
 		artifact = _load_artifact(workspace)
 		assert artifact["results"][0]["verdict"] == "does-not-support"
 		assert "CONSOLIDATOR_REJECT_REVERSED issue=001 kind=already-fixed" in verify_result.stdout
+
+
+def test_already_fixed_rejection_supports_when_pr_diff_deletes_file() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_deleted_pr_diff(runtime, workspace)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py\nlines: 2-3\nexcerpt: if x == None:",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		assert "REVERSAL_REASON:" not in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "support"
+		assert artifact["results"][0]["reason"] == "PR diff deletes src/module.py, which covers the cited fix."
 
 
 def test_out_of_scope_rejection_supports_when_file_absent_from_linked_issue_scope() -> None:
@@ -425,6 +566,29 @@ def test_out_of_scope_rejection_reverses_when_file_is_in_scope() -> None:
 		assert "Linked issue files_touched explicitly includes src/module.py." in block
 		artifact = _load_artifact(workspace)
 		assert artifact["results"][0]["verdict"] == "does-not-support"
+
+
+def test_verifier_sanitizes_non_numeric_pr_number_for_artifact_paths() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(notes="Legacy rejection rationale."),
+			schema_enabled="false",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			schema_enabled="false",
+			pr_number="foo/../../../escape",
+		)
+		assert verify_result.returncode == 0, verify_result.stderr
+		artifact = _load_artifact(workspace, pr_number="unknown")
+		assert artifact["pr_number"] == "unknown"
+		assert not (workspace / ".ai" / "escape").exists()
 
 
 def test_prior_round_rejection_supports_when_cached_artifact_matches() -> None:

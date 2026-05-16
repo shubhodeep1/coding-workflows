@@ -90,7 +90,7 @@ validate_repo_relative_path_syntax()
 	if [[ "${file_path}" == /* ]]; then
 		return 1
 	fi
-	if [[ "${file_path}" == *".."* ]]; then
+	if [[ "${file_path}" == ".." ]] || [[ "${file_path}" == ../* ]] || [[ "${file_path}" == */../* ]] || [[ "${file_path}" == */.. ]]; then
 		return 1
 	fi
 	if [[ "${file_path}" =~ [[:cntrl:]] ]]; then
@@ -101,7 +101,9 @@ validate_repo_relative_path_syntax()
 
 is_truthy()
 {
-	case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+	local normalized
+	normalized="$(trim "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')")"
+	case "${normalized}" in
 		1|true|yes|on)
 			return 0
 			;;
@@ -121,6 +123,7 @@ extract_evidence_value()
 			sub(/^[[:space:]]+/, "", line)
 			if (line ~ ("^" key ":[[:space:]]*")) {
 				sub("^" key ":[[:space:]]*", "", line)
+				sub(/[[:space:]]+$/, "", line)
 				print line
 				exit
 			}
@@ -152,7 +155,6 @@ validate_typed_rejection()
 	local source_value=""
 	local quote_stats=""
 	local quote_count="0"
-	local quote_too_long="0"
 	local round_value=""
 	local issue_id_value=""
 	local prior_kind_value=""
@@ -268,7 +270,6 @@ validate_typed_rejection()
 			quote_stats="$(printf '%s\n' "${expected_content}" | awk '
 				BEGIN {
 					count = 0
-					too_long = 0
 				}
 				{
 					line = $0
@@ -278,23 +279,15 @@ validate_typed_rejection()
 						if (line != "") {
 							count++
 						}
-						if (length(line) > 500) {
-							too_long = 1
-						}
 					}
 				}
 				END {
-					printf "%s %s", count, too_long
+					printf "%s", count
 				}
 			')"
-			quote_count="${quote_stats%% *}"
-			quote_too_long="${quote_stats##* }"
+			quote_count="${quote_stats}"
 			if [ "${quote_count}" -lt 1 ]; then
 				TYPED_REJECTION_VALIDATION_ERROR="missing_spec_quote"
-				return 1
-			fi
-			if [ "${quote_too_long}" != "0" ]; then
-				TYPED_REJECTION_VALIDATION_ERROR="spec_quote_too_long"
 				return 1
 			fi
 			;;
@@ -640,10 +633,6 @@ process_block()
 	if [ -z "${severity}" ]; then
 		severity="low"
 	fi
-	if [ "${classification}" = "non-actionable" ] && [ -n "${rejection_kind}" ]; then
-		printf 'CONSOLIDATOR_REJECT_TYPED issue=%s kind=%s schema_enabled=%s\n' \
-			"${issue_id}" "${rejection_kind}" "${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}" >&2
-	fi
 	if [ "${classification}" = "non-actionable" ] && is_truthy "${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}"; then
 		if [ -z "${rejection_kind}" ]; then
 			classification="unclassified"
@@ -662,6 +651,9 @@ process_block()
 				"${rejection_kind}" \
 				"${EXPECTED_REJECTION_EVIDENCE_FIELD:-unknown}" \
 				"${TYPED_REJECTION_VALIDATION_ERROR:-unknown}" >&2
+		else
+			printf 'CONSOLIDATOR_REJECT_TYPED issue=%s kind=%s schema_enabled=%s\n' \
+				"${issue_id}" "${rejection_kind}" "${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}" >&2
 		fi
 	fi
 	if [ -z "${classification}" ]; then

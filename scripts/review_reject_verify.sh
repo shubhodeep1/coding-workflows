@@ -1,18 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trim_ascii_whitespace()
+{
+	local value="$1"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s' "${value}"
+}
+
+sanitize_numeric_identifier()
+{
+	local value="$1"
+	local fallback="$2"
+	value="$(trim_ascii_whitespace "${value}")"
+	if [[ "${value}" =~ ^[0-9]+$ ]]; then
+		printf '%s' "${value}"
+		return 0
+	fi
+	printf '%s' "${fallback}"
+}
+
 CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 REVIEW_ISSUES_FILE="${REVIEW_ISSUES_FILE:-${RUNTIME_DIR}/review_issues.txt}"
 PR_DIFF_FILE="${PR_DIFF_FILE:-${RUNTIME_DIR}/pr_diff.patch}"
 LINKED_ISSUE_CONTEXT_FILE="${LINKED_ISSUE_CONTEXT_FILE:-${RUNTIME_DIR}/linked_issue_context.txt}"
-PR_NUMBER="${PR_NUMBER:-unknown}"
+PR_NUMBER="$(sanitize_numeric_identifier "${PR_NUMBER:-unknown}" "unknown")"
 
-ROUND_NUMBER_BASE="${ROUND_NUMBER:-}"
+ROUND_NUMBER_BASE="$(trim_ascii_whitespace "${ROUND_NUMBER:-}")"
+AUTOFIX_ITERATION_VALUE="$(trim_ascii_whitespace "${AUTOFIX_ITERATION:-}")"
 if [[ "${ROUND_NUMBER_BASE}" =~ ^[0-9]+$ ]]; then
 	CURRENT_ROUND="$((ROUND_NUMBER_BASE + 1))"
-elif [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]]; then
-	CURRENT_ROUND="${AUTOFIX_ITERATION}"
+elif [[ "${AUTOFIX_ITERATION_VALUE}" =~ ^[0-9]+$ ]]; then
+	CURRENT_ROUND="${AUTOFIX_ITERATION_VALUE}"
 else
 	CURRENT_ROUND="1"
 fi
@@ -152,46 +173,72 @@ def extract_files_touched(text: str) -> list[str] | None:
 	return None
 
 
+def normalize_patch_path(path: str) -> str | None:
+	path = path.strip()
+	if path == "/dev/null":
+		return None
+	if path.startswith(("a/", "b/")):
+		return path[2:]
+	return path
+
+
 def parse_patch(text: str) -> tuple[bool, dict[str, dict[str, object]]]:
 	if "diff --git " not in text:
 		return False, {}
 	files: dict[str, dict[str, object]] = {}
 	current_path: str | None = None
+	current_old_path: str | None = None
 	current_lines: list[str] = []
 	hunks: list[tuple[int, int]] = []
+	current_deleted = False
 
 	def flush() -> None:
-		nonlocal current_path, current_lines, hunks
-		if current_path is None:
+		nonlocal current_path, current_old_path, current_lines, hunks, current_deleted
+		path = current_path or current_old_path
+		if path is None:
+			current_path = None
+			current_old_path = None
 			current_lines = []
 			hunks = []
+			current_deleted = False
 			return
-		files[current_path] = {
+		files[path] = {
 			"text": "\n".join(current_lines),
 			"hunks": list(hunks),
+			"deleted": current_deleted,
 		}
 		current_path = None
+		current_old_path = None
 		current_lines = []
 		hunks = []
+		current_deleted = False
 
 	for line in text.splitlines():
 		if line.startswith("diff --git "):
 			flush()
 			current_lines = [line]
+			parts = line.split(" ", 3)
+			if len(parts) >= 4:
+				current_old_path = normalize_patch_path(parts[2])
+				current_path = normalize_patch_path(parts[3])
+			else:
+				current_old_path = None
+				current_path = None
+			current_deleted = False
 			continue
 		current_lines.append(line)
+		if line.startswith("--- "):
+			current_old_path = normalize_patch_path(line[4:])
+			continue
 		if line.startswith("+++ "):
-			path = line[4:].strip()
-			if path == "/dev/null":
-				current_path = None
-			else:
-				current_path = path[2:] if path.startswith("b/") else path
+			current_path = normalize_patch_path(line[4:])
+			current_deleted = current_path is None
 			continue
 		match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
-		if match and current_path is not None:
+		if match and (current_path is not None or current_old_path is not None):
 			start = int(match.group(1))
 			length = int(match.group(2) or "1")
-			end = start - 1 if length == 0 else start + length - 1
+			end = start if length == 0 else start + length - 1
 			hunks.append((start, end))
 	flush()
 	return True, files
@@ -243,18 +290,22 @@ def verify_already_fixed(block: dict[str, object], diff_available: bool, patches
 	evidence = parse_evidence_map(block["fields"].get("EVIDENCE_DIFF_HUNK", ""))  # type: ignore[index]
 	file_path = first_value(evidence, "file")
 	line_spec = first_value(evidence, "lines")
+	excerpt = first_value(evidence, "excerpt")
 	parsed = parse_line_spec(line_spec)
 	if not file_path or parsed is None:
 		return "inconclusive", "Parsed rejection evidence was incomplete after the parser stage."
 	patch = patches.get(file_path)
 	if patch is None:
 		return "does-not-support", f"PR diff does not touch {file_path}."
+	if bool(patch.get("deleted")):
+		if excerpt and excerpt not in str(patch.get("text", "")):
+			return "does-not-support", f"PR diff for {file_path} does not contain the cited excerpt."
+		return "support", f"PR diff deletes {file_path}, which covers the cited fix."
 	start, end = parsed
 	for hunk_start, hunk_end in patch.get("hunks", []):
 		if hunk_end < hunk_start:
 			continue
 		if not (end < hunk_start or hunk_end < start):
-			excerpt = first_value(evidence, "excerpt")
 			if excerpt and excerpt not in str(patch.get("text", "")):
 				return "does-not-support", f"PR diff for {file_path} does not contain the cited excerpt."
 			return "support", f"PR diff contains a matching hunk for {file_path}:{line_spec}."
@@ -282,6 +333,8 @@ def verify_prior_round(block: dict[str, object], repo_root: Path, pr_number: str
 	sticky = first_value(evidence, "sticky").lower()
 	if not round_value or not issue_id or not prior_kind:
 		return "inconclusive", "Parsed prior-round evidence was incomplete after the parser stage."
+	if not pr_number.isdigit():
+		return "inconclusive", "PR number was not numeric, so prior-round artifact lookup was skipped."
 	if sticky != "true":
 		return "does-not-support", "already-rejected-with-evidence requires sticky: true."
 	if not round_value.isdigit() or int(round_value) < 1:
