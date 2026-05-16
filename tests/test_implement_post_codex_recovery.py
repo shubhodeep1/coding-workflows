@@ -827,6 +827,29 @@ def test_resolve_checkout_ref_retries_issue_metadata_fetch() -> None:
 		assert files["issue_meta"], "successful retry path must still cache valid issue metadata"
 
 
+def test_resolve_checkout_ref_surfaces_final_issue_metadata_fetch_stderr_on_fallback() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="prior_pr_baseline_branch: ai/reissue-baseline/pr-42-failed\n",
+			default_checkout_ref="orchestrator/project-829",
+			issue_api_failures_remaining=3,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert len(state.get("issue_queries", [])) == 3, (
+			"Resolve checkout ref must still retry three times before failing open to the default ref"
+		)
+		assert files["issue_meta"] == "", "failed issue metadata fetch must not cache partial data"
+		assert files["issue_body"] == "", "failed issue metadata fetch must not cache partial body data"
+		assert "gh: simulated transient failure" in proc.stderr, (
+			"Final failed gh api stderr must remain visible so the fail-open fallback is debuggable"
+		)
+
+
 def test_resolve_checkout_ref_fails_open_on_invalid_issue_metadata_without_caching_it() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
 		tmp_path = Path(td)
