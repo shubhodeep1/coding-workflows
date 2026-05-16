@@ -15,6 +15,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
+  REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
@@ -413,8 +414,223 @@ jobs:
             echo "source=integration/default" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout repository
+      - name: Resolve trusted prior PR baseline branch
         if: env.SKIP_IMPLEMENT != 'true'
+        id: baseline_refctx
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ISSUE_BODY: ${{ github.event.issue.body || '' }}
+          ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}
+          REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          issue_body = os.environ.get("ISSUE_BODY", "").replace("\r\n", "\n")
+          issue_author_association = os.environ.get("ISSUE_AUTHOR_ASSOCIATION", "").strip().upper()
+          feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          trusted_issue_associations = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+          def emit(*, branch: str = "", sha: str = "", status: str) -> None:
+              with output_path.open("a", encoding="utf-8") as fh:
+                  fh.write(f"branch={branch}\n")
+                  if sha:
+                      fh.write(f"sha={sha}\n")
+                  fh.write(f"status={status}\n")
+
+          def notice(message: str) -> None:
+              print(f"::notice::{message}")
+
+          if not feature_enabled:
+              notice("Baseline override ignored: REISSUE_PRESERVE_BASELINE_ENABLED is disabled.")
+              emit(status="disabled")
+              raise SystemExit(0)
+
+          # Review-blocked reissues are created by the repo's trusted GH_PAT
+          # identity, so reject baseline overrides on externally authored issues
+          # before consulting any user-controlled body metadata.
+          if issue_author_association not in trusted_issue_associations:
+              notice("Baseline override ignored: issue author association is not trusted for review-blocked baseline reuse.")
+              emit(status="issue-author-untrusted")
+              raise SystemExit(0)
+
+          branch_matches = re.findall(r"(?m)^prior_pr_baseline_branch:\s*(\S+)\s*$", issue_body)
+          if len(branch_matches) != 1:
+              notice("Baseline override ignored: issue body does not contain exactly one prior_pr_baseline_branch entry.")
+              emit(status="absent")
+              raise SystemExit(0)
+
+          branch = branch_matches[0].strip()
+          branch_match = re.fullmatch(r"ai/reissue-pr-(\d+)-baseline-([0-9a-f]{12})", branch)
+          if branch_match is None:
+              notice("Baseline override ignored: prior_pr_baseline_branch is not in the trusted review-blocked format.")
+              emit(status="untrusted")
+              raise SystemExit(0)
+
+          files_touched_match = re.search(r"(?m)^files_touched:\s*\n(?:[ \t]*- [^\n]+\n?)+", issue_body)
+          if files_touched_match is None:
+              notice("Baseline override ignored: files_touched metadata is missing or empty.")
+              emit(status="files-missing")
+              raise SystemExit(0)
+
+          metadata_match = re.search(
+              r"(?m)^\*\*Review-blocked reissue metadata\*\*\s*\n(?P<block>(?:- [^\n]*\n?)*)",
+              issue_body,
+          )
+          if metadata_match is None:
+              notice("Baseline override ignored: review-blocked reissue metadata header is missing.")
+              emit(status="metadata-missing")
+              raise SystemExit(0)
+
+          metadata_block = metadata_match.group("block")
+          reissue_type_matches = re.findall(r"(?m)^- Type:\s*(review-blocked-reissue)\s*$", metadata_block)
+          replaces_matches = re.findall(
+              "(?m)^- Replaces:\\s*(?:#\\d+\\s+)?\\(PR #(\\d+) closed \\u2014 approach rework\\)\\s*$",
+              metadata_block,
+          )
+          if len(reissue_type_matches) != 1 or len(replaces_matches) != 1:
+              notice("Baseline override ignored: review-blocked reissue metadata footer is incomplete.")
+              emit(status="metadata-missing")
+              raise SystemExit(0)
+
+          expected_pr_number = replaces_matches[0]
+          branch_pr_number, sha_prefix = branch_match.groups()
+          if branch_pr_number != expected_pr_number:
+              notice("Baseline override ignored: prior_pr_baseline_branch PR number does not match reissue metadata.")
+              emit(status="pr-mismatch")
+              raise SystemExit(0)
+
+          if not repo:
+              notice("Baseline override ignored: repository context unavailable for PR validation.")
+              emit(status="repo-missing")
+              raise SystemExit(0)
+
+          try:
+              pr_view = subprocess.run(
+                  [
+                      "gh",
+                      "pr",
+                      "view",
+                      expected_pr_number,
+                      "--repo",
+                      repo,
+                      "--json",
+                      "state,headRefOid",
+                  ],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+                  timeout=30,
+              )
+          except (OSError, ValueError, subprocess.SubprocessError):
+              notice("Baseline override ignored: failed to verify prior PR baseline branch against GitHub.")
+              emit(status="lookup-failed")
+              raise SystemExit(0)
+          if pr_view.returncode != 0:
+              notice("Baseline override ignored: failed to verify prior PR baseline branch against GitHub.")
+              emit(status="lookup-failed")
+              raise SystemExit(0)
+
+          try:
+              pr_payload = json.loads(pr_view.stdout or "{}")
+          except json.JSONDecodeError:
+              notice("Baseline override ignored: GitHub PR validation response was malformed.")
+              emit(status="lookup-failed")
+              raise SystemExit(0)
+
+          pr_state = str(pr_payload.get("state") or "")
+          pr_head_oid = str(pr_payload.get("headRefOid") or "")
+          # Review-blocked reissues are emitted only for PRs closed without
+          # merge ("closed — approach rework"), so MERGED stays untrusted here.
+          if pr_state != "CLOSED":
+              notice("Baseline override ignored: referenced PR is not in the closed review-blocked state.")
+              emit(status="pr-open")
+              raise SystemExit(0)
+
+          if re.fullmatch(r"[0-9a-f]{40}", pr_head_oid) is None or pr_head_oid[:12] != sha_prefix:
+              notice("Baseline override ignored: prior_pr_baseline_branch suffix does not match the closed PR head SHA.")
+              emit(status="head-mismatch")
+              raise SystemExit(0)
+
+          # The gh pr view call above validates the closed PR head, but it
+          # cannot prove the machine-generated baseline ref actually exists or
+          # still points at that immutable commit. Resolve the exact ref before
+          # honoring the override, then continue to checkout by SHA below.
+          try:
+              ref_view = subprocess.run(
+                  [
+                      "gh",
+                      "api",
+                      f"repos/{repo}/git/matching-refs/heads/{branch}",
+                  ],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+                  timeout=30,
+              )
+          except (OSError, ValueError, subprocess.SubprocessError):
+              notice("Baseline override ignored: failed to verify prior PR baseline ref against GitHub.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+          if ref_view.returncode != 0:
+              notice("Baseline override ignored: failed to verify prior PR baseline ref against GitHub.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+
+          try:
+              ref_payload = json.loads(ref_view.stdout or "[]")
+          except json.JSONDecodeError:
+              notice("Baseline override ignored: GitHub baseline ref validation response was malformed.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+          if not isinstance(ref_payload, list):
+              notice("Baseline override ignored: GitHub baseline ref validation response was malformed.")
+              emit(status="ref-lookup-failed")
+              raise SystemExit(0)
+
+          exact_refs = [
+              item for item in ref_payload
+              if isinstance(item, dict) and str(item.get("ref") or "") == f"refs/heads/{branch}"
+          ]
+          if len(exact_refs) != 1:
+              notice("Baseline override ignored: prior PR baseline ref is missing on GitHub.")
+              emit(status="ref-missing")
+              raise SystemExit(0)
+
+          ref_object = exact_refs[0].get("object")
+          ref_oid = str(ref_object.get("sha") or "") if isinstance(ref_object, dict) else ""
+          if re.fullmatch(r"[0-9a-f]{40}", ref_oid) is None:
+              notice("Baseline override ignored: prior PR baseline ref did not resolve to a commit SHA.")
+              emit(status="ref-missing")
+              raise SystemExit(0)
+          if ref_oid != pr_head_oid:
+              notice("Baseline override ignored: prior PR baseline ref no longer points at the closed PR head SHA.")
+              emit(status="ref-mismatch")
+              raise SystemExit(0)
+
+          notice(f"Baseline override accepted: {branch}")
+          emit(branch=branch, sha=pr_head_oid, status="accepted")
+          PY
+
+      - name: Checkout prior PR baseline branch
+        if: env.SKIP_IMPLEMENT != 'true' && steps.baseline_refctx.outputs.branch != ''
+        id: checkout_baseline
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.baseline_refctx.outputs.sha || steps.baseline_refctx.outputs.branch }}
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Checkout repository
+        if: env.SKIP_IMPLEMENT != 'true' && (steps.baseline_refctx.outputs.branch == '' || steps.checkout_baseline.outcome != 'success')
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -435,9 +651,20 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          echo "Resolved checkout ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           echo "Resolved checkout source: ${{ steps.checkout_ref.outputs.source || 'integration/default' }}"
           echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          baseline_status="${{ steps.baseline_refctx.outputs.status }}"
+          if [ -z "${baseline_status}" ]; then
+            baseline_status="step-no-output"
+          fi
+          if [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
+            echo "Baseline override: accepted ${{ steps.baseline_refctx.outputs.branch }}"
+          elif [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ]; then
+            echo "Baseline override: fallback to resolved ref after checkout failure for ${{ steps.baseline_refctx.outputs.branch }}"
+          else
+            echo "Baseline override: ignored (${baseline_status})"
+          fi
           echo "HEAD commit: $(git rev-parse HEAD)"
           if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
             echo "HEAD branch: ${branch_name}"
