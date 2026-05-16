@@ -274,6 +274,18 @@ if args[0] == "api":
 		sys.exit(0)
 
 	if re.search(r"/issues/\d+$", path):
+		state.setdefault("issue_queries", []).append(path)
+		failures_remaining = int(state.get("issue_api_failures_remaining", 0) or 0)
+		if failures_remaining > 0:
+			state["issue_api_failures_remaining"] = failures_remaining - 1
+			save()
+			print("gh: simulated transient failure", file=sys.stderr)
+			sys.exit(1)
+		raw_issue_response = state.get("issue_api_raw_response")
+		if raw_issue_response is not None:
+			save()
+			print(raw_issue_response)
+			sys.exit(0)
 		labels = [{"name": x} for x in state.get("issue_labels", [])]
 		body = state.get("issue_body", "")
 		if jq:
@@ -287,6 +299,20 @@ if args[0] == "api":
 			print(json.dumps({"labels": labels, "body": body}))
 		save()
 		sys.exit(0)
+
+	if "/git/ref/heads/" in path:
+		ref = path.split("/git/ref/heads/", 1)[1]
+		from urllib.parse import unquote
+
+		decoded_ref = unquote(ref)
+		state.setdefault("branch_ref_queries", []).append(decoded_ref)
+		exists = bool((state.get("branch_exists", {}) or {}).get(decoded_ref, False))
+		save()
+		if exists:
+			print(json.dumps({"ref": f"refs/heads/{decoded_ref}"}))
+			sys.exit(0)
+		print("gh: Not Found (HTTP 404)", file=sys.stderr)
+		sys.exit(1)
 
 	# Asset fetch fallback path (unused in these tests, but keep stable behavior).
 	if "/contents/" in path:
@@ -305,6 +331,8 @@ sys.exit(1)
 	mock_path = bin_dir / "gh"
 	mock_path.write_text(gh_script, encoding="utf-8")
 	mock_path.chmod(0o755)
+	(bin_dir / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	(bin_dir / "sleep").chmod(0o755)
 
 
 def _install_mock_codex(bin_dir: Path) -> None:
@@ -495,6 +523,67 @@ def _parse_github_output(path: Path) -> dict[str, str]:
 	return parsed
 
 
+def _run_resolve_checkout_ref_step(
+	tmp_path: Path,
+	*,
+	issue_body: str,
+	default_checkout_ref: str,
+	branch_exists: dict[str, bool] | None = None,
+	issue_api_failures_remaining: int = 0,
+	issue_api_raw_response: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict, dict[str, str], dict[str, str]]:
+	repo_dir = tmp_path / "checkout-ref-repo"
+	_bootstrap_git_repo(repo_dir)
+	bin_dir = tmp_path / "bin"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_mock_gh(bin_dir)
+
+	gh_state_file = runtime_dir / "checkout_ref_gh_state.json"
+	gh_state_file.write_text(
+		json.dumps(
+			{
+				"issue_number": 948,
+				"issue_body": issue_body,
+				"branch_exists": branch_exists or {},
+				"issue_api_failures_remaining": issue_api_failures_remaining,
+				"issue_api_raw_response": issue_api_raw_response,
+			}
+		),
+		encoding="utf-8",
+	)
+
+	github_output = runtime_dir / "checkout_ref_github_output.txt"
+	issue_meta_file = runtime_dir / "issue_meta.json"
+	issue_body_file = runtime_dir / "issue_body.txt"
+	script = _render_github_expressions(_extract_run_script("Resolve checkout ref"))
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GITHUB_OUTPUT": str(github_output),
+			"ISSUE_NUMBER": "948",
+			"ISSUE_META_FILE": str(issue_meta_file),
+			"ISSUE_BODY_FILE": str(issue_body_file),
+			"DEFAULT_CHECKOUT_REF": default_checkout_ref,
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"TMPDIR": str(runtime_dir),
+		}
+	)
+
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	state = _read_gh_state(gh_state_file)
+	outputs = _parse_github_output(github_output)
+	files = {
+		"issue_meta": _read_file(str(issue_meta_file)),
+		"issue_body": _read_file(str(issue_body_file)),
+	}
+	return proc, state, outputs, files
+
+
 def _install_capture_step_mock_gh(bin_dir: Path) -> None:
 	gh_script = r'''#!/usr/bin/env python3
 import json
@@ -677,6 +766,152 @@ def test_capture_step_fails_open_on_invalid_jobs_payload() -> None:
 		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 		assert state.get("jobs_api_calls") == 1
 		assert outputs.get("failed_step_name", "") == ""
+
+
+def test_resolve_checkout_ref_prefers_prior_pr_baseline_branch_when_available() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		baseline_branch = "ai/reissue-baseline/pr-42-abcdef123456-1710000000"
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body=f"Plan body\n\nprior_pr_baseline_branch: {baseline_branch}\n",
+			default_checkout_ref="orchestrator/project-829",
+			branch_exists={baseline_branch: True},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == baseline_branch
+		assert outputs.get("source") == "prior_pr_baseline_branch"
+		assert len(state.get("issue_queries", [])) == 1
+		assert baseline_branch in state.get("branch_ref_queries", []), (
+			"Resolve checkout ref must verify prior_pr_baseline_branch under refs/heads before using it"
+		)
+		assert files["issue_body"].strip().endswith(f"prior_pr_baseline_branch: {baseline_branch}")
+
+
+def test_resolve_checkout_ref_falls_back_when_hint_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, _ = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="No baseline hint here.\n",
+			default_checkout_ref="orchestrator/project-829",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("branch_ref_queries", []) == [], (
+			"Resolve checkout ref should not hit /git/ref/heads when prior_pr_baseline_branch is absent"
+		)
+
+
+def test_resolve_checkout_ref_retries_issue_metadata_fetch() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		baseline_branch = "ai/reissue-baseline/pr-42-retried"
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body=f"prior_pr_baseline_branch: {baseline_branch}\n",
+			default_checkout_ref="orchestrator/project-829",
+			branch_exists={baseline_branch: True},
+			issue_api_failures_remaining=2,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == baseline_branch
+		assert outputs.get("source") == "prior_pr_baseline_branch"
+		assert len(state.get("issue_queries", [])) == 3, (
+			"Resolve checkout ref must retry transient issue metadata fetch failures before falling back"
+		)
+		assert files["issue_meta"], "successful retry path must still cache valid issue metadata"
+
+
+def test_resolve_checkout_ref_surfaces_final_issue_metadata_fetch_stderr_on_fallback() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="prior_pr_baseline_branch: ai/reissue-baseline/pr-42-failed\n",
+			default_checkout_ref="orchestrator/project-829",
+			issue_api_failures_remaining=3,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert len(state.get("issue_queries", [])) == 3, (
+			"Resolve checkout ref must still retry three times before failing open to the default ref"
+		)
+		assert files["issue_meta"] == "", "failed issue metadata fetch must not cache partial data"
+		assert files["issue_body"] == "", "failed issue metadata fetch must not cache partial body data"
+		assert "gh: simulated transient failure" in proc.stderr, (
+			"Final failed gh api stderr must remain visible so the fail-open fallback is debuggable"
+		)
+
+
+def test_resolve_checkout_ref_fails_open_on_invalid_issue_metadata_without_caching_it() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="prior_pr_baseline_branch: ai/reissue-baseline/pr-42-invalid\n",
+			default_checkout_ref="orchestrator/project-829",
+			issue_api_raw_response="<!doctype html>not-json",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("branch_ref_queries", []) == [], (
+			"Invalid issue metadata must fail open before any prior_pr_baseline_branch lookup"
+		)
+		assert files["issue_meta"] == "", "invalid issue metadata must not poison ISSUE_META_FILE"
+		assert files["issue_body"] == "", "invalid issue metadata must not populate ISSUE_BODY_FILE"
+
+
+def test_resolve_checkout_ref_rejects_invalid_branch_name_before_api_lookup() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, _ = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="prior_pr_baseline_branch: ../escape\n",
+			default_checkout_ref="orchestrator/project-829",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("branch_ref_queries", []) == [], (
+			"Invalid prior_pr_baseline_branch values must be rejected before any GitHub ref lookup"
+		)
+
+
+def test_resolve_checkout_ref_falls_back_when_branch_is_unavailable() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		baseline_branch = "ai/reissue-baseline/pr-42-missing"
+		proc, state, outputs, _ = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body=f"- prior_pr_baseline_branch: {baseline_branch}\n",
+			default_checkout_ref="orchestrator/project-829",
+			branch_exists={baseline_branch: False},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert baseline_branch in state.get("branch_ref_queries", [])
+
+
+def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:
+	fetch_block = _extract_run_script("Fetch issue metadata")
+	assert 'PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"' in fetch_block, (
+		"Fetch issue metadata must keep PR_BASE_BRANCH anchored to the integration/default ref, not the baseline checkout override"
+	)
+	assert "steps.checkout_ref.outputs.ref" not in fetch_block, (
+		"PR_BASE_BRANCH must not follow the optional prior_pr_baseline_branch checkout override"
+	)
 
 
 def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
