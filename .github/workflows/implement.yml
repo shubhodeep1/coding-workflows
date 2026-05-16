@@ -585,7 +585,7 @@ jobs:
           else
             echo "Baseline override: ignored (${baseline_status})"
           fi
-          echo "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           echo "HEAD commit: $(git rev-parse HEAD)"
           if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
             echo "HEAD branch: ${branch_name}"
