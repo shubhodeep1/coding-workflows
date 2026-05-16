@@ -112,6 +112,10 @@ CANARY_REQUIRED="${CANARY_REQUIRED:-1}"
 # not executed as TAP tests. Any basename matching HELPER_PATTERN is excluded
 # from test discovery. Default matches the `_lib_*.sh` / `_*.sh` convention.
 HELPER_PATTERN="${HELPER_PATTERN:-_*.sh}"
+# Synthesised behavioural smoke tests use the stable synth_round_*.sh prefix.
+# Keep them opt-out so validation can ignore cached/generated advisory tests
+# without affecting normal top-level TAP discovery.
+VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"
 
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-validation-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-validation-password}"
@@ -690,6 +694,14 @@ discover_tests()
 	local candidate_name
 	local all_candidates=()
 	local helper_files=()
+	local synth_files=()
+	local include_synthesised="true"
+
+	case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED}" | tr '[:upper:]' '[:lower:]')" in
+		0|false|no|off)
+			include_synthesised="false"
+			;;
+	esac
 
 	if [ ! -d "${TEST_DIR}" ]; then
 		fail_fast "tests_missing" "test directory not found: ${TEST_DIR}" "${COMPOSE_LOG}" "tests"
@@ -714,6 +726,10 @@ discover_tests()
 			helper_files+=("${candidate}")
 			continue
 		fi
+		if [ "${include_synthesised}" != "true" ] && [[ "${candidate_name}" == synth_round_*.sh ]]; then
+			synth_files+=("${candidate}")
+			continue
+		fi
 		TEST_FILES+=("${candidate}")
 	done
 
@@ -721,6 +737,13 @@ discover_tests()
 		{
 			echo "validate_driver: excluded ${#helper_files[@]} helper script(s) from test discovery (HELPER_PATTERN='${HELPER_PATTERN}'):"
 			printf '  - %s\n' "${helper_files[@]}"
+		} >&2
+	fi
+
+	if [ "${#synth_files[@]}" -gt 0 ]; then
+		{
+			echo "validate_driver: excluded ${#synth_files[@]} synthesised behavioural smoke script(s) from test discovery (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED}):"
+			printf '  - %s\n' "${synth_files[@]}"
 		} >&2
 	fi
 

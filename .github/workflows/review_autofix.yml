@@ -763,6 +763,9 @@ jobs:
       JUDGE_INTERIM_ENABLED: ${{ vars.JUDGE_INTERIM_ENABLED || 'false' }}
       JUDGE_INTERIM_REASONING: ${{ vars.JUDGE_INTERIM_REASONING || 'low' }}
       JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}
+      BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED: ${{ vars.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED || 'false' }}
+      BEHAVIOURAL_SMOKE_LANG: ${{ vars.BEHAVIOURAL_SMOKE_LANG || '' }}
+      VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
@@ -936,7 +939,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_run_judge_interim.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -1103,6 +1106,17 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
+            src=".codex-workflow-src/prompts/behavioural-smoke-synthesise.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/behavioural-smoke-synthesise.txt" ]; then
+              src=".codex-workflow-src-main/prompts/behavioural-smoke-synthesise.txt"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/behavioural-smoke-synthesise.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
           fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
             src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"
@@ -2813,6 +2827,7 @@ jobs:
           check_soft_file "${SUPPORT_AGENTS_FILE}"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
+          check_soft_file "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
           case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
@@ -3443,6 +3458,16 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_judge_interim.sh"
+
+      - name: Synthesize behavioural smoke
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        env:
+          ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          bash "${SUPPORT_SCRIPTS_DIR}/review_synthesise_smoke.sh"
 
       # Save the updated per-PR review runtime state so the next iteration
       # (separate workflow run triggered by pull_request.synchronize after
