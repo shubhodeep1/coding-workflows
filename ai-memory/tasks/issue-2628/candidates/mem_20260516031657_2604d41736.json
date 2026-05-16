@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken\n- Reviewed the Phase A section of `docs/plans/judge-loop-and-reissue-plan.md`, the relevant `review_autofix.yml` cache/commit/judge flow, `scripts/review_apply_fixes.sh`, `scripts/review_consolidate.sh`, `scripts/review_rb_judge.sh`, `.gitignore`, and the existing review-pipeline test harnesses.\n\nPlanning ref\n- Branch: `orchestrator/project-2627`\n- Commit: `82fd9392aa0239a991dde93a45b28e8a10f52051`\n- Clarification mapping: no Q1/Q2 batch existed; `/answer [auto-answered-by-orchestrator]` means proceed with the issue as written.\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/mode-judge-interim.txt` (new)\n- `scripts/review_run_judge_interim.sh` (new)\n- `.github/workflows/review_autofix.yml`\n- `scripts/review_apply_fixes.sh`\n- `scripts/review_consolidate.sh` (likely companion change; see conflict note below)\n- `prompts/review-consolidator.txt`\n- `.gitignore`\n- `tests/test_review_judge_interim_round_trip.py` (new dedicated coverage file)\n- `tests/fixtures/review_pipeline/...` or a new adjacent fixture dir, if the new test uses mocked judge outputs\n\n2. Functions / modules to implement\n- Add `prompts/mode-judge-interim.txt` as a standalone advisory-judge prompt:\n  - output only `{ round, head_sha, remaining_issues[] }`\n  - carry over the citation rule and empty-lookup fallback rule from `prompts/mode-judge.txt`\n  - explicitly forbid RB-judge/orchestrator fields like `action` / `status`\n- Add `scripts/review_run_judge_interim.sh`, following the fail-open shell-runner pattern from `scripts/review_consolidate.sh` and the prompt-render/JSON-validation pattern from `scripts/review_rb_judge.sh`:\n  - inputs: `PR_NUMBER`, `ROUND_NUMBER`, `HEAD_SHA` (with a safe fallback to current `git rev-parse HEAD`)\n  - build a small prompt from linked issue/PR intent plus the latest commit diff only\n  - run codex in read-only mode with `JUDGE_INTERIM_REASONING` and `JUDGE_INTERIM_TIMEOUT_S`\n  - validate output JSON before writing\n  - emit `JUDGE_INTERIM_PASS_OK` / `JUDGE_INTERIM_PASS_FAIL`\n  - exit 0 on timeout, malformed JSON, empty output, or model failure\n- Update `.github/workflows/review_autofix.yml`:\n  - add env defaults:\n    - `JUDGE_INTERIM_ENABLED=false`\n    - `JUDGE_INTERIM_REASONING=low`\n    - `JUDGE_INTERIM_TIMEOUT_S=120`\n  - bootstrap/copy the new script and prompt into support dirs\n  - insert the new step immediately after `id: commit_changes`, guarded by the plan\u2019s non-final-round condition\n  - extend cache restore/save paths to include `.ai/review_runtime/`\n  - keep `rb_judge` flow untouched\n- Update `scripts/review_apply_fixes.sh`:\n  - after `AUTOFIX_ITERATION` is resolved, look for prior-round cache data at `.ai/review_runtime/pr-${PR_NUMBER}/round-$((AUTOFIX_ITERATION-1))/judge_interim.json`\n  - if present and valid, convert `remaining_issues[]` into a small plain-text advisory block (`<judge_interim_priors> ... </judge_interim_priors>`)\n  - fail open on missing cache, round 1, or malformed JSON\n- Update `scripts/review_consolidate.sh`:\n  - include that optional priors block in the consolidator prompt before reviewer findings, because this is where the consolidator prompt is actually assembled today\n- Extend `prompts/review-consolidator.txt` minimally so the consolidator treats the priors block as advisory carry-over, not as new reviewer findings\n\n3. Data structures / artifacts affected\n- New cached per-round artifact:\n  - `.ai/review_runtime/pr-${PR}/round-${N}/judge_interim.json`\n- JSON shape:\n  - `round` (int)\n  - `head_sha` (string)\n  - `remaining_issues[]` entries with:\n    - `id`\n    - `file`\n    - `line_start`\n    - `line_end`\n    - `symptom`\n    - `evidence_quote`\n    - `severity`\n- Likely new transient runtime file under `RUNTIME_DIR` for the consolidator prompt, e.g. a rendered priors text file\n- Review-ledger cache contract stays the same key/restore-prefix, but the cached path list expands to include `.ai/review_runtime/`\n\n4. API / interface changes\n- New workflow env vars with safe defaults only; no default behavior flips\n- New runner script contract for `review_autofix.yml`\n- Consolidator prompt gains an optional `<judge_interim_priors>` section\n- No change to end-of-loop `Review-blocked judge decision`\n- No README/agents documentation changes in this issue\n\n5. Risks / edge cases / conflict notes\n- Conflict: the Phase A doc mentions updating `agents.md`, but this issue explicitly forbids touching `agents.md`; that update should be deferred\n- Conflict: the issue body points at `scripts/review_apply_fixes.sh` for the consolidator-input insertion, but the current consolidator prompt is built in `scripts/review_consolidate.sh`; a small companion change there is likely required\n- Conflict: `steps.retrigger_guard.outputs.autofix_iteration` is currently a pre-commit, 0-based count of existing `[ai-autofix]` commits; the new round directory naming must convert that to the current 1-based round\n- Conflict: the current cache save step is before `commit_changes`; if left there, the post-commit `judge_interim.json` will never persist. The save step likely needs to move below the new interim-judge step while keeping `always()`\n- Cache miss / eviction / round 1 must stay a no-op\n- `HEAD_SHA` from the PR event is stale after a local `[ai-autofix]` commit; the interim judge must inspect the current local HEAD commit\n- `.gitignore` is load-bearing here: restored `.ai/review_runtime/` files must not show up as untracked noise in later rounds\n- The new feature must remain fully inert when `JUDGE_INTERIM_ENABLED=false`\n\n6. Testing considerations\n- Add one new dedicated test file, patterned after `tests/test_review_pipeline_integration.py`, that:\n  - mocks codex output for `scripts/review_run_judge_interim.sh`\n  - asserts a valid run writes `.ai/review_runtime/pr-<PR>/round-<N>/judge_interim.json`\n  - asserts malformed/empty output fails open and does not break the stage\n  - seeds a prior-round cached artifact and asserts the next-round consolidator prompt includes `<judge_interim_priors>`\n  - asserts round-1 / cache-miss stays a no-op\n- Re-run `tests/test_review_autofix_last_run_diff_oscillation_guard.py` unchanged\n- Run tests with `PYTHONDONTWRITEBYTECODE=1`\n\nAssumptions\n- `files_touched` includes the workflow/script/prompt/test files named in the issue; if it does not include `scripts/review_consolidate.sh`, that is the main codebase-vs-issue mismatch to resolve because the consolidator prompt currently lives there.\n\nMissing-context note\n- The exact `files_touched` allowlist is not in the planning context; the plan stays within the issue\u2019s named scope plus the one code-layout-driven companion file (`scripts/review_consolidate.sh`).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "99790040e858ffb4e05288ada439d15c674e5bc815aeca69965f02ea75881fd5",
+  "lineage": {
+    "issue_number": 2628,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25951224645",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25951224645",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2628"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260516031657_2604d41736",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2628,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25951224645"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2628",
+  "timestamps": {
+    "created_at": "2026-05-16T03:16:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
