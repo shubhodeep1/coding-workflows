@@ -435,7 +435,7 @@ jobs:
           if issue_body_file.is_file():
               try:
                   issue_body = issue_body_file.read_text(encoding="utf-8")
-              except OSError:
+              except (OSError, UnicodeDecodeError):
                   print("::notice::Baseline override ignored: ISSUE_BODY_FILE could not be read; falling back to event body.")
           issue_body = issue_body.replace("\r\n", "\n")
           issue_author_association = os.environ.get("ISSUE_AUTHOR_ASSOCIATION", "").strip().upper()

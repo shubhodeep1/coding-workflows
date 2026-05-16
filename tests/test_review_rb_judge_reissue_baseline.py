@@ -279,6 +279,7 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert "ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}" in resolver_step
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in resolver_step
 	assert "ISSUE_BODY_FILE" in resolver_script
+	assert "except (OSError, UnicodeDecodeError):" in resolver_script
 	assert "ISSUE_BODY_FILE could not be read; falling back to event body" in resolver_script
 	assert 're.fullmatch(r"ai/reissue-baseline/pr-(\\d+)-([0-9a-f]{12})-\\d+-\\d+", branch)' in resolver_script
 	assert "issue author association is not trusted for review-blocked baseline reuse" in resolver_script
@@ -345,6 +346,59 @@ def test_resolver_prefers_cached_issue_body_file_over_nonempty_event_body() -> N
 		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
 		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
 	]
+
+
+def test_resolver_falls_back_to_event_body_when_cached_issue_body_file_is_not_utf8() -> None:
+	script = _extract_run_script("Resolve trusted prior PR baseline branch")
+	with tempfile.TemporaryDirectory() as tmpdir:
+		tmp = Path(tmpdir)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		_install_mock_gh(bin_dir)
+
+		state_file = tmp / "gh_state.json"
+		state_file.write_text(
+			json.dumps(
+				{
+					"calls": [],
+					"pr_state": "CLOSED",
+					"pr_head_oid": VALID_HEAD_OID,
+				}
+			),
+			encoding="utf-8",
+		)
+		output_file = tmp / "github_output.txt"
+		issue_body_file = tmp / "issue_body.txt"
+		issue_body_file.write_bytes(b"\xff\xfeinvalid-utf8")
+
+		env = os.environ.copy()
+		env.pop("ISSUE_BODY_FILE", None)
+		env.update(
+			{
+				"PYTHONDONTWRITEBYTECODE": "1",
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+				"MOCK_GH_STATE_FILE": str(state_file),
+				"GITHUB_OUTPUT": str(output_file),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"GH_TOKEN": "test-token",
+				"ISSUE_BODY": _valid_issue_body(),
+				"ISSUE_BODY_FILE": str(issue_body_file),
+				"ISSUE_AUTHOR_ASSOCIATION": "OWNER",
+				"REISSUE_PRESERVE_BASELINE_ENABLED": "true",
+			}
+		)
+
+		result = _run_shell_script(script, cwd=tmp, env=env)
+		outputs = _parse_github_output(output_file)
+		state = json.loads(state_file.read_text(encoding="utf-8"))
+
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
+	assert state["calls"] == [
+		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
+		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
+	]
+	assert "ISSUE_BODY_FILE could not be read; falling back to event body" in result.stdout
 
 
 def test_resolver_ignores_inherited_issue_body_file_when_cached_body_not_requested() -> None:
