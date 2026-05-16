@@ -489,3 +489,126 @@
 | Code modularization | 8-9 | Large |
 | Expression size reduction | 3-4 | Medium |
 | Medium/Low fixes | 5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-16)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven in-place and can be consolidated without changing retries, filters, pagination, concurrency, or observable behavior. `NEEDS_VERIFICATION` means the overlap is real but one or more safety preconditions still need a human/parity check. `RISKY_SKIP` means the redundancy is visible, but it sits in a guarded/polling/race-sensitive path (or otherwise fails the auto-merge safety bar) and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION**
+  - **Files:** `.github/workflows/clarify.yml:397-402`
+  - **Current call count:** 2 logical comment fetches when `SEMANTIC_CACHE_BACKEND != 'none'`
+  - **Proposed call count:** 1 logical fetch on the semantic-cache-enabled success path
+  - **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments?sort=created&direction=asc`
+  - **Evidence:**
+    ```sh
+    gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+    if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+      if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+        | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+    ```
+    The second call is a strict superset of the first call’s data when semantic cache is enabled; only the output shaping differs.
+  - **Proposed fix:** In `Fetch issue comments`, fetch the paginated comment list once into a temp JSON blob when semantic cache is enabled, derive `ISSUE_COMMENTS_FILE` via `jq 'add // [] | .[:50]'`, and derive `THREAD_HISTORY_FILE` from the same merged array; keep the current single-page fetch as the fail-open fallback if the full fetch fails.
+  - **Safety rationale:** The overlap is real, but the current two-call design has different pagination and fail-open semantics, so response-order and failure-parity must be checked before collapsing it.
+  - **Downstream signal:** Verify on an issue with `>100` comments that `ISSUE_COMMENTS_FILE` still matches the current first-50 ordering, and simulate a full-fetch failure to confirm the step still preserves bounded prompt context plus the existing semantic-cache bypass behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — SAFE_TO_MERGE**
+  - **Files:** `scripts/review_rb_judge.sh:210-227`, `scripts/review_rb_judge.sh:242-245`
+  - **Current call count:** 2 common-path `pulls/{pr}` fetches in the `closingIssuesReferences == empty` branch
+  - **Proposed call count:** 1 common-path fetch; retain the second fetch only as fallback if the reused payload is empty/invalid
+  - **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pr_number}`
+  - **Evidence:**
+    ```sh
+    _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+    ...
+    unset _pr_meta _pr_state _pr_merged
+    ...
+    if [ -z "${ISSUE_NUMBERS}" ]; then
+      PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    fi
+    ```
+    The second fetch is only used to recover `title + body`, which is already present in `_pr_meta`.
+  - **Proposed fix:** Delay `unset _pr_meta` until after the linked-issue fallback, compute `PR_DATA` from `_pr_meta` first, and keep the current `_safe_gh_jq` fetch only as a fallback when `_pr_meta` is empty or unparsable.
+  - **Safety rationale:** Same endpoint, same script, and no response-affecting mutation occurs between the two reads; keeping the current fallback preserves the existing fail-open/error-handling behavior.
+  - **Downstream signal:** Reuse `_pr_meta` for `PR_DATA` in `scripts/review_rb_judge.sh`, and fall back to the existing `_safe_gh_jq` pull fetch only when `_pr_meta` is unusable.
+
+- **REUSE-002 — NEEDS_VERIFICATION**
+  - **Files:** `.github/workflows/internal-review.yml:98-101`
+  - **Current call count:** 2 logical API calls
+  - **Proposed call count:** 1 logical API call
+  - **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls?state=open&head={owner}:{branch}`, `GET /repos/{owner}/{repo}`
+  - **Evidence:**
+    ```sh
+    existing_pr="$(gh api \
+      "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+      --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+    base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+    ```
+    `base_ref` is repo metadata that is typically already present on the push event payload as `github.event.repository.default_branch`.
+  - **Proposed fix:** Replace the `/repos/${REPOSITORY}` fetch with `${{ github.event.repository.default_branch }}` (or inject it once into env before the shell step) and keep the open-PR lookup unchanged.
+  - **Safety rationale:** The data appears to already exist in workflow context, but reusable-workflow push-context parity should be verified before removing the API fallback.
+  - **Downstream signal:** Confirm `github.event.repository.default_branch` is always populated for the `push`-triggered `internal-review.yml` path and matches the current API response on representative branches/repos before deleting the repo lookup.
+
+- **REUSE-003 — NEEDS_VERIFICATION**
+  - **Files:** `.github/workflows/implement.yml:69-80`, `.github/workflows/implement.yml:898-907`
+  - **Current call count:** 2 common-path issue fetches in one job
+  - **Proposed call count:** 1 common-path issue fetch
+  - **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence:**
+    ```sh
+    ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+    ```
+    later:
+    ```sh
+    gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+    ```
+    The job later standardizes on `ISSUE_META_FILE`, and other steps already reuse that file instead of re-fetching labels.
+  - **Proposed fix:** Have `Precheck approval phase label` fetch/store the full issue JSON in a temp file (for example under `$RUNNER_TEMP`), then let `Fetch issue metadata` validate/reuse that file as `ISSUE_META_FILE`, keeping the current `gh_retry gh api` as fallback only if the temp snapshot is missing or invalid.
+  - **Safety rationale:** This crosses step boundaries and changes which fetch becomes the authoritative metadata source, so retry/failure parity and cache-lifetime assumptions must be verified.
+  - **Downstream signal:** Validate both `SKIP_IMPLEMENT=true` and normal implement paths to ensure the precheck snapshot survives across steps, preserves the current gating decisions, and still falls back cleanly when the cached file is absent or malformed.
+
+### Dead Calls (DEAD-API-###)
+
+- **DEAD-API-001 — RISKY_SKIP**
+  - **Files:** `scripts/orchestrate_poll_process.sh:5231-5237`
+  - **Current call count:** 1 embedded fetch site inside an otherwise unreferenced helper
+  - **Proposed call count:** 0 embedded fetch sites
+  - **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments?sort=created&direction=desc&per_page=100`
+  - **Evidence:**
+    ```sh
+    read_standalone_state_json() {
+      local issue_num="$1"
+      local comments_json
+      if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+        comments_json='[]'
+      fi
+      _extract_standalone_state_json_from_comments "${comments_json}"
+    }
+    ```
+    Repo-wide symbol search finds no in-repo call sites for `read_standalone_state_json`; only the definition exists.
+  - **Proposed fix:** Remove `read_standalone_state_json`, or replace it with a documented wrapper around `_extract_standalone_state_json_from_comments` only if an external consumer is confirmed to source this script.
+  - **Safety rationale:** Even though the helper appears dead, it lives inside `scripts/orchestrate_poll_process.sh`, which this audit contract treats as a manual-review-only path for API removals.
+  - **Downstream signal:** Do not auto-delete this helper; first confirm no external shell sourcing, test harness, or operational runbook depends on `read_standalone_state_json`, then remove it manually if truly unused.
+
+### Cross-References to Deep Audit Section
+
+- API-001: NEEDS_VERIFICATION — directionally correct, but `gh_pr_with_all_comments` must be field-for-field/pagination-parity checked before replacing `review_autofix`’s current REST hydration.
+- BATCH-001: NEEDS_VERIFICATION — batching the fallback issue hydration is correct in principle, but the replacement must preserve `_FALLBACK_MAX_ISSUES`, fail-open behavior, and existing warning logs.
+- BATCH-002: NEEDS_VERIFICATION — label batching is a good fit, but the fallback path still feeds live label-removal side effects and needs parity verification before swapping out the per-issue lookups.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+| --- | ---: | --- |
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 1 | DEAD-API-001 |
+
+### Implement-Stage Handoff
+
+- REUSE-001
