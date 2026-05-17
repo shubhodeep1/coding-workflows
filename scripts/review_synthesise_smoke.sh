@@ -49,7 +49,7 @@ behavioural_smoke_emit_extractor_stderr()
 
 	{
 		printf 'behavioural_smoke extractor %s stderr begin\n' "${label}"
-		cat "${path}"
+		cat "${path}" 2>/dev/null || true
 		printf 'behavioural_smoke extractor %s stderr end\n' "${label}"
 	} >&2
 }

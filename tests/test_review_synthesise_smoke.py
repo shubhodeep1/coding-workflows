@@ -699,6 +699,45 @@ def test_behavioural_smoke_emit_warning_is_best_effort_when_fd3_is_closed() -> N
 	assert result.stderr == ""
 
 
+def test_behavioural_smoke_emit_extractor_stderr_is_best_effort_on_read_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_emit_extractor_stderr_") as td:
+		workspace = Path(td)
+		mock_bin_dir = workspace / "mock_bin"
+		mock_bin_dir.mkdir(parents=True, exist_ok=True)
+		(mock_bin_dir / "cat").write_text(
+			"#!/usr/bin/env bash\n"
+			"exit 1\n",
+			encoding="utf-8",
+		)
+		(mock_bin_dir / "cat").chmod(0o755)
+		stderr_path = workspace / "extractor.stderr"
+		stderr_path.write_text("diagnostic\n", encoding="utf-8")
+
+		function_text = _extract_shell_function(SYNTH_SCRIPT, "behavioural_smoke_emit_extractor_stderr")
+		env = os.environ.copy()
+		env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"
+		env["TEST_STDERR_PATH"] = str(stderr_path)
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ function_text
+				+ "behavioural_smoke_emit_extractor_stderr stdout \"${TEST_STDERR_PATH}\"\n"
+				+ "echo after\n",
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert result.stdout.strip() == "after"
+		assert "behavioural_smoke extractor stdout stderr begin" in result.stderr
+		assert "behavioural_smoke extractor stdout stderr end" in result.stderr
+
+
 def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_timeout_") as td:
 		workspace = Path(td)
