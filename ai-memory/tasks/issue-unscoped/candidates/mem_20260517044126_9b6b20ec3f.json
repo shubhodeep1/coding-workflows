@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_synthesise_smoke.py:23-56 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: _install_mock_codex accepts exit_code, but the generated mock script always exits from MOCK_CODEX_EXIT_CODE instead.\n  WHY: Future callers that rely on the parameter alone will get a false-passing mock, and existing tests only work because they redundantly set both sources.\n- scripts/validate_process.sh:1392-1396 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: When rows=[] the materialization step prints the generic \"Materialized...\" success message even though nothing was copied.\n  WHY: Empty-manifest runs become indistinguishable from successful materializations in logs; the warning branch only covers the case where files were listed but none copied.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_synthesise_smoke.py:27-56 | confidence=3\n  PROBLEM: The _install_mock_codex helper accepts exit_code, but the generated mock bash script never forwards that parameter and instead reads MOCK_CODEX_EXIT_CODE from the environment.\n  WHY: A future test that calls _install_mock_codex(mock_bin_dir, exit_code=1) without also setting the environment variable would see the mock exit 0 and falsely pass.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_synthesise_smoke.py:23-55 | confidence=4\n  PROBLEM: The _install_mock_codex helper function accepts an exit_code parameter but the generated mock bash script ignores it, instead reading from the MOCK_CODEX_EXIT_CODE environment variable.\n  WHY: Any test caller that relies solely on the exit_code parameter will see the mock always exit 0, producing false-positive test results.\n- scripts/validate_process.sh:materialize_synthesised_behavioural_smoke_tests() embedded Python block, final conditional print (near end of heredoc) | confidence=3\n  PROBLEM: When the manifest JSON contains an empty \"files\" array, the condition `copied == 0 and rows` is false, so the code prints `Materialized synthesised behavioural smoke tests from ... (files=0).`\n  WHY: This logs a success-style message even though nothing was materialized, which makes the empty-manifest case hard to distinguish from a real materialization.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_synthesise_smoke.py:_install_mock_codex function (the embedded bash script body: \"exit \\\"${MOCK_CODEX_EXIT_CODE:-0}\\\"\") | confidence=4\n  PROBLEM: The Python function accepts an exit_code parameter but never passes it into the generated mock script, which reads the exit code exclusively from the MOCK_CODEX_EXIT_CODE environment variable.\n  WHY: Any future test that calls _install_mock_codex(mock_bin_dir, exit_code=1) without also setting MOCK_CODEX_EXIT_CODE will see the mock always exit 0 and may falsely pass.\n- scripts/validate_process.sh:materialize_synthesised_behavioural_smoke_tests() \u2014 embedded Python block, final `if copied == 0 and rows:` conditional (tail of the heredoc) | confidence=2\n  PROBLEM: When the restored manifest is valid but lists zero files, `rows = []` makes the condition false, so the else branch prints `Materialized synthesised behavioural smoke tests from ... (files=0).`\n  WHY: The message reads as a successful materialization even though nothing was materialized and automated log parsing can misclassify the run.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_review_synthesise_smoke.py:27-54 | confidence=3\n  PROBLEM: The exit_code parameter is accepted but never written into the generated mock script, so the mock always exits with ${MOCK_CODEX_EXIT_CODE:-0} from the environment.\n  WHY: If a future test calls _install_mock_codex(mock_bin_dir, exit_code=1) without also setting env[\"MOCK_CODEX_EXIT_CODE\"] = \"1\", the mock will exit 0 and the test may pass incorrectly.\n- scripts/validate_process.sh:1392-1396 | confidence=2\n  PROBLEM: When the manifest contains a valid but empty files list, the `if copied == 0 and rows:` condition is falsy, so the else branch prints `Materialized synthesised behavioural smoke tests from ... into validation/tests (files=0).`\n  WHY: This is not a runtime crash, but the \"Materialized\" prefix can make an empty-manifest run look like a successful materialization to operators or log-parsing tooling.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f437ea370884fd2994c8a6e62912fc1fd531329a2d0d0d4339c6141057881a0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2667,
+    "run_id": "25981100308",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25981100308",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517044126_9b6b20ec3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2667,
+    "run_id": "25981100308"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T04:41:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
