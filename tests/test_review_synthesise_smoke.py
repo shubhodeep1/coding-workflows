@@ -234,8 +234,95 @@ def test_review_synthesise_smoke_writes_scripts_manifest_and_mirror() -> None:
 
 		prompt_text = (mock_bin_dir / "codex_stdin.txt").read_text(encoding="utf-8")
 		assert "language_hint: python" in prompt_text
+		assert "PROMPT INJECTION GUARD" in prompt_text
+		assert "=== BEGIN UNTRUSTED ISSUE / PR CONTEXT ===" in prompt_text
+		assert "=== END UNTRUSTED ISSUE / PR CONTEXT ===" in prompt_text
 		assert path_one in prompt_text
 		assert path_two in prompt_text
+
+
+def test_review_synthesise_smoke_keeps_valid_entries_when_some_rows_are_invalid() -> None:
+	with tempfile.TemporaryDirectory(prefix="behavioural_smoke_partial_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		issues = [
+			{
+				"id": "src/module.py:7:carry-over",
+				"file": "src/module.py",
+				"line_start": 7,
+				"line_end": 8,
+				"symptom": "Branch remains unnecessary (src/module.py:7-8)",
+				"evidence_quote": "return stale_value",
+				"severity": "must-fix",
+			},
+			{
+				"id": "src/api.py:14:guard-check",
+				"file": "src/api.py",
+				"line_start": 14,
+				"line_end": 16,
+				"symptom": "Guard still blocks the fixed path (src/api.py:14-16)",
+				"evidence_quote": "if should_skip:\n\treturn None",
+				"severity": "nice-to-have",
+			},
+		]
+		_write_judge_interim_artifact(workspace, issues)
+		(workspace / "validation").mkdir(parents=True, exist_ok=True)
+		(workspace / "validation" / "validate.env").write_text(
+			"CANARY_TOOLS=bash python3\n",
+			encoding="utf-8",
+		)
+
+		path_one = _expected_output_path(test_dir="validation/tests", issue=issues[0], round_number=1)
+		path_two = _expected_output_path(test_dir="validation/tests", issue=issues[1], round_number=1)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": path_one,
+						"content": 'behavioural_smoke_present "branch still present"',
+						"expected_to_fail_until_fixed": True,
+					},
+					{
+						"path": "validation/tests/not_allowed.sh",
+						"content": 'behavioural_smoke_present "bogus path"',
+						"expected_to_fail_until_fixed": True,
+					},
+					{
+						"path": path_two,
+						"content": 'behavioural_smoke_cleared "guard removed"',
+						"expected_to_fail_until_fixed": False,
+					},
+					{
+						"path": path_one,
+						"content": 'behavioural_smoke_present "duplicate row should be ignored"',
+						"expected_to_fail_until_fixed": True,
+					},
+				]
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		combined = result.stdout + result.stderr
+		manifest_path = workspace / "validation" / "tests" / "synth_round_1_manifest.json"
+		assert result.returncode == 0, combined
+		assert manifest_path.exists(), combined
+		manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+		assert manifest["generated_count"] == 2
+		assert {row["path"] for row in manifest["files"]} == {path_one, path_two}
+		assert not (workspace / "validation" / "tests" / "not_allowed.sh").exists()
+		assert "duplicate row should be ignored" not in (workspace / path_one).read_text(encoding="utf-8")
 
 
 def test_review_synthesise_smoke_fails_open_without_artifact() -> None:
@@ -301,6 +388,84 @@ def test_review_synthesise_smoke_fails_open_on_invalid_model_output() -> None:
 		assert result.returncode == 0, combined
 		assert "could not validate synthesis output" in combined
 		assert not (workspace / "validation" / "tests" / "synth_round_1_manifest.json").exists()
+
+
+def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
+	with tempfile.TemporaryDirectory(prefix="behavioural_smoke_unsafe_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		issues = [
+			{
+				"id": "src/module.py:7:carry-over",
+				"file": "src/module.py",
+				"line_start": 7,
+				"line_end": 8,
+				"symptom": "Branch remains unnecessary (src/module.py:7-8)",
+				"evidence_quote": "return stale_value",
+				"severity": "must-fix",
+			}
+		]
+		_write_judge_interim_artifact(workspace, issues)
+		(workspace / "validation").mkdir(parents=True, exist_ok=True)
+		(workspace / "validation" / "validate.env").write_text(
+			"CANARY_TOOLS=bash python3\n",
+			encoding="utf-8",
+		)
+		path_one = _expected_output_path(test_dir="validation/tests", issue=issues[0], round_number=1)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": path_one,
+						"content": 'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
+						"expected_to_fail_until_fixed": True,
+					}
+				]
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		combined = result.stdout + result.stderr
+		assert result.returncode == 0, combined
+		assert "could not validate synthesis output" in combined
+		assert not (workspace / "validation" / "tests" / "synth_round_1_manifest.json").exists()
+
+
+def test_review_synthesise_smoke_warns_when_zero_issue_manifest_write_fails() -> None:
+	with tempfile.TemporaryDirectory(prefix="behavioural_smoke_zero_issue_warn_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		_install_mock_codex(mock_bin_dir)
+		_write_judge_interim_artifact(workspace, [])
+		(workspace / "validation").write_text("occupied\n", encoding="utf-8")
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		combined = result.stdout + result.stderr
+		assert result.returncode == 0, combined
+		assert "failed to write synthesized outputs for zero-issue round" in combined
+		assert "BEHAVIOURAL_SMOKE_SYNTHESISED" not in combined
 
 
 def test_review_synthesise_smoke_workflow_contract() -> None:
