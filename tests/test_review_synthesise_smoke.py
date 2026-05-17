@@ -390,6 +390,110 @@ def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
 
 
+def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_diagnostics() -> None:
+	cases = [
+		(
+			"bash_reentry",
+			"bash -c 'echo unsafe'\n",
+			"shell re-entry via bash is not allowed",
+		),
+		(
+			"command_substitution",
+			"value=$(python3 -V)\necho \"$value\"\nexit 1\n",
+			"command substitution is not allowed",
+		),
+	]
+
+	for case_name, generated_content, expected_diagnostic in cases:
+		with tempfile.TemporaryDirectory(prefix=f"review_synth_smoke_unsafe_{case_name}_") as td:
+			workspace = Path(td)
+			runtime_dir = workspace / "runtime"
+			runtime_dir.mkdir(parents=True, exist_ok=True)
+			mock_bin_dir = workspace / "mock_bin"
+			head_sha = _seed_repo_with_autofix_commit(workspace)
+			_write_judge_artifact(
+				workspace,
+				head_sha,
+				[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+			)
+			_install_mock_codex(
+				mock_bin_dir,
+				stdout_text=json.dumps(
+					[
+						{
+							"path": f"validation/tests/{case_name}.sh",
+							"content": generated_content,
+							"expected_to_fail_until_fixed": True,
+						}
+					]
+				)
+				+ "\n",
+			)
+			env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+			result = subprocess.run(
+				["bash", str(SYNTH_SCRIPT)],
+				cwd=workspace,
+				env=env,
+				capture_output=True,
+				text=True,
+			)
+
+			synth_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth"
+			manifest = synth_dir / "synth_round_1_manifest.json"
+			combined_output = result.stdout + result.stderr
+			assert result.returncode == 0, combined_output
+			assert not manifest.exists(), combined_output
+			assert not synth_dir.exists(), combined_output
+			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
+			assert "behavioural_smoke extractor rejected generated content:" in result.stderr
+			assert expected_diagnostic in result.stderr
+
+
+def test_review_synthesise_smoke_allows_comment_and_heredoc_literals_that_look_unsafe() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_safe_literals_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": "validation/tests/safe_literals.sh",
+						"content": "# sudo bash -c 'ignored'\npython3 - <<'PY'\nprint(\"literal $(whoami)\")\nprint(\"literal `uname`\")\nprint(\"literal source ./venv/bin/activate\")\nraise SystemExit(1)\nPY",
+						"expected_to_fail_until_fixed": True,
+					}
+				]
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert manifest.exists(), combined_output
+		payload = json.loads(manifest.read_text(encoding="utf-8"))
+		assert len(payload["files"]) == 1
+		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=1 round=1 language=python" in combined_output
+
+
 def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> None:
 	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_lang_") as td:
 		workspace = Path(td)
