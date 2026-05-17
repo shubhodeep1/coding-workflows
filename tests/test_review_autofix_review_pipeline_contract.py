@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Contract tests for review-pipeline plumbing in review_autofix.yml.
-
-This issue only wires existing floor/consolidator/parser/ledger controls and
-adds a local-artifact-only step-summary block; the broader autofix flow must
-remain unchanged.
-"""
+"""Contract tests for review-pipeline plumbing in review_autofix.yml."""
 
 from __future__ import annotations
 
@@ -17,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
 
 def _workflow_text() -> str:
@@ -25,6 +21,10 @@ def _workflow_text() -> str:
 
 def _reviewers_text() -> str:
 	return REVIEWERS.read_text(encoding="utf-8")
+
+
+def _apply_fixes_text() -> str:
+	return APPLY_FIXES.read_text(encoding="utf-8")
 
 
 def _step_block(step_name: str) -> str:
@@ -304,6 +304,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}",
 		"REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}",
 		"REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}",
+		"CONSOLIDATOR_REJECT_SCHEMA_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_SCHEMA_ENABLED || 'false' }}",
 		"REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}",
 		"REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}",
 		"REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}",
@@ -311,6 +312,17 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
+
+
+def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
+	workflow = _workflow_text()
+	apply_fixes = _apply_fixes_text()
+	assert "review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh" in workflow
+	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
+	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
+	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
+	assert parse_idx < verify_idx < ledger_idx
+	assert 'CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"' in apply_fixes
 
 
 def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:

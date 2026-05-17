@@ -103,6 +103,135 @@ worktree_has_substantive_diff() {
   return 1
 }
 
+prepare_judge_interim_priors()
+{
+	local prior_round=""
+	local prior_json=""
+	local merged_count="0"
+
+	JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_interim_priors.txt}"
+	rm -f "${JUDGE_INTERIM_PRIORS_FILE}" 2>/dev/null || true
+
+	case "$(printf '%s' "${JUDGE_INTERIM_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) ;;
+		*)
+			echo "JUDGE_INTERIM_PRIORS_MERGED count=0 source=disabled"
+			return 0
+			;;
+	esac
+
+	if [ -z "${PR_NUMBER:-}" ] || ! [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] || [ "${AUTOFIX_ITERATION}" -le 1 ]; then
+		echo "JUDGE_INTERIM_PRIORS_MERGED count=0 source=none"
+		return 0
+	fi
+
+	prior_round="$((AUTOFIX_ITERATION - 1))"
+	prior_json=".ai/review_runtime/pr-${PR_NUMBER}/round-${prior_round}/judge_interim.json"
+	if [ ! -s "${prior_json}" ]; then
+		echo "JUDGE_INTERIM_PRIORS_MERGED count=0 source=${prior_json}"
+		return 0
+	fi
+
+	merged_count="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
+import json
+import re
+import sys
+
+src, dst = sys.argv[1:3]
+
+try:
+	with open(src, 'r', encoding='utf-8') as handle:
+		payload = json.load(handle)
+except (OSError, json.JSONDecodeError):
+	sys.exit(1)
+
+if not isinstance(payload, dict):
+	sys.exit(1)
+
+round_value = payload.get('round')
+head_sha = payload.get('head_sha')
+remaining = payload.get('remaining_issues')
+if not isinstance(round_value, int) or not isinstance(head_sha, str) or not isinstance(remaining, list):
+	sys.exit(1)
+
+
+def squish(value, limit=None):
+	text = re.sub(r'\s+', ' ', str(value)).strip()
+	if limit is not None and len(text) > limit:
+		text = text[: max(limit - 3, 0)].rstrip() + '...'
+	return text
+
+
+rows = []
+for issue in remaining:
+	if not isinstance(issue, dict):
+		sys.exit(1)
+	line_start = issue.get('line_start')
+	line_end = issue.get('line_end')
+	severity = issue.get('severity')
+	if type(line_start) is not int or type(line_end) is not int:
+		sys.exit(1)
+	if line_start < 1 or line_end < line_start:
+		sys.exit(1)
+	if severity not in {'must-fix', 'nice-to-have'}:
+		sys.exit(1)
+	issue_id = issue.get('id')
+	issue_file = issue.get('file')
+	symptom = issue.get('symptom')
+	evidence_quote = issue.get('evidence_quote')
+	if not all(isinstance(value, str) for value in (issue_id, issue_file, symptom, evidence_quote)):
+		sys.exit(1)
+	issue_id = squish(issue_id)
+	issue_file = squish(issue_file)
+	symptom = squish(symptom)
+	evidence_quote = squish(evidence_quote, 200)
+	if not issue_id or not issue_file or not symptom or not evidence_quote:
+		sys.exit(1)
+	rows.append(
+		{
+			'id': issue_id,
+			'file': issue_file,
+			'line_start': line_start,
+			'line_end': line_end,
+			'symptom': symptom,
+			'evidence_quote': evidence_quote,
+			'severity': severity,
+		}
+	)
+
+if not rows:
+	print('0')
+	sys.exit(0)
+
+with open(dst, 'w', encoding='utf-8') as handle:
+	handle.write('<judge_interim_priors>\n')
+	handle.write('source: prior_round_interim_judge\n')
+	handle.write(f'round: {round_value}\n')
+	handle.write(f'head_sha: {head_sha}\n')
+	handle.write('remaining_issues:\n')
+	for row in rows:
+		handle.write(f"- id: {row['id']}\n")
+		handle.write(f"  file: {row['file']}\n")
+		handle.write(f"  lines: {row['line_start']}-{row['line_end']}\n")
+		handle.write(f"  severity: {row['severity']}\n")
+		handle.write(f"  symptom: {row['symptom']}\n")
+		handle.write(f"  evidence_quote: {row['evidence_quote']}\n")
+	handle.write('</judge_interim_priors>\n')
+
+print(str(len(rows)))
+PY
+)" || merged_count="0"
+
+	if ! [[ "${merged_count}" =~ ^[0-9]+$ ]] || [ "${merged_count}" -le 0 ] || [ ! -s "${JUDGE_INTERIM_PRIORS_FILE}" ]; then
+		rm -f "${JUDGE_INTERIM_PRIORS_FILE}" 2>/dev/null || true
+		echo "JUDGE_INTERIM_PRIORS_MERGED count=0 source=${prior_json}"
+		return 0
+	fi
+
+	echo "JUDGE_INTERIM_PRIORS_MERGED count=${merged_count} source=${prior_json}"
+	return 0
+}
+
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -122,6 +251,7 @@ REVIEW_ISSUES_FILE="${RUNTIME_DIR}/review_issues.txt"
 LEDGER_STATUS_FILE="${RUNTIME_DIR}/ledger_status.txt"
 CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 PARSER_STATS_FILE="${RUNTIME_DIR}/parser_stats.txt"
+CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"
 
 find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'review_*.txt' | sort > "${REVIEWER_MANIFEST_FILE}"
 if [ ! -s "${REVIEWER_MANIFEST_FILE}" ]; then
@@ -184,6 +314,8 @@ if [ -z "${AUTOFIX_ITERATION}" ]; then
 fi
 export AUTOFIX_ITERATION
 
+prepare_judge_interim_priors
+
 floor_rules_script=""
 if floor_rules_script="$(resolve_support_script review_floor_rules.sh)"; then
   if [ "${REVIEW_FLOOR_RULES_ENABLED:-1}" = "0" ]; then
@@ -217,6 +349,15 @@ else
   : > "${REVIEW_ISSUES_FILE}"
   : > "${PARSER_STATS_FILE}"
   echo "::warning::review_parse_consolidator.sh not found; skipping parser stage"
+fi
+
+verify_script=""
+if verify_script="$(resolve_support_script review_reject_verify.sh)"; then
+  if ! bash "${verify_script}"; then
+    echo "::warning::review_reject_verify.sh failed; continuing"
+  fi
+else
+  echo "::warning::review_reject_verify.sh not found; skipping reject verifier stage"
 fi
 
 ledger_script=""
@@ -530,6 +671,12 @@ $(_embed_input_file "${SYMBOL_DIFF_SUMMARY_FILE}" 80000)
 === BEGIN ${RUNTIME_DIR}/floor_tags.txt (optional; non-skippable floor findings) ===
 $(_embed_input_file "${RUNTIME_DIR}/floor_tags.txt" 50000)
 === END ${RUNTIME_DIR}/floor_tags.txt ===
+
+$(if [ -s "${JUDGE_INTERIM_PRIORS_FILE:-}" ]; then
+	printf '=== BEGIN %s (advisory carry-over from the prior round interim judge) ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
+	_embed_input_file "${JUDGE_INTERIM_PRIORS_FILE}" 20000
+	printf '\n=== END %s ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
+fi)
 
 === BEGIN ${RUNTIME_DIR}/review_issues.txt (optional; parsed consolidator findings, advisory only) ===
 $(_embed_input_file "${RUNTIME_DIR}/review_issues.txt" 80000)
