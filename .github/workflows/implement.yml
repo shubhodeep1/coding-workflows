@@ -3997,13 +3997,13 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
-          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
+          _summary_combined_prompt="${RUNTIME_DIR}/issue_summary_combined_prompt.txt"
+          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt" "${_summary_combined_prompt}"' EXIT
 
           for _summary_attempt in 1 2 3; do
             # Materialise the concatenation into a temp file so we
             # can sanitize invalid UTF-8 before piping to codex
             # (codex's stdin reader strictly validates UTF-8).
-            _summary_combined_prompt="${RUNTIME_DIR}/issue_summary_combined_prompt.txt"
             cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" > "${_summary_combined_prompt}"
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${_summary_combined_prompt}"
