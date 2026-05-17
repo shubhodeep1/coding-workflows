@@ -419,8 +419,11 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 
 		for content in (
 			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
+			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
 			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'exec /bin/false\nbehavioural_smoke_inconclusive "unsafe"',
+			'env -S "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env --split-string="printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
 			'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
 			'. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
 			'cmd & eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
@@ -429,9 +432,12 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 			'2>/dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'env -u SOME_VAR eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'python3 -c "print(1)"\nbehavioural_smoke_inconclusive "unsafe"',
 			'sudo eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'sudo -u root eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'time eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time -o /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time --format %E eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'time -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'! eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
@@ -441,6 +447,9 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 			'xargs -d , eval\nbehavioural_smoke_inconclusive "unsafe"',
 			'command -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'builtin -- source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'exit;\nbehavioural_smoke_inconclusive "unsafe"',
+			'exit\t0\nbehavioural_smoke_inconclusive "unsafe"',
+			'if exit; then behavioural_smoke_inconclusive "unsafe"; fi',
 			'if eval "$PAYLOAD"; then behavioural_smoke_inconclusive "unsafe"; fi',
 		):
 			_install_mock_codex(

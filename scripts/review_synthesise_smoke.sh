@@ -295,9 +295,32 @@ def normalize_content(text: str) -> str:
 		passthrough_value_tokens = {
 			"env": {"-u", "-C", "--unset", "--chdir"},
 			"nice": {"-n", "--adjustment"},
+			"time": {"-f", "--format", "-o", "--output"},
 			"timeout": {"-s", "--signal", "-k", "--kill-after"},
 		}
-		dangerous_command_tokens = {"eval", "exec", "source", ".", "sudo", "xargs"}
+		dangerous_command_tokens = {
+			".",
+			"bash",
+			"csh",
+			"dash",
+			"eval",
+			"exec",
+			"exit",
+			"ksh",
+			"node",
+			"nodejs",
+			"perl",
+			"php",
+			"python",
+			"python3",
+			"ruby",
+			"sh",
+			"source",
+			"sudo",
+			"tcsh",
+			"xargs",
+			"zsh",
+		}
 		for index, token in enumerate(tokens):
 			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
 			if pending_redirection_target:
@@ -322,6 +345,13 @@ def normalize_content(text: str) -> str:
 				passthrough_command = token
 				continue
 			if expect_command and passthrough_command:
+				if passthrough_command == "env" and (
+					token == "-S"
+					or token.startswith("-S")
+					or token == "--split-string"
+					or token.startswith("--split-string=")
+				):
+					raise ValueError("body_unsafe_shell_construct")
 				if token.startswith("-"):
 					if token in passthrough_value_tokens.get(passthrough_command, set()):
 						passthrough_option_value = True
@@ -335,7 +365,7 @@ def normalize_content(text: str) -> str:
 			expect_command = False
 			passthrough_command = ""
 			passthrough_option_value = False
-		if stripped == "exit" or stripped.startswith("exit "):
+		if re.match(r"^exit(?:$|[\s;|&)])", stripped):
 			raise ValueError("body_must_not_exit")
 	return text + "\n"
 
