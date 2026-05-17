@@ -34,6 +34,9 @@ source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+  sanitize_codex_prompt_file() { :; }
+fi
 REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
 REVIEW_RB_SEMBLE_MAX_CHUNKS="4"
 REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="12000"

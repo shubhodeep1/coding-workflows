@@ -243,6 +243,9 @@ tg_notify()
 if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+  sanitize_codex_prompt_file() { :; }
+fi
 
 write_github_env_value()
 {

@@ -31,6 +31,9 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     cat "${_p}"
   }
 fi
+if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+  sanitize_codex_prompt_file() { :; }
+fi
 
 # Filter workflow-generated Serena runtime artifacts from the editor
 # no-op detector only when the repo did not already own the Serena

@@ -28,6 +28,9 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     cat "${_p}"
   }
 fi
+if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+  sanitize_codex_prompt_file() { :; }
+fi
 
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
