@@ -5,13 +5,27 @@
   "entry_id": "processed_command_2716_4472047151_approved",
   "issue_number": 2716,
   "metadata": {
+    "branch": "ai/issue-2716",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "prompts/review-consolidator.txt",
+      "scripts/review_annotate_sticky.sh",
+      "scripts/review_apply_fixes.sh",
+      "tests/test_review_annotate_sticky.py",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 2716,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2716",
+    "pr_number": 2718,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2718",
+    "run_attempt": "1",
+    "run_id": "25998804173",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25998804173"
   },
   "run_attempt": 1,
   "run_id": "25998804173",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-17T18:16:01Z",
+  "status": "completed",
+  "timestamp": "2026-05-17T18:29:48Z",
   "workflow": "implement"
 }
