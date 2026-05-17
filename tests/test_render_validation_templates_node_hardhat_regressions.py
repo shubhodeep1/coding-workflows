@@ -149,10 +149,80 @@ def test_log9_validate_env_values_are_double_quoted() -> None:
         custom_result = _run_renderer(manifest_path, output_root)
         assert custom_result.returncode == 0, custom_result.stderr
         custom_env_text = (output_root / "validate.env").read_text(encoding="utf-8")
-        assert 'ANVIL_PORT="9555"' in custom_env_text
+        # `manifest.port` is the app HTTP listener port, not the chain RPC port;
+        # it must NOT propagate into ANVIL_PORT. The chain RPC port stays at
+        # Anvil's default 8545 unless `env_overrides.ANVIL_PORT` is set.
+        assert 'ANVIL_PORT="8545"' in custom_env_text
+        assert 'ANVIL_PORT="9555"' not in custom_env_text
         assert 'CANARY_TOOLS="curl jq node"' in custom_env_text
         assert 'RPC_URL=""' in env_text
         assert 'RPC_URL=""' in custom_env_text
+
+
+def test_anvil_port_overridable_via_env_overrides_not_manifest_port() -> None:
+    """`env_overrides.ANVIL_PORT` is the supported knob for a non-default chain RPC port.
+
+    Setting `manifest.port` to a value other than 8545 used to leak the app
+    HTTP port into ANVIL_PORT, which broke the rendered compose healthcheck
+    and RPC routing for any consumer whose app HTTP port differed from
+    Anvil's default. The fix decouples the two: keep ANVIL_PORT at 8545 by
+    default and let consumers override it via `env_overrides.ANVIL_PORT`.
+    """
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        payload = _manifest_payload()
+        # App-HTTP-port-like value that must NOT spill into ANVIL_PORT.
+        payload["port"] = 8080
+        payload["env_overrides"] = {"ANVIL_PORT": "9555"}
+        _write_yaml(manifest_path, payload)
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+        # The default ANVIL_PORT="8545" line appears first, but env_overrides
+        # emits ANVIL_PORT="9555" afterwards, and `set -a; . validate.env`
+        # last-write-wins so the override takes effect at source time.
+        assert 'ANVIL_PORT="8545"' in env_text, env_text
+        assert 'ANVIL_PORT="9555"' in env_text, env_text
+        override_pos = env_text.find('ANVIL_PORT="9555"')
+        default_pos = env_text.find('ANVIL_PORT="8545"')
+        assert override_pos > default_pos, env_text
+
+
+def test_anvil_compose_command_is_single_element_list_so_sh_c_keeps_flags() -> None:
+    """foundry's ENTRYPOINT is ["/bin/sh", "-c"]: command must be a 1-elem list.
+
+    The foundry image's ENTRYPOINT is ["/bin/sh", "-c"]; if compose's
+    `command:` is a string, compose tokenizes it into multiple argv elements
+    and the resulting exec is `/bin/sh -c anvil --host 0.0.0.0 --port 8545`,
+    where sh -c uses only the FIRST non-option arg as the script (anvil)
+    and the rest become positional parameters $0, $1, ... — anvil runs
+    without flags and binds to its default 127.0.0.1:8545. Rendering the
+    command as a single-element list keeps the whole command line in argv[0]
+    so sh -c runs the intended script.
+    """
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        parsed = yaml.safe_load(compose_text)
+        anvil_command = parsed["services"]["anvil"]["command"]
+        assert isinstance(anvil_command, list), f"command must be a list, got {type(anvil_command).__name__}: {anvil_command!r}"
+        assert len(anvil_command) == 1, f"command must be single-element, got {anvil_command!r}"
+        assert anvil_command[0] == "anvil --host 0.0.0.0 --port ${ANVIL_PORT:-8545}", anvil_command[0]
+        # Guard against accidental regression to the folded-scalar / string form
+        # that compose would tokenize back into a multi-arg argv.
+        assert "command: >-" not in compose_text, compose_text
+        assert "command: anvil --host" not in compose_text, compose_text
 
 
 def test_shutdown_helper_is_rendered_and_invoked() -> None:

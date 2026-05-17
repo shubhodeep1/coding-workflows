@@ -8,8 +8,15 @@ services:
   anvil:
     image: ghcr.io/foundry-rs/foundry:v1.3.1
     init: true
-    command: >-
-      anvil --host 0.0.0.0 --port ${ANVIL_PORT:-8545}
+    # The foundry image's ENTRYPOINT is ["/bin/sh", "-c"], so the command must
+    # arrive as a SINGLE argv element (the full script for sh -c). Compose
+    # tokenizes a string-form `command:` into a list of separate args, which
+    # would make sh -c run only the first token ("anvil") and silently drop
+    # --host/--port (anvil would then bind to its default 127.0.0.1:8545,
+    # failing the healthcheck below when ANVIL_PORT != 8545). Use a
+    # single-element list to keep the whole command line intact.
+    command:
+      - "anvil --host 0.0.0.0 --port ${ANVIL_PORT:-8545}"
     healthcheck:
       test:
         - "CMD-SHELL"
