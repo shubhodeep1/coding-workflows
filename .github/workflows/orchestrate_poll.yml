@@ -179,6 +179,8 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.find_tracking.outputs.has_work == 'true'
+        # Intentionally use the released action ref as the rollout boundary.
+        # Consumers pick this up when test-and-mark-stable retags @stable.
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
