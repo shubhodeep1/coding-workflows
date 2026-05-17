@@ -471,3 +471,147 @@ Repo-wide grep found no `TODO`/`FIXME`/`HACK` markers in workflows/scripts; the 
 | Code modularization | 6-7 | Large |
 | Expression size reduction | 5-7 | Large |
 | Medium/Low fixes | 7-8 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-17)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the reduction is statically provable on this branch and can be implemented directly without changing observable behavior; `NEEDS_VERIFICATION` means the overlap is real but a human or follow-on analysis must confirm data-shape/error-handling freshness contracts first; `RISKY_SKIP` means the duplication sits in retry/race/poll/rate-limit-sensitive logic and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION**
+  - **File path and line ranges:** `.github/workflows/review_autofix.yml:514-519`, `.github/workflows/review_autofix.yml:521-531`, `.github/workflows/review_autofix.yml:536-545`
+  - **Current call count:** On the GraphQL-empty fallback path, `1` GraphQL linked-issue fetch + `1` PR body/title fetch + `K` per-issue label lookups.
+  - **Proposed call count:** `1` GraphQL linked-issue fetch + `1` PR body/title fetch + `1` batched issue-details GraphQL fetch.
+  - **Endpoint(s):** GraphQL `repository.pullRequest(number).closingIssuesReferences(first:50){nodes{number labels(first:100){nodes{name}}}}`; REST `GET /repos/{repo}/pulls/{pr_number}`; per-issue `gh issue view <n> --json labels` label lookups (CLI transport not explicit in repo source).
+  - **Evidence:**
+    ```bash
+    issue_nodes_json="$(gh api graphql \
+      ...
+      --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+
+    if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
+      pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+      ...
+      issue_nodes_json="$(... | map({number: tonumber, labels: null})')"
+    fi
+
+    if [ "${labels_known}" != "true" ]; then
+      issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' ...)"
+    fi
+    ```
+  - **Proposed fix:** In `post-merge-validate-dispatch`, after the PR-body fallback computes `issue_numbers`, batch-fetch labels for those issue numbers with one aliased GraphQL query modeled on `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh:6393-6455`, populate `issue_nodes_json` with real label arrays, and keep the current per-issue `gh issue view` loop only as the fail-open fallback.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because this replaces per-issue fail-open lookups with a single batched failure domain, and the existing `gh issue view` transport/pagination semantics are not explicit in the repo source.
+  - **Downstream signal:** Verify on a PR whose `closingIssuesReferences` is empty but whose body fallback finds multiple issues that (a) every needed label is returned by the batch query and (b) a batch failure still degrades to the current per-issue loop before removing lines 539-545.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — NEEDS_VERIFICATION**
+  - **File path and line ranges:** `.github/workflows/issue_pr_status.yml:295-349`, `.github/workflows/issue_pr_status.yml:383-386`, `.github/workflows/issue_pr_status.yml:503-512`
+  - **Current call count:** Existing classifier cost (`1` aliased GraphQL batch, or per-issue REST fallback on batch failure) **plus** up to `N` late REST body reads in the merged-alert step.
+  - **Proposed call count:** Same classifier cost, `0` late REST body reads.
+  - **Endpoint(s):** GraphQL `repository{ issue(number){ number labels(first:50){nodes{name}} body } }`; REST `GET /repos/{repo}/issues/{issue_number}`.
+  - **Evidence:**
+    ```bash
+    _managed_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+      ...
+      select(
+        ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+        or
+        ((.body // "") | contains("Managed by: AI Orchestrator"))
+      ) | .number
+    ' ...)"
+
+    echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+    echo "${ISSUE_NUMBERS}" >> "$GITHUB_ENV"
+
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+      IS_ORCHESTRATED="true"
+    fi
+    ```
+  - **Proposed fix:** In `Update linked issue labels when PR closes`, export a dedicated alert-skip value (for example `HAS_ORCHESTRATOR_BODY_MARKER=true` or a body-marker issue list) derived from the **same** `contains("Managed by: AI Orchestrator")` predicate already evaluated during classification, then have the later merged-alert step consume that exported value instead of re-fetching issue bodies.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the reuse crosses workflow steps and must preserve the current body-marker-only alert suppression rule rather than accidentally widening to the broader label-or-body managed-issue rule.
+  - **Downstream signal:** Verify that the merged-alert step is intended to skip only on the body-marker predicate, then export that exact predicate result during lines 295-349 and confirm the alert/no-alert set matches current behavior before deleting lines 503-512.
+
+- **REUSE-002 — NEEDS_VERIFICATION**
+  - **File path and line ranges:** `scripts/review_rb_judge.sh:210-227`, `scripts/review_rb_judge.sh:242-245`
+  - **Current call count:** `2` explicit `GET /pulls/{pr}` reads on the GraphQL-empty linked-issues path.
+  - **Proposed call count:** `1`.
+  - **Endpoint(s):** REST `GET /repos/{repo}/pulls/{pr_number}`.
+  - **Evidence:**
+    ```bash
+    _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+    ...
+    unset _pr_meta _pr_state _pr_merged
+    ...
+    if [ -z "${ISSUE_NUMBERS}" ]; then
+      PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    fi
+    ```
+  - **Proposed fix:** Delay `unset _pr_meta` until after the linked-issue fallback and derive `PR_DATA` from `_pr_meta` with `jq -r '.title + " " + (.body // "")'`; keep the current line-243 fetch only if `_pr_meta` is empty/invalid.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because collapsing onto `_pr_meta` changes failure semantics (`gh_retry _safe_gh_jq` snapshot vs un-retried `_safe_gh_jq` refetch) unless a guarded fallback remains.
+  - **Downstream signal:** Verify that the fallback issue-number extraction does not require a fresher PR title/body snapshot than line 210 provides; if not, parse `PR_DATA` from `_pr_meta` first and retain line 243 only as the error fallback.
+
+- **REUSE-003 — NEEDS_VERIFICATION**
+  - **File path and line ranges:** `.github/workflows/orchestrate_clarify_respond.yml:62-83`, `.github/workflows/orchestrate_clarify_respond.yml:408-420`
+  - **Current call count:** `2` child-issue reads per run, plus up to `2` tracking-issue reads per run.
+  - **Proposed call count:** `1` child-issue read, plus `1` tracking-issue read when `TRACKING_NUM` exists.
+  - **Endpoint(s):** REST `GET /repos/{repo}/issues/{ISSUE_NUMBER}` and `GET /repos/{repo}/issues/{TRACKING_NUM}`.
+  - **Evidence:**
+    ```bash
+    ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+    ...
+    TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' ...)"
+
+    ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+    ...
+    TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+    ```
+  - **Proposed fix:** In `Check orchestrator metadata`, persist the full child-issue JSON and full tracking-issue JSON (not just title) to a temp file or `GITHUB_ENV`; in `Fetch issue and tracking context`, read those cached payloads first and keep the current `gh_retry gh api` calls only as parse-failure fallback.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the reuse spans two workflow steps with different retry behavior, and the later step currently re-reads live issue text after several setup steps.
+  - **Downstream signal:** Confirm no step between lines 62-83 and 408-420 mutates the child/tracking issue body or depends on the second step’s retry semantics; if confirmed, cache the full JSON from the first step and leave the second fetches as missing-file fallback only.
+
+### Dead Calls (DEAD-API-###)
+
+- **DEAD-API-001 — SAFE_TO_MERGE**
+  - **File path and line ranges:** `scripts/orchestrate_poll_process.sh:5231-5238`
+  - **Current call count:** `1` dormant paginated `/comments` fetch embedded in an unreferenced helper; `0` reachable runtime invocations on this branch.
+  - **Proposed call count:** `0`.
+  - **Endpoint(s):** REST `GET /repos/{repo}/issues/{issue_num}/comments?sort=created&direction=desc&per_page=100`.
+  - **Evidence:**
+    ```bash
+    read_standalone_state_json() {
+      local issue_num="$1"
+      local comments_json
+      if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+        comments_json='[]'
+      fi
+      _extract_standalone_state_json_from_comments "${comments_json}"
+    }
+    ```
+
+    ```bash
+    $ rg -n 'read_standalone_state_json' scripts/orchestrate_poll_process.sh
+    5231:read_standalone_state_json() {
+    ```
+  - **Proposed fix:** Delete `read_standalone_state_json()` and leave `get_standalone_state_comment_id()` / `write_standalone_state_json()` unchanged.
+  - **Safety rationale:** `SAFE_TO_MERGE` because the helper name has no call sites anywhere in this repo on the audited branch, so removing it cannot change runtime API behavior or log output.
+  - **Downstream signal:** Delete `read_standalone_state_json()` from `scripts/orchestrate_poll_process.sh`.
+
+### Cross-References to Deep Audit Section
+
+- API-001: NEEDS_VERIFICATION — directionally correct, but swapping the hot-path 4-call REST bundle for `gh_pr_with_all_comments` changes batching/pagination/fallback behavior and should be parity-verified first.
+- API-002: NEEDS_VERIFICATION — the duplicate is real, but collapsing the 50-comment prompt fetch into the full semantic-cache history fetch changes truncation/ordering semantics and needs contract confirmation first.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 4 | MERGE-001, REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 0 | — |
+
+### Implement-Stage Handoff
+
+- DEAD-API-001
