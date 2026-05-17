@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: "0"
+      pr_number:
+        description: Review PR number for restoring cached behavioural smoke artifacts
+        required: false
+        type: string
+        default: "0"
       compose_file:
         description: Compose file path fallback
         required: false
@@ -29,6 +34,7 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@main
     with:
       tracking_issue: ${{ inputs.tracking_issue || '0' }}
+      pr_number: ${{ inputs.pr_number || '0' }}
       compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
       validation_timeout: ${{ inputs.validation_timeout || '15' }}
     secrets: inherit

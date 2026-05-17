@@ -90,6 +90,7 @@ SERENA_PROJECT_BOOTSTRAP_HASH="${SERENA_PROJECT_BOOTSTRAP_HASH:-}"
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
 VALIDATION_TEST_API_KEY="${VALIDATION_TEST_API_KEY:-test-api-key}"
+VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"
 VALIDATION_USE_TEMPLATES="${VALIDATION_USE_TEMPLATES:-true}"
 VALIDATION_USE_TEMPLATES_ENABLED="false"
 case "$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')" in
@@ -1279,6 +1280,125 @@ exit 1
 EOF
 
   chmod +x "${VALIDATION_RUNNER_FILE}"
+}
+
+materialize_synthesised_behavioural_smoke_tests()
+{
+  local include_synthesised="true"
+  local materialize_output=""
+
+  case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off)
+      include_synthesised="false"
+      ;;
+  esac
+
+  if [ "${include_synthesised}" != "true" ]; then
+    echo "validate_process: skipping synthesised behavioural smoke materialization (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED:-true})." >&2
+    return 0
+  fi
+
+  if [ ! -d .ai/review_runtime ]; then
+    return 0
+  fi
+
+  if ! materialize_output="$(PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import json
+import re
+import shutil
+import sys
+from pathlib import Path
+
+
+repo_root = Path('.').resolve()
+runtime_root = (repo_root / '.ai' / 'review_runtime').resolve()
+target_root = (repo_root / 'validation' / 'tests').resolve()
+
+
+def _manifest_key(path: Path) -> tuple[int, int, str]:
+    round_match = re.search(r'/round-(\d+)/', path.as_posix())
+    pr_match = re.search(r'/pr-(\d+)/', path.as_posix())
+    round_value = int(round_match.group(1)) if round_match else -1
+    pr_value = int(pr_match.group(1)) if pr_match else -1
+    return (round_value, pr_value, path.as_posix())
+
+
+def _safe_target(relpath: object, expected_root: Path):
+    if not isinstance(relpath, str) or not relpath.strip():
+        return None
+    candidate = (repo_root / relpath).resolve()
+    try:
+        candidate.relative_to(expected_root)
+    except ValueError:
+        return None
+    if candidate.parent != expected_root:
+        return None
+    return candidate
+
+
+manifest_paths = sorted(runtime_root.glob('pr-*/round-*/synth/synth_round_*_manifest.json'))
+if not manifest_paths:
+    sys.exit(0)
+
+manifest_path = max(manifest_paths, key=_manifest_key)
+with open(manifest_path, 'r', encoding='utf-8') as handle:
+    payload = json.load(handle)
+
+if not isinstance(payload, dict):
+    raise ValueError(f'invalid manifest payload at {manifest_path}')
+
+rows = payload.get('files')
+if not isinstance(rows, list):
+    raise ValueError(f'invalid manifest files list at {manifest_path}')
+
+target_root.mkdir(parents=True, exist_ok=True)
+
+copied = 0
+for row in rows:
+    if not isinstance(row, dict):
+        continue
+    source_relpath = row.get('cache_relpath')
+    target_relpath = row.get('target_relpath')
+    if not isinstance(source_relpath, str) or not isinstance(target_relpath, str):
+        continue
+
+    source_path = (repo_root / source_relpath).resolve()
+    try:
+        source_path.relative_to(runtime_root)
+    except ValueError:
+        print(f'validate_process: skipping synthesised smoke source outside review-runtime root: {source_relpath}', file=sys.stderr)
+        continue
+    if not source_path.is_file():
+        print(f'validate_process: missing synthesised smoke source: {source_relpath}', file=sys.stderr)
+        continue
+
+    target_path = _safe_target(target_relpath, target_root)
+    if target_path is None:
+        print(f'validate_process: skipping synthesised smoke target outside validation/tests: {target_relpath}', file=sys.stderr)
+        continue
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, target_path)
+    copied += 1
+
+target_manifest_relpath = payload.get('target_manifest_relpath')
+target_manifest_path = _safe_target(target_manifest_relpath, target_root)
+if target_manifest_path is not None:
+    target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(manifest_path, target_manifest_path)
+else:
+    print('validate_process: skipping synthesised smoke manifest copy because target_manifest_relpath is invalid.', file=sys.stderr)
+
+print(f'Materialized synthesised behavioural smoke tests from {manifest_path.relative_to(repo_root).as_posix()} into validation/tests (files={copied}).')
+PY
+)"; then
+    echo "::warning::Failed to materialize synthesised behavioural smoke tests from .ai/review_runtime; continuing without them." >&2
+    return 0
+  fi
+
+  if [ -n "${materialize_output}" ]; then
+    echo "${materialize_output}"
+  fi
 }
 
 write_status_file()
@@ -2811,6 +2931,8 @@ case "${renderer_exit}" in
 		exit 1
 		;;
 esac
+
+materialize_synthesised_behavioural_smoke_tests
 
 if command -v git >/dev/null 2>&1; then
   git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > "${POST_GENERATE_STATUS_FILE}" 2>/dev/null || true

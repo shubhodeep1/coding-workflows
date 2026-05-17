@@ -15,7 +15,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYNTH_SCRIPT = REPO_ROOT / "scripts" / "review_synthesise_smoke.sh"
 VALIDATE_DRIVER = REPO_ROOT / "scripts" / "validate_driver.sh"
+VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+INTERNAL_VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "internal-validate.yml"
 MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mark-stable.yml"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 TEST_AND_MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
@@ -553,6 +555,27 @@ def test_review_synthesise_smoke_is_registered_in_ci_workflows() -> None:
 		assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py" in workflow, workflow_path
 
 
+def test_validate_workflows_restore_cached_behavioural_smoke_artifacts() -> None:
+	validate_workflow = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
+	internal_validate_workflow = INTERNAL_VALIDATE_WORKFLOW.read_text(encoding="utf-8")
+	review_workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+
+	assert "description: \"Review PR number for restoring cached behavioural smoke artifacts (0 to auto-detect from tracking issue)\"" in validate_workflow
+	assert "- name: Resolve behavioural smoke source PR" in validate_workflow
+	assert "- name: Restore behavioural smoke runtime cache" in validate_workflow
+	assert "path: .ai/review_runtime/" in validate_workflow
+	assert "review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-" in validate_workflow
+
+	assert "pr_number:" in internal_validate_workflow
+	assert "pr_number: ${{ inputs.pr_number || '0' }}" in internal_validate_workflow
+
+	dispatch_idx = review_workflow.find("Dispatching standalone validation for linked issue")
+	assert dispatch_idx != -1, "review_autofix.yml missing standalone validation dispatch"
+	dispatch_block = review_workflow[dispatch_idx : dispatch_idx + 500]
+	assert '-f tracking_issue="0"' in dispatch_block
+	assert '-f pr_number="${PR_NUMBER}"' in dispatch_block
+
+
 def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
 	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_gate_") as td:
 		test_dir = Path(td) / "validation" / "tests"
@@ -610,6 +633,126 @@ def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
 		assert str(test_dir / "synth_round_1_issue.sh") not in excluded_paths
 		assert str(test_dir / "_helpers.sh") not in included_paths
 		assert "excluded 1 synthesised behavioural smoke script(s)" in include_false.stderr
+
+
+def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_materialize_") as td:
+		workspace = Path(td)
+
+		round1_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth"
+		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
+		round1_dir.mkdir(parents=True, exist_ok=True)
+		round3_dir.mkdir(parents=True, exist_ok=True)
+
+		old_wrapper = round1_dir / "synth_round_1_old_issue.sh"
+		old_wrapper.write_text("#!/usr/bin/env bash\necho old\n", encoding="utf-8")
+		old_wrapper.chmod(0o755)
+		(round1_dir / "synth_round_1_manifest.json").write_text(
+			json.dumps(
+				{
+					"round": 1,
+					"head_sha": "oldsha",
+					"language": "python",
+					"source_artifact": ".ai/review_runtime/pr-4242/round-1/judge_interim.json",
+					"target_manifest_relpath": "validation/tests/synth_round_1_manifest.json",
+					"files": [
+						{
+							"issue_id": "old",
+							"file": "src/module.py",
+							"line_start": 1,
+							"line_end": 1,
+							"severity": "must-fix",
+							"slug": "old_issue",
+							"cache_relpath": ".ai/review_runtime/pr-4242/round-1/synth/synth_round_1_old_issue.sh",
+							"target_relpath": "validation/tests/synth_round_1_old_issue.sh",
+							"suggested_path": "validation/tests/synth_round_1_old_issue.sh",
+							"expected_to_fail_until_fixed": True,
+						}
+					],
+				},
+				indent=2,
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		latest_wrapper = round3_dir / "synth_round_3_latest_issue.sh"
+		latest_wrapper.write_text("#!/usr/bin/env bash\necho latest\n", encoding="utf-8")
+		latest_wrapper.chmod(0o755)
+		(round3_dir / "synth_round_3_manifest.json").write_text(
+			json.dumps(
+				{
+					"round": 3,
+					"head_sha": "newsha",
+					"language": "python",
+					"source_artifact": ".ai/review_runtime/pr-4242/round-3/judge_interim.json",
+					"target_manifest_relpath": "validation/tests/synth_round_3_manifest.json",
+					"files": [
+						{
+							"issue_id": "latest",
+							"file": "src/module.py",
+							"line_start": 3,
+							"line_end": 3,
+							"severity": "must-fix",
+							"slug": "latest_issue",
+							"cache_relpath": ".ai/review_runtime/pr-4242/round-3/synth/synth_round_3_latest_issue.sh",
+							"target_relpath": "validation/tests/synth_round_3_latest_issue.sh",
+							"suggested_path": "validation/tests/synth_round_3_latest_issue.sh",
+							"expected_to_fail_until_fixed": True,
+						}
+					],
+				},
+				indent=2,
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
+
+		disabled = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ "VALIDATION_INCLUDE_SYNTHESISED=false\n"
+				+ function_text
+				+ "materialize_synthesised_behavioural_smoke_tests\n",
+			],
+			cwd=workspace,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert "skipping synthesised behavioural smoke materialization" in disabled.stderr
+		assert not (workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh").exists()
+
+		enabled = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
+				+ function_text
+				+ "materialize_synthesised_behavioural_smoke_tests\n",
+			],
+			cwd=workspace,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		latest_target = workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh"
+		latest_manifest = workspace / "validation" / "tests" / "synth_round_3_manifest.json"
+		old_target = workspace / "validation" / "tests" / "synth_round_1_old_issue.sh"
+
+		assert "Materialized synthesised behavioural smoke tests" in enabled.stdout
+		assert latest_target.exists()
+		assert latest_target.read_text(encoding="utf-8") == latest_wrapper.read_text(encoding="utf-8")
+		assert os.access(latest_target, os.X_OK)
+		assert latest_manifest.exists()
+		assert json.loads(latest_manifest.read_text(encoding="utf-8"))["round"] == 3
+		assert not old_target.exists()
 
 
 def main() -> int:

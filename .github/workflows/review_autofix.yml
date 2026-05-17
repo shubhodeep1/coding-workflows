@@ -552,7 +552,7 @@ jobs:
 
             if [ "${validation_dispatched}" = "false" ]; then
               echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
-              if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; }; then
+              if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" -f pr_number="${PR_NUMBER}" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0" -f pr_number="${PR_NUMBER}"; }; then
                 validation_dispatched="true"
               else
                 echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
