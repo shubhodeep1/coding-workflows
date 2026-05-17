@@ -248,6 +248,7 @@ def test_review_synthesise_smoke_writes_manifest_and_cached_wrappers() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -296,6 +297,7 @@ def test_review_synthesise_smoke_fails_open_on_malformed_output() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -331,6 +333,7 @@ def test_review_synthesise_smoke_surfaces_codex_stderr_on_failure() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -381,6 +384,7 @@ def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -486,6 +490,7 @@ def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> 
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -512,6 +517,7 @@ def test_behavioural_smoke_emit_warning_is_best_effort_when_fd3_is_closed() -> N
 		],
 		capture_output=True,
 		text=True,
+		timeout=60,
 	)
 
 	assert result.returncode == 0, result.stdout + result.stderr
@@ -555,6 +561,7 @@ def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -609,6 +616,7 @@ def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() 
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 		assert result.returncode == 0, result.stdout + result.stderr
 
@@ -626,6 +634,7 @@ def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() 
 				cwd=workspace,
 				capture_output=True,
 				text=True,
+				timeout=60,
 			)
 			assert wrapper_result.returncode == 0, wrapper_result.stdout + wrapper_result.stderr
 			assert markers[row["issue_id"]] in wrapper_result.stdout
@@ -727,6 +736,7 @@ def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 		include_false = subprocess.run(
 			[
@@ -740,6 +750,7 @@ def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 
 		included_paths = include_true.stdout.splitlines()
@@ -840,6 +851,7 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 		assert "skipping synthesised behavioural smoke materialization" in disabled.stderr
 		assert not (workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh").exists()
@@ -857,6 +869,7 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 
 		latest_target = workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh"
@@ -921,6 +934,7 @@ def test_validate_process_warns_when_synth_sources_are_missing() -> None:
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 
 		manifest_target = workspace / "validation" / "tests" / "synth_round_3_manifest.json"
