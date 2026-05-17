@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -207,7 +208,7 @@ def test_sanitize_codex_prompt_file_rewrites_all_invalid_utf8(tmp_path: Path) ->
 		[
 			"bash",
 			"-lc",
-			f"source {GH_HELPERS!s}; sanitize_codex_prompt_file {prompt_file!s}",
+			f"source {shlex.quote(str(GH_HELPERS))}; sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}",
 		],
 		cwd=REPO_ROOT,
 		env={"PATH": f"{Path('/usr/bin')}:{Path('/bin')}", "PYTHONDONTWRITEBYTECODE": "1"},
