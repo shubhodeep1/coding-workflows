@@ -113,9 +113,9 @@ CANARY_REQUIRED="${CANARY_REQUIRED:-1}"
 # from test discovery. Default matches the `_lib_*.sh` / `_*.sh` convention.
 HELPER_PATTERN="${HELPER_PATTERN:-_*.sh}"
 # Synthesised behavioural smoke tests use the stable synth_round_*.sh prefix.
-# Keep them opt-out so validation can ignore cached/generated advisory tests
-# without affecting normal top-level TAP discovery.
-VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"
+# Keep them opt-in so validation only includes cached/generated advisory tests
+# when VALIDATION_INCLUDE_SYNTHESISED=true is set explicitly.
+VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-false}"
 
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-validation-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-validation-password}"
@@ -695,11 +695,11 @@ discover_tests()
 	local all_candidates=()
 	local helper_files=()
 	local synth_files=()
-	local include_synthesised="true"
+	local include_synthesised="false"
 
-	case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED}" | tr '[:upper:]' '[:lower:]')" in
-		0|false|no|off)
-			include_synthesised="false"
+	case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on)
+			include_synthesised="true"
 			;;
 	esac
 
@@ -742,7 +742,7 @@ discover_tests()
 
 	if [ "${#synth_files[@]}" -gt 0 ]; then
 		{
-			echo "validate_driver: excluded ${#synth_files[@]} synthesised behavioural smoke script(s) from test discovery (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED}):"
+			echo "validate_driver: excluded ${#synth_files[@]} synthesised behavioural smoke script(s) from test discovery (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED:-false}):"
 			printf '  - %s\n' "${synth_files[@]}"
 		} >&2
 	fi

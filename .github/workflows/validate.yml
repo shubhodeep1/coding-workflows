@@ -59,7 +59,7 @@ env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
-  VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
+  VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'false' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
 
@@ -603,10 +603,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          include_synthesised="true"
-          case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-true}" | tr '[:upper:]' '[:lower:]')" in
-            0|false|no|off)
-              include_synthesised="false"
+          include_synthesised="false"
+          case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-false}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              include_synthesised="true"
               ;;
           esac
 
