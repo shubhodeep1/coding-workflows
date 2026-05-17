@@ -321,3 +321,133 @@
 | `review_autofix` `25978047174`, `25966190742`, `25967061106`, `25979101486`, `25979383060` | linked-issue reuse | `Linked issues already cached from early fetch.` | observed in 5 named runs (also seen in other slow samples) | Good intra-run reuse |
 | `copilot_pull_request_reviewer` `25979160103` | `Prepare` / `Cleanup artifacts` | `pulls.listFiles`, `pulls.get`, artifact listing endpoint | 3 hotspot call sites in `log_summary` | Best candidate for call consolidation |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-17)
+
+### Section 1: Bug & Correctness Sweep
+
+Static review did not surface a high-confidence secret leak or a repo-wide unquoted-variable failure pattern in the audited workflows/scripts. The strongest correctness defect was the linked-issue fallback drift below.
+
+#### BUG-001
+- **File path:** `.github/workflows/issue_pr_status.yml:195-210; .github/workflows/review_autofix.yml:521-566,4475-4495,4596-4616,5350-5369; scripts/review_rb_judge.sh:235-245,775-778,916-930`
+- **Severity:** High
+- **Category tag:** bug
+- **Description:** `issue_pr_status.yml` explicitly tightened fallback parsing so bare prose mentions like `issue #N` and `issues/N` are **not** treated as linked issues (`issue_pr_status.yml:196-204`). `review_autofix.yml` and `review_rb_judge.sh` still use the older broad regexes that accept those forms (`issue[[:space:]]*#...` and `issues/[0-9]+`). In `review_autofix.yml`, those fallback matches can dispatch validation and remove `ai:orchestrator-validate-required` (`:534-566`), or set `ai:ready-to-merge` / `ai:review-blocked` on whatever number was parsed (`:4490-4495`, `:4611-4616`, `:5365-5369`). That re-opens the same false-positive class `issue_pr_status.yml` was hardened against.
+- **Recommended fix:** Extract one shared fallback parser, e.g. `scripts/gh_helpers.sh::extract_explicit_closing_issue_numbers <repo> <text>`, that only accepts the strict `issue_pr_status.yml` semantics (closing keywords or repo-scoped issue URLs/paths). Replace the inline regexes in `review_autofix.yml` and `scripts/review_rb_judge.sh`, and add a regression test for prose-only `issue #N` / `issues/N` mentions.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path:** `scripts/review_rb_judge.sh:235-272`
+- **Severity:** Medium
+- **Category tag:** api-redundancy
+- **Description:** The judge first fetches `closingIssuesReferences` with one GraphQL call (`:235-240`), then loops over the linked issues and does `_safe_gh_jq "repos/.../issues/${issue_number}"` until it finds the first body (`:256-272`). **Current call count:** `1 + up to N` API calls for `N` linked issues, even though the script only needs `number`, `body`, and labels for the first linked issue context.
+- **Recommended fix:** Extend the existing GraphQL query to request `number body labels(first:50){nodes{name}}`, then derive `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` locally. **Proposed call count:** `1`. Extend the current GraphQL-first pattern rather than adding a new path; the closest existing batching model is `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`.
+
+#### BATCH-001
+- **File path:** `.github/workflows/review_autofix.yml:1442-1565,1689-1781; scripts/gh_helpers.sh:735-900`
+- **Severity:** Medium
+- **Category tag:** api-batching
+- **Description:** `Collect PR metadata` hydrates the PR with four separate REST calls: PR payload (`:1530`), issue comments (`:1531-1532`), reviews (`:1533-1534`), and review comments (`:1535-1536`). The same repo already has `gh_pr_with_all_comments()` in `scripts/gh_helpers.sh`, which consolidates PR metadata + issue comments + nested review comments through one GraphQL-first helper, but it does not yet emit top-level review bodies/states. The downstream Python merger in `review_autofix.yml:1689-1781` proves those review objects are required. **Current call count:** `4` for PR hydration alone, or `5` total in this step including the linked-issues GraphQL fetch.
+- **Recommended fix:** Extend `gh_pr_with_all_comments <owner> <repo> <pr_number> [preloaded_meta_json]` to also emit a `reviews` array with reviewer/body/state/submitted timestamp, then have `review_autofix.yml` call that helper once and materialize the three JSON files from its output. **Proposed call count:** `1` for PR hydration, or `2` total in the step including the separate linked-issues fetch. Reuse the existing `gh_pr_with_all_comments` batching pattern instead of maintaining another bespoke REST fan-out.
+
+#### API-002
+- **File path:** `.github/workflows/issue_pr_status.yml:253-350,383-386,501-512`
+- **Severity:** Medium
+- **Category tag:** api-redundancy
+- **Description:** The main linked-issue step already batch-classifies `TRACKING_ISSUES` and `MANAGED_ISSUES` via one GraphQL query with REST fallback (`:280-350`) and exports the linked issue numbers (`:383-386`). The later alert step ignores that work and re-fetches each linked issue body one-by-one (`:505-512`) just to decide whether to suppress the merged alert. **Current call count:** `N` extra REST calls in the alert step after earlier classification already touched the same issues. The body-only recheck also drops the earlier label-based managed-issue rule, so label-only managed issues could be misclassified as standalone. [NEEDS VERIFICATION]
+- **Recommended fix:** Export `MANAGED_ISSUES` / `TRACKING_ISSUES` or a simple `IS_ORCHESTRATED` boolean from the earlier classification step and consume that cached result in the alert step. **Proposed call count:** `0` extra calls in the alert step. If this is extracted into shared code, model it after the alias-batched GraphQL shape already used here and in `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path:** `scripts/label_helpers.sh:146-196; scripts/orchestrate_poll_process.sh:1422-1492; scripts/validate_process.sh:951-1024; scripts/review_rb_judge.sh:138-170`
+- **Severity:** Medium
+- **Category tag:** duplication
+- **Description:** The repo has four near-duplicate “swap issue phase label safely” implementations. Three of them are contract-driven (`label_helpers.sh`, `orchestrate_poll_process.sh`, `validate_process.sh`), but `review_rb_judge.sh` hardcodes `_rps_phases` and bypasses `.github/ai/label_contract.v1.json`. That stale list omits multiple current issue-phase labels from the contract, so judge-driven transitions can diverge from the rest of the pipeline if the contract evolves.
+- **Recommended fix:** Consolidate on `scripts/label_helpers.sh` and make it the single owner of phase transitions with a contract-driven signature such as `set_issue_phase_label_resilient <issue_number> <target_label> <repo> [contract_file]`. Update callers in `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_rb_judge.sh`, and the inline fallback in `.github/workflows/issue_pr_status.yml`.
+
+#### DUP-002
+- **File path:** `.github/workflows/clarify.yml:164-250; .github/workflows/plan.yml:215-300; .github/workflows/review_autofix.yml:857-955; .github/workflows/validate.yml:201-305; .github/workflows/issue_pr_status.yml:41-120`
+- **Severity:** Low
+- **Category tag:** duplication
+- **Description:** The same resolve-support-ref / checkout primary / fallback to `main` / optional `main` snapshot / stage support files pattern is repeated inline across multiple workflows, with small local edits per workflow. That duplication is already large enough to contribute to expression-size pressure (`validate.yml` is one of the flagged workflows below) and makes support bootstrap changes expensive to roll out safely.
+- **Recommended fix:** Move this into a shared owner, preferably `scripts/fetch_workflow_support.sh`, with a signature like `fetch_workflow_support.sh <workflow_name> <wf_source> <script_ref> <dest_root> [--with-prompts] [--with-ai-memory]`. Update the repeated callers in `clarify.yml`, `plan.yml`, `review_autofix.yml`, `implement.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, `validate.yml`, `issue_pr_status.yml`, and related internal wrappers.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+All audited workflow files are below the 800 KB early-warning threshold; the largest is `.github/workflows/review_autofix.yml` at `334,445` bytes.
+
+#### EXPR-001
+- **File path:** `.github/workflows/test-and-mark-stable.yml:1182-1593`
+- **Severity:** High
+- **Category tag:** expression-limit
+- **Description:** The `run:` body for `Phase 4: Wait for review & autofix to complete` contains `${{ }}` interpolations and measures about `19,899` characters, leaving only `1,101` characters of headroom before GitHub’s `21,000`-character template-expression hard stop. The step embeds a long polling loop plus inline helper logic, so routine edits can push it over the limit.
+- **Recommended fix:** Extract the wait-loop into an external script such as `scripts/test_and_mark_stable_wait_review.sh` and keep the workflow step to env wiring + script invocation.
+
+#### EXPR-002
+- **File path:** `.github/workflows/test-and-mark-stable.yml:1663-2079`
+- **Severity:** Medium
+- **Category tag:** expression-limit
+- **Description:** The `run:` body for `Phase 4b: Verify editor restored canary (pytest + retry)` is about `17,408` characters, leaving `3,592` characters of headroom. It mixes package install recovery, retry wrappers, polling, and assertion logic in one interpolated block.
+- **Recommended fix:** Extract the phase-4b logic into `scripts/test_and_mark_stable_verify_canary.sh`, or split it into smaller install / verify / retry steps so each `${{ }}` carrier is shorter.
+
+#### EXPR-003
+- **File path:** `.github/workflows/review_autofix.yml:1442-1834`
+- **Severity:** Medium
+- **Category tag:** expression-limit
+- **Description:** The `Collect PR metadata` step is about `17,408` characters, leaving `3,592` characters of headroom. It combines inline retry helpers, no-PR synthesis, REST hydration, linked-issue GraphQL fetch, and Python post-processing in a single interpolated `run:` block.
+- **Recommended fix:** Move the metadata collection into a dedicated script such as `scripts/review_collect_pr_metadata.sh` and pass only the required env/paths from the workflow.
+
+#### EXPR-004
+- **File path:** `.github/workflows/validate.yml:201-577`
+- **Severity:** Medium
+- **Category tag:** expression-limit
+- **Description:** `Fetch workflow support files` is about `17,416` characters, leaving `3,584` characters of headroom. The duplicated support-bootstrap logic is the main size driver here.
+- **Recommended fix:** Replace the inline block with a shared script (`scripts/fetch_workflow_support.sh`) or a composite action so the workflow only passes parameters.
+
+### Section 5: Cross-Cutting Concerns
+
+Audit note: no `TODO` / `FIXME` / `HACK` markers were present under `.github/workflows/` or `scripts/`.
+
+#### DEAD-001
+- **File path:** `scripts/orchestrate_poll_process.sh:5219-5237`
+- **Severity:** Low
+- **Category tag:** dead-code
+- **Description:** `get_standalone_state_comment_id()` and `read_standalone_state_json()` are defined but have no in-repo callers. Both still contain their own paginated issue-comment fetch logic, so they add unused API-touching code and maintenance surface.
+- **Recommended fix:** Remove these wrappers if they are truly unused, or replace them with documented thin wrappers around `_extract_standalone_state_comment_id_from_comments` / `_extract_standalone_state_json_from_comments` only after confirming there is an external consumer.
+
+#### SHELL-001
+- **File path:** `scripts/review_run_reviewers.sh:142-146`
+- **Severity:** Low
+- **Category tag:** shellcheck
+- **Description:** `probe_prompt` is declared in the local variable list but never assigned or read. This is a straightforward ShellCheck `SC2034` unused-variable finding.
+- **Recommended fix:** Drop `probe_prompt` from the declaration list, or wire it into the later probe flow if it was meant to carry prompt text.
+
+#### SHELL-002
+- **File path:** `scripts/validate_process.sh:229-237`
+- **Severity:** Low
+- **Category tag:** shellcheck
+- **Description:** `local msg="$1$(_tg_link_suffix)"` performs command substitution inside the `local` declaration, which is ShellCheck `SC2155` because the declaration can mask the substitution’s exit status.
+- **Recommended fix:** Split it into two statements, e.g. `local msg` followed by `msg="$1$(_tg_link_suffix)"`, so any future failure in `_tg_link_suffix` is not hidden by the declaration.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, EXPR-001 |
+| Medium | 7 | API-001, BATCH-001, API-002, DUP-001, EXPR-002, EXPR-003, EXPR-004 |
+| Low | 4 | DUP-002, DEAD-001, SHELL-001, SHELL-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3-4 | Medium |
+| API call optimization | 3-5 | Medium |
+| Code modularization | 8-11 | Large |
+| Expression size reduction | 4-6 | Medium |
+| Medium/Low fixes | 3-4 | Small |
