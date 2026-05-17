@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `orchestrator/project-2627` @ `2ca708977a828308eaa769af5b4b1909d53539f1`  \nRef check: checkout ref matches integration metadata; no branch mismatch.\n\nClarification mapping  \n- No `Q1`/`Q2` batch existed. `/answer [auto-answered-by-orchestrator]` means proceed with the issue exactly as written.\n\nRepresentative path inspected  \n- Core: `scripts/review_synthesise_smoke.sh`\n- Existing regression harness: `tests/test_review_synthesise_smoke.py`\n- Downstream integration hooks: `scripts/validate_process.sh` (`materialize_synthesised_behavioural_smoke_tests`) and `scripts/validate_driver.sh` (synth test discovery gating)\n\n1. Files likely to change\n- `scripts/review_synthesise_smoke.sh`\n- `tests/test_review_synthesise_smoke.py`\n- `agents.md`\n- Possibly `tests/test_review_reject_verify.py` if the `agents.md` log-prefix assertions are split by domain\n- Workflow YAMLs are likely **not** needed if the new assertions live in the already-run test files; if a brand-new test file is added instead, then also update:\n  - `.github/workflows/ci.yml`\n  - `.github/workflows/mark-stable.yml`\n  - `.github/workflows/test-and-mark-stable.yml`\n\n2. Functions/modules to implement\n- In the embedded Python inside `extract_and_write_synth_bundle`, extend `normalize_generated_items(...)` with a dedicated shell-safety validator for `content` before any wrapper/manifest write.\n- Add a helper in that embedded Python to reject unsafe shell constructs, covering the explicit issue list and straightforward variants:\n  - `eval`\n  - `source` / `.` as shell include\n  - `bash -c`, `sh -c`\n  - `env -S`, `env --split-string`\n  - command substitution `$()`\n  - backticks\n  - `sudo`\n  - `xargs`\n- Keep `build_wrapper(...)` and manifest-writing shape intact; the new gate should stop unsafe content earlier rather than redesign the wrapper flow.\n- Refactor the shell-side failure path around the two `extract_and_write_synth_bundle` calls so extractor diagnostics are no longer sent to `/dev/null`, but are only surfaced when synthesis truly fails (to avoid noisy diagnostics if stdout parsing fails but stderr fallback succeeds).\n\n3. Data structures affected\n- Generated synthesis items keep the same schema: `path`, `content`, `expected_to_fail_until_fixed`; only validation becomes stricter.\n- Synth manifest schema should stay unchanged; it should still be written only on full success.\n- No env var/default changes:\n  - `BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED` unchanged\n  - `CONSOLIDATOR_REJECT_SCHEMA_ENABLED` unchanged\n  - cache-copy/materialization design unchanged\n- `agents.md` stable log-prefix list needs the missing entries added.\n\n4. API/interface changes\n- No public interface/env-var change expected.\n- Observable behavior change: unsafe or malformed synthesis now emits visible rejection diagnostics on stderr while still fail-opening with `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n- Preserve the existing fail-open contract: no wrappers, no manifest, no round blockage.\n\n5. Risks and edge cases\n- Do not use a naive raw-regex scan that rejects safe heredoc bodies/comments; existing safe patterns like `python3 - <<'PY' ... PY` must keep working.\n- Validate before `mkdir`/wrapper writes so partial artifacts never survive rejection.\n- Avoid duplicate/misleading diagnostics when the first extraction source fails but the second succeeds.\n- Keep zero-item success (`[]`) working.\n- Preserve current runtime semantics for safe wrappers (`BEHAVIOURAL_SMOKE_PRESENT_PASSED/FAILED/INCONCLUSIVE`).\n- Do not broaden this into downstream validation cleanup or default-flip work.\n\n6. Testing considerations\n- Extend `tests/test_review_synthesise_smoke.py` with regression coverage for unsafe generated shell, asserting:\n  - script exits `0`\n  - no manifest exists\n  - no cached wrappers exist\n  - `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL` is emitted\n  - rejection diagnostics are visible on stderr\n- Keep positive coverage for currently valid content (`echo/exit`, quoted Python heredoc payloads) to guard against false positives.\n- Add a small `agents.md` contract assertion in an already-wired test module for:\n  - `CONSOLIDATOR_REJECT_TYPED`\n  - `CONSOLIDATOR_REJECT_EVIDENCE_MALFORMED`\n  - `CONSOLIDATOR_REJECT_VERIFIED`\n  - `CONSOLIDATOR_REJECT_REVERSED`\n  - `CONSOLIDATOR_REJECT_VERIFIER_INCONCLUSIVE`\n  - `CONSOLIDATOR_REJECT_VERIFIER_FAIL`\n  - `BEHAVIOURAL_SMOKE_SYNTHESISED`\n  - `BEHAVIOURAL_SMOKE_PRESENT_FAILED`\n  - `BEHAVIOURAL_SMOKE_PRESENT_PASSED`\n  - `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`\n- Re-run:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py` if touched\n\nCodebase notes / conflicts\n- The requested markers already exist in the emitting scripts; `agents.md` is the missing contract documentation.\n- The three named workflows already invoke `tests/test_review_synthesise_smoke.py` and `tests/test_review_reject_verify.py`, so extending those existing files satisfies the \u201cwire into workflows\u201d requirement without necessarily editing the YAMLs.\n\nAssumptions\n- Hardening is limited to synthesis-time validation in `scripts/review_synthesise_smoke.sh`, not a full sandbox redesign.\n- Prefer stdlib-only validation in the embedded Python rather than adding a new parser dependency.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f623ee77d613ba12ab39c036f6906f6e9b17288f28eedaac0967bfc838db6ce9",
+  "lineage": {
+    "issue_number": 2698,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25987408128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25987408128",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2698"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260517094926_d76c5c9e12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2698,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25987408128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2698",
+  "timestamps": {
+    "created_at": "2026-05-17T09:49:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
