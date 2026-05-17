@@ -9,6 +9,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "review_floor_rules.sh"
+GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "review_pipeline"
 
 
@@ -196,6 +197,26 @@ def test_excerpt_truncation_at_240_bytes_does_not_emit_invalid_utf8(tmp_path: Pa
 	assert excerpt.startswith("This excerpt is engineered so"), (
 		f"excerpt prefix corrupted by sanitisation: {excerpt[:80]!r}"
 	)
+
+
+def test_sanitize_codex_prompt_file_rewrites_all_invalid_utf8(tmp_path: Path) -> None:
+	prompt_file = tmp_path / "invalid_prompt.txt"
+	prompt_file.write_bytes(b"\xff\xfe\xfa")
+
+	subprocess.run(
+		[
+			"bash",
+			"-lc",
+			f"source {GH_HELPERS!s}; sanitize_codex_prompt_file {prompt_file!s}",
+		],
+		cwd=REPO_ROOT,
+		env={"PATH": f"{Path('/usr/bin')}:{Path('/bin')}", "PYTHONDONTWRITEBYTECODE": "1"},
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+
+	assert prompt_file.read_bytes() == b""
 
 
 def test_fail_open_unhandled_error_emits_empty_valid_output(tmp_path: Path) -> None:

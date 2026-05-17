@@ -1410,12 +1410,16 @@ _embed_input_file()
 # stdin boundary.
 #
 # Behaviour notes:
-#   • Best-effort. No-op if <path> is missing/empty, if `iconv` is
-#     not installed, or if the temp file write fails.
-#   • Uses `iconv -f UTF-8 -t UTF-8//IGNORE`, which drops invalid
-#     sequences. GNU iconv exits non-zero whenever it discards
-#     bytes even though the rewritten output is correct, so we
-#     accept any non-empty output regardless of exit status.
+#   • Best-effort. No-op if <path> is missing/empty or if the temp
+#     file write fails.
+#   • Prefers `iconv -f UTF-8 -t UTF-8//IGNORE` when available.
+#     GNU iconv exits non-zero whenever it discards bytes even though
+#     the rewritten output is correct, so we accept any non-empty
+#     output regardless of exit status.
+#   • Falls back to `python3` UTF-8 decode/encode with
+#     `errors="ignore"` when iconv is missing, unsupported (musl),
+#     or discards the entire file. That preserves the documented
+#     "last line of defence" behaviour even for all-invalid inputs.
 #   • Idempotent. Running on already-valid UTF-8 leaves the file
 #     byte-identical (modulo the mv/rename, which the caller's
 #     downstream `wc -c` / `sha256sum` instrumentation will reflect).
@@ -1429,18 +1433,32 @@ sanitize_codex_prompt_file()
 	if [ -z "${_path}" ] || [ ! -f "${_path}" ]; then
 		return 0
 	fi
-	if ! command -v iconv >/dev/null 2>&1; then
-		return 0
-	fi
 	local _tmp
 	_tmp="$(mktemp "${_path}.utf8XXXXXX" 2>/dev/null)" || return 0
-	# //IGNORE discards invalid sequences. iconv exits non-zero
-	# whenever it skips any, but the output IS correct, so don't
-	# gate the rewrite on $? — gate on whether output was produced.
-	iconv -f UTF-8 -t UTF-8//IGNORE < "${_path}" > "${_tmp}" 2>/dev/null || true
-	if [ -s "${_tmp}" ] || [ ! -s "${_path}" ]; then
-		mv "${_tmp}" "${_path}"
-	else
-		rm -f "${_tmp}"
+	if command -v iconv >/dev/null 2>&1; then
+		# //IGNORE discards invalid sequences. iconv exits non-zero
+		# whenever it skips any, but the output IS correct, so don't
+		# gate the rewrite on $? — gate on whether output was produced.
+		iconv -f UTF-8 -t UTF-8//IGNORE < "${_path}" > "${_tmp}" 2>/dev/null || true
+		if [ -s "${_tmp}" ] || [ ! -s "${_path}" ]; then
+			mv "${_tmp}" "${_path}" 2>/dev/null || rm -f "${_tmp}"
+			return 0
+		fi
+		: > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; return 0; }
 	fi
+	if command -v python3 >/dev/null 2>&1; then
+		if python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+dst.write_bytes(src.read_bytes().decode("utf-8", "ignore").encode("utf-8"))
+PY
+		then
+			mv "${_tmp}" "${_path}" 2>/dev/null || rm -f "${_tmp}"
+			return 0
+		fi
+	fi
+	rm -f "${_tmp}"
 }
