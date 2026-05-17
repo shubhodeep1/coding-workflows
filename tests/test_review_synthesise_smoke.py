@@ -407,6 +407,7 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
 
 		for content in (
+			'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
 			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
 			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
@@ -457,6 +458,7 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 				env=env,
 				capture_output=True,
 				text=True,
+				timeout=60,
 			)
 
 			combined_output = result.stdout + result.stderr

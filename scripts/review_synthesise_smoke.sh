@@ -229,7 +229,9 @@ def normalize_content(text: str) -> str:
 			raise ValueError("body_unsafe_shell_construct")
 		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
 		lexer.whitespace_split = True
-		lexer.commenters = "#"
+		# Keep '#' literal so shlex does not hide trailing separators/commands
+		# that bash would still execute when '#' appears mid-word.
+		lexer.commenters = ""
 		tokens = list(lexer)
 		expect_command = True
 		passthrough_command = ""

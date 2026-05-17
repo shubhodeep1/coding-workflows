@@ -91,6 +91,7 @@ def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> 
 		env=env,
 		capture_output=True,
 		text=True,
+		timeout=60,
 	)
 
 
