@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The canary file does not match the exact three-line specification from issue #2689.\n  WHY: It contains the wrong status, run_id, and updated-by values plus three extra lines, so strict E2E smoke-gate validation fails.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | confidence=5\n  PROBLEM: Every line in the file is wrong relative to the linked issue #2689 specification.\n  WHY: The file should contain exactly three lines (`status: ok`, `run_id: 25981596273`, `updated-by: ai-pipeline`) with a trailing newline, but it currently has wrong field values and extra lines that will fail smoke-gate validation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file content) | confidence=5\n  PROBLEM: The file content does not match the specification in linked issue #2689.\n  WHY: The current content has 6 lines with incorrect values instead of exactly 3 lines with the required values, so the E2E smoke test gate fails exact byte-for-byte validation.\n- tests/e2e_smoke_canary.txt:line 1 - `status: BROKEN_BY_E2E_BAIT_25981596273` | confidence=5\n  PROBLEM: The status field value is `BROKEN_BY_E2E_BAIT_25981596273` instead of the required value `ok`.\n  WHY: Any consumer parsing this canary file expects `status: ok` to indicate a passing smoke test.\n- tests/e2e_smoke_canary.txt:line 2 - `run_id: WRONG_VALUE_SHOULD_BE_25981596273` | confidence=5\n  PROBLEM: The run_id field value is `WRONG_VALUE_SHOULD_BE_25981596273` instead of the required numeric value `25981596273`.\n  WHY: Consumers extracting the run ID as a numeric field will get a parse error or wrong value.\n- tests/e2e_smoke_canary.txt:line 3 - `updated-by: e2e-bait-injector` | confidence=5\n  PROBLEM: The updated-by field value is `e2e-bait-injector` instead of the required value `ai-pipeline`.\n  WHY: Validation logic that checks the `updated-by` field to confirm the canary was set by the AI pipeline will reject this file.\n- tests/e2e_smoke_canary.txt:lines 4-6 - extra content beyond the required three lines | confidence=5\n  PROBLEM: Three extra lines are present (`extra: this line violates the issue spec`, `also: another line that must be removed`, and a comment line) even though the linked issue spec requires exactly three lines with a trailing newline.\n  WHY: The smoke-test validation expects a strict 3-line file format, so the extra lines cause the content validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | confidence=5\n  PROBLEM: File content violates the exact three-line specification from issue #2689.\n  WHY: The status field is wrong, the run_id is wrong, the updated-by field is wrong, and three extra lines were added, so the E2E smoke test gate fails byte-for-byte validation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | confidence=5\n  PROBLEM: The file content violates every constraint specified in linked issue #2689.\n  WHY: The issue requires exactly three lines with a trailing newline, but the PR has the wrong status, run_id, and updated-by values plus two extra data lines and a comment line, so strict content validation fails.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:line 1 \u2014 `status: BROKEN_BY_E2E_BAIT_25981596273` | confidence=5\n  PROBLEM: The status value is `BROKEN_BY_E2E_BAIT_25981596273` instead of the required value `ok`.\n  WHY: The E2E smoke gate parses this canary file and expects `status: ok`; the corrupted value causes the gate to fail.\n- tests/e2e_smoke_canary.txt:line 2 \u2014 `run_id: WRONG_VALUE_SHOULD_BE_25981596273` | confidence=5\n  PROBLEM: The run_id value is `WRONG_VALUE_SHOULD_BE_25981596273` instead of the numeric value `25981596273`.\n  WHY: Consumers that extract the run ID as a numeric field will get a parse error or incorrect value.\n- tests/e2e_smoke_canary.txt:line 3 \u2014 `updated-by: e2e-bait-injector` | confidence=5\n  PROBLEM: The updated-by value is `e2e-bait-injector` instead of the required `ai-pipeline`.\n  WHY: Consumers that validate the updated-by field to confirm the canary was set by the AI pipeline will reject this file.\n- tests/e2e_smoke_canary.txt:lines 4-6 \u2014 `extra: ...`, `also: ...`, `# E2E_EDITOR_BAIT_25981596273: ...` | confidence=5\n  PROBLEM: Three extra lines are present despite the linked issue spec requiring exactly three lines with a trailing newline.\n  WHY: Consumers that expect a strict 3-line file format will fail due to unexpected extra content.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "dd9056369b3bf54c536eb62bfe91970eab717a30fca9ce1794ba6559470433c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2694,
+    "run_id": "25981722885",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25981722885",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517050056_f89ee3eb2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2694,
+    "run_id": "25981722885"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T05:00:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
