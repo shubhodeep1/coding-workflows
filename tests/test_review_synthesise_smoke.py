@@ -50,7 +50,7 @@ def _install_mock_codex(
 		"if [ -n \"${MOCK_CODEX_STDERR_FILE:-}\" ] && [ -f \"${MOCK_CODEX_STDERR_FILE}\" ]; then\n"
 		"\tcat \"${MOCK_CODEX_STDERR_FILE}\" >&2\n"
 		"fi\n"
-		"exit \"${MOCK_CODEX_EXIT_CODE:-0}\"\n",
+		f"exit \"${{MOCK_CODEX_EXIT_CODE:-{exit_code}}}\"\n",
 		encoding="utf-8",
 	)
 	(mock_bin_dir / "codex").chmod(0o755)
@@ -134,7 +134,6 @@ def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[st
 	env["BEHAVIOURAL_SMOKE_LANG"] = "python"
 	env["MOCK_CODEX_STDOUT_FILE"] = str(mock_bin_dir / "codex_stdout.txt")
 	env["MOCK_CODEX_STDERR_FILE"] = str(mock_bin_dir / "codex_stderr.txt")
-	env["MOCK_CODEX_EXIT_CODE"] = "0"
 	return env
 
 
@@ -325,7 +324,6 @@ def test_review_synthesise_smoke_surfaces_codex_stderr_on_failure() -> None:
 			exit_code=1,
 		)
 		env = _base_env(workspace, runtime_dir, mock_bin_dir)
-		env["MOCK_CODEX_EXIT_CODE"] = "1"
 
 		result = subprocess.run(
 			["bash", str(SYNTH_SCRIPT)],
