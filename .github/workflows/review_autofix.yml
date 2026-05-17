@@ -756,6 +756,9 @@ jobs:
       REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}
       REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
       CONSOLIDATOR_REJECT_SCHEMA_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_SCHEMA_ENABLED || 'false' }}
+      CONSOLIDATOR_REJECT_VERIFIER_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_VERIFIER_ENABLED || 'false' }}
+      CONSOLIDATOR_REJECT_VERIFIER_REASONING: ${{ vars.CONSOLIDATOR_REJECT_VERIFIER_REASONING || 'low' }}
+      CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX: ${{ vars.CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX || '8' }}
       REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
       REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
@@ -1122,6 +1125,18 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/consolidator-reject-verifier.txt" ]; then
+            src=".codex-workflow-src/prompts/consolidator-reject-verifier.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/consolidator-reject-verifier.txt" ]; then
+              src=".codex-workflow-src-main/prompts/consolidator-reject-verifier.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/consolidator-reject-verifier.txt"
+            else
+              echo "::warning::consolidator-reject-verifier.txt not found in checked-out support sources for ${SCRIPT_REF}; reject-verifier LLM batches will fail open even when CONSOLIDATOR_REJECT_VERIFIER_ENABLED=true."
+              rm -f "${SUPPORT_PROMPTS_DIR}/consolidator-reject-verifier.txt"
+            fi
           fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
             src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"
@@ -2834,6 +2849,9 @@ jobs:
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          case "$(printf '%s' "${CONSOLIDATOR_REJECT_VERIFIER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/consolidator-reject-verifier.txt" ;;
+          esac
           case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
           esac

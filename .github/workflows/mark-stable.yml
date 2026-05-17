@@ -220,6 +220,17 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_annotate_sticky.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
+          if ! python3 -c "import pytest" >/dev/null 2>&1; then
+            PYTEST_INSTALL_LOG="${RUNNER_TEMP:-/tmp}/review_reject_verify_pytest_install.log"
+            : > "${PYTEST_INSTALL_LOG}"
+            python3 -m pip install --quiet pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || {
+              echo "::warning::pip install pytest failed; trying apt fallback"
+              sudo apt-get update -qq >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
+              sudo apt-get install -y --no-install-recommends python3-pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
+            }
+            python3 -c "import pytest" >/dev/null 2>&1 || { echo "::error::pytest is not importable after pip + apt install attempts"; echo "::group::pytest install diagnostics"; cat "${PYTEST_INSTALL_LOG}" || true; echo "::endgroup::"; exit 1; }
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_review_reject_verify_llm.py -q
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py

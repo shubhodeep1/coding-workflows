@@ -143,6 +143,10 @@ def _run_verifier(
 	schema_enabled: str,
 	pr_number: str = "4242",
 	autofix_iteration: str = "1",
+	verifier_enabled: str = "false",
+	verifier_reasoning: str = "low",
+	verifier_batch_max: str = "8",
+	support_prompts_dir: Path | None = None,
 	sticky_line_bucket: str | None = None,
 	sticky_findings_enabled: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -155,6 +159,11 @@ def _run_verifier(
 	env["PR_NUMBER"] = pr_number
 	env["AUTOFIX_ITERATION"] = autofix_iteration
 	env["CONSOLIDATOR_REJECT_SCHEMA_ENABLED"] = schema_enabled
+	env["CONSOLIDATOR_REJECT_VERIFIER_ENABLED"] = verifier_enabled
+	env["CONSOLIDATOR_REJECT_VERIFIER_REASONING"] = verifier_reasoning
+	env["CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX"] = verifier_batch_max
+	if support_prompts_dir is not None:
+		env["SUPPORT_PROMPTS_DIR"] = str(support_prompts_dir)
 	if sticky_line_bucket is None:
 		env.pop("STICKY_LINE_BUCKET", None)
 	else:
@@ -356,7 +365,7 @@ def test_parser_accepts_double_dot_paths_in_typed_rejection_evidence() -> None:
 		assert "CONSOLIDATOR_REJECT_TYPED issue=001 kind=out-of-scope schema_enabled=true" in result.stderr
 
 
-def test_verifier_leaves_llm_only_rejections_inconclusive() -> None:
+def test_verifier_leaves_llm_only_rejections_inconclusive_when_flag_is_off() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
 		runtime = _seed_repo(workspace)
@@ -379,14 +388,33 @@ def test_verifier_leaves_llm_only_rejections_inconclusive() -> None:
 		])
 		parse_result = _run_parser(workspace, runtime, raw_text=raw_text, schema_enabled="true")
 		assert parse_result.returncode == 0, parse_result.stderr
-		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true", verifier_enabled="false")
 		assert verify_result.returncode == 0, verify_result.stderr
 		issues = (runtime / "review_issues.txt").read_text(encoding="utf-8")
 		assert issues.count("CLASSIFICATION: non-actionable") >= 2
 		assert "REVERSAL_REASON:" not in issues
 		artifact = _load_artifact(workspace)
 		assert [row["verdict"] for row in artifact["results"]] == ["inconclusive", "inconclusive"]
-		assert "Phase C PR-2 LLM verifier" in verify_result.stdout
+		assert "CONSOLIDATOR_REJECT_VERIFIER_FAIL" not in verify_result.stdout
+		assert all(
+			row["reason"] == "LLM reject verifier is disabled by CONSOLIDATOR_REJECT_VERIFIER_ENABLED=false."
+			for row in artifact["results"]
+		)
+
+
+def test_unknown_rejection_kind_preserves_legacy_pending_message() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		(runtime / "review_issues.txt").write_text(
+			_issue_block(rejection_kind="future-kind"),
+			encoding="utf-8",
+		)
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "inconclusive"
+		assert artifact["results"][0]["reason"] == "future-kind remains pending the Phase C PR-2 LLM verifier."
 
 
 def test_already_fixed_rejection_supports_when_pr_diff_matches() -> None:
