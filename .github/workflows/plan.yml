@@ -78,7 +78,6 @@ jobs:
         if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          CODEX_BIN="$(which codex)"
           NPM_GLOBAL_ROOT="$(npm root -g)"
           mkdir -p "${{ runner.tool_cache }}/codex"
           [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
@@ -87,7 +86,6 @@ jobs:
           }
           cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
           cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
-          cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
 
       - name: Restore Codex CLI from cache
         if: steps.cache-codex.outputs.cache-hit == 'true'
