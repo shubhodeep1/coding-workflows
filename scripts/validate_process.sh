@@ -1351,6 +1351,12 @@ rows = payload.get('files')
 if not isinstance(rows, list):
     raise ValueError(f'invalid manifest files list at {manifest_path}')
 
+target_manifest_relpath = payload.get('target_manifest_relpath')
+target_manifest_path = _safe_target(target_manifest_relpath, target_root)
+if target_manifest_path is None:
+    print('validate_process: skipping synthesised smoke materialization because target_manifest_relpath is invalid.', file=sys.stderr)
+    sys.exit(0)
+
 target_root.mkdir(parents=True, exist_ok=True)
 
 copied = 0
@@ -1381,13 +1387,8 @@ for row in rows:
     shutil.copy2(source_path, target_path)
     copied += 1
 
-target_manifest_relpath = payload.get('target_manifest_relpath')
-target_manifest_path = _safe_target(target_manifest_relpath, target_root)
-if target_manifest_path is not None:
-    target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(manifest_path, target_manifest_path)
-else:
-    print('validate_process: skipping synthesised smoke manifest copy because target_manifest_relpath is invalid.', file=sys.stderr)
+target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+shutil.copy2(manifest_path, target_manifest_path)
 
 if copied == 0 and rows:
     print(

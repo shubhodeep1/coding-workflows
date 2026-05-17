@@ -638,7 +638,7 @@ def test_close_and_reissue_preserves_judge_json_bytes_under_xpg_echo() -> None:
 			"justification": "Quoted reissues should not be dropped.",
 			"new_issue": {
 				"title": 'Reissue: handle "quoted" follow-up',
-				"body": 'First line keeps "quotes" intact.\nSecond line stays attached.',
+				"body": 'First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
 			},
 		},
 		enable_xpg_echo=True,
@@ -652,7 +652,7 @@ def test_close_and_reissue_preserves_judge_json_bytes_under_xpg_echo() -> None:
 	title = args[args.index("--title") + 1]
 	body = args[args.index("--body") + 1]
 	assert title == 'Reissue: handle "quoted" follow-up'
-	assert body.startswith('First line keeps "quotes" intact.\nSecond line stays attached.')
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
 
 
 def test_close_and_reissue_spot_fix_invalid_remaining_issue_file_falls_back_to_redo() -> None:
@@ -1419,7 +1419,7 @@ def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None
 	state = _run_merge_with_followup(
 		parent_label_set=["ai:orchestrator-managed"],
 		followup_title='Follow-up: handle "quoted" wiring',
-		followup_body='First line keeps "quotes" intact.\nSecond line stays attached.',
+		followup_body='First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
 		enable_xpg_echo=True,
 	)
 
@@ -1431,7 +1431,7 @@ def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None
 	title = args[args.index("--title") + 1]
 	body = args[args.index("--body") + 1]
 	assert title == 'Follow-up: handle "quoted" wiring'
-	assert body.startswith('First line keeps "quotes" intact.\nSecond line stays attached.')
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
 
 
 def test_review_blocked_preamble_uses_printf_for_judge_json_extraction() -> None:
@@ -1442,6 +1442,9 @@ RB_JUSTIFICATION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.justification // "n
 RB_FIX_DESC="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
 RB_REMAINING="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')""" in src
 	assert 'RB_ACTION="$(echo "${JUDGE_JSON}" | jq -r' not in src
+	assert "FOLLOWUP_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.followup_issue.body // empty')\"" in src
+	assert "NEW_ISSUE_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.new_issue.body // empty')\"" in src
+	assert "| sed 's/\\\\n/\\n/g'" not in src
 
 
 def test_review_blocked_pr_metadata_parsing_uses_printf_under_xpg_echo() -> None:

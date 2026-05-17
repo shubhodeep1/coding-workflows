@@ -223,7 +223,10 @@ def normalize_content(text: str) -> str:
 	text = "\n".join(lines).strip()
 	if not text:
 		raise ValueError("empty_content")
-	for raw_line in text.splitlines():
+	# Validate backslash-continued shell lines as one logical command so
+	# dangerous dispatchers cannot hide behind line continuations.
+	validation_text = re.sub(r'\\\n[ \t]*', ' ', text)
+	for raw_line in validation_text.splitlines():
 		stripped = raw_line.strip()
 		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped:
 			raise ValueError("body_unsafe_shell_construct")

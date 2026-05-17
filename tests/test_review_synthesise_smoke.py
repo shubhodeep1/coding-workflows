@@ -416,8 +416,10 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 			'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'AWK=eval\n$AWK "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'coproc eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'coproc\\\n eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'coproc /bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
 			'coproc env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'coproc\\\n env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'/bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
 			'/usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
@@ -893,6 +895,68 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 		assert latest_manifest.exists()
 		assert json.loads(latest_manifest.read_text(encoding="utf-8"))["round"] == 3
 		assert not old_target.exists()
+
+
+def test_validate_process_skips_wrapper_copy_when_manifest_target_is_invalid() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_manifest_invalid_") as td:
+		workspace = Path(td)
+
+		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
+		round3_dir.mkdir(parents=True, exist_ok=True)
+		latest_wrapper = round3_dir / "synth_round_3_latest_issue.sh"
+		latest_wrapper.write_text("#!/usr/bin/env bash\necho latest\n", encoding="utf-8")
+		latest_wrapper.chmod(0o755)
+		(round3_dir / "synth_round_3_manifest.json").write_text(
+			json.dumps(
+				{
+					"round": 3,
+					"head_sha": "newsha",
+					"language": "python",
+					"source_artifact": ".ai/review_runtime/pr-4242/round-3/judge_interim.json",
+					"target_manifest_relpath": "../outside.json",
+					"files": [
+						{
+							"issue_id": "latest",
+							"file": "src/module.py",
+							"line_start": 3,
+							"line_end": 3,
+							"severity": "must-fix",
+							"slug": "latest_issue",
+							"cache_relpath": ".ai/review_runtime/pr-4242/round-3/synth/synth_round_3_latest_issue.sh",
+							"target_relpath": "validation/tests/synth_round_3_latest_issue.sh",
+							"suggested_path": "validation/tests/synth_round_3_latest_issue.sh",
+							"expected_to_fail_until_fixed": True,
+						}
+					],
+				},
+				indent=2,
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
+				+ function_text
+				+ "materialize_synthesised_behavioural_smoke_tests\n",
+			],
+			cwd=workspace,
+			capture_output=True,
+			text=True,
+			check=True,
+			timeout=60,
+		)
+
+		latest_target = workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh"
+		assert not latest_target.exists()
+		assert not (workspace / "outside.json").exists()
+		assert "skipping synthesised smoke materialization because target_manifest_relpath is invalid" in result.stderr
+		assert "Materialized synthesised behavioural smoke tests" not in result.stdout
 
 
 def test_validate_process_warns_when_synth_sources_are_missing() -> None:

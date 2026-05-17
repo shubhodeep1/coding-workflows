@@ -658,6 +658,32 @@ def test_already_fixed_rejection_supports_when_pr_diff_deletes_file() -> None:
 		assert artifact["results"][0]["reason"] == "PR diff deletes src/module.py, which covers the cited fix."
 
 
+def test_already_fixed_rejection_supports_when_deleted_diff_evidence_uses_b_prefix() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_deleted_pr_diff(runtime, workspace)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: b/src/module.py\nlines: 2-3\nexcerpt: if x == None:",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		assert "REVERSAL_REASON:" not in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "support"
+		assert artifact["results"][0]["reason"] == "PR diff deletes src/module.py, which covers the cited fix."
+
+
 def test_out_of_scope_rejection_supports_when_file_absent_from_linked_issue_scope() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
