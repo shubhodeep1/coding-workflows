@@ -174,6 +174,28 @@ def parse_line_spec(spec: str) -> tuple[int, int] | None:
 	return start, end
 
 
+def line_range_distance(
+	left_start: int,
+	left_end: int,
+	right_start: int,
+	right_end: int,
+) -> int:
+	if left_end < right_start:
+		return right_start - left_end
+	if right_end < left_start:
+		return left_start - right_end
+	return 0
+
+
+def sticky_line_bucket() -> int:
+	raw = os.getenv("STICKY_LINE_BUCKET", "5").strip()
+	return int(raw) if raw.isdigit() else 5
+
+
+def sticky_findings_enabled() -> bool:
+	return os.getenv("STICKY_FINDINGS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def parse_evidence_map(text: str) -> dict[str, list[str]]:
 	data: dict[str, list[str]] = {}
 	for raw in text.splitlines():
@@ -687,8 +709,19 @@ def verify_prior_round(block: dict[str, object], repo_root: Path, pr_number: str
 			return "does-not-support", "Prior-round verifier artifact did not support the cited rejection."
 		if str(row.get("file", "")) != str(block["fields"].get("FILE", "")):  # type: ignore[index]
 			return "does-not-support", "Prior-round verifier artifact points at a different file."
-		if str(row.get("lines", "")) != str(block["fields"].get("LINES", "")):  # type: ignore[index]
-			return "does-not-support", "Prior-round verifier artifact points at a different line range."
+		prior_lines = str(row.get("lines", ""))
+		current_lines = str(block["fields"].get("LINES", ""))  # type: ignore[index]
+		if prior_lines != current_lines:
+			if not sticky_findings_enabled():
+				return "does-not-support", "Prior-round verifier artifact points at a different line range."
+			prior_range = parse_line_spec(prior_lines)
+			current_range = parse_line_spec(current_lines)
+			if prior_range is None:
+				return "does-not-support", "Prior-round verifier artifact has an unparseable line range."
+			if current_range is None:
+				return "does-not-support", "Current review issue has an unparseable line range."
+			if line_range_distance(*prior_range, *current_range) > sticky_line_bucket():
+				return "does-not-support", "Prior-round verifier artifact points at a different line range."
 		return "support", f"Prior-round verifier artifact still supports issue {issue_id}."
 	return "does-not-support", f"Prior-round verifier artifact does not contain issue {issue_id}."
 
