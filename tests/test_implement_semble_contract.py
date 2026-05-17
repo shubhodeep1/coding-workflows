@@ -226,6 +226,31 @@ def test_review_rb_judge_reissue_baseline_module_runs_clean() -> None:
 	)
 
 
+def test_review_rb_judge_self_run_exclusion_module_runs_clean() -> None:
+	self_run_test = REPO_ROOT / "tests" / "test_review_rb_judge_self_run_exclusion.py"
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	result = subprocess.run(
+		["python3", str(self_run_test)],
+		cwd=str(REPO_ROOT),
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=120,
+	)
+	assert result.returncode == 0, (
+		"review-blocked self-run exclusion regression test failed\n"
+		f"stdout:\n{result.stdout}\n"
+		f"stderr:\n{result.stderr}"
+	)
+	assert "passed" in result.stdout and "total" in result.stdout, (
+		"review-blocked self-run exclusion regression test did not execute "
+		"its direct-entrypoint harness\n"
+		f"stdout:\n{result.stdout}\n"
+		f"stderr:\n{result.stderr}"
+	)
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

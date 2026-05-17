@@ -255,6 +255,27 @@ def test_workflow_branches_telegram_message_on_each_reason() -> None:
 		)
 
 
+def test_workflow_telegram_reason_messages_use_printf_for_newlines() -> None:
+	"""Reason-specific Telegram branches must use printf so the embedded
+	`\n` becomes a real newline before tg_send_msg URL-encodes the body."""
+	wf = _review_autofix_text()
+	step_anchor = "- name: Telegram review-blocked judge decision"
+	idx = wf.find(step_anchor)
+	assert idx >= 0
+	next_step = wf.find("\n      - name:", idx + len(step_anchor))
+	step_body = wf[idx:next_step if next_step > 0 else len(wf)]
+
+	for reason in EXPECTED_MERGE_WITH_FOLLOWUP_SKIP_REASONS:
+		assert re.search(
+			rf'\n\s*{re.escape(reason)}\)\n\s+MSG="\$\(printf ',
+			step_body,
+		), (
+			f"`Telegram review-blocked judge decision` step must format "
+			f"`JUDGE_SKIP_REASON={reason}` via `printf` so Telegram gets "
+			f"a real newline instead of a literal \\n sequence."
+		)
+
+
 def test_workflow_preserves_max_iterations_fallback() -> None:
 	"""The default `*)` branch of the case must preserve the original
 	"maximum number of autofix iterations" body so legacy callers (no
@@ -418,3 +439,27 @@ def test_jq_filter_no_self_collision_on_non_actions_details_url() -> None:
 		}
 	]
 	assert _run_jq(payload, "12345") == "1"
+
+
+def main() -> int:
+	# Direct `python3 tests/<file>.py` entrypoint — sibling review-blocked
+	# regression modules use this harness, and allowlisted contract tests
+	# invoke them directly to ensure the assertions actually execute.
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

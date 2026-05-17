@@ -5341,23 +5341,23 @@ jobs:
               not_writable)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), branch not writable\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               missing_followup_details)
-                MSG="PR review blocked — judge selected merge_with_followup but omitted follow-up details\nNeeds judge retry or manual follow-up issue creation" ;;
+                MSG="$(printf 'PR review blocked — judge selected merge_with_followup but omitted follow-up details\nNeeds judge retry or manual follow-up issue creation')" ;;
               unresolved_head_sha)
-                MSG="PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically" ;;
+                MSG="$(printf 'PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically')" ;;
               check_runs_query_failed)
-                MSG="PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically" ;;
+                MSG="$(printf 'PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically')" ;;
               blocking_check_runs)
-                MSG="PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically" ;;
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')" ;;
               sync_merge_failed)
-                MSG="PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation" ;;
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation')" ;;
               auto_merge_disabled)
-                MSG="PR review blocked — merge_with_followup approved but ENABLE_AUTO_MERGE=false\nManual merge required before follow-up creation" ;;
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but ENABLE_AUTO_MERGE=false\nManual merge required before follow-up creation')" ;;
               merge_conflict)
-                MSG="PR review blocked — PR has merge conflicts\nNeeds rebase or conflict resolution" ;;
+                MSG="$(printf 'PR review blocked — PR has merge conflicts\nNeeds rebase or conflict resolution')" ;;
               mergeability_pending)
-                MSG="PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically" ;;
+                MSG="$(printf 'PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically')" ;;
               followup_issue_create_failed)
-                MSG="PR review blocked — PR merged but follow-up issue creation failed\nNeeds follow-up issue creation or retry" ;;
+                MSG="$(printf 'PR review blocked — PR merged but follow-up issue creation failed\nNeeds follow-up issue creation or retry')" ;;
               llm_failed_critical_issues|json_parse_failed_critical_issues)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge LLM failed, deterministic fallback found critical issues\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               llm_failed*|json_parse_failed*)
