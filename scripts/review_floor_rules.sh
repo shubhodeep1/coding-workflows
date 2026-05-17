@@ -592,6 +592,31 @@ else
 	: > "${OUT_FILE}"
 fi
 
+# Strip any invalid UTF-8 bytes from the rendered rows. The excerpt
+# truncation above uses `substr(out, 1, 240)` inside an awk script;
+# mawk's `substr` (and gawk's, under LC_ALL=C/POSIX) is byte-based, so
+# the cap can land mid-codepoint inside a multi-byte character (e.g.
+# the 3-byte em-dash U+2014 = \xe2\x80\x94) and leave an orphaned
+# lead-byte sequence in OUT_FILE. Codex CLI's stdin reader strictly
+# validates UTF-8 and aborts on the first invalid byte, so a single
+# truncated em-dash here was enough to kill the editor across all
+# retries on multi-user-ai-agent PR #33. iconv -t UTF-8//IGNORE
+# silently drops the orphaned bytes; on already-valid input it leaves
+# OUT_FILE byte-identical. Best-effort: skip if iconv is missing.
+if [ -s "${OUT_FILE}" ] && command -v iconv >/dev/null 2>&1; then
+	_floor_tags_utf8_tmp="${OUT_FILE}.utf8tmp"
+	# iconv exits non-zero whenever //IGNORE skips any bytes, even
+	# though the output IS correct; gate on whether output was
+	# produced, not on $?.
+	iconv -f UTF-8 -t UTF-8//IGNORE < "${OUT_FILE}" > "${_floor_tags_utf8_tmp}" 2>/dev/null || true
+	if [ -s "${_floor_tags_utf8_tmp}" ]; then
+		mv "${_floor_tags_utf8_tmp}" "${OUT_FILE}"
+	else
+		rm -f "${_floor_tags_utf8_tmp}"
+	fi
+	unset _floor_tags_utf8_tmp
+fi
+
 anchors_scanned=0
 multi_reviewer_hits=0
 keyword_hits=0

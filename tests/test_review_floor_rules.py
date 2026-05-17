@@ -170,6 +170,34 @@ def test_excerpt_truncation_caps_at_240_chars(tmp_path: Path) -> None:
 	assert len(excerpt) == 240
 
 
+def test_excerpt_truncation_at_240_bytes_does_not_emit_invalid_utf8(tmp_path: Path) -> None:
+	"""Regression guard for multi-user-ai-agent PR #33: mawk's byte-based
+	`substr(out, 1, 240)` at scripts/review_floor_rules.sh:303 could land
+	mid-codepoint inside a 3-byte em-dash and leak invalid UTF-8 into
+	floor_tags.txt, which Codex CLI's stdin reader then rejected with
+	"input is not valid UTF-8", killing the editor across every retry.
+	The fix post-processes OUT_FILE through iconv -f UTF-8 -t UTF-8//IGNORE
+	so any orphaned partial-codepoint bytes are dropped before downstream
+	consumers see the file. The fixture places the em-dash so the 240-byte
+	cut lands inside it.
+	"""
+	out_file = tmp_path / "floor_tags.txt"
+	_run_floor_rules(FIXTURES / "reviewer_bundle_utf8_boundary_excerpt.txt", out_file)
+
+	# The whole rendered file must be valid UTF-8 end-to-end. Strict
+	# decode raises UnicodeDecodeError on the first invalid byte —
+	# exactly what Codex CLI's stdin reader does.
+	out_file.read_bytes().decode("utf-8")
+
+	rows = _parse_floor_tags(out_file)
+	assert len(rows) == 1
+	_, _, _, excerpt = rows[0]
+	assert excerpt, "excerpt was empty after sanitisation"
+	assert excerpt.startswith("This excerpt is engineered so"), (
+		f"excerpt prefix corrupted by sanitisation: {excerpt[:80]!r}"
+	)
+
+
 def test_fail_open_unhandled_error_emits_empty_valid_output(tmp_path: Path) -> None:
 	bundle = tmp_path / "bundle.txt"
 	bundle.write_text(
